@@ -1,0 +1,10 @@
+project: shiro_mlops
+registry: data/registry.pb
+provider: local
+offline_store:
+  type: file
+online_store:
+  type: redis
+  connection_string: localhost:6379
+flags:
+  alpha_features: false

@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: shiro_postgres
+    environment:
+      POSTGRES_DB: mlflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: shiro_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mlflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mlflow
+    container_name: shiro_mlflow
+    ports:
+      - "5001:5000"
+    environment:
+      BACKEND_STORE_URI: postgresql://postgres:postgrespassword@postgres:5432/mlflow
+      ARTIFACT_ROOT: /mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: shiro_api
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: local
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  dagster-webserver:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dagster
+    container_name: shiro_dagster_webserver
+    command: dagster dev -h 0.0.0.0 -p 3000 -f src/shiro_mlops/pipelines/definitions.py
+    ports:
+      - "3000:3000"
+    environment:
+      DAGSTER_HOME: /dagster_home
+      ENVIRONMENT: local
+      REDIS_HOST: redis
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    volumes:
+      - ..:/workspace
+      - dagster_home:/dagster_home
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:
+  dagster_home:
