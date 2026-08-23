@@ -1,0 +1,48 @@
+"""Configuration settings with Pydantic."""
+
+from pathlib import Path
+from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings supporting local and AWS environments."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # Environment
+    ENVIRONMENT: Literal["local", "aws", "test"] = "local"
+
+    # Storage paths / AWS S3
+    DATA_DIR: Path = Path("data")
+    S3_BUCKET_NAME: str = "shiro-mlops-artifacts"
+    AWS_REGION: str = "ap-northeast-1"
+
+    # MLflow
+    MLFLOW_TRACKING_URI: str = "http://localhost:5001"
+    MLFLOW_EXPERIMENT_NAME: str = "taipower_load_forecasting"
+
+    # Feast Feature Store
+    FEAST_REPO_PATH: Path = Path("src/shiro_mlops/features")
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: str | None = None
+
+    # External APIs
+    CWA_API_KEY: str = ""
+    TAIPOWER_API_URL: str = (
+        "https://data.taipower.com.tw/opendata/apply/file/d015046/台灣電力公司_過去電力供需資訊.csv"
+    )
+
+    # API Serving
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8000
+
+
+settings = Settings()

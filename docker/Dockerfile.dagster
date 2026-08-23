@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /workspace
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+
+RUN uv pip install --system -e .
+
+ENV DAGSTER_HOME=/dagster_home
+RUN mkdir -p /dagster_home
+
+EXPOSE 3000
+
+CMD ["dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-f", "src/shiro_mlops/pipelines/definitions.py"]
