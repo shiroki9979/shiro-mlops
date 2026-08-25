@@ -11,8 +11,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -35,11 +35,11 @@ mlruns/
 .mlflow/
 
 # Feast
-data/registry.pb
+/data/registry.pb
 .feast/
 
 # Data artifacts & local cache
-data/
+/data/
 *.parquet
 *.csv
 
