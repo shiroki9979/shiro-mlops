@@ -38,3 +38,17 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 2. **Offline Unit/Integration Tests**: Tests in `tests/` must NOT depend on external live APIs; use fixtures in `tests/fixtures/`.
 3. **No Implementation Details in CONTEXT.md**: `CONTEXT.md` is strictly reserved for business domain terms. Technical details belong in `docs/SPEC.md` or `docs/adr/`.
 4. **Diátaxis Discipline**: When adding docs, adhere strictly to the 4 quadrants (Tutorial, How-To, Reference, Explanation).
+
+## Agent skills
+
+### Issue tracker
+
+Local Markdown issues under `.scratch/`. See [docs/agents/issue-tracker.md](file:///home/myuser/repos/shiro-mlops/docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](file:///home/myuser/repos/shiro-mlops/docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context layout (`CONTEXT.md` + `docs/adr/`). See [docs/agents/domain.md](file:///home/myuser/repos/shiro-mlops/docs/agents/domain.md).
