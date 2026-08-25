@@ -1,13 +1,14 @@
-.PHONY: help install dev test lint format clean compose-up compose-down dagster mlflow api
+.PHONY: help install dev test lint format clean compose-up compose-down dagster mlflow api frontend frontend-test frontend-build
 
 help:
 	@echo "Available commands:"
 	@echo "  make install       Install dependencies using uv"
 	@echo "  make dev           Run FastAPI locally in development mode"
-	@echo "  make frontend      Run Streamlit frontend dashboard locally"
+	@echo "  make frontend      Run React 19 SPA frontend dashboard locally"
+	@echo "  make frontend-test Run frontend Vitest test suite"
 	@echo "  make dagster       Run Dagster webserver locally"
 	@echo "  make mlflow        Run MLflow UI locally"
-	@echo "  make test          Run test suite with pytest"
+	@echo "  make test          Run Python test suite with pytest"
 	@echo "  make lint          Check code style and lint with ruff"
 	@echo "  make format        Format code with ruff"
 	@echo "  make compose-up    Start full local stack (Dagster, MLflow, Redis, Postgres)"
@@ -21,7 +22,13 @@ dev:
 	uv run uvicorn shiro_mlops.service.api:app --reload --host 0.0.0.0 --port 8000
 
 frontend:
-	uv run streamlit run frontend/app.py
+	npm --prefix frontend run dev
+
+frontend-test:
+	npm --prefix frontend run test
+
+frontend-build:
+	npm --prefix frontend run build
 
 dagster:
 	DAGSTER_HOME=.dagster_home uv run dagster dev -f src/shiro_mlops/pipelines/definitions.py

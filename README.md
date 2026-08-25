@@ -11,7 +11,7 @@ Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast,
 - **Serving & API**: FastAPI (Dynamic horizon load predictions)
 - **Monitoring**: Evidently AI (Data Drift, Target Drift, and Evaluation Metrics)
 - **Infrastructure**: AWS + Terraform (S3, ECR, App Runner, IAM OIDC)
-- **Frontend Stub**: `frontend/` (Independent stub directory for future UI integration)
+- **Frontend Dashboard**: `frontend/` (React 19 + TypeScript + Vite + TanStack SPA)
 
 ---
 
@@ -21,6 +21,7 @@ Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast,
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
+- Node.js 20+ and npm (for frontend dashboard)
 - Docker & Docker Compose (optional for full container mode)
 
 ### 2. Installation
@@ -43,13 +44,21 @@ make dev
 
 API docs available at: `http://localhost:8000/docs`
 
-### 5. Start Dagster Pipeline Webserver
+### 5. Start Frontend Dashboard
+
+```bash
+make frontend
+```
+
+Dashboard available at: `http://localhost:3000` (proxies `/api` to `http://localhost:8000`)
+
+### 6. Start Dagster Pipeline Webserver
 
 ```bash
 make dagster
 ```
 
-Dagster UI available at: `http://localhost:3000`
+Dagster UI available at: `http://localhost:3000` (or configured pipeline port)
 
 ---
 
@@ -59,7 +68,7 @@ Dagster UI available at: `http://localhost:3000`
 shiro-mlops/
 ├── .github/workflows/      # CI/CD pipelines
 ├── docker/                 # Docker Compose & Dockerfiles
-├── frontend/               # Frontend UI stub
+├── frontend/               # React 19 + Vite Dashboard SPA
 ├── infra/terraform/        # AWS Infrastructure as Code
 ├── src/shiro_mlops/
 │   ├── core/               # Configuration, IO managers, constants

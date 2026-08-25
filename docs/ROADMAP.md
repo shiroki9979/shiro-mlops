@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-08-23
+- 最後更新：2026-08-25
 - 專案版本：`0.1.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
@@ -12,7 +12,7 @@
 
 | 里程碑 | 目標 | 主要模組 | 驗證標準 |
 | :--- | :--- | :--- | :--- |
-| **M1: 視覺化儀表板** | 實作 Streamlit 互動介面，對接 FastAPI 隨需預測 | `frontend/app.py` | 成功啟動並渲染 24h 動態視界負載與氣溫圖表 |
+| **M1: 視覺化儀表板** | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 (已完成) |
 | **M2: API 穩健度與降級快取** | 建立本地快取與自動重試，落實降級預報模式 | `src/shiro_mlops/data/` | 斷網條件下仍能產出標記 `DEGRADED` 之預測 |
 | **M3: 多測站與行事曆特徵** | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
 | **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署與 GitHub Actions 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔並更新服務 |
@@ -23,17 +23,18 @@
 
 ### Milestone 1: 視覺化儀表板實作 (Frontend Dashboard)
 
-#### [TICKET-101] 建立 Streamlit 互動式儀表板
+#### [TICKET-101] 建立 React 19 + Vite + TanStack 現代化 SPA 儀表板
 
-- **目標**：取代 `frontend/` 靜態 stub，建立 Python 原生 Streamlit 應用程式。
+- **目標**：建立生產級 React 19 + TypeScript + Vite + TanStack Router/Query 單頁應用程式。
 - **功能範圍**：
-  1. 側邊欄控制項：可自訂預測視界長度（1 ~ 168 小時）與預測區域（Taipei）。
-  2. 負載預報曲線圖：呼叫 `/predict` 端點繪製未來 $H$ 小時之負載變化趨勢。
-  3. 氣象預報疊圖：同步繪製未來氣溫與相對濕度折線圖。
-  4. 系統健康指標：呼叫 `/health` 顯示 API 版本、環境與模型載入狀態。
+  1. 4 大頁面導航：即時預測總覽 (`/`)、歷史回測 (`/history`)、資料漂移監控 (`/monitoring`)、系統設定 (`/settings`)。
+  2. 負載與氣候走勢圖：Recharts 繪製 1~72h 負載（MW）與氣溫（°C）雙 Y 軸互動走勢圖。
+  3. 關鍵指標與明細：最高尖峰用電預估卡、逐時明細表與 CSV 資料匯出。
+  4. 系統健康指標：對接 `/health` 顯示 API 版本、環境與模型載入狀態，支援 MSW 離線測試。
 - **完成標準 (DoD)**：
-  - 建立 `frontend/app.py` 與 `frontend/requirements.txt`（或包含於 pyproject）。
-  - 執行 `uv run streamlit run frontend/app.py` 無報錯且能正常呈現圖表。
+  - 建立 `frontend/` 完整 SPA 架構與測試環境。
+  - 執行 `npm run test` 全數通過（Vitest + MSW v2 離線測試）。
+  - 執行 `npm run build`（`tsc -b && vite build`）與 `npm run lint` 無報錯。
 
 ---
 
