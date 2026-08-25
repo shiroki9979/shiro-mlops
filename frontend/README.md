@@ -1,27 +1,43 @@
-# Frontend Dashboard
+# shiro-mlops Frontend Dashboard
 
-Streamlit-based interactive web dashboard for `shiro-mlops`.
+生產級 React 19 + TypeScript + Vite + TanStack 現代化單頁儀表板（SPA），專為台電 1~72 小時動態負載預測與氣候監控所設計。
 
-## Features
+## 核心技術棧
 
-- Real-time dynamic horizon load forecast visualization (1 to 72 hours).
-- Dual-axis interactive chart comparing load (MW) with temperature (°C) via Plotly.
-- Metric summary cards (Peak load, Average load, Max temperature).
-- Backend service health and model status indicator.
-- Downloadable forecast CSV data.
+- **框架與核心**：React 19, TypeScript 5.7, Vite 6
+- **路由與狀態**：TanStack Router, TanStack Query v5, Zustand v5
+- **資料視覺化**：Recharts (雙軸動態走勢圖), TanStack Table v8
+- **樣式與元件**：Tailwind CSS v4, Radix UI Primitives, Lucide Icons, Sonner
+- **型別與驗證**：Zod v3, React Hook Form
+- **測試框架**：Vitest, React Testing Library, Mock Service Worker (MSW v2), Playwright
 
-## Running Locally
+## 頁面導航架構
 
-1. Start the FastAPI backend server:
+1. **即時預測總覽 (`/`)**：1~72 小時動態用電負載與氣溫雙軸曲線、尖離峰指標卡、逐時明細表與 CSV 匯出。
+2. **歷史回測與評估 (`/history`)**：實際用電 vs 模型預測對比、MAPE / RMSE 誤差指標分析。
+3. **模型漂移監控 (`/monitoring`)**：Evidently AI 資料漂移檢定報告與 Feast Feature Store 快照檢視。
+4. **系統設定與連線診斷 (`/settings`)**：FastAPI 後端連線設定、降級快取模式說明與手動 Payload 推論測試。
 
-   ```bash
-   make dev
-   ```
+## 開發與執行指令
 
-2. Start the Streamlit frontend:
+於 `frontend/` 目錄下執行：
 
-   ```bash
-   uv run streamlit run frontend/app.py
-   ```
+```bash
+# 安裝依賴
+npm install
 
-   Dashboard is accessible at `http://localhost:8501`.
+# 啟動 Vite 本地開發伺服器 (包含 /api 代理至 FastAPI http://localhost:8000)
+npm run dev
+
+# 執行 Vitest 離線單元與整合測試
+npm run test
+
+# 執行 TypeScript 型別檢查與生產打包
+npm run build
+
+# 預覽打包產物
+npm run preview
+
+# 程式碼風格與 Lint 檢查
+npm run lint
+```
