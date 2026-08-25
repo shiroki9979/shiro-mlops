@@ -4,14 +4,14 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 
 ## Essential Context Pointers
 
-- **Domain Glossary & Semantics**: Read [CONTEXT.md](file:///home/shiro/repos/shiro-mlops/CONTEXT.md) for business context, power grid terminology, and degraded forecast definitions.
-- **System & Data Specifications**: Read [docs/SPEC.md](file:///home/shiro/repos/shiro-mlops/docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
-- **Architecture Decisions**: Consult [docs/adr/](file:///home/shiro/repos/shiro-mlops/docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, and `uv`.
-- **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](file:///home/shiro/repos/shiro-mlops/docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
+- **Domain Glossary & Semantics**: Read [CONTEXT.md](file:///home/myuser/repos/shiro-mlops/CONTEXT.md) for business context, power grid terminology, and degraded forecast definitions.
+- **System & Data Specifications**: Read [docs/SPEC.md](file:///home/myuser/repos/shiro-mlops/docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
+- **Architecture Decisions**: Consult [docs/adr/](file:///home/myuser/repos/shiro-mlops/docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, and `uv`.
+- **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](file:///home/myuser/repos/shiro-mlops/docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
 - **Operational Guides**:
-  - Tutorial: [docs/tutorials/quickstart-local-prediction.md](file:///home/shiro/repos/shiro-mlops/docs/tutorials/quickstart-local-prediction.md)
-  - Full Local Stack: [docs/how-to/run-full-local-stack.md](file:///home/shiro/repos/shiro-mlops/docs/how-to/run-full-local-stack.md)
-  - AWS Deployment: [docs/how-to/deploy-aws-infrastructure.md](file:///home/shiro/repos/shiro-mlops/docs/how-to/deploy-aws-infrastructure.md)
+  - Tutorial: [docs/tutorials/quickstart-local-prediction.md](file:///home/myuser/repos/shiro-mlops/docs/tutorials/quickstart-local-prediction.md)
+  - Full Local Stack: [docs/how-to/run-full-local-stack.md](file:///home/myuser/repos/shiro-mlops/docs/how-to/run-full-local-stack.md)
+  - AWS Deployment: [docs/how-to/deploy-aws-infrastructure.md](file:///home/myuser/repos/shiro-mlops/docs/how-to/deploy-aws-infrastructure.md)
 
 ## Development Loop & Commands
 

@@ -41,7 +41,8 @@ docker compose -f docker/docker-compose.yml up -d
 
 | 元件名稱 | 容器名稱 | 監聽端口 | 驗證方式 |
 | :--- | :--- | :--- | :--- |
-| **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程 |
+| **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:3000` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表與監控 |
+| **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程 (容器內 `3000` 映射) |
 | **MLflow Server** | `shiro_mlops_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
 | **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | 存取 Swagger UI 或執行 `curl /health` |
 | **Feast Online Redis** | `shiro_redis` | `localhost:6379` | `docker exec -it shiro_redis redis-cli ping` |
