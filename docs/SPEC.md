@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-08-23
+- 最後更新：2026-08-26
 - 專案版本：`0.1.0`
 
 ---
@@ -30,7 +30,27 @@
 | `relative_humidity` | `float64` | `65.0` | 相對濕度（百分比） |
 | `location` | `string` | `Taipei` | 觀測站/預報區域 |
 
-### 1.3 Feast 特徵庫視圖 (Feature View Schema)
+### 1.3 地端時序資料庫模型 (TimescaleDB Hypertables)
+
+- **資料庫**：`shiro_timeseries` (TimescaleDB / PostgreSQL 15+)
+- **主表結構**：
+  1. `raw_taipower_load`:
+     - `time` (TIMESTAMPTZ, NOT NULL)
+     - `location` (VARCHAR(64), NOT NULL)
+     - `load_mw` (DOUBLE PRECISION, NOT NULL)
+     - `created_at` (TIMESTAMPTZ DEFAULT NOW())
+     - **Constraint**: `PRIMARY KEY (time, location)`
+     - **Hypertable**: `create_hypertable('raw_taipower_load', 'time')`
+  2. `raw_cwa_weather`:
+     - `time` (TIMESTAMPTZ, NOT NULL)
+     - `location` (VARCHAR(64), NOT NULL)
+     - `temperature` (DOUBLE PRECISION)
+     - `relative_humidity` (DOUBLE PRECISION)
+     - `created_at` (TIMESTAMPTZ DEFAULT NOW())
+     - **Constraint**: `PRIMARY KEY (time, location)`
+     - **Hypertable**: `create_hypertable('raw_cwa_weather', 'time')`
+
+### 1.4 Feast 特徵庫視圖 (Feature View Schema)
 
 - **Entity**: `location` (Join Key: `location`)
 - **Features (`taipower_load_features`)**:

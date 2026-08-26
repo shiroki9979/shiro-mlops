@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -9,12 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 新增 ADR-0006 架構決策紀錄，確立地端 TimescaleDB 與 Parquet/S3 雙層儲存架構（`docs/adr/0006-timescaledb-local-storage-layer.md`）。
+- 規劃 TimescaleDB 地端時序儲存規格書與 4 張 Tracer-bullet 工單（`.scratch/timescaledb-local-storage/`）。
 - 實作 `TaipowerClient` 與 `CWAClient` 資料擷取與氣象觀測預報模組（`src/shiro_mlops/data/`）。
 - 實作 React 19 SPA 儀表板，支援 1~72h 負載與氣溫雙軸走勢圖、歷史回測、資料漂移監控與系統診斷（`frontend/`）。
 - 配置 Matt Pocock Agent Skills 規範文件與索引，支援 Local Markdown issue tracker 與標準 Triage 標籤（`docs/agents/`、`AGENTS.md`）。
 
 ### Changed
 
+- 更新系統資料契約規格書，補入 `raw_taipower_load` 與 `raw_cwa_weather` Hypertables 定義（`docs/SPEC.md`）。
 - 前端套件管理切換至 pnpm，配置 `onlyBuiltDependencies` 支援 `esbuild` 與 `msw` 安裝腳本（`frontend/`）。
 - 同步專案藍圖、服務端口與 Makefile，將 Milestone 1 規格更新為 React SPA 儀表板（`docs/`、`README.md`、`Makefile`）。
 
