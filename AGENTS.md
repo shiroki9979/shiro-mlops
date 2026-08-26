@@ -43,12 +43,12 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 ### Issue tracker
 
-Local Markdown issues under `.scratch/`. See [docs/agents/issue-tracker.md](file:///home/myuser/repos/shiro-mlops/docs/agents/issue-tracker.md).
+GitHub issues (via `gh` CLI). See [docs/agents/issue-tracker.md](file:///home/shiro/repos/shiro-mlops/docs/agents/issue-tracker.md).
 
 ### Triage labels
 
-Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](file:///home/myuser/repos/shiro-mlops/docs/agents/triage-labels.md).
+Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](file:///home/shiro/repos/shiro-mlops/docs/agents/triage-labels.md).
 
 ### Domain docs
 
-Single-context layout (`CONTEXT.md` + `docs/adr/`). See [docs/agents/domain.md](file:///home/myuser/repos/shiro-mlops/docs/agents/domain.md).
+Single-context layout (`CONTEXT.md` + `docs/adr/`). See [docs/agents/domain.md](file:///home/shiro/repos/shiro-mlops/docs/agents/domain.md).
