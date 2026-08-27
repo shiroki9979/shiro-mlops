@@ -1,14 +1,20 @@
 """Client for fetching historical and real-time Taipower grid load data."""
 
 import json
-import pandas as pd
+
 import httpx
+import pandas as pd
+
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
+
 
 class TaipowerClient:
     """Client for querying Taipower load data APIs."""
 
-    def __init__(self, base_url: str = "https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json") -> None:
+    def __init__(
+        self,
+        base_url: str = "https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json",
+    ) -> None:
         self.base_url = base_url
 
     def fetch_load_data(self) -> pd.DataFrame:

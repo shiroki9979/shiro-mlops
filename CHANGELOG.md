@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 升級 Docker Compose 資料庫服務至 `timescale/timescaledb:latest-pg15`，並新增 `docker/init-db/01_init_hypertables.sql` 自動初始化 `raw_taipower_load` 與 `raw_cwa_weather` 7-day chunk interval Hypertables。
+- 擴充 `Settings` 與 `shiro_mlops.core.database` 提供 TimescaleDB 連線參數、URI 與連線引擎輔助函式。
+- 新增 `tests/unit/test_database.py` 離線單元測試，驗證 DDL 生成、檔案完整性與引擎初始化。
 - 新增 ADR-0006 架構決策紀錄，確立地端 TimescaleDB 與 Parquet/S3 雙層儲存架構（`docs/adr/0006-timescaledb-local-storage-layer.md`）。
 - 建立 TimescaleDB 地端時序儲存規格書（`docs/specs/timescaledb-local-storage.md`）。
 - 實作 `TaipowerClient` 與 `CWAClient` 資料擷取與氣象觀測預報模組（`src/shiro_mlops/data/`）。
