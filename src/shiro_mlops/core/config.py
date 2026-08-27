@@ -44,5 +44,20 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
 
+    # TimescaleDB / Operational Time-Series Store
+    TIMESCALE_HOST: str = "localhost"
+    TIMESCALE_PORT: int = 5432
+    TIMESCALE_DB: str = "mlflow"
+    TIMESCALE_USER: str = "postgres"
+    TIMESCALE_PASSWORD: str = "postgrespassword"
+
+    @property
+    def timescale_uri(self) -> str:
+        """Return the PostgreSQL/TimescaleDB connection URI."""
+        return (
+            f"postgresql://{self.TIMESCALE_USER}:{self.TIMESCALE_PASSWORD}@"
+            f"{self.TIMESCALE_HOST}:{self.TIMESCALE_PORT}/{self.TIMESCALE_DB}"
+        )
+
 
 settings = Settings()

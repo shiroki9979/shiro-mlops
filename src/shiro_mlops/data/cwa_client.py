@@ -1,9 +1,12 @@
 """Client for fetching Central Weather Administration (CWA) observations and forecasts."""
 
 import json
-import pandas as pd
+
 import httpx
-from shiro_mlops.core.constants import DATETIME_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL
+import pandas as pd
+
+from shiro_mlops.core.constants import DATETIME_COL, RELATIVE_HUMIDITY_COL, TEMPERATURE_COL
+
 
 class CWAClient:
     """Client for querying Central Weather Administration (CWA) OpenData API."""
@@ -16,7 +19,9 @@ class CWAClient:
     def fetch_observations(self, location: str = "Taipei") -> pd.DataFrame:
         """Fetch latest weather observations."""
         with httpx.Client(timeout=10.0) as client:
-            response = client.get(self.obs_url, params={"Authorization": self.api_key, "locationName": location})
+            response = client.get(
+                self.obs_url, params={"Authorization": self.api_key, "locationName": location}
+            )
             if hasattr(response, "raise_for_status"):
                 response.raise_for_status()
             data = json.loads(response.text)
@@ -35,8 +40,7 @@ class CWAClient:
         """Fetch future weather forecasts for up to horizon_hours."""
         with httpx.Client(timeout=10.0) as client:
             response = client.get(
-                self.forecast_url,
-                params={"Authorization": self.api_key, "locationName": location}
+                self.forecast_url, params={"Authorization": self.api_key, "locationName": location}
             )
             if hasattr(response, "raise_for_status"):
                 response.raise_for_status()
