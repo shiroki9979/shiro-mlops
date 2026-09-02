@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 實作 `TimeSeriesRepository` 支援 SQLAlchemy/TimescaleDB 連線池、台電負載與氣象資料批次 Upsert（`ON CONFLICT DO UPDATE`）與時序範圍查詢（`src/shiro_mlops/data/repository.py`、`tests/unit/test_repository.py`）。
+
 - 升級 Docker Compose 資料庫服務至 `timescale/timescaledb:latest-pg15`，並新增 `docker/init-db/01_init_hypertables.sql` 自動初始化 `raw_taipower_load` 與 `raw_cwa_weather` 7-day chunk interval Hypertables。
 - 擴充 `Settings` 與 `shiro_mlops.core.database` 提供 TimescaleDB 連線參數、URI 與連線引擎輔助函式。
 - 新增 `tests/unit/test_database.py` 離線單元測試，驗證 DDL 生成、檔案完整性與引擎初始化。
