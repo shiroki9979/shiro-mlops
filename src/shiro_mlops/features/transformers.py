@@ -111,8 +111,17 @@ def build_feature_pipeline(
     if weather_df is not None:
         df = merge_weather_features(df, weather_df)
 
+    if lags is None:
+        if len(df) <= max(DEFAULT_LAG_HOURS):
+            effective_lags = [lag for lag in DEFAULT_LAG_HOURS if lag < len(df)] or [1]
+        else:
+            effective_lags = DEFAULT_LAG_HOURS
+    else:
+        effective_lags = lags
+
     df = create_calendar_features(df)
-    df = create_lag_features(df, value_col=LOAD_MW_COL, lags=lags)
+    df = create_lag_features(df, value_col=LOAD_MW_COL, lags=effective_lags)
+
     df = create_rolling_features(df, value_col=LOAD_MW_COL, windows=windows)
 
     if drop_na:
