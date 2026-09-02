@@ -10,7 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 實作 `engineered_features` 自 TimescaleDB 提取時序歷史視界數據並編譯產出 Feast 離線 Parquet 檔案（`taipower_features.parquet` 與 `weather_features.parquet`），驗證 Feast 離線特徵檢索與 LightGBM 訓練端到端相容（`src/shiro_mlops/pipelines/assets.py`、`src/shiro_mlops/features/definitions.py`、`tests/integration/test_feast_pipeline.py`）。
 - 整合 `TimeSeriesRepository` 至 Dagster `raw_taipower_load_data` 與 `raw_weather_obs_data` 資料擷取資產，支援自動持久化寫入 TimescaleDB 與測試模式安全降級（`src/shiro_mlops/pipelines/assets.py`、`src/shiro_mlops/pipelines/definitions.py`、`tests/integration/test_pipeline_assets.py`）。
+
 - 實作 `TimeSeriesRepository` 支援 SQLAlchemy/TimescaleDB 連線池、台電負載與氣象資料批次 Upsert（`ON CONFLICT DO UPDATE`）與時序範圍查詢（`src/shiro_mlops/data/repository.py`、`tests/unit/test_repository.py`）。
 
 

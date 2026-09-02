@@ -1,7 +1,5 @@
 """Dagster Software-Defined Assets for Taipower load forecasting MLOps pipeline."""
 
-from pathlib import Path
-
 import mlflow
 import pandas as pd
 from dagster import AssetExecutionContext, Output, asset
@@ -74,19 +72,115 @@ def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
 
 @asset(
     group_name="features",
-    description="Build lag, rolling, calendar, and weather features for model training",
+    description="Build lag, rolling, calendar, and weather features for model training and Feast",
+    required_resource_keys={"time_series_repo"},
 )
 def engineered_features(
     context: AssetExecutionContext,
     raw_taipower_load_data: pd.DataFrame,
     raw_weather_obs_data: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Asset: Engineered feature table for offline training and Feast."""
+    """Asset: Extract clean time-series from TimescaleDB, engineer features, and export Feast Parquet artifacts."""
+    repo = _get_time_series_repo(context)
+
+    # 1. Fetch clean time-series from TimescaleDB (fallback to upstream assets if empty)
+    try:
+        db_load_df = repo.fetch_load_range()
+        db_weather_df = repo.fetch_weather_range()
+    except Exception as e:
+        context.log.warning(
+            f"Failed to fetch from repository, falling back to upstream assets: {e}"
+        )
+        db_load_df = pd.DataFrame()
+        db_weather_df = pd.DataFrame()
+
+    load_df = db_load_df.copy() if not db_load_df.empty else raw_taipower_load_data.copy()
+    weather_df = db_weather_df.copy() if not db_weather_df.empty else raw_weather_obs_data.copy()
+
+    # 2. Normalize columns
+    if "time" in load_df.columns and "datetime" not in load_df.columns:
+        load_df = load_df.rename(columns={"time": "datetime"})
+    if "time" in weather_df.columns and "datetime" not in weather_df.columns:
+        weather_df = weather_df.rename(columns={"time": "datetime"})
+
+    if "created_at" in load_df.columns:
+        load_df = load_df.drop(columns=["created_at"])
+    if "created_at" in weather_df.columns:
+        weather_df = weather_df.drop(columns=["created_at"])
+
+    # 3. Build engineered features
     features_df = build_feature_pipeline(
-        load_df=raw_taipower_load_data,
-        weather_df=raw_weather_obs_data,
+        load_df=load_df,
+        weather_df=weather_df,
     )
     context.log.info(f"Constructed engineered features table with shape: {features_df.shape}")
+
+    # 4. Export Feast Parquet artifacts to settings.DATA_DIR
+    data_dir = settings.DATA_DIR
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Compile taipower_features.parquet
+    taipower_export_df = features_df.copy()
+    if "location" not in taipower_export_df.columns:
+        taipower_export_df["location"] = "Taipei"
+    if "datetime" not in taipower_export_df.columns and "time" in taipower_export_df.columns:
+        taipower_export_df["datetime"] = taipower_export_df["time"]
+
+    taipower_cols = ["datetime", "location"]
+    float_fields = [
+        "load_mw",
+        "load_mw_lag_1",
+        "load_mw_lag_2",
+        "load_mw_lag_24",
+        "load_mw_rolling_mean_6",
+        "load_mw_rolling_mean_24",
+        "hour_sin",
+        "hour_cos",
+    ]
+    int_fields = ["hour", "dayofweek", "is_weekend"]
+
+    for f in float_fields:
+        if f in taipower_export_df.columns:
+            taipower_export_df[f] = pd.to_numeric(taipower_export_df[f], errors="coerce").astype(
+                "float32"
+            )
+            taipower_cols.append(f)
+
+    for f in int_fields:
+        if f in taipower_export_df.columns:
+            taipower_export_df[f] = pd.to_numeric(taipower_export_df[f], errors="coerce").astype(
+                "int64"
+            )
+            taipower_cols.append(f)
+
+    taipower_parquet_path = data_dir / "taipower_features.parquet"
+    taipower_export_df[taipower_cols].to_parquet(taipower_parquet_path, index=False)
+
+    # Compile weather_features.parquet
+    weather_export_df = weather_df.copy()
+    if "location" not in weather_export_df.columns:
+        weather_export_df["location"] = "Taipei"
+    if "datetime" not in weather_export_df.columns and "time" in weather_export_df.columns:
+        weather_export_df["datetime"] = weather_export_df["time"]
+
+    weather_cols = ["datetime", "location"]
+    if "temperature" in weather_export_df.columns:
+        weather_export_df["temperature"] = pd.to_numeric(
+            weather_export_df["temperature"], errors="coerce"
+        ).astype("float32")
+        weather_cols.append("temperature")
+    if "relative_humidity" in weather_export_df.columns:
+        weather_export_df["relative_humidity"] = pd.to_numeric(
+            weather_export_df["relative_humidity"], errors="coerce"
+        ).astype("float32")
+        weather_cols.append("relative_humidity")
+
+    weather_parquet_path = data_dir / "weather_features.parquet"
+    weather_export_df[weather_cols].to_parquet(weather_parquet_path, index=False)
+
+    context.log.info(
+        f"Exported Feast Parquet files: {taipower_parquet_path}, {weather_parquet_path}"
+    )
     return features_df
 
 
@@ -113,9 +207,7 @@ def trained_forecaster_model(
     y_pred = forecaster.model.predict(x_val)
 
     metrics = evaluate_forecast(y_val, y_pred)
-    context.log.info(f"Validation metrics: {metrics}")
-
-    model_path = Path("data/model.joblib")
+    model_path = settings.DATA_DIR / "model.joblib"
     forecaster.save(model_path)
 
     # MLflow logging (safe in test/local environments)
