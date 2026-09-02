@@ -5,6 +5,8 @@ from datetime import timedelta
 from feast import Entity, FeatureView, Field, FileSource, ValueType
 from feast.types import Float32, Int64
 
+from shiro_mlops.core.config import settings
+
 # 1. Location Entity
 location_entity = Entity(
     name="location",
@@ -16,13 +18,13 @@ location_entity = Entity(
 # 2. Offline Parquet Sources
 load_source = FileSource(
     name="taipower_load_source",
-    path="data/taipower_features.parquet",
+    path=str(settings.DATA_DIR.resolve() / "taipower_features.parquet"),
     timestamp_field="datetime",
 )
 
 weather_source = FileSource(
     name="cwa_weather_source",
-    path="data/weather_features.parquet",
+    path=str(settings.DATA_DIR.resolve() / "weather_features.parquet"),
     timestamp_field="datetime",
 )
 
