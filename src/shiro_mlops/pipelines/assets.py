@@ -12,27 +12,63 @@ from shiro_mlops.core.constants import (
     LOAD_MW_COL,
 )
 from shiro_mlops.data.cwa_client import CWAClient
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
 from shiro_mlops.features.transformers import build_feature_pipeline
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 
 
-@asset(group_name="ingestion", description="Fetch raw hourly load data from Taipower Open Data")
+def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
+    """Retrieve TimeSeriesRepository from Dagster resources or instantiate default."""
+    return getattr(context.resources, "time_series_repo", None) or TimeSeriesRepository()
+
+
+@asset(
+    group_name="ingestion",
+    description="Fetch raw hourly load data from Taipower Open Data",
+    required_resource_keys={"time_series_repo"},
+)
 def raw_taipower_load_data(context: AssetExecutionContext) -> pd.DataFrame:
     """Asset: Raw Taipower load data."""
-    client = TaipowerClient(api_url=settings.TAIPOWER_API_URL)
+    client = TaipowerClient(base_url=settings.TAIPOWER_API_URL)
     df = client.fetch_load_data()
     context.log.info(f"Fetched {len(df)} Taipower load records.")
+
+    repo = _get_time_series_repo(context)
+    try:
+        upserted = repo.upsert_taipower_load(df)
+        context.log.info(f"Persisted {upserted} Taipower load records to TimescaleDB.")
+    except Exception as e:
+        if settings.ENVIRONMENT == "test":
+            context.log.warning(f"Database persistence skipped in test environment: {e}")
+        else:
+            raise
+
     return df
 
 
-@asset(group_name="ingestion", description="Fetch raw weather observation data from CWA Open Data")
+@asset(
+    group_name="ingestion",
+    description="Fetch raw weather observation data from CWA Open Data",
+    required_resource_keys={"time_series_repo"},
+)
 def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
     """Asset: Raw CWA weather observation data."""
     client = CWAClient(api_key=settings.CWA_API_KEY)
     df = client.fetch_observations()
     context.log.info(f"Fetched {len(df)} CWA weather observation records.")
+
+    repo = _get_time_series_repo(context)
+    try:
+        upserted = repo.upsert_cwa_weather(df)
+        context.log.info(f"Persisted {upserted} CWA weather records to TimescaleDB.")
+    except Exception as e:
+        if settings.ENVIRONMENT == "test":
+            context.log.warning(f"Database persistence skipped in test environment: {e}")
+        else:
+            raise
+
     return df
 
 
@@ -79,6 +115,9 @@ def trained_forecaster_model(
     metrics = evaluate_forecast(y_val, y_pred)
     context.log.info(f"Validation metrics: {metrics}")
 
+    model_path = Path("data/model.joblib")
+    forecaster.save(model_path)
+
     # MLflow logging (safe in test/local environments)
     try:
         mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
@@ -86,14 +125,10 @@ def trained_forecaster_model(
         with mlflow.start_run(run_name="dagster_daily_training") as run:
             mlflow.log_metrics(metrics)
             mlflow.log_params(forecaster.params)
-            model_path = Path("data/model.joblib")
-            forecaster.save(model_path)
             mlflow.log_artifact(str(model_path), artifact_path="model")
             run_id = run.info.run_id
     except Exception as e:
         context.log.warning(f"MLflow logging skipped or failed: {e}")
-        model_path = Path("data/model.joblib")
-        forecaster.save(model_path)
         run_id = "local_run"
 
     return Output(

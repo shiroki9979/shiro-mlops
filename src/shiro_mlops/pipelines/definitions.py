@@ -4,6 +4,7 @@ from dagster import Definitions, load_assets_from_modules
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import get_parquet_io_manager
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets
 from shiro_mlops.pipelines.schedules import (
     daily_training_job,
@@ -26,5 +27,6 @@ defs = Definitions(
     jobs=[daily_training_job, hourly_drift_job],
     resources={
         "io_manager": io_manager,
+        "time_series_repo": TimeSeriesRepository(),
     },
 )
