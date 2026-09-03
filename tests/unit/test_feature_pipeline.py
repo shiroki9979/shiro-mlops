@@ -4,6 +4,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.feature_pipeline import (
@@ -37,6 +39,31 @@ def test_fetch_feature_source_data_uses_repository_data_and_normalizes_storage_c
     assert "created_at" not in source_data.weather.columns
     assert source_data.load.equals(taipower_raw_df)
     assert source_data.weather.equals(cwa_obs_df)
+
+
+def test_fetch_feature_source_data_logs_and_falls_back_when_repository_is_unavailable(
+    caplog, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
+) -> None:
+    """Feature retrieval preserves ingestion data when TimescaleDB is unavailable."""
+    repository = MagicMock(spec=TimeSeriesRepository)
+    repository.fetch_load_range.side_effect = SQLAlchemyError("TimescaleDB unavailable")
+
+    source_data = fetch_feature_source_data(repository, taipower_raw_df, cwa_obs_df)
+
+    assert source_data.load.equals(taipower_raw_df)
+    assert source_data.weather.equals(cwa_obs_df)
+    assert "TimescaleDB unavailable" in caplog.text
+
+
+def test_fetch_feature_source_data_propagates_unexpected_repository_errors(
+    taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
+) -> None:
+    """Feature retrieval exposes non-database failures for diagnosis."""
+    repository = MagicMock(spec=TimeSeriesRepository)
+    repository.fetch_load_range.side_effect = RuntimeError("Unexpected repository failure")
+
+    with pytest.raises(RuntimeError, match="Unexpected repository failure"):
+        fetch_feature_source_data(repository, taipower_raw_df, cwa_obs_df)
 
 
 def test_transform_feature_source_data_preserves_model_feature_contract(
