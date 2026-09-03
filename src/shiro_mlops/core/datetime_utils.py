@@ -19,22 +19,27 @@ def standardize_taiwan_datetime(s: pd.Series) -> pd.Series:
     if getattr(s.dtype, "tz", None) is not None:
         return s.dt.tz_convert(TAIWAN_TZ).dt.tz_localize(None)
 
-    non_nulls = s.dropna()
-    if not non_nulls.empty:
-        sample = str(non_nulls.iloc[0])
-        has_tz = (
-            ("+" in sample)
-            or ("Z" in sample)
-            or ("-" in sample and "T" in sample and len(sample) > 19)
-        )
-        if has_tz:
-            try:
-                parsed = pd.to_datetime(s, utc=True)
-                return parsed.dt.tz_convert(TAIWAN_TZ).dt.tz_localize(None)
-            except Exception:
-                pass
+    def to_taiwan_local(value: object) -> pd.Timestamp:
+        if pd.isna(value):
+            return pd.NaT
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is not None:
+            return timestamp.tz_convert(TAIWAN_TZ).tz_localize(None)
+        return timestamp
 
-    parsed = pd.to_datetime(s, errors="coerce")
-    if getattr(parsed.dtype, "tz", None) is not None:
-        return parsed.dt.tz_convert(TAIWAN_TZ).dt.tz_localize(None)
-    return parsed
+    return pd.to_datetime(s.map(to_taiwan_local), errors="coerce")
+
+
+def taiwan_local_to_utc(s: pd.Series) -> pd.Series:
+    """Convert source timestamps to UTC for persistence and database filtering.
+
+    Timezone-naive values represent Taiwan local time at the ingestion boundary;
+    timezone-aware values retain their stated instant before conversion to UTC.
+    """
+    local_time = standardize_taiwan_datetime(s)
+    return local_time.dt.tz_localize(TAIWAN_TZ).dt.tz_convert("UTC")
+
+
+def utc_to_taiwan_datetime(s: pd.Series) -> pd.Series:
+    """Convert UTC database timestamps to Taiwan-local, timezone-naive feature time."""
+    return pd.to_datetime(s, utc=True).dt.tz_convert(TAIWAN_TZ).dt.tz_localize(None)
