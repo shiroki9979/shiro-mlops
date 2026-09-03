@@ -166,6 +166,86 @@ def test_engineered_features_multi_location_isolation_and_export(
     assert not w_df.duplicated(subset=["datetime", "location"]).any()
 
 
+def test_short_dataset_feast_parquet_schema_contract(
+    sqlite_engine: Engine,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Verify short data windows (e.g. 5 records) produce complete Feast Parquet schemas with float32/int64 types."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    repo = TimeSeriesRepository(engine=sqlite_engine)
+
+    short_load = pd.DataFrame(
+        [
+            {
+                "datetime": f"2026-08-20 0{i}:00:00",
+                "load_mw": 25000.0 + i * 100,
+                "location": "Taipei",
+            }
+            for i in range(5)
+        ]
+    )
+    short_weather = pd.DataFrame(
+        [
+            {
+                "datetime": f"2026-08-20 0{i}:00:00",
+                "temperature": 28.0 + i * 0.5,
+                "relative_humidity": 80.0 - i,
+                "location": "Taipei",
+            }
+            for i in range(5)
+        ]
+    )
+
+    repo.upsert_taipower_load(short_load)
+    repo.upsert_cwa_weather(short_weather)
+
+    context = build_asset_context(resources={"time_series_repo": repo})
+    features_df = engineered_features(
+        context=context,
+        raw_taipower_load_data=short_load,
+        raw_weather_obs_data=short_weather,
+    )
+
+    assert not features_df.empty
+    assert len(features_df) == 5
+
+    # Check Parquet on disk
+    tp_path = tmp_path / "taipower_features.parquet"
+    tp_df = pd.read_parquet(tp_path)
+    assert len(tp_df) == 5
+
+    # Verify all FeatureView fields are present in the Parquet file
+    expected_tp_fields = [
+        "load_mw",
+        "load_mw_lag_1",
+        "load_mw_lag_2",
+        "load_mw_lag_24",
+        "load_mw_rolling_mean_6",
+        "load_mw_rolling_mean_24",
+        "hour",
+        "dayofweek",
+        "is_weekend",
+        "hour_sin",
+        "hour_cos",
+    ]
+    for field in expected_tp_fields:
+        assert field in tp_df.columns, f"Missing required Feast field: {field}"
+
+    # Verify types
+    assert tp_df["load_mw_lag_24"].dtype == "float32"
+    assert tp_df["load_mw_rolling_mean_24"].dtype == "float32"
+    assert tp_df["hour"].dtype == "int64"
+
+    w_path = tmp_path / "weather_features.parquet"
+    w_df = pd.read_parquet(w_path)
+    assert len(w_df) == 5
+    assert "temperature" in w_df.columns
+    assert "relative_humidity" in w_df.columns
+    assert w_df["temperature"].dtype == "float32"
+    assert w_df["relative_humidity"].dtype == "float32"
+
+
 def test_feast_offline_feature_retrieval(
     populated_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
