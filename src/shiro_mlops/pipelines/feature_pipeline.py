@@ -1,5 +1,6 @@
 """Feature pipeline boundaries for retrieval, transformation, and Feast publication."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,11 +8,28 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.core.constants import LOAD_MW_COL
+from shiro_mlops.core.constants import (
+    DATETIME_COL,
+    DEFAULT_LOCATION,
+    LOAD_MW_COL,
+    LOCATION_COL,
+    RELATIVE_HUMIDITY_COL,
+    TEMPERATURE_COL,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.storage import publish_parquet_feature
 from shiro_mlops.features.transformers import build_feature_pipeline
+
+logger = logging.getLogger(__name__)
+
+STORAGE_TIME_COL = "time"
+STORAGE_CREATED_AT_COL = "created_at"
+TAIPOWER_EXPORT_LAG_HOURS = (1, 2, 24)
+TAIPOWER_EXPORT_ROLLING_WINDOWS = (6, 24)
+DEFAULT_TEMPERATURE_CELSIUS = 25.0
+DEFAULT_RELATIVE_HUMIDITY_PERCENT = 70.0
 
 
 @dataclass(frozen=True)
@@ -43,9 +61,19 @@ class FeaturePublication:
 def _to_transformer_input(df: pd.DataFrame) -> pd.DataFrame:
     """Remove storage-only columns and restore the feature datetime name."""
     result = df.copy()
-    if "time" in result.columns and "datetime" not in result.columns:
-        result = result.rename(columns={"time": "datetime"})
-    return result.drop(columns=["created_at"], errors="ignore")
+    if STORAGE_TIME_COL in result.columns and DATETIME_COL not in result.columns:
+        result = result.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
+    return result.drop(columns=[STORAGE_CREATED_AT_COL], errors="ignore")
+
+
+def _normalize_export_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure an export frame has the shared Feast entity and event-time columns."""
+    result = df.copy()
+    if LOCATION_COL not in result.columns:
+        result[LOCATION_COL] = DEFAULT_LOCATION
+    if DATETIME_COL not in result.columns and STORAGE_TIME_COL in result.columns:
+        result = result.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
+    return result
 
 
 def fetch_feature_source_data(
@@ -57,7 +85,12 @@ def fetch_feature_source_data(
     try:
         persisted_load = repository.fetch_load_range()
         persisted_weather = repository.fetch_weather_range()
-    except Exception:
+    except SQLAlchemyError as error:
+        logger.warning(
+            "Could not retrieve persisted feature source data; using ingestion outputs: %s",
+            error,
+            exc_info=True,
+        )
         persisted_load = pd.DataFrame()
         persisted_weather = pd.DataFrame()
 
@@ -73,13 +106,9 @@ def transform_feature_source_data(source_data: FeatureSourceData) -> pd.DataFram
 
 def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     """Build the Taipower Feast schema from engineered features."""
-    result = features_df.copy()
-    if "location" not in result.columns:
-        result["location"] = "Taipei"
-    if "datetime" not in result.columns and "time" in result.columns:
-        result["datetime"] = result["time"]
+    result = _normalize_export_frame(features_df)
 
-    datetime_values = pd.to_datetime(result["datetime"])
+    datetime_values = pd.to_datetime(result[DATETIME_COL])
     if "hour" not in result.columns:
         result["hour"] = datetime_values.dt.hour
     if "dayofweek" not in result.columns:
@@ -91,14 +120,14 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     if "hour_cos" not in result.columns:
         result["hour_cos"] = np.cos(2 * np.pi * result["hour"] / 24.0)
 
-    for lag in [1, 2, 24]:
+    for lag in TAIPOWER_EXPORT_LAG_HOURS:
         column = f"load_mw_lag_{lag}"
         if column not in result.columns:
             result[column] = result.groupby("location")[LOAD_MW_COL].transform(
                 lambda values: values.shift(lag).bfill().ffill()
             )
 
-    for window in [6, 24]:
+    for window in TAIPOWER_EXPORT_ROLLING_WINDOWS:
         column = f"load_mw_rolling_mean_{window}"
         if column not in result.columns:
             result[column] = result.groupby("location")[LOAD_MW_COL].transform(
@@ -125,38 +154,38 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     for column in int_columns:
         result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0).astype("int64")
 
-    columns = ["datetime", "location"] + float_columns[:6] + int_columns + float_columns[6:]
+    columns = [DATETIME_COL, LOCATION_COL] + float_columns[:6] + int_columns + float_columns[6:]
     return (
         result[columns]
-        .drop_duplicates(subset=["datetime", "location"], keep="last")
-        .sort_values(["location", "datetime"])
+        .drop_duplicates(subset=[DATETIME_COL, LOCATION_COL], keep="last")
+        .sort_values([LOCATION_COL, DATETIME_COL])
         .reset_index(drop=True)
     )
 
 
 def _build_weather_export(weather_df: pd.DataFrame) -> pd.DataFrame:
     """Build the CWA Feast schema from weather source observations."""
-    result = weather_df.copy()
-    if "location" not in result.columns:
-        result["location"] = "Taipei"
-    if "datetime" not in result.columns and "time" in result.columns:
-        result["datetime"] = result["time"]
-    if "temperature" not in result.columns:
-        result["temperature"] = 25.0
-    if "relative_humidity" not in result.columns:
-        result["relative_humidity"] = 70.0
+    result = _normalize_export_frame(weather_df)
+    if TEMPERATURE_COL not in result.columns:
+        result[TEMPERATURE_COL] = DEFAULT_TEMPERATURE_CELSIUS
+    if RELATIVE_HUMIDITY_COL not in result.columns:
+        result[RELATIVE_HUMIDITY_COL] = DEFAULT_RELATIVE_HUMIDITY_PERCENT
 
-    result["temperature"] = (
-        pd.to_numeric(result["temperature"], errors="coerce").fillna(25.0).astype("float32")
+    result[TEMPERATURE_COL] = (
+        pd.to_numeric(result[TEMPERATURE_COL], errors="coerce")
+        .fillna(DEFAULT_TEMPERATURE_CELSIUS)
+        .astype("float32")
     )
-    result["relative_humidity"] = (
-        pd.to_numeric(result["relative_humidity"], errors="coerce").fillna(70.0).astype("float32")
+    result[RELATIVE_HUMIDITY_COL] = (
+        pd.to_numeric(result[RELATIVE_HUMIDITY_COL], errors="coerce")
+        .fillna(DEFAULT_RELATIVE_HUMIDITY_PERCENT)
+        .astype("float32")
     )
-    columns = ["datetime", "location", "temperature", "relative_humidity"]
+    columns = [DATETIME_COL, LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL]
     return (
         result[columns]
-        .drop_duplicates(subset=["datetime", "location"], keep="last")
-        .sort_values(["location", "datetime"])
+        .drop_duplicates(subset=[DATETIME_COL, LOCATION_COL], keep="last")
+        .sort_values([LOCATION_COL, DATETIME_COL])
         .reset_index(drop=True)
     )
 
