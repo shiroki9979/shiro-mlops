@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.features.transformers import merge_weather_features
 
 
 @pytest.fixture
@@ -46,6 +47,66 @@ def test_upsert_taipower_load_insert_and_fetch(
     assert "load_mw" in fetched_df.columns
     assert fetched_df.iloc[0]["load_mw"] == pytest.approx(26500.0)
     assert fetched_df.iloc[0]["location"] == "Taipei"
+
+
+def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_aligned(
+    repository: TimeSeriesRepository,
+) -> None:
+    """Persist Taiwan-local load and weather as UTC, then return aligned local feature times."""
+    load_df = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20T14:00:00.000",
+                "load_mw": 38000.0,
+                "location": "Taipei",
+            }
+        ]
+    )
+    weather_df = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20T06:00:00Z",
+                "temperature": 35.5,
+                "relative_humidity": 55.0,
+                "location": "Taipei",
+            }
+        ]
+    )
+
+    repository.upsert_taipower_load(load_df)
+    repository.upsert_cwa_weather(weather_df)
+
+    with repository.engine.connect() as conn:
+        stored_load_time = pd.read_sql_query("SELECT time FROM raw_taipower_load", conn).iloc[0][
+            "time"
+        ]
+        stored_weather_time = pd.read_sql_query("SELECT time FROM raw_cwa_weather", conn).iloc[0][
+            "time"
+        ]
+
+    expected_utc = pd.Timestamp("2026-08-20 06:00:00+00:00")
+    assert pd.Timestamp(stored_load_time) == expected_utc
+    assert pd.Timestamp(stored_weather_time) == expected_utc
+
+    persisted_load = repository.fetch_load_range(
+        start_time="2026-08-20 14:00:00",
+        end_time="2026-08-20 14:00:00",
+        location="Taipei",
+    )
+    persisted_weather = repository.fetch_weather_range(
+        start_time="2026-08-20T06:00:00Z",
+        end_time="2026-08-20T06:00:00Z",
+        location="Taipei",
+    )
+
+    assert persisted_load.iloc[0]["time"] == pd.Timestamp("2026-08-20 14:00:00")
+    assert persisted_weather.iloc[0]["time"] == pd.Timestamp("2026-08-20 14:00:00")
+
+    merged = merge_weather_features(
+        persisted_load.rename(columns={"time": "datetime"}),
+        persisted_weather.rename(columns={"time": "datetime"}),
+    )
+    assert merged.iloc[0]["temperature"] == pytest.approx(35.5)
 
 
 def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepository):

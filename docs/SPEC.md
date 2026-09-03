@@ -33,6 +33,7 @@
 ### 1.3 地端時序資料庫模型 (TimescaleDB Hypertables)
 
 - **資料庫**：`shiro_timeseries` (TimescaleDB / PostgreSQL 15+)
+- **時間契約**：擷取與特徵工程邊界的無時區時間均表示台灣本地時間（`Asia/Taipei`）；帶時區的來源時間保留其原始瞬間。寫入 `TIMESTAMPTZ` 前，repository 一律轉為 UTC；範圍查詢條件同樣轉為 UTC。讀回資料在交給特徵工程前轉回無時區的台灣本地時間。
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)

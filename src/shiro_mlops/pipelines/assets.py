@@ -1,7 +1,8 @@
 """Dagster Software-Defined Assets for Taipower load forecasting MLOps pipeline."""
 
+from collections.abc import Callable
+
 import mlflow
-import numpy as np
 import pandas as pd
 from dagster import AssetExecutionContext, Output, asset
 
@@ -14,14 +15,36 @@ from shiro_mlops.data.cwa_client import CWAClient
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
 from shiro_mlops.features.storage import publish_parquet_feature
-from shiro_mlops.features.transformers import build_feature_pipeline
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
+from shiro_mlops.pipelines.feature_pipeline import (
+    FeaturePublicationTargets,
+    fetch_feature_source_data,
+    publish_feast_features,
+    transform_feature_source_data,
+)
 
 
 def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
     """Retrieve TimeSeriesRepository from Dagster resources or instantiate default."""
     return getattr(context.resources, "time_series_repo", None) or TimeSeriesRepository()
+
+
+def _persist_ingested_data(
+    context: AssetExecutionContext,
+    df: pd.DataFrame,
+    persist: Callable[[pd.DataFrame], int],
+    data_name: str,
+) -> None:
+    """Persist an ingestion asset while preserving the test-environment fallback policy."""
+    try:
+        upserted = persist(df)
+        context.log.info(f"Persisted {upserted} {data_name} records to TimescaleDB.")
+    except Exception as error:
+        if settings.ENVIRONMENT == "test":
+            context.log.warning(f"Database persistence skipped in test environment: {error}")
+        else:
+            raise
 
 
 @asset(
@@ -35,15 +58,9 @@ def raw_taipower_load_data(context: AssetExecutionContext) -> pd.DataFrame:
     df = client.fetch_load_data()
     context.log.info(f"Fetched {len(df)} Taipower load records.")
 
-    repo = _get_time_series_repo(context)
-    try:
-        upserted = repo.upsert_taipower_load(df)
-        context.log.info(f"Persisted {upserted} Taipower load records to TimescaleDB.")
-    except Exception as e:
-        if settings.ENVIRONMENT == "test":
-            context.log.warning(f"Database persistence skipped in test environment: {e}")
-        else:
-            raise
+    _persist_ingested_data(
+        context, df, _get_time_series_repo(context).upsert_taipower_load, "Taipower load"
+    )
 
     return df
 
@@ -59,15 +76,9 @@ def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
     df = client.fetch_observations()
     context.log.info(f"Fetched {len(df)} CWA weather observation records.")
 
-    repo = _get_time_series_repo(context)
-    try:
-        upserted = repo.upsert_cwa_weather(df)
-        context.log.info(f"Persisted {upserted} CWA weather records to TimescaleDB.")
-    except Exception as e:
-        if settings.ENVIRONMENT == "test":
-            context.log.warning(f"Database persistence skipped in test environment: {e}")
-        else:
-            raise
+    _persist_ingested_data(
+        context, df, _get_time_series_repo(context).upsert_cwa_weather, "CWA weather"
+    )
 
     return df
 
@@ -83,171 +94,30 @@ def engineered_features(
     raw_weather_obs_data: pd.DataFrame,
 ) -> pd.DataFrame:
     """Asset: Extract clean time-series from TimescaleDB, engineer features, and export Feast Parquet artifacts."""
-    repo = _get_time_series_repo(context)
-
-    # 1. Fetch clean time-series from TimescaleDB (fallback to upstream assets if empty)
-    try:
-        db_load_df = repo.fetch_load_range()
-        db_weather_df = repo.fetch_weather_range()
-    except Exception as e:
-        context.log.warning(
-            f"Failed to fetch from repository, falling back to upstream assets: {e}"
-        )
-        db_load_df = pd.DataFrame()
-        db_weather_df = pd.DataFrame()
-
-    load_df = db_load_df.copy() if not db_load_df.empty else raw_taipower_load_data.copy()
-    weather_df = db_weather_df.copy() if not db_weather_df.empty else raw_weather_obs_data.copy()
-
-    # 2. Normalize columns
-    if "time" in load_df.columns and "datetime" not in load_df.columns:
-        load_df = load_df.rename(columns={"time": "datetime"})
-    if "time" in weather_df.columns and "datetime" not in weather_df.columns:
-        weather_df = weather_df.rename(columns={"time": "datetime"})
-
-    if "created_at" in load_df.columns:
-        load_df = load_df.drop(columns=["created_at"])
-    if "created_at" in weather_df.columns:
-        weather_df = weather_df.drop(columns=["created_at"])
-
-    # 3. Build engineered features
-    features_df = build_feature_pipeline(
-        load_df=load_df,
-        weather_df=weather_df,
+    source_data = fetch_feature_source_data(
+        _get_time_series_repo(context), raw_taipower_load_data, raw_weather_obs_data
     )
+    features_df = transform_feature_source_data(source_data)
     context.log.info(f"Constructed engineered features table with shape: {features_df.shape}")
 
-    # 4. Export Feast Parquet artifacts to settings.DATA_DIR
-    data_dir = settings.DATA_DIR
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    # Compile taipower_features.parquet
-    taipower_export_df = features_df.copy()
-    if "location" not in taipower_export_df.columns:
-        taipower_export_df["location"] = "Taipei"
-    if "datetime" not in taipower_export_df.columns and "time" in taipower_export_df.columns:
-        taipower_export_df["datetime"] = taipower_export_df["time"]
-
-    dt_series = pd.to_datetime(taipower_export_df["datetime"])
-
-    # Ensure required calendar fields
-    if "hour" not in taipower_export_df.columns:
-        taipower_export_df["hour"] = dt_series.dt.hour
-    if "dayofweek" not in taipower_export_df.columns:
-        taipower_export_df["dayofweek"] = dt_series.dt.dayofweek
-    if "is_weekend" not in taipower_export_df.columns:
-        taipower_export_df["is_weekend"] = (taipower_export_df["dayofweek"] >= 5).astype(int)
-    if "hour_sin" not in taipower_export_df.columns:
-        taipower_export_df["hour_sin"] = np.sin(2 * np.pi * taipower_export_df["hour"] / 24.0)
-    if "hour_cos" not in taipower_export_df.columns:
-        taipower_export_df["hour_cos"] = np.cos(2 * np.pi * taipower_export_df["hour"] / 24.0)
-
-    # Ensure required lag fields for Feast schema
-    for lag in [1, 2, 24]:
-        col_name = f"load_mw_lag_{lag}"
-        if col_name not in taipower_export_df.columns:
-            taipower_export_df[col_name] = taipower_export_df.groupby("location")[
-                "load_mw"
-            ].transform(lambda s: s.shift(lag).bfill().ffill())
-            if taipower_export_df[col_name].isna().any():
-                fallback_val = (
-                    float(taipower_export_df["load_mw"].mean())
-                    if not taipower_export_df["load_mw"].isna().all()
-                    else 0.0
-                )
-                taipower_export_df[col_name] = taipower_export_df[col_name].fillna(fallback_val)
-
-    # Ensure required rolling fields for Feast schema
-    for w in [6, 24]:
-        mean_col = f"load_mw_rolling_mean_{w}"
-        if mean_col not in taipower_export_df.columns:
-            taipower_export_df[mean_col] = taipower_export_df.groupby("location")[
-                "load_mw"
-            ].transform(
-                lambda s: s.shift(1).rolling(window=w, min_periods=1).mean().bfill().ffill()
-            )
-            if taipower_export_df[mean_col].isna().any():
-                fallback_val = (
-                    float(taipower_export_df["load_mw"].mean())
-                    if not taipower_export_df["load_mw"].isna().all()
-                    else 0.0
-                )
-                taipower_export_df[mean_col] = taipower_export_df[mean_col].fillna(fallback_val)
-
-    float_fields = [
-        "load_mw",
-        "load_mw_lag_1",
-        "load_mw_lag_2",
-        "load_mw_lag_24",
-        "load_mw_rolling_mean_6",
-        "load_mw_rolling_mean_24",
-        "hour_sin",
-        "hour_cos",
-    ]
-    int_fields = ["hour", "dayofweek", "is_weekend"]
-
-    for f in float_fields:
-        taipower_export_df[f] = (
-            pd.to_numeric(taipower_export_df[f], errors="coerce").fillna(0.0).astype("float32")
-        )
-
-    for f in int_fields:
-        taipower_export_df[f] = (
-            pd.to_numeric(taipower_export_df[f], errors="coerce").fillna(0).astype("int64")
-        )
-
-    taipower_cols = ["datetime", "location"] + float_fields[:6] + int_fields + float_fields[6:]
-    taipower_parquet_path = data_dir / "taipower_features.parquet"
-    taipower_export_df = (
-        taipower_export_df[taipower_cols]
-        .drop_duplicates(subset=["datetime", "location"], keep="last")
-        .sort_values(["location", "datetime"])
-        .reset_index(drop=True)
+    publication = publish_feast_features(
+        features_df,
+        source_data.weather,
+        FeaturePublicationTargets(
+            data_dir=settings.DATA_DIR,
+            offline_store_type=settings.FEAST_OFFLINE_STORE_TYPE,
+            taipower_uri=settings.taipower_parquet_uri,
+            weather_uri=settings.weather_parquet_uri,
+        ),
+        publisher=publish_parquet_feature,
     )
-    publish_parquet_feature(taipower_export_df, str(taipower_parquet_path))
-
-    # Compile weather_features.parquet
-    weather_export_df = weather_df.copy()
-    if "location" not in weather_export_df.columns:
-        weather_export_df["location"] = "Taipei"
-    if "datetime" not in weather_export_df.columns and "time" in weather_export_df.columns:
-        weather_export_df["datetime"] = weather_export_df["time"]
-
-    if "temperature" not in weather_export_df.columns:
-        weather_export_df["temperature"] = 25.0
-    if "relative_humidity" not in weather_export_df.columns:
-        weather_export_df["relative_humidity"] = 70.0
-
-    weather_export_df["temperature"] = (
-        pd.to_numeric(weather_export_df["temperature"], errors="coerce")
-        .fillna(25.0)
-        .astype("float32")
-    )
-    weather_export_df["relative_humidity"] = (
-        pd.to_numeric(weather_export_df["relative_humidity"], errors="coerce")
-        .fillna(70.0)
-        .astype("float32")
-    )
-
-    weather_cols = ["datetime", "location", "temperature", "relative_humidity"]
-    weather_parquet_path = data_dir / "weather_features.parquet"
-    weather_export_df = (
-        weather_export_df[weather_cols]
-        .drop_duplicates(subset=["datetime", "location"], keep="last")
-        .sort_values(["location", "datetime"])
-        .reset_index(drop=True)
-    )
-    publish_parquet_feature(weather_export_df, str(weather_parquet_path))
-
     if settings.FEAST_OFFLINE_STORE_TYPE == "s3":
-        publish_parquet_feature(taipower_export_df, settings.taipower_parquet_uri)
-        publish_parquet_feature(weather_export_df, settings.weather_parquet_uri)
         context.log.info(
             f"Published Feast Parquet to S3: {settings.taipower_parquet_uri}, {settings.weather_parquet_uri}"
         )
     else:
         context.log.info(
-            f"Exported Feast Parquet files: {taipower_parquet_path}, {weather_parquet_path}"
+            f"Exported Feast Parquet files: {publication.taipower_path}, {publication.weather_path}"
         )
     return features_df
 
