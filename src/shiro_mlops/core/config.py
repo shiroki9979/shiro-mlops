@@ -22,6 +22,22 @@ class Settings(BaseSettings):
     DATA_DIR: Path = Path("data")
     S3_BUCKET_NAME: str = "shiro-mlops-artifacts"
     AWS_REGION: str = "ap-northeast-1"
+    FEAST_OFFLINE_STORE_TYPE: Literal["file", "s3"] = "file"
+    FEAST_S3_PREFIX: str = "features"
+
+    @property
+    def taipower_parquet_uri(self) -> str:
+        """Return the target URI (local path or s3://) for Taipower feature Parquet."""
+        if self.FEAST_OFFLINE_STORE_TYPE == "s3":
+            return f"s3://{self.S3_BUCKET_NAME}/{self.FEAST_S3_PREFIX}/taipower_features.parquet"
+        return str((self.DATA_DIR / "taipower_features.parquet").resolve())
+
+    @property
+    def weather_parquet_uri(self) -> str:
+        """Return the target URI (local path or s3://) for CWA weather feature Parquet."""
+        if self.FEAST_OFFLINE_STORE_TYPE == "s3":
+            return f"s3://{self.S3_BUCKET_NAME}/{self.FEAST_S3_PREFIX}/weather_features.parquet"
+        return str((self.DATA_DIR / "weather_features.parquet").resolve())
 
     # MLflow
     MLFLOW_TRACKING_URI: str = "http://localhost:5001"
