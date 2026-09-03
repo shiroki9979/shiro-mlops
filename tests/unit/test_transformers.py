@@ -77,3 +77,91 @@ def test_build_feature_pipeline(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.Da
     assert f"{LOAD_MW_COL}_rolling_mean_6" in features_df.columns
     assert "temperature" in features_df.columns
     assert not features_df.isna().any().any()
+
+
+def test_multi_location_lag_and_rolling_isolation() -> None:
+    """Verify lag and rolling calculations are isolated per location with zero cross-station pollution."""
+    multi_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 300.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 1000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 2000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 3000.0, "location": "Kaohsiung"},
+        ]
+    )
+
+    lag_res = create_lag_features(multi_df, lags=[1])
+    # Taipei checks
+    taipei_lags = lag_res[lag_res["location"] == "Taipei"].sort_values("datetime")
+    assert pd.isna(taipei_lags.iloc[0]["load_mw_lag_1"])
+    assert taipei_lags.iloc[1]["load_mw_lag_1"] == 100.0
+    assert taipei_lags.iloc[2]["load_mw_lag_1"] == 200.0
+
+    # Kaohsiung checks - MUST NOT be contaminated by Taipei's 300.0 at t=0
+    kh_lags = lag_res[lag_res["location"] == "Kaohsiung"].sort_values("datetime")
+    assert pd.isna(kh_lags.iloc[0]["load_mw_lag_1"])
+    assert kh_lags.iloc[1]["load_mw_lag_1"] == 1000.0
+    assert kh_lags.iloc[2]["load_mw_lag_1"] == 2000.0
+
+    # Rolling checks
+    roll_res = create_rolling_features(multi_df, windows=[2])
+    kh_roll = roll_res[roll_res["location"] == "Kaohsiung"].sort_values("datetime")
+    # Kaohsiung t=1 shifted(1) window=2 should be mean([1000.0]) = 1000.0, not contaminated by Taipei
+    assert kh_roll.iloc[1]["load_mw_rolling_mean_2"] == 1000.0
+
+
+def test_multi_location_weather_merge_isolation() -> None:
+    """Verify weather data is merged per (datetime, location) without Cartesian product or cross-station bleed."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 1000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 2000.0, "location": "Kaohsiung"},
+        ]
+    )
+    weather_df = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20 00:00:00",
+                "temperature": 32.0,
+                "relative_humidity": 60.0,
+                "location": "Taipei",
+            },
+            {
+                "datetime": "2026-08-20 01:00:00",
+                "temperature": 33.0,
+                "relative_humidity": 58.0,
+                "location": "Taipei",
+            },
+            {
+                "datetime": "2026-08-20 00:00:00",
+                "temperature": 28.0,
+                "relative_humidity": 80.0,
+                "location": "Kaohsiung",
+            },
+            {
+                "datetime": "2026-08-20 01:00:00",
+                "temperature": 29.0,
+                "relative_humidity": 78.0,
+                "location": "Kaohsiung",
+            },
+        ]
+    )
+
+    merged = merge_weather_features(load_df, weather_df)
+    # Exactly 4 rows, preserving location alignment
+    assert len(merged) == 4
+    taipei_00 = merged[
+        (merged["location"] == "Taipei")
+        & (merged["datetime"] == pd.Timestamp("2026-08-20 00:00:00"))
+    ].iloc[0]
+    kh_00 = merged[
+        (merged["location"] == "Kaohsiung")
+        & (merged["datetime"] == pd.Timestamp("2026-08-20 00:00:00"))
+    ].iloc[0]
+
+    assert taipei_00["temperature"] == 32.0
+    assert kh_00["temperature"] == 28.0

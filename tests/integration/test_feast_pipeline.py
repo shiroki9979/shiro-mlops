@@ -120,6 +120,52 @@ def test_engineered_features_extracts_db_and_materializes_feast_parquet(
     assert "relative_humidity" in w_df.columns
 
 
+def test_engineered_features_multi_location_isolation_and_export(
+    sqlite_engine: Engine,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Verify engineered_features isolates multiple locations and produces unique composite Feast keys."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    repo = TimeSeriesRepository(engine=sqlite_engine)
+
+    # Upsert Taipei data
+    repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    repo.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
+
+    # Upsert Kaohsiung data with different values
+    kh_taipower = taipower_raw_df.copy()
+    kh_taipower["load_mw"] = kh_taipower["load_mw"] * 0.6
+    kh_taipower["location"] = "Kaohsiung"
+    repo.upsert_taipower_load(kh_taipower, default_location="Kaohsiung")
+
+    kh_weather = cwa_obs_df.copy()
+    kh_weather["temperature"] = kh_weather["temperature"] + 3.0
+    kh_weather["location"] = "Kaohsiung"
+    repo.upsert_cwa_weather(kh_weather, default_location="Kaohsiung")
+
+    context = build_asset_context(resources={"time_series_repo": repo})
+    features_df = engineered_features(
+        context=context,
+        raw_taipower_load_data=taipower_raw_df,
+        raw_weather_obs_data=cwa_obs_df,
+    )
+
+    assert not features_df.empty
+    assert set(features_df["location"]) == {"Taipei", "Kaohsiung"}
+
+    # Verify Feast Parquet export has unique (datetime, location) keys
+    tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
+    assert set(tp_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert not tp_df.duplicated(subset=["datetime", "location"]).any()
+
+    w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
+    assert set(w_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert not w_df.duplicated(subset=["datetime", "location"]).any()
+
+
 def test_feast_offline_feature_retrieval(
     populated_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,

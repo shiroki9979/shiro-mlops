@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 修正 `transformers.py` 特徵工程依 `location` 隔離計算 lag 與 rolling 時序特徵，並改以 `(datetime, location)` 對齊氣象特徵與分組填值，徹底消除多測站笛卡兒積與特徵污染（`src/shiro_mlops/features/transformers.py`，#7）。
+- 修正 `engineered_features` 資產確保產出之 Feast Parquet 包含唯一 `(datetime, location)` 實體鍵與時間對齊（`src/shiro_mlops/pipelines/assets.py`，#7）。
+- 新增多地點離線防回歸測試，驗證跨測站時序特徵無相互污染（`tests/unit/test_transformers.py`、`tests/integration/test_feast_pipeline.py`，#7）。
 - 修正 `TaipowerClient` 支援解析真實 CSV 與 JSON 資料源，並將萬瓩單位與中文欄位標準化為 `datetime` 與 `load_mw`（`src/shiro_mlops/data/taipower_client.py`，#6）。
 - 修正 `CWAClient` 支援解析真實巢狀 `O-A0001-001` 觀測 payload，萃取 `location`、`time`、`temperature` 與 `relative_humidity`（`src/shiro_mlops/data/cwa_client.py`，#6）。
 - 新增真實 API 離線測試 fixtures（`taipower_sample.csv`、`cwa_obs_nested_sample.json`）並整合 Dagster Ingestion 至 TimescaleDB Upsert 端到端驗證（`tests/fixtures/`、`tests/integration/test_data_clients.py`、`tests/integration/test_pipeline_assets.py`，#6）。
