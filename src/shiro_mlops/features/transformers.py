@@ -12,14 +12,16 @@ from shiro_mlops.core.constants import (
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
+from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 
 def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL) -> pd.DataFrame:
     """Generate cyclical and calendar features from datetime."""
     df = df.copy()
-    dt_series = pd.to_datetime(df[datetime_col])
+    dt_series = standardize_taiwan_datetime(df[datetime_col])
 
     df["hour"] = dt_series.dt.hour
+
     df["dayofweek"] = dt_series.dt.dayofweek
     df["month"] = dt_series.dt.month
     df["is_weekend"] = (df["dayofweek"] >= 5).astype(int)
@@ -94,8 +96,8 @@ def merge_weather_features(
     load_df = load_df.copy()
     weather_df = weather_df.copy()
 
-    load_df[datetime_col] = pd.to_datetime(load_df[datetime_col])
-    weather_df[datetime_col] = pd.to_datetime(weather_df[datetime_col])
+    load_df[datetime_col] = standardize_taiwan_datetime(load_df[datetime_col])
+    weather_df[datetime_col] = standardize_taiwan_datetime(weather_df[datetime_col])
 
     # Keep weather columns
     weather_cols = [datetime_col]
@@ -150,6 +152,7 @@ def build_feature_pipeline(
 ) -> pd.DataFrame:
     """End-to-end feature pipeline building calendar, weather, lag, and rolling features isolated by location."""
     df = load_df.copy()
+    df[DATETIME_COL] = standardize_taiwan_datetime(df[DATETIME_COL])
 
     has_location = location_col in df.columns
     sort_cols = [location_col, DATETIME_COL] if has_location else [DATETIME_COL]

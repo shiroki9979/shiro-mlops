@@ -7,6 +7,7 @@ import httpx
 import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, LOCATION_COL
+from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 
 class TaipowerClient:
@@ -45,7 +46,7 @@ class TaipowerClient:
                 break
 
         if DATETIME_COL in df.columns:
-            df[DATETIME_COL] = pd.to_datetime(df[DATETIME_COL])
+            df[DATETIME_COL] = standardize_taiwan_datetime(df[DATETIME_COL])
 
         # Standardize load column (handling 萬瓩 unit conversion: 1 萬瓩 = 10 MW)
         if LOAD_MW_COL in df.columns:

@@ -34,7 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 統一台電用電負載與氣象觀測之時區語意為台灣本地時間（`Asia/Taipei`），實作 `standardize_taiwan_datetime` 函式處理無時區、含時區偏移（`+08:00`）與 UTC（`Z`）時間戳記（`src/shiro_mlops/core/datetime_utils.py`、`src/shiro_mlops/data/taipower_client.py`、`src/shiro_mlops/data/cwa_client.py`，#11）。
+- 於 `TimeSeriesRepository` 與特徵工程（`transformers.py`）讀寫與合併前強制進行台灣本地時區對齊，確保多資料源在完全相同之時間基準上合併與計算時序特徵，徹底杜絕 8 小時偏移問題（`src/shiro_mlops/data/repository.py`、`src/shiro_mlops/features/transformers.py`，#11）。
+- 新增時區對齊之單元與整合測試，涵蓋無時區、`+08:00` 與 UTC 混合來源（`tests/unit/test_transformers.py`、`tests/integration/test_data_clients.py`，#11）。
 - 實作地端資料庫自動檢查與遷移機制 `ensure_timescale_hypertables`，於 `TimeSeriesRepository` 與 API 服務啟動時自動建立或升級 Hypertable（`src/shiro_mlops/core/database.py`、`src/shiro_mlops/data/repository.py`、`src/shiro_mlops/service/api.py`，#10）。
+
 - 在 TimescaleDB 初始化 DDL 加入 `migrate_data => TRUE`，確保既有已含觀測資料之資料卷無痛升級為 Hypertable 且零資料遺失（`docker/init-db/01_init_hypertables.sql`，#10）。
 - 新增既有資料卷升級、重複啟動冪等性與保留資料之離線測試（`tests/unit/test_database.py`，#10）。
 - 隔離 LightGBM 與 MLflow 離線測試環境，在測試模式下自動注入輕量或 mock forecaster，並將 MLflow tracking 後端切換為本機隔離 SQLite / Mock，大幅提升端到端測試穩定度與執行速度（`src/shiro_mlops/pipelines/assets.py`、`tests/conftest.py`、`tests/integration/test_feast_pipeline.py`，#9）。

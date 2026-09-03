@@ -12,6 +12,7 @@ from shiro_mlops.core.constants import (
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
+from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 
 def _normalize_location_name(name: str) -> str:
@@ -127,7 +128,7 @@ class CWAClient:
         df = _parse_cwa_observations_payload(data, fallback_location=location)
 
         if DATETIME_COL in df.columns:
-            df[DATETIME_COL] = pd.to_datetime(df[DATETIME_COL])
+            df[DATETIME_COL] = standardize_taiwan_datetime(df[DATETIME_COL])
         if TEMPERATURE_COL in df.columns:
             df[TEMPERATURE_COL] = pd.to_numeric(df[TEMPERATURE_COL], errors="coerce").astype(float)
         if RELATIVE_HUMIDITY_COL in df.columns:
@@ -150,7 +151,7 @@ class CWAClient:
         df = _parse_cwa_observations_payload(data, fallback_location=location)
 
         if DATETIME_COL in df.columns:
-            df[DATETIME_COL] = pd.to_datetime(df[DATETIME_COL])
+            df[DATETIME_COL] = standardize_taiwan_datetime(df[DATETIME_COL])
         if TEMPERATURE_COL in df.columns:
             df[TEMPERATURE_COL] = pd.to_numeric(df[TEMPERATURE_COL], errors="coerce").astype(float)
         if RELATIVE_HUMIDITY_COL in df.columns:

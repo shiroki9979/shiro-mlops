@@ -17,6 +17,7 @@ from shiro_mlops.core.constants import (
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
+from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ def _prepare_timeseries_df(
     else:
         work_df[LOCATION_COL] = work_df[LOCATION_COL].fillna(default_location)
 
-    work_df["time"] = pd.to_datetime(work_df["time"])
+    work_df["time"] = standardize_taiwan_datetime(work_df["time"])
     return work_df.drop_duplicates(subset=["time", LOCATION_COL], keep="last")
 
 
@@ -55,11 +56,13 @@ def _build_time_location_filter(
 
     if start_time is not None:
         clauses.append("time >= :start_time")
-        params["start_time"] = pd.to_datetime(start_time).to_pydatetime()
+        dt_start = standardize_taiwan_datetime(pd.Series([start_time])).iloc[0]
+        params["start_time"] = pd.to_datetime(dt_start).to_pydatetime()
 
     if end_time is not None:
         clauses.append("time <= :end_time")
-        params["end_time"] = pd.to_datetime(end_time).to_pydatetime()
+        dt_end = standardize_taiwan_datetime(pd.Series([end_time])).iloc[0]
+        params["end_time"] = pd.to_datetime(dt_end).to_pydatetime()
 
     if location is not None:
         clauses.append("location = :location")
@@ -262,7 +265,7 @@ class TimeSeriesRepository:
             empty_df["time"] = pd.to_datetime(empty_df["time"])
             return empty_df
 
-        df["time"] = pd.to_datetime(df["time"])
+        df["time"] = standardize_taiwan_datetime(df["time"])
         return df
 
     def fetch_weather_range(
@@ -305,5 +308,5 @@ class TimeSeriesRepository:
             empty_df["time"] = pd.to_datetime(empty_df["time"])
             return empty_df
 
-        df["time"] = pd.to_datetime(df["time"])
+        df["time"] = standardize_taiwan_datetime(df["time"])
         return df
