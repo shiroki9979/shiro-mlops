@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 新增可選 TimescaleDB 整合測試，驗證台灣時間與 UTC 輸入的儲存瞬間、Upsert 冪等性、範圍查詢與特徵合併對齊（`tests/integration/test_timescaledb_repository.py`，#13）。
 - 支援 Feast 離線特徵發布至 S3 或本機檔案系統，實作 `publish_parquet_feature` 儲存發布模組（`src/shiro_mlops/features/storage.py`，#12）。
 - 於 `Settings` 增加 `FEAST_OFFLINE_STORE_TYPE`、`FEAST_S3_PREFIX` 與動態 Parquet URI 屬性，並更新 `definitions.py` 動態支援 S3 與本機 FileSource 檢索（`src/shiro_mlops/core/config.py`、`src/shiro_mlops/features/definitions.py`，#12）。
 - 於 Dagster `engineered_features` 資產中整合 S3 特徵檔發布，維持雲端無常駐資料庫之混合拓撲架構（`src/shiro_mlops/pipelines/assets.py`，#12）。
