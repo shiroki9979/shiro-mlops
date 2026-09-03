@@ -128,3 +128,45 @@ def test_cwa_client_nested_payload_mocked(monkeypatch: pytest.MonkeyPatch) -> No
     taipei_row = df[df["location"] == "Taipei"].iloc[0]
     assert taipei_row["temperature"] == pytest.approx(35.7)
     assert taipei_row["relative_humidity"] == pytest.approx(57.0)
+    # Datetime should be normalized to timezone-naive Taiwan local time
+    assert getattr(df[DATETIME_COL].dtype, "tz", None) is None
+    assert df[DATETIME_COL].iloc[0] == pd.Timestamp("2026-08-20 14:00:00")
+
+
+def test_taipower_and_cwa_timezone_alignment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Taipower CSV (tz-naive) and CWA nested JSON (tz-aware +08:00) align at identical timestamp."""
+    with open(FIXTURES_DIR / "taipower_sample.csv", encoding="utf-8") as f:
+        csv_str = f.read()
+    with open(FIXTURES_DIR / "cwa_obs_nested_sample.json", encoding="utf-8") as f:
+        json_str = f.read()
+
+    class MockCSVResp:
+        status_code = 200
+        text = csv_str
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class MockJSONResp:
+        status_code = 200
+        text = json_str
+
+        def raise_for_status(self) -> None:
+            pass
+
+    monkeypatch.setattr(httpx.Client, "get", lambda self, url, *a, **kw: MockCSVResp())
+    taipower_client = TaipowerClient()
+    load_df = taipower_client.fetch_load_data()
+
+    monkeypatch.setattr(httpx.Client, "get", lambda self, url, *a, **kw: MockJSONResp())
+    cwa_client = CWAClient(api_key="test_key")
+    weather_df = cwa_client.fetch_observations()
+
+    # Both clients must yield naive datetime64[ns] in Asia/Taipei
+    assert getattr(load_df[DATETIME_COL].dtype, "tz", None) is None
+    assert getattr(weather_df[DATETIME_COL].dtype, "tz", None) is None
+
+    # Target timestamp: 2026-08-20 14:00:00 exists in both
+    target_dt = pd.Timestamp("2026-08-20 14:00:00")
+    assert target_dt in load_df[DATETIME_COL].values
+    assert target_dt in weather_df[DATETIME_COL].values

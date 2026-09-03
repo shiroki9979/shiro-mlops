@@ -165,3 +165,68 @@ def test_multi_location_weather_merge_isolation() -> None:
 
     assert taipei_00["temperature"] == 32.0
     assert kh_00["temperature"] == 28.0
+
+
+def test_timezone_aware_and_naive_weather_merge_alignment() -> None:
+    """Verify tz-aware (+08:00) CWA weather perfectly merges with tz-naive Taipower load."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 14:00:00", "load_mw": 38000.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 15:00:00", "load_mw": 37500.0, "location": "Taipei"},
+        ]
+    )
+    weather_df_aware = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20T14:00:00+08:00",
+                "temperature": 35.5,
+                "relative_humidity": 55.0,
+                "location": "Taipei",
+            },
+            {
+                "datetime": "2026-08-20T15:00:00+08:00",
+                "temperature": 34.8,
+                "relative_humidity": 58.0,
+                "location": "Taipei",
+            },
+        ]
+    )
+
+    merged = merge_weather_features(load_df, weather_df_aware)
+    assert len(merged) == 2
+    row_14 = merged[merged["datetime"] == pd.Timestamp("2026-08-20 14:00:00")].iloc[0]
+    assert row_14["temperature"] == 35.5
+    assert row_14["load_mw"] == 38000.0
+
+
+def test_utc_z_weather_merge_alignment() -> None:
+    """Verify UTC (Z) timestamp is converted to Asia/Taipei and aligns without 8-hour shift."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 14:00:00", "load_mw": 38000.0, "location": "Taipei"},
+        ]
+    )
+    # 06:00:00Z in UTC corresponds exactly to 14:00:00 in Asia/Taipei
+    weather_df_utc = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20T06:00:00Z",
+                "temperature": 35.5,
+                "relative_humidity": 55.0,
+                "location": "Taipei",
+            },
+        ]
+    )
+
+    merged = merge_weather_features(load_df, weather_df_utc)
+    assert len(merged) == 1
+    assert merged.iloc[0]["temperature"] == 35.5
+    assert merged.iloc[0]["datetime"] == pd.Timestamp("2026-08-20 14:00:00")
+
+
+def test_calendar_features_hour_aligned_with_taiwan_time() -> None:
+    """Verify calendar feature extraction treats UTC input as Taiwan local time."""
+    df_utc = pd.DataFrame([{"datetime": "2026-08-20T06:00:00Z", "load_mw": 30000.0}])
+    feat = create_calendar_features(df_utc)
+    # 06:00 UTC is 14:00 in Taiwan
+    assert feat.iloc[0]["hour"] == 14
