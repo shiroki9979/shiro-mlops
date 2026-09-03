@@ -1,0 +1,36 @@
+{
+  "success": "true",
+  "result": {
+    "resource_id": "O-A0001-001",
+    "fields": [
+      {"id": "StationName", "type": "String"},
+      {"id": "ObsTime", "type": "Timestamp"}
+    ]
+  },
+  "records": {
+    "Station": [
+      {
+        "StationName": "Taipei",
+        "StationId": "466920",
+        "ObsTime": {
+          "DateTime": "2026-08-20T14:00:00+08:00"
+        },
+        "WeatherElement": {
+          "AirTemperature": 35.7,
+          "RelativeHumidity": 57.0
+        }
+      },
+      {
+        "StationName": "Kaohsiung",
+        "StationId": "467440",
+        "ObsTime": {
+          "DateTime": "2026-08-20T14:00:00+08:00"
+        },
+        "WeatherElement": {
+          "AirTemperature": 33.2,
+          "RelativeHumidity": 68.0
+        }
+      }
+    ]
+  }
+}

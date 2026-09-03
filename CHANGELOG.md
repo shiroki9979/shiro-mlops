@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 修正 `TaipowerClient` 支援解析真實 CSV 與 JSON 資料源，並將萬瓩單位與中文欄位標準化為 `datetime` 與 `load_mw`（`src/shiro_mlops/data/taipower_client.py`，#6）。
+- 修正 `CWAClient` 支援解析真實巢狀 `O-A0001-001` 觀測 payload，萃取 `location`、`time`、`temperature` 與 `relative_humidity`（`src/shiro_mlops/data/cwa_client.py`，#6）。
+- 新增真實 API 離線測試 fixtures（`taipower_sample.csv`、`cwa_obs_nested_sample.json`）並整合 Dagster Ingestion 至 TimescaleDB Upsert 端到端驗證（`tests/fixtures/`、`tests/integration/test_data_clients.py`、`tests/integration/test_pipeline_assets.py`，#6）。
 - 修復 `.gitignore` 根目錄路徑前綴，避免誤忽略 `src/shiro_mlops/data/` 與 `frontend/src/lib/`。
 - 修復 `AGENTS.md` 內部文件連結之絕對路徑。
 
