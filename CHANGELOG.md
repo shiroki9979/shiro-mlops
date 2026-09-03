@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 於專案發展藍圖新增 GitHub Rulesets 分支與標籤保護機制工單 TICKET-402（`docs/ROADMAP.md`）。
 - 新增 ADR-0006 架構決策紀錄，確立地端 TimescaleDB 與 Parquet/S3 雙層儲存架構（`docs/adr/0006-timescaledb-local-storage-layer.md`）。
 - 建立 TimescaleDB 地端時序儲存規格書（`docs/specs/timescaledb-local-storage.md`）。
 - 實作 `TaipowerClient` 與 `CWAClient` 資料擷取與氣象觀測預報模組（`src/shiro_mlops/data/`）。
