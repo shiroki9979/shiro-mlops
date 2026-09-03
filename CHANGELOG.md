@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 統一 TimescaleDB 資料庫名稱契約為 `shiro_timeseries`，同步更新 `src/shiro_mlops/core/config.py`、`docker/docker-compose.yml`、`.env.example` 與單元測試（#8）。
+- 實作 Feast Parquet Schema 固定合約防護，確保即使為不足長度之短資料視界，亦包含 `load_mw_lag_24`、`load_mw_rolling_mean_24` 等所有必填特徵欄位與相容型別（`float32` / `int64`）（`src/shiro_mlops/features/transformers.py`、`src/shiro_mlops/pipelines/assets.py`，#8）。
+- 定義明確的短期視界缺失值後向填補（`bfill`）與平均值常模補值策略，並加入短資料集與設定一致性離線測試（`tests/integration/test_feast_pipeline.py`、`tests/unit/test_database.py`，#8）。
 - 修正 `transformers.py` 特徵工程依 `location` 隔離計算 lag 與 rolling 時序特徵，並改以 `(datetime, location)` 對齊氣象特徵與分組填值，徹底消除多測站笛卡兒積與特徵污染（`src/shiro_mlops/features/transformers.py`，#7）。
 - 修正 `engineered_features` 資產確保產出之 Feast Parquet 包含唯一 `(datetime, location)` 實體鍵與時間對齊（`src/shiro_mlops/pipelines/assets.py`，#7）。
 - 新增多地點離線防回歸測試，驗證跨測站時序特徵無相互污染（`tests/unit/test_transformers.py`、`tests/integration/test_feast_pipeline.py`，#7）。

@@ -16,10 +16,27 @@ def test_settings_timescaledb_defaults():
     settings = Settings()
     assert settings.TIMESCALE_HOST == "localhost"
     assert settings.TIMESCALE_PORT == 5432
-    assert settings.TIMESCALE_DB == "mlflow"
+    assert settings.TIMESCALE_DB == "shiro_timeseries"
     assert settings.TIMESCALE_USER == "postgres"
     assert settings.TIMESCALE_PASSWORD == "postgrespassword"
-    assert settings.timescale_uri == "postgresql://postgres:postgrespassword@localhost:5432/mlflow"
+    assert (
+        settings.timescale_uri
+        == "postgresql://postgres:postgrespassword@localhost:5432/shiro_timeseries"
+    )
+
+
+def test_database_contract_consistency():
+    """Verify TimescaleDB database name is unified across config, compose, and .env.example."""
+    settings = Settings()
+    expected_db = "shiro_timeseries"
+    assert settings.TIMESCALE_DB == expected_db
+
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+    assert f"TIMESCALE_DB={expected_db}" in env_example
+
+    compose_content = Path("docker/docker-compose.yml").read_text(encoding="utf-8")
+    assert f"POSTGRES_DB: {expected_db}" in compose_content
+    assert f"/{expected_db}" in compose_content
 
 
 def test_settings_timescaledb_env_override(monkeypatch):

@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # TimescaleDB / Operational Time-Series Store
     TIMESCALE_HOST: str = "localhost"
     TIMESCALE_PORT: int = 5432
-    TIMESCALE_DB: str = "mlflow"
+    TIMESCALE_DB: str = "shiro_timeseries"
     TIMESCALE_USER: str = "postgres"
     TIMESCALE_PASSWORD: str = "postgrespassword"
 

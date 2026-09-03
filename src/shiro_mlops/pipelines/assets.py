@@ -1,6 +1,7 @@
 """Dagster Software-Defined Assets for Taipower load forecasting MLOps pipeline."""
 
 import mlflow
+import numpy as np
 import pandas as pd
 from dagster import AssetExecutionContext, Output, asset
 
@@ -126,7 +127,52 @@ def engineered_features(
     if "datetime" not in taipower_export_df.columns and "time" in taipower_export_df.columns:
         taipower_export_df["datetime"] = taipower_export_df["time"]
 
-    taipower_cols = ["datetime", "location"]
+    dt_series = pd.to_datetime(taipower_export_df["datetime"])
+
+    # Ensure required calendar fields
+    if "hour" not in taipower_export_df.columns:
+        taipower_export_df["hour"] = dt_series.dt.hour
+    if "dayofweek" not in taipower_export_df.columns:
+        taipower_export_df["dayofweek"] = dt_series.dt.dayofweek
+    if "is_weekend" not in taipower_export_df.columns:
+        taipower_export_df["is_weekend"] = (taipower_export_df["dayofweek"] >= 5).astype(int)
+    if "hour_sin" not in taipower_export_df.columns:
+        taipower_export_df["hour_sin"] = np.sin(2 * np.pi * taipower_export_df["hour"] / 24.0)
+    if "hour_cos" not in taipower_export_df.columns:
+        taipower_export_df["hour_cos"] = np.cos(2 * np.pi * taipower_export_df["hour"] / 24.0)
+
+    # Ensure required lag fields for Feast schema
+    for lag in [1, 2, 24]:
+        col_name = f"load_mw_lag_{lag}"
+        if col_name not in taipower_export_df.columns:
+            taipower_export_df[col_name] = taipower_export_df.groupby("location")[
+                "load_mw"
+            ].transform(lambda s: s.shift(lag).bfill().ffill())
+            if taipower_export_df[col_name].isna().any():
+                fallback_val = (
+                    float(taipower_export_df["load_mw"].mean())
+                    if not taipower_export_df["load_mw"].isna().all()
+                    else 0.0
+                )
+                taipower_export_df[col_name] = taipower_export_df[col_name].fillna(fallback_val)
+
+    # Ensure required rolling fields for Feast schema
+    for w in [6, 24]:
+        mean_col = f"load_mw_rolling_mean_{w}"
+        if mean_col not in taipower_export_df.columns:
+            taipower_export_df[mean_col] = taipower_export_df.groupby("location")[
+                "load_mw"
+            ].transform(
+                lambda s: s.shift(1).rolling(window=w, min_periods=1).mean().bfill().ffill()
+            )
+            if taipower_export_df[mean_col].isna().any():
+                fallback_val = (
+                    float(taipower_export_df["load_mw"].mean())
+                    if not taipower_export_df["load_mw"].isna().all()
+                    else 0.0
+                )
+                taipower_export_df[mean_col] = taipower_export_df[mean_col].fillna(fallback_val)
+
     float_fields = [
         "load_mw",
         "load_mw_lag_1",
@@ -140,19 +186,16 @@ def engineered_features(
     int_fields = ["hour", "dayofweek", "is_weekend"]
 
     for f in float_fields:
-        if f in taipower_export_df.columns:
-            taipower_export_df[f] = pd.to_numeric(taipower_export_df[f], errors="coerce").astype(
-                "float32"
-            )
-            taipower_cols.append(f)
+        taipower_export_df[f] = (
+            pd.to_numeric(taipower_export_df[f], errors="coerce").fillna(0.0).astype("float32")
+        )
 
     for f in int_fields:
-        if f in taipower_export_df.columns:
-            taipower_export_df[f] = pd.to_numeric(taipower_export_df[f], errors="coerce").astype(
-                "int64"
-            )
-            taipower_cols.append(f)
+        taipower_export_df[f] = (
+            pd.to_numeric(taipower_export_df[f], errors="coerce").fillna(0).astype("int64")
+        )
 
+    taipower_cols = ["datetime", "location"] + float_fields[:6] + int_fields + float_fields[6:]
     taipower_parquet_path = data_dir / "taipower_features.parquet"
     taipower_export_df = (
         taipower_export_df[taipower_cols]
@@ -169,18 +212,23 @@ def engineered_features(
     if "datetime" not in weather_export_df.columns and "time" in weather_export_df.columns:
         weather_export_df["datetime"] = weather_export_df["time"]
 
-    weather_cols = ["datetime", "location"]
-    if "temperature" in weather_export_df.columns:
-        weather_export_df["temperature"] = pd.to_numeric(
-            weather_export_df["temperature"], errors="coerce"
-        ).astype("float32")
-        weather_cols.append("temperature")
-    if "relative_humidity" in weather_export_df.columns:
-        weather_export_df["relative_humidity"] = pd.to_numeric(
-            weather_export_df["relative_humidity"], errors="coerce"
-        ).astype("float32")
-        weather_cols.append("relative_humidity")
+    if "temperature" not in weather_export_df.columns:
+        weather_export_df["temperature"] = 25.0
+    if "relative_humidity" not in weather_export_df.columns:
+        weather_export_df["relative_humidity"] = 70.0
 
+    weather_export_df["temperature"] = (
+        pd.to_numeric(weather_export_df["temperature"], errors="coerce")
+        .fillna(25.0)
+        .astype("float32")
+    )
+    weather_export_df["relative_humidity"] = (
+        pd.to_numeric(weather_export_df["relative_humidity"], errors="coerce")
+        .fillna(70.0)
+        .astype("float32")
+    )
+
+    weather_cols = ["datetime", "location", "temperature", "relative_humidity"]
     weather_parquet_path = data_dir / "weather_features.parquet"
     weather_export_df = (
         weather_export_df[weather_cols]
