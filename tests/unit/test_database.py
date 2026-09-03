@@ -3,8 +3,9 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import Settings
@@ -130,5 +131,77 @@ def test_init_db_with_sqlite_custom_ddl(tmp_path):
 
         inspector = inspect(engine)
         assert "test_table" in inspector.get_table_names()
+    finally:
+        engine.dispose()
+
+
+def test_timescale_ddl_contains_migrate_data():
+    """Verify TimescaleDB DDL specifies migrate_data => TRUE for existing volumes."""
+    sql_path = Path("docker/init-db/01_init_hypertables.sql")
+    content = sql_path.read_text(encoding="utf-8")
+    assert "migrate_data => TRUE" in content
+    # Ensure both tables have migrate_data set
+    assert content.count("migrate_data => TRUE") >= 2
+
+
+def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path):
+    """Verify ensure_timescale_hypertables creates tables and preserves data across repeated calls."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    db_path = tmp_path / "persistent_volume.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    try:
+        # 1. Initial creation
+        ensure_timescale_hypertables(engine)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "raw_taipower_load" in tables
+        assert "raw_cwa_weather" in tables
+
+        # 2. Populate existing volume with data
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO raw_taipower_load (time, location, load_mw) "
+                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
+                )
+            )
+            conn.commit()
+
+        # 3. Simulate upgrade/restart on existing volume
+        ensure_timescale_hypertables(engine)
+        ensure_timescale_hypertables(engine)
+
+        # 4. Verify existing data preserved and not corrupted or duplicated
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT * FROM raw_taipower_load")).fetchall()
+            assert len(rows) == 1
+            assert rows[0][1] == "Taipei"
+            assert rows[0][2] == 26500.0
+    finally:
+        engine.dispose()
+
+
+def test_repository_auto_init_on_existing_volume(tmp_path):
+    """Verify TimeSeriesRepository auto_init smoothly handles fresh and existing database volumes."""
+    from shiro_mlops.data.repository import TimeSeriesRepository
+
+    db_path = tmp_path / "repo_volume.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    try:
+        # Launch repo against fresh volume
+        repo1 = TimeSeriesRepository(engine=engine, auto_init=True)
+        sample_df = pd.DataFrame(
+            [{"datetime": "2026-08-20 00:00:00", "load_mw": 30000.0, "location": "Taipei"}]
+        )
+        repo1.upsert_taipower_load(sample_df)
+
+        # Launch new repo instance against existing volume (service reboot)
+        repo2 = TimeSeriesRepository(engine=engine, auto_init=True)
+        persisted = repo2.fetch_load_range(location="Taipei")
+        assert len(persisted) == 1
+        assert persisted.iloc[0]["load_mw"] == 30000.0
     finally:
         engine.dispose()

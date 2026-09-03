@@ -56,6 +56,56 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
     return create_engine(db_uri, **engine_kwargs)
 
 
+SQLITE_DEFAULT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS raw_taipower_load (
+    time TIMESTAMP NOT NULL,
+    location VARCHAR(64) NOT NULL,
+    load_mw DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (time, location)
+);
+
+CREATE TABLE IF NOT EXISTS raw_cwa_weather (
+    time TIMESTAMP NOT NULL,
+    location VARCHAR(64) NOT NULL,
+    temperature DOUBLE PRECISION,
+    relative_humidity DOUBLE PRECISION,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (time, location)
+);
+"""
+
+
+def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
+    """Ensure database tables and TimescaleDB hypertables exist and are migrated safely.
+
+    Idempotent and safe for both new and existing persistent data volumes.
+    If tables already exist with rows, converts them to hypertables with migrate_data => TRUE.
+    """
+    db_engine = engine or get_timescale_engine()
+    dialect_obj = getattr(db_engine, "dialect", None)
+    dialect = getattr(dialect_obj, "name", "postgresql").lower()
+
+    if dialect == "sqlite":
+        with db_engine.connect() as conn:
+            for statement in SQLITE_DEFAULT_SCHEMA.split(";"):
+                cleaned = statement.strip()
+                if cleaned:
+                    conn.execute(text(cleaned))
+            conn.commit()
+        return
+
+    # PostgreSQL / TimescaleDB
+    ddl = get_timescale_init_ddl()
+    with db_engine.connect() as conn:
+        for statement in ddl.split(";"):
+            cleaned = statement.strip()
+            if cleaned:
+                conn.execute(text(cleaned))
+        conn.commit()
+    logger.info("TimescaleDB hypertables verified and initialized successfully.")
+
+
 def init_db(engine: Engine | None = None, sql_path: Path | None = None) -> None:
     """Initialize database tables and hypertables using the DDL script.
 
@@ -64,11 +114,14 @@ def init_db(engine: Engine | None = None, sql_path: Path | None = None) -> None:
     engine : Engine | None
         SQLAlchemy engine to execute DDL against. Defaults to get_timescale_engine().
     sql_path : Path | None
-        Optional path to custom SQL script. Defaults to docker/init-db/01_init_hypertables.sql.
+        Optional path to custom SQL script. If None, invokes ensure_timescale_hypertables().
     """
     db_engine = engine or get_timescale_engine()
-    ddl = get_timescale_init_ddl(sql_path=sql_path)
+    if sql_path is None:
+        ensure_timescale_hypertables(db_engine)
+        return
 
+    ddl = get_timescale_init_ddl(sql_path=sql_path)
     with db_engine.connect() as conn:
         for statement in ddl.split(";"):
             cleaned_stmt = statement.strip()
