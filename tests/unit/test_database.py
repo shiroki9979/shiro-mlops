@@ -96,10 +96,11 @@ def test_docker_init_sql_file_exists_and_matches():
     assert "INTERVAL '7 days'" in sql_content
 
 
-def test_get_timescale_engine():
+def test_get_timescale_engine(tmp_path):
     """Verify get_timescale_engine returns a SQLAlchemy Engine instance."""
-    engine = get_timescale_engine(uri="sqlite:///:memory:")
+    engine = get_timescale_engine(uri=f"sqlite:///{tmp_path / 'test_engine.db'}")
     assert isinstance(engine, Engine)
+    engine.dispose()
 
 
 def test_init_db_executes_ddl():
@@ -123,8 +124,11 @@ def test_init_db_with_sqlite_custom_ddl(tmp_path):
     custom_sql_file = tmp_path / "test.sql"
     custom_sql_file.write_text(custom_ddl, encoding="utf-8")
 
-    engine = create_engine("sqlite:///:memory:")
-    init_db(engine=engine, sql_path=custom_sql_file)
+    engine = create_engine(f"sqlite:///{tmp_path / 'custom_ddl.db'}")
+    try:
+        init_db(engine=engine, sql_path=custom_sql_file)
 
-    inspector = inspect(engine)
-    assert "test_table" in inspector.get_table_names()
+        inspector = inspect(engine)
+        assert "test_table" in inspector.get_table_names()
+    finally:
+        engine.dispose()

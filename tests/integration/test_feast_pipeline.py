@@ -1,15 +1,12 @@
 """Integration tests for Feast Parquet export, offline feature retrieval, and full pipeline."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 from dagster import build_asset_context, materialize
 from feast import FeatureStore
-from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -26,55 +23,6 @@ from shiro_mlops.pipelines.assets import (
     raw_weather_obs_data,
     trained_forecaster_model,
 )
-
-SQLITE_TEST_SCHEMA = """
-CREATE TABLE IF NOT EXISTS raw_taipower_load (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    load_mw DOUBLE PRECISION NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
-
-CREATE TABLE IF NOT EXISTS raw_cwa_weather (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    temperature DOUBLE PRECISION,
-    relative_humidity DOUBLE PRECISION,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
-"""
-
-
-@pytest.fixture
-def sqlite_engine() -> Engine:
-    """Create an in-memory SQLite engine with test schema."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    with engine.connect() as conn:
-        for stmt in SQLITE_TEST_SCHEMA.split(";"):
-            cleaned = stmt.strip()
-            if cleaned:
-                conn.execute(text(cleaned))
-        conn.commit()
-    return engine
-
-
-@pytest.fixture
-def populated_repo(
-    sqlite_engine: Engine,
-    taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
-) -> TimeSeriesRepository:
-    """Create and populate TimeSeriesRepository with fixture data."""
-    repo = TimeSeriesRepository(engine=sqlite_engine)
-    repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
-    repo.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
-    return repo
 
 
 def test_engineered_features_extracts_db_and_materializes_feast_parquet(
@@ -313,8 +261,13 @@ def test_full_dagster_mlops_pipeline_materialization(
     sqlite_engine: Engine,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
+    lightweight_forecaster: LightGBMRecursiveForecaster,
+    dagster_instance,
+    tmp_path: Path,
+    monkeypatch,
 ):
-    """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring."""
+    """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring offline and fast."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
     with (
@@ -326,7 +279,12 @@ def test_full_dagster_mlops_pipeline_materialization(
             "shiro_mlops.pipelines.assets.CWAClient.fetch_observations",
             return_value=cwa_obs_df,
         ),
+        patch("shiro_mlops.pipelines.assets.mlflow") as mock_mlflow,
     ):
+        mock_run = MagicMock()
+        mock_run.info.run_id = "test_run_123"
+        mock_mlflow.start_run.return_value.__enter__.return_value = mock_run
+
         res = materialize(
             assets=[
                 raw_taipower_load_data,
@@ -335,13 +293,17 @@ def test_full_dagster_mlops_pipeline_materialization(
                 trained_forecaster_model,
                 drift_monitoring_report,
             ],
-            resources={"time_series_repo": repo},
+            resources={
+                "time_series_repo": repo,
+                "forecaster": lightweight_forecaster,
+            },
+            instance=dagster_instance,
         )
 
     assert res.success
 
     # Verify model trained and saved in DATA_DIR
-    model_path = settings.DATA_DIR / "model.joblib"
+    model_path = tmp_path / "model.joblib"
     assert model_path.exists()
 
     # Verify drift report metadata
