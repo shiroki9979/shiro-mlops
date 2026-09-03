@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 隔離 LightGBM 與 MLflow 離線測試環境，在測試模式下自動注入輕量或 mock forecaster，並將 MLflow tracking 後端切換為本機隔離 SQLite / Mock，大幅提升端到端測試穩定度與執行速度（`src/shiro_mlops/pipelines/assets.py`、`tests/conftest.py`、`tests/integration/test_feast_pipeline.py`，#9）。
+- 將重複之 SQLite schema、Engine、Repository 與 DagsterInstance fixtures 統整至 `tests/conftest.py`，徹底消除測試資料庫定義漂移與資源競爭問題（`tests/conftest.py`、`tests/integration/test_pipeline_assets.py`、`tests/unit/test_repository.py`、`tests/unit/test_database.py`，#9）。
 - 統一 TimescaleDB 資料庫名稱契約為 `shiro_timeseries`，同步更新 `src/shiro_mlops/core/config.py`、`docker/docker-compose.yml`、`.env.example` 與單元測試（#8）。
 - 實作 Feast Parquet Schema 固定合約防護，確保即使為不足長度之短資料視界，亦包含 `load_mw_lag_24`、`load_mw_rolling_mean_24` 等所有必填特徵欄位與相容型別（`float32` / `int64`）（`src/shiro_mlops/features/transformers.py`、`src/shiro_mlops/pipelines/assets.py`，#8）。
 - 定義明確的短期視界缺失值後向填補（`bfill`）與平均值常模補值策略，並加入短資料集與設定一致性離線測試（`tests/integration/test_feast_pipeline.py`、`tests/unit/test_database.py`，#8）。

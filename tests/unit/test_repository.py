@@ -5,48 +5,15 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 
-SQLITE_TEST_SCHEMA = """
-CREATE TABLE IF NOT EXISTS raw_taipower_load (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    load_mw DOUBLE PRECISION NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
-
-CREATE TABLE IF NOT EXISTS raw_cwa_weather (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    temperature DOUBLE PRECISION,
-    relative_humidity DOUBLE PRECISION,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
-"""
-
 
 @pytest.fixture
-def sqlite_engine() -> Engine:
-    """Create an in-memory SQLite engine with test schema."""
-    engine = create_engine("sqlite:///:memory:")
-    with engine.connect() as conn:
-        for stmt in SQLITE_TEST_SCHEMA.split(";"):
-            cleaned = stmt.strip()
-            if cleaned:
-                conn.execute(text(cleaned))
-        conn.commit()
-    return engine
-
-
-@pytest.fixture
-def repository(sqlite_engine: Engine) -> TimeSeriesRepository:
-    """Instantiate TimeSeriesRepository backed by in-memory SQLite engine."""
-    return TimeSeriesRepository(engine=sqlite_engine)
+def repository(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
+    """Fixture alias returning TimeSeriesRepository backed by canonical test engine."""
+    return test_repo
 
 
 def test_repository_initialization(sqlite_engine: Engine):
