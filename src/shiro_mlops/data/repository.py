@@ -16,7 +16,7 @@ from shiro_mlops.core.constants import (
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
-from shiro_mlops.core.database import get_timescale_engine
+from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,13 @@ def _build_time_location_filter(
 class TimeSeriesRepository:
     """Repository managing time-series persistence and queries for TimescaleDB."""
 
-    def __init__(self, engine: Engine | None = None, uri: str | None = None) -> None:
-        """Initialize repository with a SQLAlchemy engine or connection URI.
+    def __init__(
+        self,
+        engine: Engine | None = None,
+        uri: str | None = None,
+        auto_init: bool = True,
+    ) -> None:
+        """Initialize repository with SQLAlchemy engine and ensure hypertables exist.
 
         Parameters
         ----------
@@ -80,6 +85,8 @@ class TimeSeriesRepository:
             Optional pre-configured SQLAlchemy Engine.
         uri : str | None
             Optional database URI string.
+        auto_init : bool
+            Whether to ensure tables and hypertables exist on initialization. Defaults to True.
         """
         if engine is not None:
             self.engine = engine
@@ -87,6 +94,14 @@ class TimeSeriesRepository:
             self.engine = get_timescale_engine(uri=uri)
         else:
             self.engine = get_timescale_engine()
+
+        if auto_init:
+            try:
+                ensure_timescale_hypertables(self.engine)
+            except Exception as e:
+                logger.warning(
+                    f"Could not automatically ensure hypertables on repository init: {e}"
+                )
 
     def upsert_taipower_load(
         self,

@@ -14,7 +14,8 @@ SELECT create_hypertable(
     'raw_taipower_load',
     'time',
     chunk_time_interval => INTERVAL '7 days',
-    if_not_exists => TRUE
+    if_not_exists => TRUE,
+    migrate_data => TRUE
 );
 
 -- 2. Raw CWA Weather Observations Table & Hypertable
@@ -31,5 +32,7 @@ SELECT create_hypertable(
     'raw_cwa_weather',
     'time',
     chunk_time_interval => INTERVAL '7 days',
-    if_not_exists => TRUE
+    if_not_exists => TRUE,
+    migrate_data => TRUE
 );
+
