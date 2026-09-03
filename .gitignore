@@ -36,12 +36,14 @@ mlruns/
 
 # Feast
 /data/registry.pb
+src/shiro_mlops/features/data/
 .feast/
 
 # Data artifacts & local cache
 /data/
 *.parquet
 *.csv
+!tests/fixtures/*.csv
 
 # Testing & Linting
 .pytest_cache/
