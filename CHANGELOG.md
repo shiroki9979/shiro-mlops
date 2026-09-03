@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 支援 Feast 離線特徵發布至 S3 或本機檔案系統，實作 `publish_parquet_feature` 儲存發布模組（`src/shiro_mlops/features/storage.py`，#12）。
+- 於 `Settings` 增加 `FEAST_OFFLINE_STORE_TYPE`、`FEAST_S3_PREFIX` 與動態 Parquet URI 屬性，並更新 `definitions.py` 動態支援 S3 與本機 FileSource 檢索（`src/shiro_mlops/core/config.py`、`src/shiro_mlops/features/definitions.py`，#12）。
+- 於 Dagster `engineered_features` 資產中整合 S3 特徵檔發布，維持雲端無常駐資料庫之混合拓撲架構（`src/shiro_mlops/pipelines/assets.py`，#12）。
+- 新增本機與 S3 特徵發布、資料契約一致性與 Feast 來源動態切換之整合測試（`tests/integration/test_feast_pipeline.py`，#12）。
 - 實作 `engineered_features` 自 TimescaleDB 提取時序歷史視界數據並編譯產出 Feast 離線 Parquet 檔案（`taipower_features.parquet` 與 `weather_features.parquet`），驗證 Feast 離線特徵檢索與 LightGBM 訓練端到端相容（`src/shiro_mlops/pipelines/assets.py`、`src/shiro_mlops/features/definitions.py`、`tests/integration/test_feast_pipeline.py`）。
 - 整合 `TimeSeriesRepository` 至 Dagster `raw_taipower_load_data` 與 `raw_weather_obs_data` 資料擷取資產，支援自動持久化寫入 TimescaleDB 與測試模式安全降級（`src/shiro_mlops/pipelines/assets.py`、`src/shiro_mlops/pipelines/definitions.py`、`tests/integration/test_pipeline_assets.py`）。
 

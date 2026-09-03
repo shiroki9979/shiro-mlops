@@ -311,3 +311,97 @@ def test_full_dagster_mlops_pipeline_materialization(
     assert "status" in report
     assert report["status"] in {"HEALTHY", "WARNING"}
     assert report["feature_count"] > 0
+
+
+def test_publish_parquet_feature_local_and_s3(tmp_path):
+    """Verify publish_parquet_feature exports matching schemas to local disk and S3."""
+    import io
+
+    from shiro_mlops.features.storage import publish_parquet_feature
+
+    sample_df = pd.DataFrame(
+        [
+            {
+                "datetime": pd.Timestamp("2026-08-20 14:00:00"),
+                "location": "Taipei",
+                "load_mw": 35000.0,
+            }
+        ]
+    )
+
+    # 1. Local publishing
+    local_target = str(tmp_path / "test_feature.parquet")
+    published_local = publish_parquet_feature(sample_df, local_target)
+    assert Path(published_local).exists()
+    local_read_df = pd.read_parquet(published_local)
+    assert len(local_read_df) == 1
+
+    # 2. S3 publishing (mocked boto3 client)
+    mock_s3 = MagicMock()
+    s3_target = "s3://test-bucket/features/test_feature.parquet"
+    published_s3 = publish_parquet_feature(sample_df, s3_target, s3_client=mock_s3)
+    assert published_s3 == s3_target
+    assert mock_s3.put_object.called
+    kwargs = mock_s3.put_object.call_args[1]
+    assert kwargs["Bucket"] == "test-bucket"
+    assert kwargs["Key"] == "features/test_feature.parquet"
+
+    # Read back parquet bytes and verify identical schema contract
+    s3_read_df = pd.read_parquet(io.BytesIO(kwargs["Body"]))
+    pd.testing.assert_frame_equal(local_read_df, s3_read_df)
+
+
+def test_engineered_features_publishes_to_s3_when_configured(
+    populated_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    monkeypatch,
+):
+    """Verify engineered_features publishes Feast feature files to S3 when configured."""
+    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
+    monkeypatch.setattr(settings, "S3_BUCKET_NAME", "my-s3-feast-bucket")
+
+    published_calls = []
+
+    def mock_publish(df, target_uri, s3_client=None):
+        published_calls.append((target_uri, df.columns.tolist()))
+        return target_uri
+
+    monkeypatch.setattr(
+        "shiro_mlops.pipelines.assets.publish_parquet_feature",
+        mock_publish,
+    )
+
+    context = build_asset_context(resources={"time_series_repo": populated_repo})
+    features_df = engineered_features(
+        context=context,
+        raw_taipower_load_data=taipower_raw_df,
+        raw_weather_obs_data=cwa_obs_df,
+    )
+
+    assert not features_df.empty
+    uris = [call[0] for call in published_calls]
+    assert any(
+        u.startswith("s3://my-s3-feast-bucket/features/taipower_features.parquet") for u in uris
+    )
+    assert any(
+        u.startswith("s3://my-s3-feast-bucket/features/weather_features.parquet") for u in uris
+    )
+
+
+def test_feast_feature_view_source_switching(monkeypatch):
+    """Verify Feast FileSource adapts between local and S3 without requiring a cloud database."""
+    from shiro_mlops.features.definitions import create_load_source, create_weather_source
+
+    # 1. Local mode
+    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "file")
+    local_load_src = create_load_source()
+    assert not local_load_src.path.startswith("s3://")
+
+    # 2. S3 mode
+    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
+    monkeypatch.setattr(settings, "S3_BUCKET_NAME", "hybrid-s3-bucket")
+    s3_load_src = create_load_source()
+    assert s3_load_src.path == "s3://hybrid-s3-bucket/features/taipower_features.parquet"
+    s3_weather_src = create_weather_source()
+    assert s3_weather_src.path == "s3://hybrid-s3-bucket/features/weather_features.parquet"

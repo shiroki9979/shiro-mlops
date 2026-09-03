@@ -13,6 +13,7 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.data.cwa_client import CWAClient
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
+from shiro_mlops.features.storage import publish_parquet_feature
 from shiro_mlops.features.transformers import build_feature_pipeline
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
@@ -203,7 +204,7 @@ def engineered_features(
         .sort_values(["location", "datetime"])
         .reset_index(drop=True)
     )
-    taipower_export_df.to_parquet(taipower_parquet_path, index=False)
+    publish_parquet_feature(taipower_export_df, str(taipower_parquet_path))
 
     # Compile weather_features.parquet
     weather_export_df = weather_df.copy()
@@ -236,11 +237,18 @@ def engineered_features(
         .sort_values(["location", "datetime"])
         .reset_index(drop=True)
     )
-    weather_export_df.to_parquet(weather_parquet_path, index=False)
+    publish_parquet_feature(weather_export_df, str(weather_parquet_path))
 
-    context.log.info(
-        f"Exported Feast Parquet files: {taipower_parquet_path}, {weather_parquet_path}"
-    )
+    if settings.FEAST_OFFLINE_STORE_TYPE == "s3":
+        publish_parquet_feature(taipower_export_df, settings.taipower_parquet_uri)
+        publish_parquet_feature(weather_export_df, settings.weather_parquet_uri)
+        context.log.info(
+            f"Published Feast Parquet to S3: {settings.taipower_parquet_uri}, {settings.weather_parquet_uri}"
+        )
+    else:
+        context.log.info(
+            f"Exported Feast Parquet files: {taipower_parquet_path}, {weather_parquet_path}"
+        )
     return features_df
 
 
