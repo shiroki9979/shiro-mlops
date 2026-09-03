@@ -154,7 +154,13 @@ def engineered_features(
             taipower_cols.append(f)
 
     taipower_parquet_path = data_dir / "taipower_features.parquet"
-    taipower_export_df[taipower_cols].to_parquet(taipower_parquet_path, index=False)
+    taipower_export_df = (
+        taipower_export_df[taipower_cols]
+        .drop_duplicates(subset=["datetime", "location"], keep="last")
+        .sort_values(["location", "datetime"])
+        .reset_index(drop=True)
+    )
+    taipower_export_df.to_parquet(taipower_parquet_path, index=False)
 
     # Compile weather_features.parquet
     weather_export_df = weather_df.copy()
@@ -176,7 +182,13 @@ def engineered_features(
         weather_cols.append("relative_humidity")
 
     weather_parquet_path = data_dir / "weather_features.parquet"
-    weather_export_df[weather_cols].to_parquet(weather_parquet_path, index=False)
+    weather_export_df = (
+        weather_export_df[weather_cols]
+        .drop_duplicates(subset=["datetime", "location"], keep="last")
+        .sort_values(["location", "datetime"])
+        .reset_index(drop=True)
+    )
+    weather_export_df.to_parquet(weather_parquet_path, index=False)
 
     context.log.info(
         f"Exported Feast Parquet files: {taipower_parquet_path}, {weather_parquet_path}"
