@@ -97,7 +97,7 @@ def test_engineered_features_multi_location_isolation_and_export(
     repo.upsert_cwa_weather(kh_weather, default_location="Kaohsiung")
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
-        repo, taipower_raw_df, cwa_obs_df
+        repo, taipower_raw_df, cwa_obs_df, location=None
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
@@ -110,6 +110,60 @@ def test_engineered_features_multi_location_isolation_and_export(
     w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
     assert set(w_df["location"]) == {"Taipei", "Kaohsiung"}
     assert not w_df.duplicated(subset=["datetime", "location"]).any()
+
+
+def test_feature_computation_isolates_requested_location_and_training_window(
+    sqlite_engine: Engine,
+) -> None:
+    """Feature computation excludes other locations and observations after each training window."""
+    repository = TimeSeriesRepository(engine=sqlite_engine)
+    source_load = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-21 00:00:00", "load_mw": 9999.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 500.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-21 00:00:00", "load_mw": 600.0, "location": "Kaohsiung"},
+        ]
+    )
+    source_weather = pd.DataFrame(
+        [
+            {
+                "datetime": row["datetime"],
+                "temperature": 30.0,
+                "relative_humidity": 70.0,
+                "location": row["location"],
+            }
+            for row in source_load.to_dict("records")
+        ]
+    )
+    repository.upsert_taipower_load(source_load)
+    repository.upsert_cwa_weather(source_weather)
+
+    taipei_reference = source_load.iloc[[1]].copy()
+    taipei_weather = source_weather.iloc[[1]].copy()
+    taipei_features, _, _ = compute_engineered_feature_outputs(
+        repository,
+        taipei_reference,
+        taipei_weather,
+        location="Taipei",
+    )
+
+    kaohsiung_reference = source_load.iloc[[4]].copy()
+    kaohsiung_weather = source_weather.iloc[[4]].copy()
+    kaohsiung_features, _, _ = compute_engineered_feature_outputs(
+        repository,
+        kaohsiung_reference,
+        kaohsiung_weather,
+        location="Kaohsiung",
+    )
+
+    assert set(taipei_features["location"]) == {"Taipei"}
+    assert taipei_features["datetime"].max() == pd.Timestamp("2026-08-20 01:00:00")
+    assert 9999.0 not in taipei_features["load_mw"].tolist()
+    assert set(kaohsiung_features["location"]) == {"Kaohsiung"}
+    assert kaohsiung_features["datetime"].max() == pd.Timestamp("2026-08-21 00:00:00")
+    assert 9999.0 not in kaohsiung_features["load_mw"].tolist()
 
 
 def test_short_dataset_feast_parquet_schema_contract(

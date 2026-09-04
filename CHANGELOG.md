@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- 特徵工程改以明確時間窗與 lookback 查詢時序來源，並移除 lag/rolling 的未來用電負載填補，確保 point-in-time 正確性（`src/shiro_mlops/pipelines/feature_pipeline.py`、`src/shiro_mlops/features/transformers.py`，#15）。
+- 特徵工程改以明確訓練地點、時間窗與 lookback 查詢時序來源，並移除 lag/rolling 的未來用電負載填補，確保 point-in-time 正確性（`src/shiro_mlops/pipelines/assets.py`、`src/shiro_mlops/pipelines/feature_pipeline.py`、`src/shiro_mlops/features/transformers.py`，#15）。
 - 修正特徵資料庫讀取失敗時的靜默降級：僅處理可預期的 SQLAlchemy 錯誤、記錄診斷脈絡並保留 ingestion 回退資料；同時統整 Feast 匯出預設值與欄位正規化（`src/shiro_mlops/pipelines/feature_pipeline.py`、`tests/unit/test_feature_pipeline.py`，#13、#14）。
 - 統一台電用電負載與氣象觀測之時區語意為台灣本地時間（`Asia/Taipei`），實作 `standardize_taiwan_datetime` 函式處理無時區、含時區偏移（`+08:00`）與 UTC（`Z`）時間戳記（`src/shiro_mlops/core/datetime_utils.py`、`src/shiro_mlops/data/taipower_client.py`、`src/shiro_mlops/data/cwa_client.py`，#11）。
 - 於 `TimeSeriesRepository` 與特徵工程（`transformers.py`）讀寫與合併前強制進行台灣本地時區對齊，確保多資料源在完全相同之時間基準上合併與計算時序特徵，徹底杜絕 8 小時偏移問題（`src/shiro_mlops/data/repository.py`、`src/shiro_mlops/features/transformers.py`，#11）。

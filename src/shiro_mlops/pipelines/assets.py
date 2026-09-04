@@ -9,6 +9,7 @@ from dagster import AssetExecutionContext, AssetOut, Output, asset, multi_asset
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DEFAULT_EXPERIMENT_NAME,
+    DEFAULT_LOCATION,
     LOAD_MW_COL,
 )
 from shiro_mlops.data.cwa_client import CWAClient
@@ -50,9 +51,10 @@ def compute_engineered_feature_outputs(
     repository: TimeSeriesRepository,
     raw_taipower_load_data: pd.DataFrame,
     raw_weather_obs_data: pd.DataFrame,
+    location: str | None = DEFAULT_LOCATION,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Compute training features and Feast frames without selecting a storage target."""
-    query_window = build_feature_query_window(raw_taipower_load_data)
+    query_window = build_feature_query_window(raw_taipower_load_data, location=location)
     source_data = fetch_feature_source_data(
         repository,
         raw_taipower_load_data,
