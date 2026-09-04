@@ -185,39 +185,45 @@ def build_feature_pipeline(
         df, value_col=LOAD_MW_COL, windows=effective_windows, location_col=location_col
     )
 
+    # 僅允許由過去觀測向前填補；禁止 bfill 以免未來用電負載洩漏進歷史缺值
+    non_leaking_fill = 0.0
     is_short_window = min_len <= max(effective_lags)
     if is_short_window or not drop_na:
-        # Explicit missing value strategy: backward fill from earliest observation, fallback to load mean
         for lag in effective_lags:
             lag_col = f"{LOAD_MW_COL}_lag_{lag}"
             if lag_col in df.columns:
                 if has_location and df[location_col].nunique() > 1:
                     df[lag_col] = df.groupby(location_col)[lag_col].transform(
-                        lambda s: s.bfill().ffill()
+                        lambda s: s.ffill().fillna(non_leaking_fill)
                     )
                 else:
-                    df[lag_col] = df[lag_col].bfill().ffill()
-
-                if df[lag_col].isna().any():
-                    fallback_val = (
-                        float(df[LOAD_MW_COL].mean()) if not df[LOAD_MW_COL].isna().all() else 0.0
-                    )
-                    df[lag_col] = df[lag_col].fillna(fallback_val)
+                    df[lag_col] = df[lag_col].ffill().fillna(non_leaking_fill)
 
         for w in effective_windows:
             mean_col = f"{LOAD_MW_COL}_rolling_mean_{w}"
             std_col = f"{LOAD_MW_COL}_rolling_std_{w}"
             if mean_col in df.columns:
-                fallback_mean = (
-                    float(df[LOAD_MW_COL].mean()) if not df[LOAD_MW_COL].isna().all() else 0.0
-                )
-                df[mean_col] = df[mean_col].bfill().ffill().fillna(fallback_mean)
+                if has_location and df[location_col].nunique() > 1:
+                    df[mean_col] = df.groupby(location_col)[mean_col].transform(
+                        lambda s: s.ffill().fillna(non_leaking_fill)
+                    )
+                else:
+                    df[mean_col] = df[mean_col].ffill().fillna(non_leaking_fill)
             if std_col in df.columns:
                 df[std_col] = df[std_col].fillna(0.0)
 
     if drop_na and not is_short_window:
         df = df.dropna().reset_index(drop=True)
     elif drop_na and is_short_window:
-        df = df.bfill().ffill().fillna(0.0).reset_index(drop=True)
+        load_feature_cols = [
+            col
+            for col in df.columns
+            if col.startswith(f"{LOAD_MW_COL}_lag_") or col.startswith(f"{LOAD_MW_COL}_rolling_")
+        ]
+        for col in load_feature_cols:
+            df[col] = df[col].ffill().fillna(non_leaking_fill)
+        other_cols = [col for col in df.columns if col not in load_feature_cols]
+        df[other_cols] = df[other_cols].ffill().bfill().fillna(0.0)
+        df = df.reset_index(drop=True)
 
     return df

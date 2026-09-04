@@ -19,6 +19,7 @@ from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.feature_pipeline import (
     FeaturePublicationTargets,
+    build_feature_query_window,
     fetch_feature_source_data,
     publish_feast_features,
     transform_feature_source_data,
@@ -94,11 +95,21 @@ def engineered_features(
     raw_weather_obs_data: pd.DataFrame,
 ) -> pd.DataFrame:
     """Asset: Extract clean time-series from TimescaleDB, engineer features, and export Feast Parquet artifacts."""
+    query_window = build_feature_query_window(raw_taipower_load_data)
     source_data = fetch_feature_source_data(
-        _get_time_series_repo(context), raw_taipower_load_data, raw_weather_obs_data
+        _get_time_series_repo(context),
+        raw_taipower_load_data,
+        raw_weather_obs_data,
+        query_window,
     )
-    features_df = transform_feature_source_data(source_data)
-    context.log.info(f"Constructed engineered features table with shape: {features_df.shape}")
+    features_df = transform_feature_source_data(source_data, window=query_window)
+    context.log.info(
+        "Constructed engineered features table with shape %s for window [%s, %s] location=%s",
+        features_df.shape,
+        query_window.start_time,
+        query_window.end_time,
+        query_window.location,
+    )
 
     publication = publish_feast_features(
         features_df,
