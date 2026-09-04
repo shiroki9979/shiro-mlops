@@ -1,7 +1,7 @@
 # ADR 0006: 地端引入 TimescaleDB 作為時序資料儲存庫與分層儲存架構
 
 - 建立日期：2026-08-26
-- 最後更新：2026-08-26
+- 最後更新：2026-09-04
 - 狀態：已接受 (Accepted)
 - 關聯：[ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0002](0002-feast-storage-layer-strategy.md)
 
@@ -56,3 +56,10 @@
 1. 地端 `docker-compose.yml` 必須配置 TimescaleDB 容器並具備 Volume 持久化。
 2. Dagster 必須具備自 TimescaleDB 寫入與讀取時序資產的測試案例。
 3. Feast 離線定義維持 `FileSource` 指向 Parquet，不得直接硬編碼連線地端 DB 以免破壞雲端相容性。
+
+---
+
+## Notes
+
+- 實作與 [SPEC.md](../SPEC.md) / init SQL 採用之 Hypertable 名稱為 `raw_taipower_load`、`raw_cwa_weather`（本 ADR Decision 段落中的 `taipower_load_raw` / `cwa_weather_raw` 為早期命名草圖，不以歷史改寫覆寫 Decision 本文）。
+- 最後更新：2026-09-04（補充實作表名對照，不變更既有決策語意）。

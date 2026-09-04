@@ -24,20 +24,20 @@
 
 ```bash
 # 安裝依賴
-npm install
+pnpm install
 
-# 啟動 Vite 本地開發伺服器 (包含 /api 代理至 FastAPI http://localhost:8000)
-npm run dev
+# 啟動 Vite 本地開發伺服器 (預設 http://localhost:5173，/api 代理至 FastAPI http://localhost:8000)
+pnpm run dev
 
 # 執行 Vitest 離線單元與整合測試
-npm run test
+pnpm run test
 
 # 執行 TypeScript 型別檢查與生產打包
-npm run build
+pnpm run build
 
 # 預覽打包產物
-npm run preview
+pnpm run preview
 
 # 程式碼風格與 Lint 檢查
-npm run lint
+pnpm run lint
 ```

@@ -4,14 +4,14 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 
 ## Essential Context Pointers
 
-- **Domain Glossary & Semantics**: Read [CONTEXT.md](file:///home/myuser/repos/shiro-mlops/CONTEXT.md) for business context, power grid terminology, and degraded forecast definitions.
-- **System & Data Specifications**: Read [docs/SPEC.md](file:///home/myuser/repos/shiro-mlops/docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
-- **Architecture Decisions**: Consult [docs/adr/](file:///home/myuser/repos/shiro-mlops/docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, and `uv`.
-- **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](file:///home/myuser/repos/shiro-mlops/docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
+- **Domain Glossary & Semantics**: Read [CONTEXT.md](CONTEXT.md) for business context, power grid terminology, and degraded forecast definitions.
+- **System & Data Specifications**: Read [docs/SPEC.md](docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
+- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, and `uv`.
+- **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
 - **Operational Guides**:
-  - Tutorial: [docs/tutorials/quickstart-local-prediction.md](file:///home/myuser/repos/shiro-mlops/docs/tutorials/quickstart-local-prediction.md)
-  - Full Local Stack: [docs/how-to/run-full-local-stack.md](file:///home/myuser/repos/shiro-mlops/docs/how-to/run-full-local-stack.md)
-  - AWS Deployment: [docs/how-to/deploy-aws-infrastructure.md](file:///home/myuser/repos/shiro-mlops/docs/how-to/deploy-aws-infrastructure.md)
+  - Tutorial: [docs/tutorials/quickstart-local-prediction.md](docs/tutorials/quickstart-local-prediction.md)
+  - Full Local Stack: [docs/how-to/run-full-local-stack.md](docs/how-to/run-full-local-stack.md)
+  - AWS Deployment: [docs/how-to/deploy-aws-infrastructure.md](docs/how-to/deploy-aws-infrastructure.md)
 
 ## Development Loop & Commands
 
@@ -43,12 +43,12 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 ### Issue tracker
 
-GitHub issues (via `gh` CLI). See [docs/agents/issue-tracker.md](file:///home/shiro/repos/shiro-mlops/docs/agents/issue-tracker.md).
+GitHub issues (via `gh` CLI). See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 
 ### Triage labels
 
-Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](file:///home/shiro/repos/shiro-mlops/docs/agents/triage-labels.md).
+Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
 
 ### Domain docs
 
-Single-context layout (`CONTEXT.md` + `docs/adr/`). See [docs/agents/domain.md](file:///home/shiro/repos/shiro-mlops/docs/agents/domain.md).
+Single-context layout (`CONTEXT.md` + `docs/adr/`). See [docs/agents/domain.md](docs/agents/domain.md).

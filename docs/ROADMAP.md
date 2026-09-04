@@ -1,8 +1,8 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-03
-- 專案版本：`0.1.0`
+- 最後更新：2026-09-04
+- 專案版本：`0.2.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
 
@@ -33,8 +33,8 @@
   4. 系統健康指標：對接 `/health` 顯示 API 版本、環境與模型載入狀態，支援 MSW 離線測試。
 - **完成標準 (DoD)**：
   - 建立 `frontend/` 完整 SPA 架構與測試環境。
-  - 執行 `npm run test` 全數通過（Vitest + MSW v2 離線測試）。
-  - 執行 `npm run build`（`tsc -b && vite build`）與 `npm run lint` 無報錯。
+  - 執行 `pnpm run test` 全數通過（Vitest + MSW v2 離線測試）。
+  - 執行 `pnpm run build`（`tsc -b && vite build`）與 `pnpm run lint` 無報錯。
 
 ---
 

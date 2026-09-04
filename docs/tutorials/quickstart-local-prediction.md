@@ -30,7 +30,7 @@ uv sync --all-extras
 uv run pytest tests/ -v
 ```
 
-您應該會看到 `11 passed` 的綠燈訊息。
+您應該會看到全部測試通過的綠燈訊息（目前套件約收集 70+ 個離線單元／整合測試）。
 
 ---
 

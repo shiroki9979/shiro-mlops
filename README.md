@@ -21,7 +21,7 @@ Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast,
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- Node.js 20+ and npm (for frontend dashboard)
+- Node.js 20+ and [pnpm](https://pnpm.io/) (for frontend dashboard)
 - Docker & Docker Compose (optional for full container mode)
 
 ### 2. Installation
@@ -50,7 +50,7 @@ API docs available at: `http://localhost:8000/docs`
 make frontend
 ```
 
-Dashboard available at: `http://localhost:3000` (proxies `/api` to `http://localhost:8000`)
+Dashboard available at: `http://localhost:5173` (proxies `/api` to `http://localhost:8000`)
 
 ### 6. Start Dagster Pipeline Webserver
 
@@ -58,7 +58,7 @@ Dashboard available at: `http://localhost:3000` (proxies `/api` to `http://local
 make dagster
 ```
 
-Dagster UI available at: `http://localhost:3000` (or configured pipeline port)
+Dagster UI available at: `http://localhost:3000`
 
 ---
 
@@ -67,15 +67,15 @@ Dagster UI available at: `http://localhost:3000` (or configured pipeline port)
 ```text
 shiro-mlops/
 ├── .github/workflows/      # CI/CD pipelines
-├── docker/                 # Docker Compose & Dockerfiles
+├── docker/                 # Docker Compose, Dockerfiles, TimescaleDB init SQL
 ├── frontend/               # React 19 + Vite Dashboard SPA
 ├── infra/terraform/        # AWS Infrastructure as Code
 ├── src/shiro_mlops/
-│   ├── core/               # Configuration, IO managers, constants
-│   ├── data/               # Taipower and CWA API clients
-│   ├── features/           # Feast definitions and transformers
+│   ├── core/               # Config, DB, IO managers, datetime helpers
+│   ├── data/               # Taipower/CWA clients, TimescaleDB repository
+│   ├── features/           # Feast definitions, storage, transformers
 │   ├── models/             # LightGBM recursive forecaster and evaluator
-│   ├── pipelines/          # Dagster assets and schedules
+│   ├── pipelines/          # Dagster assets, feature pipeline, schedules
 │   └── service/            # FastAPI application
 ├── tests/
 │   ├── fixtures/           # Mock data fixtures
