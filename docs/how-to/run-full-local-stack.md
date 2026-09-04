@@ -41,9 +41,9 @@ docker compose -f docker/docker-compose.yml up -d
 
 | 元件名稱 | 容器名稱 | 監聽端口 | 驗證方式 |
 | :--- | :--- | :--- | :--- |
-| **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:3000` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表與監控 |
-| **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程 (容器內 `3000` 映射) |
-| **MLflow Server** | `shiro_mlops_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
+| **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:5173` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表與監控 |
+| **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程（Compose 映射 `3000`） |
+| **MLflow Server** | `shiro_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
 | **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | 存取 Swagger UI 或執行 `curl /health` |
 | **Feast Online Redis** | `shiro_redis` | `localhost:6379` | `docker exec -it shiro_redis redis-cli ping` |
 | **TimescaleDB (時序與 MLflow)** | `shiro_postgres` | `localhost:5432` | 內部容器通訊與時序 Hypertables 存取 |
@@ -55,9 +55,9 @@ docker compose -f docker/docker-compose.yml up -d
 1. 開啟瀏覽器進入 `http://localhost:3000`。
 2. 進入 **Assets** 頁面，點選右上角 **Materialize All**。
 3. Dagster 將依序執行：
-   - `raw_taipower_load_data` (台電資料擷取)
-   - `raw_weather_obs_data` (氣象觀測擷取)
-   - `engineered_features` (特徵工程轉換)
+   - `raw_taipower_load_data` (台電資料擷取並 Upsert 至 TimescaleDB)
+   - `raw_weather_obs_data` (氣象觀測擷取並 Upsert 至 TimescaleDB)
+   - `engineered_feature_set` → 產出 `engineered_features` / `taipower_features` / `weather_features`（後兩者經 `feast_io_manager` 發布 Parquet）
    - `trained_forecaster_model` (LightGBM 訓練並記錄於 MLflow)
    - `drift_monitoring_report` (計算 MAPE/RMSE 與漂移報告)
 4. 完成後至 `http://localhost:5001` (MLflow) 即可檢視最新產出的模型參數與評估指標。

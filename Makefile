@@ -11,7 +11,7 @@ help:
 	@echo "  make test          Run Python test suite with pytest"
 	@echo "  make lint          Check code style and lint with ruff"
 	@echo "  make format        Format code with ruff"
-	@echo "  make compose-up    Start full local stack (Dagster, MLflow, Redis, Postgres)"
+	@echo "  make compose-up    Start full local stack (Dagster, MLflow, Redis, TimescaleDB)"
 	@echo "  make compose-down  Stop full local stack"
 	@echo "  make clean         Clean temporary files and caches"
 
@@ -22,13 +22,13 @@ dev:
 	uv run uvicorn shiro_mlops.service.api:app --reload --host 0.0.0.0 --port 8000
 
 frontend:
-	npm --prefix frontend run dev
+	pnpm --dir frontend run dev
 
 frontend-test:
-	npm --prefix frontend run test
+	pnpm --dir frontend run test
 
 frontend-build:
-	npm --prefix frontend run build
+	pnpm --dir frontend run build
 
 dagster:
 	DAGSTER_HOME=.dagster_home uv run dagster dev -f src/shiro_mlops/pipelines/definitions.py

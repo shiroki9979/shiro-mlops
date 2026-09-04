@@ -1,7 +1,8 @@
 # Feature Spec: TimescaleDB Local Time-Series Storage & Ingestion Pipeline
 
-**Status:** ready-for-agent
+**Status:** implemented
 **Created:** 2026-08-26
+**Last Updated:** 2026-09-04
 **Feature Slug:** `timescaledb-local-storage`
 
 ---
@@ -20,7 +21,7 @@ Currently, `shiro-mlops` ingests Taipower power load and CWA weather observation
 
 Upgrade the local Docker container environment from vanilla PostgreSQL to TimescaleDB, create structured Hypertables for raw Taipower load and CWA weather observations, and update Dagster ingestion assets to persist incoming API payloads with deduplication (`ON CONFLICT DO UPDATE`).
 
-Establish a clean export seam from TimescaleDB into Parquet (`data/taipower_features.parquet`) for Feast Feature Store and downstream LightGBM model training, strictly preserving zero-idle-cost cloud compatibility as defined in [ADR-0001](file:///home/myuser/repos/shiro-mlops/docs/adr/0001-hybrid-topology-boundary.md), [ADR-0002](file:///home/myuser/repos/shiro-mlops/docs/adr/0002-feast-storage-layer-strategy.md), and [ADR-0006](file:///home/myuser/repos/shiro-mlops/docs/adr/0006-timescaledb-local-storage-layer.md).
+Establish a clean export seam from TimescaleDB into Parquet (`data/taipower_features.parquet`) for Feast Feature Store and downstream LightGBM model training, strictly preserving zero-idle-cost cloud compatibility as defined in [ADR-0001](../adr/0001-hybrid-topology-boundary.md), [ADR-0002](../adr/0002-feast-storage-layer-strategy.md), and [ADR-0006](../adr/0006-timescaledb-local-storage-layer.md).
 
 ---
 
@@ -62,7 +63,7 @@ Establish a clean export seam from TimescaleDB into Parquet (`data/taipower_feat
 - Refactor Dagster assets:
   - `raw_taipower_load_data`: Fetch from API client -> Upsert into TimescaleDB -> Return DataFrame.
   - `raw_weather_obs_data`: Fetch from API client -> Upsert into TimescaleDB -> Return DataFrame.
-  - `engineered_features`: Pull clean time-series from TimescaleDB (or upstream assets) -> Compute lag/rolling transforms -> Save to `data/taipower_features.parquet`.
+  - `engineered_feature_set` (multi-asset): Pull clean time-series from TimescaleDB (or upstream assets) -> Compute lag/rolling transforms -> Emit `engineered_features` / `taipower_features` / `weather_features`（後兩者由 `feast_io_manager` 發布至本機或 S3 Parquet）。
 
 ### 4. Feast Feature Store Seam
 
@@ -97,7 +98,7 @@ Establish a clean export seam from TimescaleDB into Parquet (`data/taipower_feat
 ## Further Notes
 
 - References:
-  - [ADR-0001: Hybrid Topology Boundary](file:///home/myuser/repos/shiro-mlops/docs/adr/0001-hybrid-topology-boundary.md)
-  - [ADR-0002: Feast Storage Layer Strategy](file:///home/myuser/repos/shiro-mlops/docs/adr/0002-feast-storage-layer-strategy.md)
-  - [ADR-0006: Local TimescaleDB Storage Layer](file:///home/myuser/repos/shiro-mlops/docs/adr/0006-timescaledb-local-storage-layer.md)
-  - [SPEC.md: Data Contracts](file:///home/myuser/repos/shiro-mlops/docs/SPEC.md)
+  - [ADR-0001: Hybrid Topology Boundary](../adr/0001-hybrid-topology-boundary.md)
+  - [ADR-0002: Feast Storage Layer Strategy](../adr/0002-feast-storage-layer-strategy.md)
+  - [ADR-0006: Local TimescaleDB Storage Layer](../adr/0006-timescaledb-local-storage-layer.md)
+  - [SPEC.md: Data Contracts](../SPEC.md)
