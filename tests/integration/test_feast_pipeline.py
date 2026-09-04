@@ -12,6 +12,10 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.definitions import (
+    create_load_source,
+    create_taipower_load_feature_view,
+    create_weather_feature_view,
+    create_weather_source,
     location_entity,
     taipower_load_feature_view,
     weather_feature_view,
@@ -423,6 +427,86 @@ def test_engineered_features_publishes_to_s3_via_io_manager(
     keys = {call.kwargs["Key"] for call in mock_s3.put_object.call_args_list}
     assert "features/taipower_features.parquet" in keys
     assert "features/weather_features.parquet" in keys
+
+
+def test_feast_retrieves_s3_published_features_offline(
+    populated_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Feast retrieves feature contracts from S3 after the I/O Manager publishes them."""
+    import boto3
+    from moto.server import ThreadedMotoServer
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+
+    moto_server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    moto_server.start()
+    host, port = moto_server.get_host_and_port()
+    endpoint_url = f"http://{host}:{port}"
+
+    try:
+        s3_client = boto3.client("s3", region_name="us-east-1", endpoint_url=endpoint_url)
+        bucket = "feast-offline-test"
+        prefix = "features"
+        s3_client.create_bucket(Bucket=bucket)
+
+        _, taipower, weather = compute_engineered_feature_outputs(
+            populated_repo, taipower_raw_df, cwa_obs_df
+        )
+        feast_manager = get_feast_parquet_io_manager(
+            offline_store_type="s3",
+            s3_bucket=bucket,
+            s3_prefix=prefix,
+            data_dir=tmp_path,
+            s3_client=s3_client,
+        )
+        feast_manager.handle_output(
+            build_output_context(asset_key=AssetKey(["taipower_features"])),
+            taipower,
+        )
+        feast_manager.handle_output(
+            build_output_context(asset_key=AssetKey(["weather_features"])),
+            weather,
+        )
+
+        store = FeatureStore(repo_path=str(settings.FEAST_REPO_PATH))
+        load_view = create_taipower_load_feature_view(
+            create_load_source(
+                f"s3://{bucket}/{prefix}/taipower_features.parquet",
+                s3_endpoint_override=endpoint_url,
+            )
+        )
+        weather_view = create_weather_feature_view(
+            create_weather_source(
+                f"s3://{bucket}/{prefix}/weather_features.parquet",
+                s3_endpoint_override=endpoint_url,
+            )
+        )
+        store.apply([location_entity, load_view, weather_view])
+
+        entity_df = pd.DataFrame(
+            {
+                "location": ["Taipei"],
+                "datetime": [pd.Timestamp("2026-08-21 12:00:00")],
+            }
+        )
+        result = store.get_historical_features(
+            entity_df=entity_df,
+            features=[
+                "taipower_load_features:load_mw",
+                "cwa_weather_features:temperature",
+            ],
+        ).to_df()
+    finally:
+        moto_server.stop()
+
+    assert result.loc[0, "load_mw"] > 0.0
+    assert result.loc[0, "temperature"] > 0.0
 
 
 def test_feature_calculation_is_decoupled_from_storage_target(
