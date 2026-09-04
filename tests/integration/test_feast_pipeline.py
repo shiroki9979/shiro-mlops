@@ -17,8 +17,6 @@ from shiro_mlops.features.definitions import (
     create_weather_feature_view,
     create_weather_source,
     location_entity,
-    taipower_load_feature_view,
-    weather_feature_view,
 )
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.assets import (
@@ -244,17 +242,21 @@ def test_feast_offline_feature_retrieval(
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     tmp_path: Path,
-    monkeypatch,
 ):
     """Verify Feast get_historical_features retrieves features and trains forecaster without error."""
-    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     _, taipower, weather = compute_engineered_feature_outputs(
         populated_repo, taipower_raw_df, cwa_obs_df
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
     store = FeatureStore(repo_path=str(settings.FEAST_REPO_PATH))
-    store.apply([location_entity, taipower_load_feature_view, weather_feature_view])
+    load_view = create_taipower_load_feature_view(
+        create_load_source(str(tmp_path / "taipower_features.parquet"))
+    )
+    weather_view = create_weather_feature_view(
+        create_weather_source(str(tmp_path / "weather_features.parquet"))
+    )
+    store.apply([location_entity, load_view, weather_view])
 
     entity_df = pd.DataFrame(
         {
