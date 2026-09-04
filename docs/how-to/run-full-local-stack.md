@@ -46,7 +46,7 @@ docker compose -f docker/docker-compose.yml up -d
 | **MLflow Server** | `shiro_mlops_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
 | **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | 存取 Swagger UI 或執行 `curl /health` |
 | **Feast Online Redis** | `shiro_redis` | `localhost:6379` | `docker exec -it shiro_redis redis-cli ping` |
-| **MLflow Postgres DB** | `shiro_postgres` | `localhost:5432` | 內部容器通訊 |
+| **TimescaleDB (時序與 MLflow)** | `shiro_postgres` | `localhost:5432` | 內部容器通訊與時序 Hypertables 存取 |
 
 ---
 

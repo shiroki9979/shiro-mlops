@@ -77,3 +77,218 @@ def test_build_feature_pipeline(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.Da
     assert f"{LOAD_MW_COL}_rolling_mean_6" in features_df.columns
     assert "temperature" in features_df.columns
     assert not features_df.isna().any().any()
+
+
+def test_multi_location_lag_and_rolling_isolation() -> None:
+    """Verify lag and rolling calculations are isolated per location with zero cross-station pollution."""
+    multi_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 300.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 1000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 2000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 3000.0, "location": "Kaohsiung"},
+        ]
+    )
+
+    lag_res = create_lag_features(multi_df, lags=[1])
+    # Taipei checks
+    taipei_lags = lag_res[lag_res["location"] == "Taipei"].sort_values("datetime")
+    assert pd.isna(taipei_lags.iloc[0]["load_mw_lag_1"])
+    assert taipei_lags.iloc[1]["load_mw_lag_1"] == 100.0
+    assert taipei_lags.iloc[2]["load_mw_lag_1"] == 200.0
+
+    # Kaohsiung checks - MUST NOT be contaminated by Taipei's 300.0 at t=0
+    kh_lags = lag_res[lag_res["location"] == "Kaohsiung"].sort_values("datetime")
+    assert pd.isna(kh_lags.iloc[0]["load_mw_lag_1"])
+    assert kh_lags.iloc[1]["load_mw_lag_1"] == 1000.0
+    assert kh_lags.iloc[2]["load_mw_lag_1"] == 2000.0
+
+    # Rolling checks
+    roll_res = create_rolling_features(multi_df, windows=[2])
+    kh_roll = roll_res[roll_res["location"] == "Kaohsiung"].sort_values("datetime")
+    # Kaohsiung t=1 shifted(1) window=2 should be mean([1000.0]) = 1000.0, not contaminated by Taipei
+    assert kh_roll.iloc[1]["load_mw_rolling_mean_2"] == 1000.0
+
+
+def test_multi_location_weather_merge_isolation() -> None:
+    """Verify weather data is merged per (datetime, location) without Cartesian product or cross-station bleed."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 1000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 2000.0, "location": "Kaohsiung"},
+        ]
+    )
+    weather_df = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20 00:00:00",
+                "temperature": 32.0,
+                "relative_humidity": 60.0,
+                "location": "Taipei",
+            },
+            {
+                "datetime": "2026-08-20 01:00:00",
+                "temperature": 33.0,
+                "relative_humidity": 58.0,
+                "location": "Taipei",
+            },
+            {
+                "datetime": "2026-08-20 00:00:00",
+                "temperature": 28.0,
+                "relative_humidity": 80.0,
+                "location": "Kaohsiung",
+            },
+            {
+                "datetime": "2026-08-20 01:00:00",
+                "temperature": 29.0,
+                "relative_humidity": 78.0,
+                "location": "Kaohsiung",
+            },
+        ]
+    )
+
+    merged = merge_weather_features(load_df, weather_df)
+    # Exactly 4 rows, preserving location alignment
+    assert len(merged) == 4
+    taipei_00 = merged[
+        (merged["location"] == "Taipei")
+        & (merged["datetime"] == pd.Timestamp("2026-08-20 00:00:00"))
+    ].iloc[0]
+    kh_00 = merged[
+        (merged["location"] == "Kaohsiung")
+        & (merged["datetime"] == pd.Timestamp("2026-08-20 00:00:00"))
+    ].iloc[0]
+
+    assert taipei_00["temperature"] == 32.0
+    assert kh_00["temperature"] == 28.0
+
+
+def test_timezone_aware_and_naive_weather_merge_alignment() -> None:
+    """Verify tz-aware (+08:00) CWA weather perfectly merges with tz-naive Taipower load."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 14:00:00", "load_mw": 38000.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 15:00:00", "load_mw": 37500.0, "location": "Taipei"},
+        ]
+    )
+    weather_df_aware = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20T14:00:00+08:00",
+                "temperature": 35.5,
+                "relative_humidity": 55.0,
+                "location": "Taipei",
+            },
+            {
+                "datetime": "2026-08-20T15:00:00+08:00",
+                "temperature": 34.8,
+                "relative_humidity": 58.0,
+                "location": "Taipei",
+            },
+        ]
+    )
+
+    merged = merge_weather_features(load_df, weather_df_aware)
+    assert len(merged) == 2
+    row_14 = merged[merged["datetime"] == pd.Timestamp("2026-08-20 14:00:00")].iloc[0]
+    assert row_14["temperature"] == 35.5
+    assert row_14["load_mw"] == 38000.0
+
+
+def test_utc_z_weather_merge_alignment() -> None:
+    """Verify UTC (Z) timestamp is converted to Asia/Taipei and aligns without 8-hour shift."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 14:00:00", "load_mw": 38000.0, "location": "Taipei"},
+        ]
+    )
+    # 06:00:00Z in UTC corresponds exactly to 14:00:00 in Asia/Taipei
+    weather_df_utc = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20T06:00:00Z",
+                "temperature": 35.5,
+                "relative_humidity": 55.0,
+                "location": "Taipei",
+            },
+        ]
+    )
+
+    merged = merge_weather_features(load_df, weather_df_utc)
+    assert len(merged) == 1
+    assert merged.iloc[0]["temperature"] == 35.5
+    assert merged.iloc[0]["datetime"] == pd.Timestamp("2026-08-20 14:00:00")
+
+
+def test_calendar_features_hour_aligned_with_taiwan_time() -> None:
+    """Verify calendar feature extraction treats UTC input as Taiwan local time."""
+    df_utc = pd.DataFrame([{"datetime": "2026-08-20T06:00:00Z", "load_mw": 30000.0}])
+    feat = create_calendar_features(df_utc)
+    # 06:00 UTC is 14:00 in Taiwan
+    assert feat.iloc[0]["hour"] == 14
+
+
+def test_lag_and_rolling_features_do_not_fill_with_future_load() -> None:
+    """Lag/rolling missing history must not be imputed from later load observations."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 300.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 03:00:00", "load_mw": 9999.0, "location": "Taipei"},
+        ]
+    )
+
+    features = build_feature_pipeline(
+        load_df=load_df,
+        weather_df=None,
+        lags=[1, 2],
+        windows=[2],
+        drop_na=False,
+    )
+
+    # Unique future marker must never appear in earlier lag/rolling cells.
+    future_marker = 9999.0
+    early = features.iloc[:3]
+    assert (early["load_mw_lag_1"] != future_marker).all()
+    assert (early["load_mw_lag_2"] != future_marker).all()
+    assert (early["load_mw_rolling_mean_2"] != future_marker).all()
+
+    # Point-in-time lag values when history exists.
+    assert features.iloc[1]["load_mw_lag_1"] == 100.0
+    assert features.iloc[2]["load_mw_lag_1"] == 200.0
+    assert features.iloc[2]["load_mw_lag_2"] == 100.0
+
+    # Warm-up rows keep a non-leaking sentinel instead of borrowing future load.
+    assert features.iloc[0]["load_mw_lag_1"] == 0.0
+    assert features.iloc[0]["load_mw_lag_2"] == 0.0
+    assert features.iloc[1]["load_mw_lag_2"] == 0.0
+
+
+def test_multi_location_features_have_no_cross_location_future_leakage() -> None:
+    """Features for one location must not absorb another location's later load values."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 110.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 5000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 5100.0, "location": "Kaohsiung"},
+        ]
+    )
+
+    features = build_feature_pipeline(
+        load_df=load_df,
+        weather_df=None,
+        lags=[1],
+        windows=[2],
+        drop_na=False,
+    )
+
+    taipei = features[features["location"] == "Taipei"].sort_values("datetime")
+    assert set(taipei["load_mw_lag_1"]).isdisjoint({5000.0, 5100.0})
+    assert taipei.iloc[0]["load_mw_lag_1"] == 0.0
+    assert taipei.iloc[1]["load_mw_lag_1"] == 100.0
