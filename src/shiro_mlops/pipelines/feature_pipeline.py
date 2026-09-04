@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -12,12 +13,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
+    DEFAULT_LAG_HOURS,
     DEFAULT_LOCATION,
+    DEFAULT_ROLLING_WINDOWS,
     LOAD_MW_COL,
     LOCATION_COL,
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
+from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.storage import publish_parquet_feature
 from shiro_mlops.features.transformers import build_feature_pipeline
@@ -30,6 +34,22 @@ TAIPOWER_EXPORT_LAG_HOURS = (1, 2, 24)
 TAIPOWER_EXPORT_ROLLING_WINDOWS = (6, 24)
 DEFAULT_TEMPERATURE_CELSIUS = 25.0
 DEFAULT_RELATIVE_HUMIDITY_PERCENT = 70.0
+NON_LEAKING_LOAD_FILL = 0.0
+
+
+@dataclass(frozen=True)
+class FeatureQueryWindow:
+    """Bounded training window used to fetch point-in-time feature sources."""
+
+    start_time: datetime
+    end_time: datetime
+    location: str | None = None
+    lookback_hours: int = max(max(DEFAULT_LAG_HOURS), max(DEFAULT_ROLLING_WINDOWS))
+
+    @property
+    def fetch_start_time(self) -> datetime:
+        """Inclusive repository start including lag/rolling lookback history."""
+        return self.start_time - timedelta(hours=self.lookback_hours)
 
 
 @dataclass(frozen=True)
@@ -58,6 +78,33 @@ class FeaturePublication:
     weather_path: Path
 
 
+def build_feature_query_window(
+    reference_load: pd.DataFrame,
+    *,
+    location: str | None = None,
+    lookback_hours: int | None = None,
+) -> FeatureQueryWindow:
+    """Derive an explicit time window from a reference load frame.
+
+    Location is only applied when callers pass it explicitly, so multi-location
+    repositories remain visible inside the same time bounds.
+    """
+    if reference_load.empty or DATETIME_COL not in reference_load.columns:
+        raise ValueError("reference_load must include a non-empty datetime column")
+
+    datetimes = standardize_taiwan_datetime(reference_load[DATETIME_COL])
+    return FeatureQueryWindow(
+        start_time=pd.Timestamp(datetimes.min()).to_pydatetime(),
+        end_time=pd.Timestamp(datetimes.max()).to_pydatetime(),
+        location=location,
+        lookback_hours=(
+            lookback_hours
+            if lookback_hours is not None
+            else max(max(DEFAULT_LAG_HOURS), max(DEFAULT_ROLLING_WINDOWS))
+        ),
+    )
+
+
 def _to_transformer_input(df: pd.DataFrame) -> pd.DataFrame:
     """Remove storage-only columns and restore the feature datetime name."""
     result = df.copy()
@@ -76,15 +123,36 @@ def _normalize_export_frame(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _filter_frame_to_window(df: pd.DataFrame, window: FeatureQueryWindow) -> pd.DataFrame:
+    """Keep only rows inside the training window and optional location filter."""
+    if df.empty:
+        return df
+    result = df.copy()
+    result[DATETIME_COL] = standardize_taiwan_datetime(result[DATETIME_COL])
+    mask = (result[DATETIME_COL] >= window.start_time) & (result[DATETIME_COL] <= window.end_time)
+    if window.location is not None and LOCATION_COL in result.columns:
+        mask &= result[LOCATION_COL] == window.location
+    return result.loc[mask].reset_index(drop=True)
+
+
 def fetch_feature_source_data(
     repository: TimeSeriesRepository,
     fallback_load: pd.DataFrame,
     fallback_weather: pd.DataFrame,
+    window: FeatureQueryWindow,
 ) -> FeatureSourceData:
-    """Fetch persisted sources, falling back to ingestion asset outputs when unavailable."""
+    """Fetch persisted sources for an explicit window, falling back to ingestion outputs."""
     try:
-        persisted_load = repository.fetch_load_range()
-        persisted_weather = repository.fetch_weather_range()
+        persisted_load = repository.fetch_load_range(
+            start_time=window.fetch_start_time,
+            end_time=window.end_time,
+            location=window.location,
+        )
+        persisted_weather = repository.fetch_weather_range(
+            start_time=window.fetch_start_time,
+            end_time=window.end_time,
+            location=window.location,
+        )
     except SQLAlchemyError as error:
         logger.warning(
             "Could not retrieve persisted feature source data; using ingestion outputs: %s",
@@ -99,9 +167,20 @@ def fetch_feature_source_data(
     return FeatureSourceData(_to_transformer_input(load), _to_transformer_input(weather))
 
 
-def transform_feature_source_data(source_data: FeatureSourceData) -> pd.DataFrame:
-    """Create the existing model-training feature matrix from source observations."""
-    return build_feature_pipeline(load_df=source_data.load, weather_df=source_data.weather)
+def transform_feature_source_data(
+    source_data: FeatureSourceData,
+    window: FeatureQueryWindow | None = None,
+) -> pd.DataFrame:
+    """Create the model-training feature matrix, optionally clipped to the training window."""
+    features = build_feature_pipeline(load_df=source_data.load, weather_df=source_data.weather)
+    if window is None:
+        return features
+    return _filter_frame_to_window(features, window)
+
+
+def _fill_load_history_without_leakage(series: pd.Series) -> pd.Series:
+    """Fill lag/rolling warm-up gaps without borrowing later load observations."""
+    return series.ffill().fillna(NON_LEAKING_LOAD_FILL)
 
 
 def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
@@ -124,15 +203,17 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
         column = f"load_mw_lag_{lag}"
         if column not in result.columns:
             result[column] = result.groupby("location")[LOAD_MW_COL].transform(
-                lambda values: values.shift(lag).bfill().ffill()
+                lambda values, lag_hours=lag: _fill_load_history_without_leakage(
+                    values.shift(lag_hours)
+                )
             )
 
     for window in TAIPOWER_EXPORT_ROLLING_WINDOWS:
         column = f"load_mw_rolling_mean_{window}"
         if column not in result.columns:
             result[column] = result.groupby("location")[LOAD_MW_COL].transform(
-                lambda values: (
-                    values.shift(1).rolling(window=window, min_periods=1).mean().bfill().ffill()
+                lambda values, rolling_window=window: _fill_load_history_without_leakage(
+                    values.shift(1).rolling(window=rolling_window, min_periods=1).mean()
                 )
             )
 
@@ -149,7 +230,9 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     int_columns = ["hour", "dayofweek", "is_weekend"]
     for column in float_columns:
         result[column] = (
-            pd.to_numeric(result[column], errors="coerce").fillna(0.0).astype("float32")
+            pd.to_numeric(result[column], errors="coerce")
+            .fillna(NON_LEAKING_LOAD_FILL)
+            .astype("float32")
         )
     for column in int_columns:
         result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0).astype("int64")

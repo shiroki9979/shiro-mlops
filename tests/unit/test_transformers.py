@@ -230,3 +230,65 @@ def test_calendar_features_hour_aligned_with_taiwan_time() -> None:
     feat = create_calendar_features(df_utc)
     # 06:00 UTC is 14:00 in Taiwan
     assert feat.iloc[0]["hour"] == 14
+
+
+def test_lag_and_rolling_features_do_not_fill_with_future_load() -> None:
+    """Lag/rolling missing history must not be imputed from later load observations."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 300.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 03:00:00", "load_mw": 9999.0, "location": "Taipei"},
+        ]
+    )
+
+    features = build_feature_pipeline(
+        load_df=load_df,
+        weather_df=None,
+        lags=[1, 2],
+        windows=[2],
+        drop_na=False,
+    )
+
+    # Unique future marker must never appear in earlier lag/rolling cells.
+    future_marker = 9999.0
+    early = features.iloc[:3]
+    assert (early["load_mw_lag_1"] != future_marker).all()
+    assert (early["load_mw_lag_2"] != future_marker).all()
+    assert (early["load_mw_rolling_mean_2"] != future_marker).all()
+
+    # Point-in-time lag values when history exists.
+    assert features.iloc[1]["load_mw_lag_1"] == 100.0
+    assert features.iloc[2]["load_mw_lag_1"] == 200.0
+    assert features.iloc[2]["load_mw_lag_2"] == 100.0
+
+    # Warm-up rows keep a non-leaking sentinel instead of borrowing future load.
+    assert features.iloc[0]["load_mw_lag_1"] == 0.0
+    assert features.iloc[0]["load_mw_lag_2"] == 0.0
+    assert features.iloc[1]["load_mw_lag_2"] == 0.0
+
+
+def test_multi_location_features_have_no_cross_location_future_leakage() -> None:
+    """Features for one location must not absorb another location's later load values."""
+    load_df = pd.DataFrame(
+        [
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 110.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 5000.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 5100.0, "location": "Kaohsiung"},
+        ]
+    )
+
+    features = build_feature_pipeline(
+        load_df=load_df,
+        weather_df=None,
+        lags=[1],
+        windows=[2],
+        drop_na=False,
+    )
+
+    taipei = features[features["location"] == "Taipei"].sort_values("datetime")
+    assert set(taipei["load_mw_lag_1"]).isdisjoint({5000.0, 5100.0})
+    assert taipei.iloc[0]["load_mw_lag_1"] == 0.0
+    assert taipei.iloc[1]["load_mw_lag_1"] == 100.0
