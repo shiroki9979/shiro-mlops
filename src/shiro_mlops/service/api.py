@@ -34,8 +34,16 @@ model_store = ModelStore()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Lifespan event to load or initialize the LightGBM model."""
+    """Lifespan event to ensure DB schema and load or initialize the LightGBM model."""
+    try:
+        from shiro_mlops.core.database import init_db
+
+        init_db()
+    except Exception:
+        pass
+
     model_path = Path("data/model.joblib")
+
     if model_path.exists():
         try:
             model_store.forecaster = LightGBMRecursiveForecaster.load(model_path)

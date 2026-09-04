@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-08-26
+- 最後更新：2026-09-04
 - 專案版本：`0.1.0`
 
 ---
@@ -33,6 +33,7 @@
 ### 1.3 地端時序資料庫模型 (TimescaleDB Hypertables)
 
 - **資料庫**：`shiro_timeseries` (TimescaleDB / PostgreSQL 15+)
+- **時間契約**：擷取與特徵工程邊界的無時區時間均表示台灣本地時間（`Asia/Taipei`）；帶時區的來源時間保留其原始瞬間。寫入 `TIMESTAMPTZ` 前，repository 一律轉為 UTC；範圍查詢條件同樣轉為 UTC。讀回資料在交給特徵工程前轉回無時區的台灣本地時間。
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)
@@ -62,6 +63,7 @@
 - **Features (`cwa_weather_features`)**:
   - `temperature`: float32
   - `relative_humidity`: float32
+- **時間正確性**：特徵擷取必須提供明確的 `FeatureQueryWindow`（訓練起迄與可選地點）；repository 查詢起點另含 lag/rolling lookback，禁止無界歷史掃描。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
 
 ---
 
@@ -117,7 +119,8 @@
 
 1. **`daily_training_job`**：
    - **排程**：`0 16 * * *`（每日台灣時間 00:00 執行）
-   - **管線鏈路**：`raw_taipower_load_data` + `raw_weather_obs_data` $\to$ `engineered_features` $\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`
+   - **管線鏈路**：`raw_taipower_load_data` + `raw_weather_obs_data` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`
+   - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
    - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。
