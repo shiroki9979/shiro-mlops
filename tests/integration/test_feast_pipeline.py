@@ -505,8 +505,8 @@ def test_feast_retrieves_s3_published_features_offline(
     finally:
         moto_server.stop()
 
-    assert result.loc[0, "load_mw"] > 0.0
-    assert result.loc[0, "temperature"] > 0.0
+    assert result.loc[0, "load_mw"] == 38500.0
+    assert result.loc[0, "temperature"] == 28.0
 
 
 def test_feature_calculation_is_decoupled_from_storage_target(
