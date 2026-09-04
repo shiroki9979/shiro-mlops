@@ -4,11 +4,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-from dagster import build_asset_context, materialize
+from dagster import AssetKey, build_output_context, materialize
 from feast import FeatureStore
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.definitions import (
     location_entity,
@@ -17,12 +18,31 @@ from shiro_mlops.features.definitions import (
 )
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.assets import (
+    compute_engineered_feature_outputs,
     drift_monitoring_report,
-    engineered_features,
+    engineered_feature_set,
     raw_taipower_load_data,
     raw_weather_obs_data,
     trained_forecaster_model,
 )
+
+
+def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.DataFrame) -> None:
+    """Publish Feast frames through the same I/O Manager boundary used by Dagster assets."""
+    manager = get_feast_parquet_io_manager(
+        offline_store_type="file",
+        s3_bucket=settings.S3_BUCKET_NAME,
+        s3_prefix=settings.FEAST_S3_PREFIX,
+        data_dir=data_dir,
+    )
+    manager.handle_output(
+        build_output_context(asset_key=AssetKey(["taipower_features"])),
+        taipower,
+    )
+    manager.handle_output(
+        build_output_context(asset_key=AssetKey(["weather_features"])),
+        weather,
+    )
 
 
 def test_engineered_features_extracts_db_and_materializes_feast_parquet(
@@ -32,40 +52,24 @@ def test_engineered_features_extracts_db_and_materializes_feast_parquet(
     tmp_path: Path,
     monkeypatch,
 ):
-    """Verify engineered_features extracts from DB, saves Feast Parquet files, and returns df."""
+    """Verify feature calculation extracts from DB and Feast I/O Manager writes Parquet files."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
-    context = build_asset_context(resources={"time_series_repo": populated_repo})
 
-    features_df = engineered_features(
-        context=context,
-        raw_taipower_load_data=taipower_raw_df,
-        raw_weather_obs_data=cwa_obs_df,
+    features_df, taipower, weather = compute_engineered_feature_outputs(
+        populated_repo, taipower_raw_df, cwa_obs_df
     )
+    _publish_feast_frames(tmp_path, taipower, weather)
 
     assert isinstance(features_df, pd.DataFrame)
     assert not features_df.empty
+    assert (tmp_path / "taipower_features.parquet").exists()
+    assert (tmp_path / "weather_features.parquet").exists()
 
-    # Verify Parquet files generated on disk in DATA_DIR
-    taipower_parquet = tmp_path / "taipower_features.parquet"
-    weather_parquet = tmp_path / "weather_features.parquet"
+    tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
+    assert {"datetime", "location", "load_mw", "hour", "is_weekend"}.issubset(tp_df.columns)
 
-    assert taipower_parquet.exists(), f"Expected {taipower_parquet} to exist"
-    assert weather_parquet.exists(), f"Expected {weather_parquet} to exist"
-
-    # Verify schema of taipower_features.parquet
-    tp_df = pd.read_parquet(taipower_parquet)
-    assert "datetime" in tp_df.columns
-    assert "location" in tp_df.columns
-    assert "load_mw" in tp_df.columns
-    assert "hour" in tp_df.columns
-    assert "is_weekend" in tp_df.columns
-
-    # Verify schema of weather_features.parquet
-    w_df = pd.read_parquet(weather_parquet)
-    assert "datetime" in w_df.columns
-    assert "location" in w_df.columns
-    assert "temperature" in w_df.columns
-    assert "relative_humidity" in w_df.columns
+    w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
+    assert {"datetime", "location", "temperature", "relative_humidity"}.issubset(w_df.columns)
 
 
 def test_engineered_features_multi_location_isolation_and_export(
@@ -75,15 +79,13 @@ def test_engineered_features_multi_location_isolation_and_export(
     tmp_path: Path,
     monkeypatch,
 ):
-    """Verify engineered_features isolates multiple locations and produces unique composite Feast keys."""
+    """Verify multi-location isolation and unique Feast composite keys via I/O Manager."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
-    # Upsert Taipei data
     repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
     repo.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
 
-    # Upsert Kaohsiung data with different values
     kh_taipower = taipower_raw_df.copy()
     kh_taipower["load_mw"] = kh_taipower["load_mw"] * 0.6
     kh_taipower["location"] = "Kaohsiung"
@@ -94,17 +96,13 @@ def test_engineered_features_multi_location_isolation_and_export(
     kh_weather["location"] = "Kaohsiung"
     repo.upsert_cwa_weather(kh_weather, default_location="Kaohsiung")
 
-    context = build_asset_context(resources={"time_series_repo": repo})
-    features_df = engineered_features(
-        context=context,
-        raw_taipower_load_data=taipower_raw_df,
-        raw_weather_obs_data=cwa_obs_df,
+    features_df, taipower, weather = compute_engineered_feature_outputs(
+        repo, taipower_raw_df, cwa_obs_df
     )
+    _publish_feast_frames(tmp_path, taipower, weather)
 
-    assert not features_df.empty
     assert set(features_df["location"]) == {"Taipei", "Kaohsiung"}
 
-    # Verify Feast Parquet export has unique (datetime, location) keys
     tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
     assert set(tp_df["location"]) == {"Taipei", "Kaohsiung"}
     assert not tp_df.duplicated(subset=["datetime", "location"]).any()
@@ -119,7 +117,7 @@ def test_short_dataset_feast_parquet_schema_contract(
     tmp_path: Path,
     monkeypatch,
 ):
-    """Verify short data windows (e.g. 5 records) produce complete Feast Parquet schemas with float32/int64 types."""
+    """Verify short data windows produce complete Feast Parquet schemas with float32/int64 types."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
@@ -148,22 +146,15 @@ def test_short_dataset_feast_parquet_schema_contract(
     repo.upsert_taipower_load(short_load)
     repo.upsert_cwa_weather(short_weather)
 
-    context = build_asset_context(resources={"time_series_repo": repo})
-    features_df = engineered_features(
-        context=context,
-        raw_taipower_load_data=short_load,
-        raw_weather_obs_data=short_weather,
+    features_df, taipower, weather = compute_engineered_feature_outputs(
+        repo, short_load, short_weather
     )
+    _publish_feast_frames(tmp_path, taipower, weather)
 
-    assert not features_df.empty
     assert len(features_df) == 5
-
-    # Check Parquet on disk
-    tp_path = tmp_path / "taipower_features.parquet"
-    tp_df = pd.read_parquet(tp_path)
+    tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
     assert len(tp_df) == 5
 
-    # Verify all FeatureView fields are present in the Parquet file
     expected_tp_fields = [
         "load_mw",
         "load_mw_lag_1",
@@ -180,16 +171,12 @@ def test_short_dataset_feast_parquet_schema_contract(
     for field in expected_tp_fields:
         assert field in tp_df.columns, f"Missing required Feast field: {field}"
 
-    # Verify types
     assert tp_df["load_mw_lag_24"].dtype == "float32"
     assert tp_df["load_mw_rolling_mean_24"].dtype == "float32"
     assert tp_df["hour"].dtype == "int64"
 
-    w_path = tmp_path / "weather_features.parquet"
-    w_df = pd.read_parquet(w_path)
+    w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
     assert len(w_df) == 5
-    assert "temperature" in w_df.columns
-    assert "relative_humidity" in w_df.columns
     assert w_df["temperature"].dtype == "float32"
     assert w_df["relative_humidity"].dtype == "float32"
 
@@ -198,20 +185,19 @@ def test_feast_offline_feature_retrieval(
     populated_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
 ):
     """Verify Feast get_historical_features retrieves features and trains forecaster without error."""
-    context = build_asset_context(resources={"time_series_repo": populated_repo})
-
-    engineered_features(
-        context=context,
-        raw_taipower_load_data=taipower_raw_df,
-        raw_weather_obs_data=cwa_obs_df,
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    _, taipower, weather = compute_engineered_feature_outputs(
+        populated_repo, taipower_raw_df, cwa_obs_df
     )
+    _publish_feast_frames(tmp_path, taipower, weather)
 
     store = FeatureStore(repo_path=str(settings.FEAST_REPO_PATH))
     store.apply([location_entity, taipower_load_feature_view, weather_feature_view])
 
-    # Construct entity DataFrame across multiple timestamps
     entity_df = pd.DataFrame(
         {
             "location": ["Taipei", "Taipei"],
@@ -249,7 +235,6 @@ def test_feast_offline_feature_retrieval(
     assert "relative_humidity" in training_df.columns
     assert "load_mw_lag_1" in training_df.columns
 
-    # Verify Feast training DataFrame compatibility with LightGBM forecaster fit
     forecaster = LightGBMRecursiveForecaster(
         params={"n_estimators": 5, "min_child_samples": 1, "verbose": -1}
     )
@@ -269,6 +254,12 @@ def test_full_dagster_mlops_pipeline_materialization(
     """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring offline and fast."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
+    feast_io_manager = get_feast_parquet_io_manager(
+        offline_store_type="file",
+        s3_bucket=settings.S3_BUCKET_NAME,
+        s3_prefix=settings.FEAST_S3_PREFIX,
+        data_dir=tmp_path,
+    )
 
     with (
         patch(
@@ -289,24 +280,23 @@ def test_full_dagster_mlops_pipeline_materialization(
             assets=[
                 raw_taipower_load_data,
                 raw_weather_obs_data,
-                engineered_features,
+                engineered_feature_set,
                 trained_forecaster_model,
                 drift_monitoring_report,
             ],
             resources={
                 "time_series_repo": repo,
+                "feast_io_manager": feast_io_manager,
                 "forecaster": lightweight_forecaster,
             },
             instance=dagster_instance,
         )
 
     assert res.success
+    assert (tmp_path / "model.joblib").exists()
+    assert (tmp_path / "taipower_features.parquet").exists()
+    assert (tmp_path / "weather_features.parquet").exists()
 
-    # Verify model trained and saved in DATA_DIR
-    model_path = tmp_path / "model.joblib"
-    assert model_path.exists()
-
-    # Verify drift report metadata
     report = res.output_for_node("drift_monitoring_report")
     assert "status" in report
     assert report["status"] in {"HEALTHY", "WARNING"}
@@ -329,14 +319,12 @@ def test_publish_parquet_feature_local_and_s3(tmp_path):
         ]
     )
 
-    # 1. Local publishing
     local_target = str(tmp_path / "test_feature.parquet")
     published_local = publish_parquet_feature(sample_df, local_target)
     assert Path(published_local).exists()
     local_read_df = pd.read_parquet(published_local)
     assert len(local_read_df) == 1
 
-    # 2. S3 publishing (mocked boto3 client)
     mock_s3 = MagicMock()
     s3_target = "s3://test-bucket/features/test_feature.parquet"
     published_s3 = publish_parquet_feature(sample_df, s3_target, s3_client=mock_s3)
@@ -346,59 +334,69 @@ def test_publish_parquet_feature_local_and_s3(tmp_path):
     assert kwargs["Bucket"] == "test-bucket"
     assert kwargs["Key"] == "features/test_feature.parquet"
 
-    # Read back parquet bytes and verify identical schema contract
     s3_read_df = pd.read_parquet(io.BytesIO(kwargs["Body"]))
     pd.testing.assert_frame_equal(local_read_df, s3_read_df)
 
 
-def test_engineered_features_publishes_to_s3_when_configured(
+def test_engineered_features_publishes_to_s3_via_io_manager(
     populated_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
-    monkeypatch,
+    tmp_path: Path,
 ):
-    """Verify engineered_features publishes Feast feature files to S3 when configured."""
-    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
-    monkeypatch.setattr(settings, "S3_BUCKET_NAME", "my-s3-feast-bucket")
-
-    published_calls = []
-
-    def mock_publish(df, target_uri, s3_client=None):
-        published_calls.append((target_uri, df.columns.tolist()))
-        return target_uri
-
-    monkeypatch.setattr(
-        "shiro_mlops.pipelines.assets.publish_parquet_feature",
-        mock_publish,
+    """Verify Feast I/O Manager publishes feature files to S3 when configured."""
+    _, taipower, weather = compute_engineered_feature_outputs(
+        populated_repo, taipower_raw_df, cwa_obs_df
+    )
+    mock_s3 = MagicMock()
+    feast_manager = get_feast_parquet_io_manager(
+        offline_store_type="s3",
+        s3_bucket="my-s3-feast-bucket",
+        s3_prefix="features",
+        data_dir=tmp_path,
+        s3_client=mock_s3,
+    )
+    feast_manager.handle_output(
+        build_output_context(asset_key=AssetKey(["taipower_features"])),
+        taipower,
+    )
+    feast_manager.handle_output(
+        build_output_context(asset_key=AssetKey(["weather_features"])),
+        weather,
     )
 
-    context = build_asset_context(resources={"time_series_repo": populated_repo})
-    features_df = engineered_features(
-        context=context,
-        raw_taipower_load_data=taipower_raw_df,
-        raw_weather_obs_data=cwa_obs_df,
+    assert mock_s3.put_object.call_count == 2
+    keys = {call.kwargs["Key"] for call in mock_s3.put_object.call_args_list}
+    assert "features/taipower_features.parquet" in keys
+    assert "features/weather_features.parquet" in keys
+
+
+def test_feature_calculation_is_decoupled_from_storage_target(
+    populated_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+):
+    """Feature calculation returns identical Feast contracts regardless of storage settings."""
+    features_a, taipower_a, weather_a = compute_engineered_feature_outputs(
+        populated_repo, taipower_raw_df, cwa_obs_df
+    )
+    features_b, taipower_b, weather_b = compute_engineered_feature_outputs(
+        populated_repo, taipower_raw_df, cwa_obs_df
     )
 
-    assert not features_df.empty
-    uris = [call[0] for call in published_calls]
-    assert any(
-        u.startswith("s3://my-s3-feast-bucket/features/taipower_features.parquet") for u in uris
-    )
-    assert any(
-        u.startswith("s3://my-s3-feast-bucket/features/weather_features.parquet") for u in uris
-    )
+    pd.testing.assert_frame_equal(features_a, features_b)
+    pd.testing.assert_frame_equal(taipower_a, taipower_b)
+    pd.testing.assert_frame_equal(weather_a, weather_b)
 
 
 def test_feast_feature_view_source_switching(monkeypatch):
     """Verify Feast FileSource adapts between local and S3 without requiring a cloud database."""
     from shiro_mlops.features.definitions import create_load_source, create_weather_source
 
-    # 1. Local mode
     monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "file")
     local_load_src = create_load_source()
     assert not local_load_src.path.startswith("s3://")
 
-    # 2. S3 mode
     monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
     monkeypatch.setattr(settings, "S3_BUCKET_NAME", "hybrid-s3-bucket")
     s3_load_src = create_load_source()

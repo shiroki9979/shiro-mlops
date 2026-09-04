@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 特徵計算與儲存目標解耦：以 `build_feast_feature_frames` 產出 Feast 契約，改由 Dagster `FeastParquetIOManager` 依本機／S3 設定發布 Parquet（`src/shiro_mlops/core/io_managers.py`、`src/shiro_mlops/pipelines/assets.py`，#16）。
 - 將 Agent Skills 之 Issue Tracker 設定自 Local Markdown 遷移至 GitHub Issues，並建立 4 張 Tracer-bullet 工單（#1 ~ #4）。
 - 更新系統資料契約規格書，補入 `raw_taipower_load` 與 `raw_cwa_weather` Hypertables 定義（`docs/SPEC.md`）。
 - 前端套件管理切換至 pnpm，配置 `onlyBuiltDependencies` 支援 `esbuild` 與 `msw` 安裝腳本（`frontend/`）。

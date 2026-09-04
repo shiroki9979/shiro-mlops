@@ -1,11 +1,8 @@
-"""Feature pipeline boundaries for retrieval, transformation, and Feast publication."""
+"""Feature pipeline boundaries for retrieval, transformation, and Feast frame building."""
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -23,7 +20,6 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.features.storage import publish_parquet_feature
 from shiro_mlops.features.transformers import build_feature_pipeline
 
 logger = logging.getLogger(__name__)
@@ -53,29 +49,19 @@ class FeatureQueryWindow:
 
 
 @dataclass(frozen=True)
+class FeastFeatureFrames:
+    """Feast-contract DataFrames ready for I/O Manager publication."""
+
+    taipower: pd.DataFrame
+    weather: pd.DataFrame
+
+
+@dataclass(frozen=True)
 class FeatureSourceData:
     """Transformer-ready load and weather source frames."""
 
     load: pd.DataFrame
     weather: pd.DataFrame
-
-
-@dataclass(frozen=True)
-class FeaturePublicationTargets:
-    """Destinations for local and optional S3 Feast feature artifacts."""
-
-    data_dir: Path
-    offline_store_type: Literal["file", "s3"]
-    taipower_uri: str
-    weather_uri: str
-
-
-@dataclass(frozen=True)
-class FeaturePublication:
-    """Local Feast artifact paths created by a publication."""
-
-    taipower_path: Path
-    weather_path: Path
 
 
 def build_feature_query_window(
@@ -273,23 +259,12 @@ def _build_weather_export(weather_df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def publish_feast_features(
+def build_feast_feature_frames(
     features_df: pd.DataFrame,
     weather_df: pd.DataFrame,
-    targets: FeaturePublicationTargets,
-    publisher: Callable[[pd.DataFrame, str], str] = publish_parquet_feature,
-) -> FeaturePublication:
-    """Publish stable Taipower and CWA Feast Parquet schemas to configured targets."""
-    targets.data_dir.mkdir(parents=True, exist_ok=True)
-    taipower_features = _build_taipower_export(features_df)
-    weather_features = _build_weather_export(weather_df)
-    taipower_path = targets.data_dir / "taipower_features.parquet"
-    weather_path = targets.data_dir / "weather_features.parquet"
-    publisher(taipower_features, str(taipower_path))
-    publisher(weather_features, str(weather_path))
-
-    if targets.offline_store_type == "s3":
-        publisher(taipower_features, targets.taipower_uri)
-        publisher(weather_features, targets.weather_uri)
-
-    return FeaturePublication(taipower_path=taipower_path, weather_path=weather_path)
+) -> FeastFeatureFrames:
+    """Build stable Taipower and CWA Feast schemas without choosing a storage target."""
+    return FeastFeatureFrames(
+        taipower=_build_taipower_export(features_df),
+        weather=_build_weather_export(weather_df),
+    )

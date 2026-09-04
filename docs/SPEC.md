@@ -119,7 +119,8 @@
 
 1. **`daily_training_job`**：
    - **排程**：`0 16 * * *`（每日台灣時間 00:00 執行）
-   - **管線鏈路**：`raw_taipower_load_data` + `raw_weather_obs_data` $\to$ `engineered_features` $\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`
+   - **管線鏈路**：`raw_taipower_load_data` + `raw_weather_obs_data` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`
+   - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
    - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。
