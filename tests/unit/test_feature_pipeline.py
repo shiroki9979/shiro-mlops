@@ -1,7 +1,6 @@
-"""Unit tests for feature source retrieval, transformation, and publication seams."""
+"""Unit tests for feature source retrieval, transformation, and Feast frame seams."""
 
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -10,12 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.feature_pipeline import (
-    FeaturePublicationTargets,
     FeatureQueryWindow,
     FeatureSourceData,
+    build_feast_feature_frames,
     build_feature_query_window,
     fetch_feature_source_data,
-    publish_feast_features,
     transform_feature_source_data,
 )
 
@@ -121,47 +119,7 @@ def test_transform_feature_source_data_preserves_model_feature_contract(
     }.issubset(features.columns)
 
 
-def test_publish_feast_features_writes_existing_load_and_weather_contracts(
-    tmp_path: Path, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
-) -> None:
-    """Feature publication emits independently consumable Feast Parquet artifacts."""
-    source_data = FeatureSourceData(taipower_raw_df, cwa_obs_df)
-    features = transform_feature_source_data(source_data)
-    targets = FeaturePublicationTargets(
-        data_dir=tmp_path,
-        offline_store_type="file",
-        taipower_uri=str(tmp_path / "taipower_features.parquet"),
-        weather_uri=str(tmp_path / "weather_features.parquet"),
-    )
-
-    publication = publish_feast_features(features, source_data.weather, targets)
-
-    load_features = pd.read_parquet(publication.taipower_path)
-    weather_features = pd.read_parquet(publication.weather_path)
-    assert list(load_features.columns) == [
-        "datetime",
-        "location",
-        "load_mw",
-        "load_mw_lag_1",
-        "load_mw_lag_2",
-        "load_mw_lag_24",
-        "load_mw_rolling_mean_6",
-        "load_mw_rolling_mean_24",
-        "hour",
-        "dayofweek",
-        "is_weekend",
-        "hour_sin",
-        "hour_cos",
-    ]
-    assert list(weather_features.columns) == [
-        "datetime",
-        "location",
-        "temperature",
-        "relative_humidity",
-    ]
-
-
-def test_feast_export_lag_features_do_not_use_future_load(tmp_path: Path) -> None:
+def test_feast_export_lag_features_do_not_use_future_load() -> None:
     """Feast export warm-up lags must use a non-leaking sentinel, not later load values."""
     load_df = pd.DataFrame(
         [
@@ -183,15 +141,7 @@ def test_feast_export_lag_features_do_not_use_future_load(tmp_path: Path) -> Non
         ]
     )
     features = transform_feature_source_data(FeatureSourceData(load_df, weather_df))
-    targets = FeaturePublicationTargets(
-        data_dir=tmp_path,
-        offline_store_type="file",
-        taipower_uri=str(tmp_path / "taipower_features.parquet"),
-        weather_uri=str(tmp_path / "weather_features.parquet"),
-    )
-
-    publication = publish_feast_features(features, weather_df, targets)
-    exported = pd.read_parquet(publication.taipower_path).sort_values("datetime")
+    exported = build_feast_feature_frames(features, weather_df).taipower.sort_values("datetime")
 
     assert (exported.iloc[:3]["load_mw_lag_1"] != 8888.0).all()
     assert exported.iloc[0]["load_mw_lag_1"] == 0.0

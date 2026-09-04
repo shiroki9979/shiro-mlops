@@ -9,9 +9,10 @@ import pytest
 from dagster import build_asset_context, materialize
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.assets import (
-    engineered_features,
+    engineered_feature_set,
     raw_taipower_load_data,
     raw_weather_obs_data,
 )
@@ -136,13 +137,21 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         ),
     ):
         res = materialize(
-            assets=[raw_taipower_load_data, raw_weather_obs_data, engineered_features],
-            resources={"time_series_repo": test_repo},
+            assets=[raw_taipower_load_data, raw_weather_obs_data, engineered_feature_set],
+            resources={
+                "time_series_repo": test_repo,
+                "feast_io_manager": get_feast_parquet_io_manager(
+                    offline_store_type="file",
+                    s3_bucket=settings.S3_BUCKET_NAME,
+                    s3_prefix=settings.FEAST_S3_PREFIX,
+                    data_dir=settings.DATA_DIR,
+                ),
+            },
             instance=dagster_instance,
         )
 
     assert res.success
-    engineered_df = res.output_for_node("engineered_features")
+    engineered_df = res.output_for_node("engineered_feature_set", "engineered_features")
     assert isinstance(engineered_df, pd.DataFrame)
     assert not engineered_df.empty
 
