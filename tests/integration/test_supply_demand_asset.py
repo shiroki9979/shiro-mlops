@@ -52,7 +52,7 @@ def test_raw_taipower_supply_demand_snapshot_materializes_to_repository(
             return_value=_mock_httpx_response(),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -75,7 +75,7 @@ def test_raw_taipower_supply_demand_snapshot_materializes_to_repository(
             return_value=_mock_httpx_response(revised),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -103,7 +103,7 @@ def test_materialize_supply_demand_asset_end_to_end(
             return_value=_mock_httpx_response(),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -132,7 +132,7 @@ def test_supply_demand_http_failure_does_not_write(
             return_value=_mock_httpx_response(status_error=True),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -156,7 +156,7 @@ def test_supply_demand_parse_failure_does_not_write(
             return_value=_mock_httpx_response(bad_payload),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):

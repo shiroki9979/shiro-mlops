@@ -56,7 +56,7 @@ def test_raw_unit_generation_snapshot_materializes_multi_unit_idempotently(
             return_value=_mock_httpx_response(),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -75,7 +75,7 @@ def test_raw_unit_generation_snapshot_materializes_multi_unit_idempotently(
             return_value=_mock_httpx_response(revised),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -101,7 +101,7 @@ def test_materialize_unit_generation_asset_end_to_end(
             return_value=_mock_httpx_response(),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -129,7 +129,7 @@ def test_unit_generation_http_failure_does_not_write(
             return_value=_mock_httpx_response(status_error=True),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
@@ -153,7 +153,7 @@ def test_unit_generation_parse_failure_does_not_write(
             return_value=_mock_httpx_response(bad_payload),
         ),
         patch(
-            "shiro_mlops.pipelines.assets.resolve_manual_observed_at",
+            "shiro_mlops.pipelines.assets.resolve_snapshot_observed_at",
             return_value=observed_slot,
         ),
     ):
