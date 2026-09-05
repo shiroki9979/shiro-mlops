@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 在 API 與 Dagster 映像安裝 `libgomp1`，修復 LightGBM 因缺少 OpenMP runtime 無法啟動的問題（`docker/Dockerfile.api`、`docker/Dockerfile.dagster`）。
+
 ### Changed
 
 - 對齊套件版本字串為 `0.2.0`；前端改以 `pnpm` 與 Vite `5173` 埠啟動，避免與 Dagster `3000` 衝突。
