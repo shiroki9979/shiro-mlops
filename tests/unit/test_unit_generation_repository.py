@@ -34,6 +34,8 @@ def test_upsert_unit_generation_snapshots_insert_and_fetch(
     assert first.net_generation_mw == pytest.approx(670.4)
     assert first.capacity_ratio_pct == pytest.approx(90.265)
     assert first.source_time == datetime(2026, 9, 5, 17, 30)
+    assert first.raw_payload["DateTime"] == "2026-09-05T17:30:00"
+    assert len(first.raw_payload["aaData"]) == 4
     offline = next(item for item in fetched if item.unit_name == "大潭CC#3")
     assert offline.net_generation_mw == pytest.approx(0.0)
     assert offline.remark == "歲修"

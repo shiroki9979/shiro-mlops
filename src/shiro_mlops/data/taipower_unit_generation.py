@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -97,15 +98,13 @@ def _parse_row(
     *,
     observed_at: datetime,
     source_time: datetime,
-    source_datetime: str,
+    source_payload: dict[str, Any],
 ) -> TaipowerUnitGenerationSnapshot | None:
     unit_type = _normalize_unit_type(row.get("機組類型"))
     unit_name = _normalize_unit_name(row.get("機組名稱"))
     if unit_type is None or unit_name is None:
         return None
 
-    raw_payload = {key: value for key, value in row.items()}
-    raw_payload["DateTime"] = source_datetime
     return TaipowerUnitGenerationSnapshot(
         observed_at=observed_at,
         unit_type=unit_type,
@@ -115,7 +114,7 @@ def _parse_row(
         net_generation_mw=_parse_optional_mw(row.get("淨發電量(MW)")),
         capacity_ratio_pct=_parse_optional_ratio_pct(row.get("淨發電量/裝置容量比(%)")),
         remark=_parse_optional_remark(row.get("備註")),
-        raw_payload=raw_payload,
+        raw_payload=deepcopy(source_payload),
     )
 
 
@@ -145,7 +144,7 @@ def parse_unit_generation_payload(
             row,
             observed_at=observed_at,
             source_time=source_time,
-            source_datetime=source_datetime,
+            source_payload=payload,
         )
         if snapshot is not None:
             snapshots.append(snapshot)
