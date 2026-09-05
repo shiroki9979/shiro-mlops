@@ -732,9 +732,7 @@ class TimeSeriesRepository:
                     source_time=_utc_instant_to_taiwan(row["source_time"])
                     or _utc_instant_to_taiwan(row["observed_at"])
                     or observed_at,
-                    capacity_mw=(
-                        None if row["capacity_mw"] is None else float(row["capacity_mw"])
-                    ),
+                    capacity_mw=(None if row["capacity_mw"] is None else float(row["capacity_mw"])),
                     net_generation_mw=(
                         None
                         if row["net_generation_mw"] is None

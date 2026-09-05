@@ -69,6 +69,15 @@ def resolve_manual_observed_at(now: datetime | None = None) -> datetime:
     return floor_to_ten_minutes(now)
 
 
+def resolve_snapshot_observed_at(observed_at: str | datetime | None = None) -> datetime:
+    """Resolve observation slot from a schedule tick, ISO string, or manual fallback."""
+    if observed_at is None:
+        return resolve_manual_observed_at()
+    if isinstance(observed_at, str):
+        return floor_to_ten_minutes(datetime.fromisoformat(observed_at))
+    return floor_to_ten_minutes(observed_at)
+
+
 def parse_roc_datetime(value: str) -> datetime:
     """Parse a ROC calendar timestamp used by Taipower open-data payloads."""
     cleaned = value.strip()
