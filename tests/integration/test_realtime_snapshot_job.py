@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
@@ -23,6 +24,16 @@ from shiro_mlops.pipelines.schedules import (
 )
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
+SCHEDULED_EXECUTION_TIME = datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
+OBSERVED_SLOT = datetime(2026, 9, 5, 17, 30)
+
+
+class FailureScenario(StrEnum):
+    """測試來源擷取失敗情境。"""
+
+    NONE = "none"
+    REGIONAL_ONCE = "regional_once"
+    UNIT_ALWAYS = "unit_always"
 
 
 def _load_fixtures():
@@ -48,6 +59,26 @@ def _build_test_defs(repo: TimeSeriesRepository, job=None) -> Definitions:
     )
 
 
+def _build_schedule_run_request():
+    context = build_schedule_context(scheduled_execution_time=SCHEDULED_EXECUTION_TIME)
+    evaluation = taipower_supply_demand_snapshot_schedule.evaluate_tick(context)
+    assert evaluation.run_requests is not None
+    return evaluation.run_requests[0]
+
+
+def _build_realtime_job_def(
+    repo: TimeSeriesRepository,
+    *,
+    retry_policy: RetryPolicy | None = None,
+):
+    job = (
+        build_taipower_supply_demand_snapshot_job()
+        if retry_policy is None
+        else build_taipower_supply_demand_snapshot_job(op_retry_policy=retry_policy)
+    )
+    return _build_test_defs(repo, job=job).resolve_job_def("taipower_supply_demand_snapshot_job")
+
+
 class MockHTTPXRouter:
     """Mock HTTPX client routing requests by Taipower open-data URL."""
 
@@ -56,18 +87,12 @@ class MockHTTPXRouter:
         sd_payload: dict,
         reg_csv: str,
         unit_payload: dict,
-        fail_sd: bool = False,
-        fail_reg: bool = False,
-        fail_unit: bool = False,
-        fail_reg_once: bool = False,
+        failure_scenario: FailureScenario = FailureScenario.NONE,
     ):
         self.sd_payload = sd_payload
         self.reg_csv = reg_csv
         self.unit_payload = unit_payload
-        self.fail_sd = fail_sd
-        self.fail_reg = fail_reg
-        self.fail_unit = fail_unit
-        self.fail_reg_once = fail_reg_once
+        self.failure_scenario = failure_scenario
         self.sd_call_count = 0
         self.reg_call_count = 0
         self.unit_call_count = 0
@@ -84,18 +109,13 @@ class MockHTTPXRouter:
 
         if "d006020" in url_str:
             self.sd_call_count += 1
-            if self.fail_sd:
-                resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-                    "SD 500 error", request=MagicMock(), response=MagicMock(status_code=500)
-                )
-            else:
-                resp.raise_for_status.return_value = None
-                resp.json.return_value = self.sd_payload
+            resp.raise_for_status.return_value = None
+            resp.json.return_value = self.sd_payload
             return resp
 
         if "d006019" in url_str:
             self.reg_call_count += 1
-            if self.fail_reg or (self.fail_reg_once and self.reg_call_count == 1):
+            if self.failure_scenario == FailureScenario.REGIONAL_ONCE and self.reg_call_count == 1:
                 resp.raise_for_status.side_effect = httpx.HTTPStatusError(
                     "Reg 500 error", request=MagicMock(), response=MagicMock(status_code=500)
                 )
@@ -106,7 +126,7 @@ class MockHTTPXRouter:
 
         if "d006001" in url_str:
             self.unit_call_count += 1
-            if self.fail_unit:
+            if self.failure_scenario == FailureScenario.UNIT_ALWAYS:
                 resp.raise_for_status.side_effect = httpx.HTTPStatusError(
                     "Unit 500 error", request=MagicMock(), response=MagicMock(status_code=500)
                 )
@@ -122,19 +142,13 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """排程觸發 job 應將同一個 tick 注入三來源，重跑時各自冪等更新相同快照。"""
-    slot = datetime(2026, 9, 5, 17, 30)
-    context = build_schedule_context(
-        scheduled_execution_time=datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
-    )
-    eval_result = taipower_supply_demand_snapshot_schedule.evaluate_tick(context)
-    assert eval_result.run_requests is not None
-    run_req = eval_result.run_requests[0]
+    slot = OBSERVED_SLOT
+    run_req = _build_schedule_run_request()
 
     sd_data, reg_data, unit_data = _load_fixtures()
     router = MockHTTPXRouter(sd_data, reg_data, unit_data)
 
-    test_defs = _build_test_defs(test_repo)
-    job_def = test_defs.resolve_job_def("taipower_supply_demand_snapshot_job")
+    job_def = _build_realtime_job_def(test_repo)
 
     with patch("httpx.Client", return_value=router):
         res = job_def.execute_in_process(run_config=run_req.run_config)
@@ -207,21 +221,22 @@ def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """任一來源暫時性失敗時，應依政策有限重試並成功完成 run。"""
-    slot = datetime(2026, 9, 5, 17, 30)
-    context = build_schedule_context(
-        scheduled_execution_time=datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
-    )
-    run_req = taipower_supply_demand_snapshot_schedule.evaluate_tick(context).run_requests[0]
+    slot = OBSERVED_SLOT
+    run_req = _build_schedule_run_request()
 
     sd_data, reg_data, unit_data = _load_fixtures()
     # 區域來源首次呼叫失敗，重試時成功
-    router = MockHTTPXRouter(sd_data, reg_data, unit_data, fail_reg_once=True)
-
-    fast_job = build_taipower_supply_demand_snapshot_job(
-        op_retry_policy=RetryPolicy(max_retries=2, delay=0)
+    router = MockHTTPXRouter(
+        sd_data,
+        reg_data,
+        unit_data,
+        failure_scenario=FailureScenario.REGIONAL_ONCE,
     )
-    test_defs = _build_test_defs(test_repo, job=fast_job)
-    job_def = test_defs.resolve_job_def("taipower_supply_demand_snapshot_job")
+
+    job_def = _build_realtime_job_def(
+        test_repo,
+        retry_policy=RetryPolicy(max_retries=2, delay=0),
+    )
 
     with patch("httpx.Client", return_value=router):
         res = job_def.execute_in_process(run_config=run_req.run_config)
@@ -241,21 +256,22 @@ def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_
     test_repo: TimeSeriesRepository,
 ) -> None:
     """任一來源持續失敗耗盡重試時，run 失敗且該來源不得寫入資料。"""
-    slot = datetime(2026, 9, 5, 17, 30)
-    context = build_schedule_context(
-        scheduled_execution_time=datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
-    )
-    run_req = taipower_supply_demand_snapshot_schedule.evaluate_tick(context).run_requests[0]
+    slot = OBSERVED_SLOT
+    run_req = _build_schedule_run_request()
 
     sd_data, reg_data, unit_data = _load_fixtures()
     # 機組來源持續失敗
-    router = MockHTTPXRouter(sd_data, reg_data, unit_data, fail_unit=True)
-
-    fast_job = build_taipower_supply_demand_snapshot_job(
-        op_retry_policy=RetryPolicy(max_retries=2, delay=0)
+    router = MockHTTPXRouter(
+        sd_data,
+        reg_data,
+        unit_data,
+        failure_scenario=FailureScenario.UNIT_ALWAYS,
     )
-    test_defs = _build_test_defs(test_repo, job=fast_job)
-    job_def = test_defs.resolve_job_def("taipower_supply_demand_snapshot_job")
+
+    job_def = _build_realtime_job_def(
+        test_repo,
+        retry_policy=RetryPolicy(max_retries=2, delay=0),
+    )
 
     with patch("httpx.Client", return_value=router):
         res = job_def.execute_in_process(
