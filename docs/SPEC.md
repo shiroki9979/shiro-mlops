@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-04
+- 最後更新：2026-09-05
 - 專案版本：`0.2.0`
 
 ---
@@ -50,6 +50,14 @@
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
      - **Constraint**: `PRIMARY KEY (time, location)`
      - **Hypertable**: `create_hypertable('raw_cwa_weather', 'time')`
+  3. `raw_taipower_supply_demand_snapshot`:
+     - **資料來源**：台電官方開放資料端點 `https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json`。
+     - 保存台電電力供需快照，與 `raw_taipower_load` 的逐時實際負載資料分離，且不得成為既有訓練特徵的輸入。
+     - `observed_at` (TIMESTAMPTZ, NOT NULL)：Dagster 排程觸發的快照觀測時間，為唯一鍵；同一排程 tick 重跑時更新同一筆快照。
+     - `source_publish_time` (TIMESTAMPTZ, NULL)：來源 payload 的預估尖峰發布時間，僅作資料欄位，不參與唯一鍵。
+     - 功率欄位以來源單位 `萬瓩` 保存，欄位名使用 `*_wan_kw`；使用率與備轉率使用 `*_pct`。typed 欄位包括目前用電／使用率、預估最大供電能力／尖峰用電／備轉容量／備轉率／指標／尖峰時段、昨日日期與對應尖峰供需資訊，以及實際最高供電能力與尖峰時間。
+     - `raw_payload` (JSONB, NOT NULL) 保存完整成功回應；原始字串中的民國曆發布時間同時解析至 `source_publish_time`，並以 `Asia/Taipei` 解讀後寫入 UTC。
+     - 永久保留歷史快照，不設定資料保留政策。
 
 ### 1.4 Feast 特徵庫視圖 (Feature View Schema)
 
@@ -130,3 +138,8 @@
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
    - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。
+3. **`taipower_supply_demand_snapshot_job`**：
+   - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。
+   - **管線鏈路**：`raw_taipower_supply_demand_snapshot` 資產擷取台電當前供需資訊並以 `observed_at` upsert 至 TimescaleDB。
+   - **冪等性**：排程觸發以 tick 時間作為 `observed_at`；手動 materialize 則以實際抓取起始時間向下取整至 10 分鐘。兩者於相同 slot 重跑時皆更新同一快照。
+   - **資料完整度與失敗政策**：`curr_load` 與 `curr_util_rate` 為必填欄位；缺少、無法解析，或 HTTP／重試最終失敗時，asset 必須失敗且不得寫入快照。預估尖峰、昨日尖峰與實際最高供電能力資料組可缺少，對應 typed 欄位保存為 `NULL`，完整來源回應仍保存於 `raw_payload`。
