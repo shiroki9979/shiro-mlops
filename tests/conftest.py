@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS raw_taipower_regional_supply_demand_snapshot (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (observed_at, region)
 );
+
+CREATE TABLE IF NOT EXISTS raw_taipower_unit_generation_snapshot (
+    observed_at TIMESTAMP NOT NULL,
+    unit_type VARCHAR(128) NOT NULL,
+    unit_name VARCHAR(128) NOT NULL,
+    source_time TIMESTAMP NOT NULL,
+    capacity_mw DOUBLE PRECISION,
+    net_generation_mw DOUBLE PRECISION,
+    capacity_ratio_pct DOUBLE PRECISION,
+    remark VARCHAR(256),
+    raw_payload TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (observed_at, unit_type, unit_name)
+);
 """
 
 

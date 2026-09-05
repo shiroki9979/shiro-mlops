@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     TAIPOWER_REGIONAL_SUPPLY_DEMAND_API_URL: str = (
         "https://service.taipower.com.tw/data/opendata/apply/file/d006019/001.csv"
     )
+    TAIPOWER_UNIT_GENERATION_API_URL: str = (
+        "https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json"
+    )
 
     # API Serving
     API_HOST: str = "0.0.0.0"

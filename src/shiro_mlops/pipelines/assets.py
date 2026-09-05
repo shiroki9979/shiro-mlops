@@ -24,6 +24,10 @@ from shiro_mlops.data.taipower_supply_demand import (
     TaipowerSupplyDemandSnapshot,
     resolve_manual_observed_at,
 )
+from shiro_mlops.data.taipower_unit_generation import (
+    TaipowerUnitGenerationClient,
+    TaipowerUnitGenerationSnapshot,
+)
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.feature_pipeline import (
@@ -150,6 +154,28 @@ def raw_taipower_regional_supply_demand_snapshot(
         snapshots[0].observed_at.isoformat(),
     )
     _get_time_series_repo(context).upsert_regional_supply_demand_snapshots(snapshots)
+    return snapshots
+
+
+@asset(
+    group_name="ingestion",
+    description="Fetch current Taipower unit net-generation snapshots",
+    required_resource_keys={"time_series_repo"},
+)
+def raw_taipower_unit_generation_snapshot(
+    context: AssetExecutionContext,
+) -> list[TaipowerUnitGenerationSnapshot]:
+    """Asset: unit net-generation snapshots upserted by observation slot and unit identity."""
+    client = TaipowerUnitGenerationClient(
+        base_url=settings.TAIPOWER_UNIT_GENERATION_API_URL
+    )
+    snapshots = client.fetch_snapshots(observed_at=resolve_manual_observed_at())
+    context.log.info(
+        "Fetched %s unit-generation snapshots for observed_at=%s",
+        len(snapshots),
+        snapshots[0].observed_at.isoformat(),
+    )
+    _get_time_series_repo(context).upsert_unit_generation_snapshots(snapshots)
     return snapshots
 
 
