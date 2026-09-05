@@ -11,6 +11,8 @@ from shiro_mlops.pipelines.schedules import (
     daily_training_schedule,
     hourly_drift_job,
     hourly_drift_schedule,
+    taipower_supply_demand_snapshot_job,
+    taipower_supply_demand_snapshot_schedule,
 )
 
 all_assets = load_assets_from_modules([assets])
@@ -29,8 +31,16 @@ feast_io_manager = get_feast_parquet_io_manager(
 
 defs = Definitions(
     assets=all_assets,
-    schedules=[daily_training_schedule, hourly_drift_schedule],
-    jobs=[daily_training_job, hourly_drift_job],
+    schedules=[
+        daily_training_schedule,
+        hourly_drift_schedule,
+        taipower_supply_demand_snapshot_schedule,
+    ],
+    jobs=[
+        daily_training_job,
+        hourly_drift_job,
+        taipower_supply_demand_snapshot_job,
+    ],
     resources={
         "io_manager": io_manager,
         "feast_io_manager": feast_io_manager,
