@@ -36,7 +36,7 @@ SELECT create_hypertable(
     migrate_data => TRUE
 );
 
--- 3. Raw Taipower Power Supply-Demand Snapshot Table & Hypertable
+-- 3. 台電電力供需快照：與逐時負載分表保存，避免快照資料混入訓練序列。
 CREATE TABLE IF NOT EXISTS raw_taipower_supply_demand_snapshot (
     observed_at TIMESTAMPTZ NOT NULL,
     source_publish_time TIMESTAMPTZ,
@@ -68,4 +68,3 @@ SELECT create_hypertable(
     if_not_exists => TRUE,
     migrate_data => TRUE
 );
-

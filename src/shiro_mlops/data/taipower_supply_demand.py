@@ -81,16 +81,19 @@ def parse_roc_datetime(value: str) -> datetime:
     day = int(match.group("day"))
     hour = int(match.group("hour") or 0)
     minute = int(match.group("minute") or 0)
-    return datetime(year, month, day, hour, minute)
+    try:
+        return datetime(year, month, day, hour, minute)
+    except ValueError as error:
+        raise SupplyDemandParseError(f"Invalid ROC datetime: {value!r}") from error
 
 
-def _parse_optional_float(raw: Any) -> float | None:
+def _parse_optional_float(raw: Any, field: str) -> float | None:
     if raw is None or raw == "":
         return None
     try:
         return float(raw)
-    except (TypeError, ValueError):
-        return None
+    except (TypeError, ValueError) as error:
+        raise SupplyDemandParseError(f"Cannot parse optional field: {field}") from error
 
 
 def _require_float(merged: dict[str, Any], field: str) -> float:
@@ -112,31 +115,34 @@ def _parse_gregorian_datetime(value: str) -> datetime:
     match = _GREGORIAN_DATETIME_RE.fullmatch(value.strip())
     if match is None:
         raise SupplyDemandParseError(f"Unrecognized Gregorian datetime: {value!r}")
-    return datetime(
-        int(match.group("year")),
-        int(match.group("month")),
-        int(match.group("day")),
-        int(match.group("hour")),
-        int(match.group("minute")),
-    )
+    try:
+        return datetime(
+            int(match.group("year")),
+            int(match.group("month")),
+            int(match.group("day")),
+            int(match.group("hour")),
+            int(match.group("minute")),
+        )
+    except ValueError as error:
+        raise SupplyDemandParseError(f"Invalid Gregorian datetime: {value!r}") from error
 
 
-def _optional_roc_datetime(raw: Any) -> datetime | None:
+def _optional_roc_datetime(raw: Any, field: str) -> datetime | None:
     if raw in (None, ""):
         return None
     try:
         return parse_roc_datetime(str(raw))
-    except SupplyDemandParseError:
-        return None
+    except SupplyDemandParseError as error:
+        raise SupplyDemandParseError(f"Cannot parse optional field: {field}") from error
 
 
-def _optional_gregorian_datetime(raw: Any) -> datetime | None:
+def _optional_gregorian_datetime(raw: Any, field: str) -> datetime | None:
     if raw in (None, ""):
         return None
     try:
         return _parse_gregorian_datetime(str(raw))
-    except SupplyDemandParseError:
-        return None
+    except SupplyDemandParseError as error:
+        raise SupplyDemandParseError(f"Cannot parse optional field: {field}") from error
 
 
 def _merge_records(payload: dict[str, Any]) -> dict[str, Any]:
@@ -165,30 +171,48 @@ def parse_supply_demand_payload(
     curr_load_wan_kw = _require_float(merged, "curr_load")
     curr_util_rate_pct = _require_float(merged, "curr_util_rate")
 
-    source_publish_time = _optional_roc_datetime(merged.get("publish_time"))
-    yday_dt = _optional_roc_datetime(merged.get("yday_date"))
+    source_publish_time = _optional_roc_datetime(merged.get("publish_time"), "publish_time")
+    yday_dt = _optional_roc_datetime(merged.get("yday_date"), "yday_date")
     yday_date = yday_dt.date() if yday_dt is not None else None
-    real_hr_peak_time = _optional_gregorian_datetime(merged.get("real_hr_peak_time"))
+    real_hr_peak_time = _optional_gregorian_datetime(
+        merged.get("real_hr_peak_time"), "real_hr_peak_time"
+    )
 
     return TaipowerSupplyDemandSnapshot(
         observed_at=observed_at,
         curr_load_wan_kw=curr_load_wan_kw,
         curr_util_rate_pct=curr_util_rate_pct,
         source_publish_time=source_publish_time,
-        fore_maxi_sply_capacity_wan_kw=_parse_optional_float(merged.get("fore_maxi_sply_capacity")),
-        fore_peak_dema_load_wan_kw=_parse_optional_float(merged.get("fore_peak_dema_load")),
-        fore_peak_resv_capacity_wan_kw=_parse_optional_float(merged.get("fore_peak_resv_capacity")),
-        fore_peak_resv_rate_pct=_parse_optional_float(merged.get("fore_peak_resv_rate")),
+        fore_maxi_sply_capacity_wan_kw=_parse_optional_float(
+            merged.get("fore_maxi_sply_capacity"), "fore_maxi_sply_capacity"
+        ),
+        fore_peak_dema_load_wan_kw=_parse_optional_float(
+            merged.get("fore_peak_dema_load"), "fore_peak_dema_load"
+        ),
+        fore_peak_resv_capacity_wan_kw=_parse_optional_float(
+            merged.get("fore_peak_resv_capacity"), "fore_peak_resv_capacity"
+        ),
+        fore_peak_resv_rate_pct=_parse_optional_float(
+            merged.get("fore_peak_resv_rate"), "fore_peak_resv_rate"
+        ),
         fore_peak_resv_indicator=_optional_str(merged.get("fore_peak_resv_indicator")),
         fore_peak_hour_range=_optional_str(merged.get("fore_peak_hour_range")),
         yday_date=yday_date,
-        yday_maxi_sply_capacity_wan_kw=_parse_optional_float(merged.get("yday_maxi_sply_capacity")),
-        yday_peak_dema_load_wan_kw=_parse_optional_float(merged.get("yday_peak_dema_load")),
-        yday_peak_resv_capacity_wan_kw=_parse_optional_float(merged.get("yday_peak_resv_capacity")),
-        yday_peak_resv_rate_pct=_parse_optional_float(merged.get("yday_peak_resv_rate")),
+        yday_maxi_sply_capacity_wan_kw=_parse_optional_float(
+            merged.get("yday_maxi_sply_capacity"), "yday_maxi_sply_capacity"
+        ),
+        yday_peak_dema_load_wan_kw=_parse_optional_float(
+            merged.get("yday_peak_dema_load"), "yday_peak_dema_load"
+        ),
+        yday_peak_resv_capacity_wan_kw=_parse_optional_float(
+            merged.get("yday_peak_resv_capacity"), "yday_peak_resv_capacity"
+        ),
+        yday_peak_resv_rate_pct=_parse_optional_float(
+            merged.get("yday_peak_resv_rate"), "yday_peak_resv_rate"
+        ),
         yday_peak_resv_indicator=_optional_str(merged.get("yday_peak_resv_indicator")),
         real_hr_maxi_sply_capacity_wan_kw=_parse_optional_float(
-            merged.get("real_hr_maxi_sply_capacity")
+            merged.get("real_hr_maxi_sply_capacity"), "real_hr_maxi_sply_capacity"
         ),
         real_hr_peak_time=real_hr_peak_time,
         raw_payload=payload,
