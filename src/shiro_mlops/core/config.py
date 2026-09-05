@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     TAIPOWER_API_URL: str = (
         "https://data.taipower.com.tw/opendata/apply/file/d015046/台灣電力公司_過去電力供需資訊.csv"
     )
+    TAIPOWER_SUPPLY_DEMAND_API_URL: str = (
+        "https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json"
+    )
 
     # API Serving
     API_HOST: str = "0.0.0.0"

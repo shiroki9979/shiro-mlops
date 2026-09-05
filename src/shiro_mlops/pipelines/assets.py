@@ -15,6 +15,11 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.data.cwa_client import CWAClient
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
+from shiro_mlops.data.taipower_supply_demand import (
+    TaipowerSupplyDemandClient,
+    TaipowerSupplyDemandSnapshot,
+    resolve_manual_observed_at,
+)
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.feature_pipeline import (
@@ -100,6 +105,26 @@ def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
     )
 
     return df
+
+
+@asset(
+    group_name="ingestion",
+    description="Fetch current Taipower power supply-demand snapshot",
+    required_resource_keys={"time_series_repo"},
+)
+def raw_taipower_supply_demand_snapshot(
+    context: AssetExecutionContext,
+) -> TaipowerSupplyDemandSnapshot:
+    """Asset: Taipower supply-demand snapshot upserted by observation slot."""
+    client = TaipowerSupplyDemandClient(base_url=settings.TAIPOWER_SUPPLY_DEMAND_API_URL)
+    snapshot = client.fetch_snapshot(observed_at=resolve_manual_observed_at())
+    context.log.info(
+        "Fetched supply-demand snapshot for observed_at=%s curr_load=%s",
+        snapshot.observed_at.isoformat(),
+        snapshot.curr_load_wan_kw,
+    )
+    _get_time_series_repo(context).upsert_supply_demand_snapshot(snapshot)
+    return snapshot
 
 
 @multi_asset(

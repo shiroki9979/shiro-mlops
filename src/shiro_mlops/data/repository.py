@@ -1,7 +1,8 @@
 """Time-series database repository for persisting and querying raw load and weather data."""
 
+import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -18,8 +19,29 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
+from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+def _to_python_datetime(value: Any) -> datetime:
+    """Normalize pandas/SQLAlchemy timestamps to timezone-naive Python datetime."""
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+    return timestamp.to_pydatetime()
+
+
+def _taiwan_instant_to_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return _to_python_datetime(taiwan_local_to_utc(pd.Series([value])).iloc[0])
+
+
+def _utc_instant_to_taiwan(value: Any) -> datetime | None:
+    if value is None or pd.isna(value):
+        return None
+    return _to_python_datetime(utc_to_taiwan_datetime(pd.Series([value])).iloc[0])
 
 
 def _prepare_timeseries_df(
@@ -310,3 +332,178 @@ class TimeSeriesRepository:
 
         df["time"] = utc_to_taiwan_datetime(df["time"])
         return df
+
+    def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
+        """Upsert a Taipower supply-demand snapshot keyed by observed_at."""
+        record = {
+            "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
+            "source_publish_time": _taiwan_instant_to_utc(snapshot.source_publish_time),
+            "curr_load_wan_kw": float(snapshot.curr_load_wan_kw),
+            "curr_util_rate_pct": float(snapshot.curr_util_rate_pct),
+            "fore_maxi_sply_capacity_wan_kw": snapshot.fore_maxi_sply_capacity_wan_kw,
+            "fore_peak_dema_load_wan_kw": snapshot.fore_peak_dema_load_wan_kw,
+            "fore_peak_resv_capacity_wan_kw": snapshot.fore_peak_resv_capacity_wan_kw,
+            "fore_peak_resv_rate_pct": snapshot.fore_peak_resv_rate_pct,
+            "fore_peak_resv_indicator": snapshot.fore_peak_resv_indicator,
+            "fore_peak_hour_range": snapshot.fore_peak_hour_range,
+            "yday_date": snapshot.yday_date,
+            "yday_maxi_sply_capacity_wan_kw": snapshot.yday_maxi_sply_capacity_wan_kw,
+            "yday_peak_dema_load_wan_kw": snapshot.yday_peak_dema_load_wan_kw,
+            "yday_peak_resv_capacity_wan_kw": snapshot.yday_peak_resv_capacity_wan_kw,
+            "yday_peak_resv_rate_pct": snapshot.yday_peak_resv_rate_pct,
+            "yday_peak_resv_indicator": snapshot.yday_peak_resv_indicator,
+            "real_hr_maxi_sply_capacity_wan_kw": snapshot.real_hr_maxi_sply_capacity_wan_kw,
+            "real_hr_peak_time": _taiwan_instant_to_utc(snapshot.real_hr_peak_time),
+            "raw_payload": (
+                snapshot.raw_payload
+                if self.engine.dialect.name == "postgresql"
+                else json.dumps(snapshot.raw_payload, ensure_ascii=False)
+            ),
+        }
+
+        upsert_stmt = text(
+            """
+            INSERT INTO raw_taipower_supply_demand_snapshot (
+                observed_at,
+                source_publish_time,
+                curr_load_wan_kw,
+                curr_util_rate_pct,
+                fore_maxi_sply_capacity_wan_kw,
+                fore_peak_dema_load_wan_kw,
+                fore_peak_resv_capacity_wan_kw,
+                fore_peak_resv_rate_pct,
+                fore_peak_resv_indicator,
+                fore_peak_hour_range,
+                yday_date,
+                yday_maxi_sply_capacity_wan_kw,
+                yday_peak_dema_load_wan_kw,
+                yday_peak_resv_capacity_wan_kw,
+                yday_peak_resv_rate_pct,
+                yday_peak_resv_indicator,
+                real_hr_maxi_sply_capacity_wan_kw,
+                real_hr_peak_time,
+                raw_payload
+            ) VALUES (
+                :observed_at,
+                :source_publish_time,
+                :curr_load_wan_kw,
+                :curr_util_rate_pct,
+                :fore_maxi_sply_capacity_wan_kw,
+                :fore_peak_dema_load_wan_kw,
+                :fore_peak_resv_capacity_wan_kw,
+                :fore_peak_resv_rate_pct,
+                :fore_peak_resv_indicator,
+                :fore_peak_hour_range,
+                :yday_date,
+                :yday_maxi_sply_capacity_wan_kw,
+                :yday_peak_dema_load_wan_kw,
+                :yday_peak_resv_capacity_wan_kw,
+                :yday_peak_resv_rate_pct,
+                :yday_peak_resv_indicator,
+                :real_hr_maxi_sply_capacity_wan_kw,
+                :real_hr_peak_time,
+                :raw_payload
+            )
+            ON CONFLICT (observed_at) DO UPDATE SET
+                source_publish_time = EXCLUDED.source_publish_time,
+                curr_load_wan_kw = EXCLUDED.curr_load_wan_kw,
+                curr_util_rate_pct = EXCLUDED.curr_util_rate_pct,
+                fore_maxi_sply_capacity_wan_kw = EXCLUDED.fore_maxi_sply_capacity_wan_kw,
+                fore_peak_dema_load_wan_kw = EXCLUDED.fore_peak_dema_load_wan_kw,
+                fore_peak_resv_capacity_wan_kw = EXCLUDED.fore_peak_resv_capacity_wan_kw,
+                fore_peak_resv_rate_pct = EXCLUDED.fore_peak_resv_rate_pct,
+                fore_peak_resv_indicator = EXCLUDED.fore_peak_resv_indicator,
+                fore_peak_hour_range = EXCLUDED.fore_peak_hour_range,
+                yday_date = EXCLUDED.yday_date,
+                yday_maxi_sply_capacity_wan_kw = EXCLUDED.yday_maxi_sply_capacity_wan_kw,
+                yday_peak_dema_load_wan_kw = EXCLUDED.yday_peak_dema_load_wan_kw,
+                yday_peak_resv_capacity_wan_kw = EXCLUDED.yday_peak_resv_capacity_wan_kw,
+                yday_peak_resv_rate_pct = EXCLUDED.yday_peak_resv_rate_pct,
+                yday_peak_resv_indicator = EXCLUDED.yday_peak_resv_indicator,
+                real_hr_maxi_sply_capacity_wan_kw = EXCLUDED.real_hr_maxi_sply_capacity_wan_kw,
+                real_hr_peak_time = EXCLUDED.real_hr_peak_time,
+                raw_payload = EXCLUDED.raw_payload
+            """
+        )
+
+        with self.engine.begin() as conn:
+            conn.execute(upsert_stmt, record)
+
+        logger.info(
+            "Upserted supply-demand snapshot for observed_at=%s",
+            snapshot.observed_at.isoformat(),
+        )
+        return 1
+
+    def fetch_supply_demand_snapshot(
+        self, observed_at: datetime
+    ) -> TaipowerSupplyDemandSnapshot | None:
+        """Fetch a supply-demand snapshot by Taiwan-local observation slot."""
+        query = text(
+            """
+            SELECT
+                observed_at,
+                source_publish_time,
+                curr_load_wan_kw,
+                curr_util_rate_pct,
+                fore_maxi_sply_capacity_wan_kw,
+                fore_peak_dema_load_wan_kw,
+                fore_peak_resv_capacity_wan_kw,
+                fore_peak_resv_rate_pct,
+                fore_peak_resv_indicator,
+                fore_peak_hour_range,
+                yday_date,
+                yday_maxi_sply_capacity_wan_kw,
+                yday_peak_dema_load_wan_kw,
+                yday_peak_resv_capacity_wan_kw,
+                yday_peak_resv_rate_pct,
+                yday_peak_resv_indicator,
+                real_hr_maxi_sply_capacity_wan_kw,
+                real_hr_peak_time,
+                raw_payload
+            FROM raw_taipower_supply_demand_snapshot
+            WHERE observed_at = :observed_at
+            """
+        )
+        params = {"observed_at": _taiwan_instant_to_utc(observed_at)}
+
+        with self.engine.connect() as conn:
+            row = conn.execute(query, params).mappings().first()
+
+        if row is None:
+            return None
+
+        raw_payload = row["raw_payload"]
+        if isinstance(raw_payload, str):
+            raw_payload = json.loads(raw_payload)
+
+        yday_value = row["yday_date"]
+        yday_date: date | None
+        if yday_value is None or pd.isna(yday_value):
+            yday_date = None
+        elif isinstance(yday_value, date) and not isinstance(yday_value, datetime):
+            yday_date = yday_value
+        else:
+            yday_date = pd.Timestamp(yday_value).date()
+
+        return TaipowerSupplyDemandSnapshot(
+            observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
+            curr_load_wan_kw=float(row["curr_load_wan_kw"]),
+            curr_util_rate_pct=float(row["curr_util_rate_pct"]),
+            source_publish_time=_utc_instant_to_taiwan(row["source_publish_time"]),
+            fore_maxi_sply_capacity_wan_kw=row["fore_maxi_sply_capacity_wan_kw"],
+            fore_peak_dema_load_wan_kw=row["fore_peak_dema_load_wan_kw"],
+            fore_peak_resv_capacity_wan_kw=row["fore_peak_resv_capacity_wan_kw"],
+            fore_peak_resv_rate_pct=row["fore_peak_resv_rate_pct"],
+            fore_peak_resv_indicator=row["fore_peak_resv_indicator"],
+            fore_peak_hour_range=row["fore_peak_hour_range"],
+            yday_date=yday_date,
+            yday_maxi_sply_capacity_wan_kw=row["yday_maxi_sply_capacity_wan_kw"],
+            yday_peak_dema_load_wan_kw=row["yday_peak_dema_load_wan_kw"],
+            yday_peak_resv_capacity_wan_kw=row["yday_peak_resv_capacity_wan_kw"],
+            yday_peak_resv_rate_pct=row["yday_peak_resv_rate_pct"],
+            yday_peak_resv_indicator=row["yday_peak_resv_indicator"],
+            real_hr_maxi_sply_capacity_wan_kw=row["real_hr_maxi_sply_capacity_wan_kw"],
+            real_hr_peak_time=_utc_instant_to_taiwan(row["real_hr_peak_time"]),
+            raw_payload=raw_payload,
+        )

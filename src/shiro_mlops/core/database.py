@@ -73,6 +73,30 @@ CREATE TABLE IF NOT EXISTS raw_cwa_weather (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (time, location)
 );
+
+CREATE TABLE IF NOT EXISTS raw_taipower_supply_demand_snapshot (
+    observed_at TIMESTAMP NOT NULL,
+    source_publish_time TIMESTAMP,
+    curr_load_wan_kw DOUBLE PRECISION NOT NULL,
+    curr_util_rate_pct DOUBLE PRECISION NOT NULL,
+    fore_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
+    fore_peak_dema_load_wan_kw DOUBLE PRECISION,
+    fore_peak_resv_capacity_wan_kw DOUBLE PRECISION,
+    fore_peak_resv_rate_pct DOUBLE PRECISION,
+    fore_peak_resv_indicator VARCHAR(8),
+    fore_peak_hour_range VARCHAR(32),
+    yday_date DATE,
+    yday_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
+    yday_peak_dema_load_wan_kw DOUBLE PRECISION,
+    yday_peak_resv_capacity_wan_kw DOUBLE PRECISION,
+    yday_peak_resv_rate_pct DOUBLE PRECISION,
+    yday_peak_resv_indicator VARCHAR(8),
+    real_hr_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
+    real_hr_peak_time TIMESTAMP,
+    raw_payload TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (observed_at)
+);
 """
 
 
