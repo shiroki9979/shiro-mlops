@@ -88,3 +88,26 @@ SELECT create_hypertable(
     if_not_exists => TRUE,
     migrate_data => TRUE
 );
+
+-- 5. 台電機組即時淨發電量快照：與供需／逐時負載分表保存，不進入訓練特徵。
+CREATE TABLE IF NOT EXISTS raw_taipower_unit_generation_snapshot (
+    observed_at TIMESTAMPTZ NOT NULL,
+    unit_type VARCHAR(128) NOT NULL,
+    unit_name VARCHAR(128) NOT NULL,
+    source_time TIMESTAMPTZ NOT NULL,
+    capacity_mw DOUBLE PRECISION,
+    net_generation_mw DOUBLE PRECISION,
+    capacity_ratio_pct DOUBLE PRECISION,
+    remark VARCHAR(256),
+    raw_payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (observed_at, unit_type, unit_name)
+);
+
+SELECT create_hypertable(
+    'raw_taipower_unit_generation_snapshot',
+    'observed_at',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE,
+    migrate_data => TRUE
+);

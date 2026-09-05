@@ -13,6 +13,7 @@ daily_training_job = define_asset_job(
     - AssetSelection.assets(
         "raw_taipower_supply_demand_snapshot",
         "raw_taipower_regional_supply_demand_snapshot",
+        "raw_taipower_unit_generation_snapshot",
     ),
     description="Run ingestion, feature engineering, model training, and drift evaluation",
 )

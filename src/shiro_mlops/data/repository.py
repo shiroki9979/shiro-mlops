@@ -24,6 +24,7 @@ from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
 from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
+from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -621,4 +622,133 @@ class TimeSeriesRepository:
 
         unknown_rank = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
         snapshots.sort(key=lambda item: region_order.get(item.region, unknown_rank))
+        return snapshots
+
+    def upsert_unit_generation_snapshots(
+        self, snapshots: list[TaipowerUnitGenerationSnapshot]
+    ) -> int:
+        """Upsert unit net-generation snapshots keyed by identity and observed_at."""
+        if not snapshots:
+            return 0
+
+        upsert_stmt = text(
+            """
+            INSERT INTO raw_taipower_unit_generation_snapshot (
+                observed_at,
+                unit_type,
+                unit_name,
+                source_time,
+                capacity_mw,
+                net_generation_mw,
+                capacity_ratio_pct,
+                remark,
+                raw_payload
+            ) VALUES (
+                :observed_at,
+                :unit_type,
+                :unit_name,
+                :source_time,
+                :capacity_mw,
+                :net_generation_mw,
+                :capacity_ratio_pct,
+                :remark,
+                :raw_payload
+            )
+            ON CONFLICT (observed_at, unit_type, unit_name) DO UPDATE SET
+                source_time = EXCLUDED.source_time,
+                capacity_mw = EXCLUDED.capacity_mw,
+                net_generation_mw = EXCLUDED.net_generation_mw,
+                capacity_ratio_pct = EXCLUDED.capacity_ratio_pct,
+                remark = EXCLUDED.remark,
+                raw_payload = EXCLUDED.raw_payload
+            """
+        )
+
+        records = []
+        for snapshot in snapshots:
+            records.append(
+                {
+                    "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
+                    "unit_type": snapshot.unit_type,
+                    "unit_name": snapshot.unit_name,
+                    "source_time": _taiwan_instant_to_utc(snapshot.source_time),
+                    "capacity_mw": snapshot.capacity_mw,
+                    "net_generation_mw": snapshot.net_generation_mw,
+                    "capacity_ratio_pct": snapshot.capacity_ratio_pct,
+                    "remark": snapshot.remark,
+                    "raw_payload": (
+                        snapshot.raw_payload
+                        if self.engine.dialect.name == "postgresql"
+                        else json.dumps(snapshot.raw_payload, ensure_ascii=False)
+                    ),
+                }
+            )
+
+        with self.engine.begin() as conn:
+            conn.execute(upsert_stmt, records)
+
+        logger.info(
+            "Upserted %s unit-generation snapshots for observed_at=%s",
+            len(snapshots),
+            snapshots[0].observed_at.isoformat(),
+        )
+        return len(snapshots)
+
+    def fetch_unit_generation_snapshots(
+        self, observed_at: datetime
+    ) -> list[TaipowerUnitGenerationSnapshot]:
+        """Fetch unit net-generation snapshots for a Taiwan-local observation slot."""
+        query = text(
+            """
+            SELECT
+                observed_at,
+                unit_type,
+                unit_name,
+                source_time,
+                capacity_mw,
+                net_generation_mw,
+                capacity_ratio_pct,
+                remark,
+                raw_payload
+            FROM raw_taipower_unit_generation_snapshot
+            WHERE observed_at = :observed_at
+            """
+        )
+        params = {"observed_at": _taiwan_instant_to_utc(observed_at)}
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
+
+        snapshots: list[TaipowerUnitGenerationSnapshot] = []
+        for row in rows:
+            raw_payload = row["raw_payload"]
+            if isinstance(raw_payload, str):
+                raw_payload = json.loads(raw_payload)
+            snapshots.append(
+                TaipowerUnitGenerationSnapshot(
+                    observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
+                    unit_type=str(row["unit_type"]),
+                    unit_name=str(row["unit_name"]),
+                    source_time=_utc_instant_to_taiwan(row["source_time"])
+                    or _utc_instant_to_taiwan(row["observed_at"])
+                    or observed_at,
+                    capacity_mw=(
+                        None if row["capacity_mw"] is None else float(row["capacity_mw"])
+                    ),
+                    net_generation_mw=(
+                        None
+                        if row["net_generation_mw"] is None
+                        else float(row["net_generation_mw"])
+                    ),
+                    capacity_ratio_pct=(
+                        None
+                        if row["capacity_ratio_pct"] is None
+                        else float(row["capacity_ratio_pct"])
+                    ),
+                    remark=row["remark"],
+                    raw_payload=raw_payload,
+                )
+            )
+
+        snapshots.sort(key=lambda item: (item.unit_type, item.unit_name))
         return snapshots
