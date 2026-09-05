@@ -85,6 +85,8 @@ def test_raw_unit_generation_snapshot_materializes_multi_unit_idempotently(
     assert len(persisted) == 4
     updated = next(item for item in persisted if item.unit_name == "大潭CC#1")
     assert updated.net_generation_mw == pytest.approx(680.0)
+    assert updated.raw_payload == revised
+    assert len(updated.raw_payload["aaData"]) == 4
 
 
 def test_materialize_unit_generation_asset_end_to_end(

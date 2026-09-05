@@ -29,7 +29,8 @@ def test_parse_unit_generation_payload_keeps_mw_zero_and_remarks() -> None:
     assert snapshots[0].capacity_ratio_pct == pytest.approx(90.265)
     assert snapshots[0].remark is None
     assert snapshots[0].source_time == datetime(2026, 9, 5, 17, 30)
-    assert snapshots[0].raw_payload["DateTime"] == "2026-09-05T17:30:00"
+    assert snapshots[0].raw_payload == payload
+    assert len(snapshots[0].raw_payload["aaData"]) == 4
 
     offline = snapshots[1]
     assert offline.unit_name == "大潭CC#3"
