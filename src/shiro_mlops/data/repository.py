@@ -19,6 +19,10 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
+from shiro_mlops.data.taipower_regional_supply_demand import (
+    REGIONAL_SUPPLY_DEMAND_REGIONS,
+    TaipowerRegionalSupplyDemandSnapshot,
+)
 from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
 
 logger = logging.getLogger(__name__)
@@ -507,3 +511,114 @@ class TimeSeriesRepository:
             real_hr_peak_time=_utc_instant_to_taiwan(row["real_hr_peak_time"]),
             raw_payload=raw_payload,
         )
+
+    def upsert_regional_supply_demand_snapshots(
+        self, snapshots: list[TaipowerRegionalSupplyDemandSnapshot]
+    ) -> int:
+        """Upsert regional supply-demand snapshots keyed by (observed_at, region)."""
+        if not snapshots:
+            return 0
+
+        upsert_stmt = text(
+            """
+            INSERT INTO raw_taipower_regional_supply_demand_snapshot (
+                observed_at,
+                region,
+                source_time,
+                generation_wan_kw,
+                load_wan_kw,
+                raw_payload
+            ) VALUES (
+                :observed_at,
+                :region,
+                :source_time,
+                :generation_wan_kw,
+                :load_wan_kw,
+                :raw_payload
+            )
+            ON CONFLICT (observed_at, region) DO UPDATE SET
+                source_time = EXCLUDED.source_time,
+                generation_wan_kw = EXCLUDED.generation_wan_kw,
+                load_wan_kw = EXCLUDED.load_wan_kw,
+                raw_payload = EXCLUDED.raw_payload
+            """
+        )
+
+        records = []
+        for snapshot in snapshots:
+            records.append(
+                {
+                    "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
+                    "region": snapshot.region,
+                    "source_time": _taiwan_instant_to_utc(snapshot.source_time),
+                    "generation_wan_kw": snapshot.generation_wan_kw,
+                    "load_wan_kw": float(snapshot.load_wan_kw),
+                    "raw_payload": (
+                        snapshot.raw_payload
+                        if self.engine.dialect.name == "postgresql"
+                        else json.dumps(snapshot.raw_payload, ensure_ascii=False)
+                    ),
+                }
+            )
+
+        with self.engine.begin() as conn:
+            conn.execute(upsert_stmt, records)
+
+        logger.info(
+            "Upserted %s regional supply-demand snapshots for observed_at=%s",
+            len(snapshots),
+            snapshots[0].observed_at.isoformat(),
+        )
+        return len(snapshots)
+
+    def fetch_regional_supply_demand_snapshots(
+        self, observed_at: datetime
+    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
+        """Fetch regional snapshots for a Taiwan-local observation slot."""
+        query = text(
+            """
+            SELECT
+                observed_at,
+                region,
+                source_time,
+                generation_wan_kw,
+                load_wan_kw,
+                raw_payload
+            FROM raw_taipower_regional_supply_demand_snapshot
+            WHERE observed_at = :observed_at
+            """
+        )
+        params = {"observed_at": _taiwan_instant_to_utc(observed_at)}
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
+
+        # 以北中南東固定順序回傳，避免字碼排序打亂領域慣用順序。
+        region_order = {
+            region: index for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS)
+        }
+        snapshots: list[TaipowerRegionalSupplyDemandSnapshot] = []
+        for row in rows:
+            raw_payload = row["raw_payload"]
+            if isinstance(raw_payload, str):
+                raw_payload = json.loads(raw_payload)
+            snapshots.append(
+                TaipowerRegionalSupplyDemandSnapshot(
+                    observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
+                    region=str(row["region"]),
+                    source_time=_utc_instant_to_taiwan(row["source_time"])
+                    or _utc_instant_to_taiwan(row["observed_at"])
+                    or observed_at,
+                    generation_wan_kw=(
+                        None
+                        if row["generation_wan_kw"] is None
+                        else float(row["generation_wan_kw"])
+                    ),
+                    load_wan_kw=float(row["load_wan_kw"]),
+                    raw_payload=raw_payload,
+                )
+            )
+
+        unknown_rank = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
+        snapshots.sort(key=lambda item: region_order.get(item.region, unknown_rank))
+        return snapshots

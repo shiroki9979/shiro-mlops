@@ -68,3 +68,23 @@ SELECT create_hypertable(
     if_not_exists => TRUE,
     migrate_data => TRUE
 );
+
+-- 4. 台電區域供需快照：北中南東分區發電／用電成對保存，不進入訓練特徵。
+CREATE TABLE IF NOT EXISTS raw_taipower_regional_supply_demand_snapshot (
+    observed_at TIMESTAMPTZ NOT NULL,
+    region VARCHAR(16) NOT NULL,
+    source_time TIMESTAMPTZ NOT NULL,
+    generation_wan_kw DOUBLE PRECISION,
+    load_wan_kw DOUBLE PRECISION NOT NULL,
+    raw_payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (observed_at, region)
+);
+
+SELECT create_hypertable(
+    'raw_taipower_regional_supply_demand_snapshot',
+    'observed_at',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE,
+    migrate_data => TRUE
+);

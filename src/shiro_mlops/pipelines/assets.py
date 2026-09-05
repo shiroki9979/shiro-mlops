@@ -15,6 +15,10 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.data.cwa_client import CWAClient
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
+from shiro_mlops.data.taipower_regional_supply_demand import (
+    TaipowerRegionalSupplyDemandClient,
+    TaipowerRegionalSupplyDemandSnapshot,
+)
 from shiro_mlops.data.taipower_supply_demand import (
     TaipowerSupplyDemandClient,
     TaipowerSupplyDemandSnapshot,
@@ -125,6 +129,28 @@ def raw_taipower_supply_demand_snapshot(
     )
     _get_time_series_repo(context).upsert_supply_demand_snapshot(snapshot)
     return snapshot
+
+
+@asset(
+    group_name="ingestion",
+    description="Fetch current Taipower regional supply-demand snapshots",
+    required_resource_keys={"time_series_repo"},
+)
+def raw_taipower_regional_supply_demand_snapshot(
+    context: AssetExecutionContext,
+) -> list[TaipowerRegionalSupplyDemandSnapshot]:
+    """Asset: regional supply-demand snapshots upserted by observation slot and region."""
+    client = TaipowerRegionalSupplyDemandClient(
+        base_url=settings.TAIPOWER_REGIONAL_SUPPLY_DEMAND_API_URL
+    )
+    snapshots = client.fetch_snapshots(observed_at=resolve_manual_observed_at())
+    context.log.info(
+        "Fetched %s regional supply-demand snapshots for observed_at=%s",
+        len(snapshots),
+        snapshots[0].observed_at.isoformat(),
+    )
+    _get_time_series_repo(context).upsert_regional_supply_demand_snapshots(snapshots)
+    return snapshots
 
 
 @multi_asset(
