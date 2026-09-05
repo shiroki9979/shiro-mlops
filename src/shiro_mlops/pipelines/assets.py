@@ -44,7 +44,7 @@ def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepositor
 
 
 class SnapshotObservationConfig(Config):
-    """Optional schedule tick used as the shared observation slot for realtime snapshots."""
+    """提供選用的排程 tick，讓即時快照共用同一個觀測 slot。"""
 
     observed_at: str | None = None
 

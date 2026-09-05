@@ -22,7 +22,8 @@ TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_unit_generation_snapshot",
 )
 
-# 暫時性來源失敗時，同一 run 內最多再試 2 次（含首次共 3 次），間隔 10 秒。
+# 將短暫網路抖動限制在 20 秒內，避免重試延伸至下一個 10 分鐘排程 slot。
+# 含首次嘗試最多重試 2 次，每次間隔 10 秒。
 TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
 
 # 1. Daily Training and Evaluation Job
@@ -54,11 +55,11 @@ hourly_drift_schedule = ScheduleDefinition(
 )
 
 
-# 3. Taipower realtime snapshot ingestion (national / regional / unit)
+# 3. 台電即時快照擷取（全台／區域／機組）
 def build_taipower_supply_demand_snapshot_job(
     op_retry_policy: RetryPolicy | None = TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY,
 ):
-    """Build the Taipower realtime snapshot ingestion asset job."""
+    """建立台電即時快照擷取資產工作。"""
     return define_asset_job(
         name="taipower_supply_demand_snapshot_job",
         selection=AssetSelection.assets(*TAIPOWER_REALTIME_SNAPSHOT_ASSETS),
@@ -71,7 +72,7 @@ taipower_supply_demand_snapshot_job = build_taipower_supply_demand_snapshot_job(
 
 
 def _taiwan_tick_iso(scheduled_execution_time: datetime) -> str:
-    """Normalize a schedule tick to a Taiwan-local 10-minute ISO observation slot."""
+    """將排程 tick 正規化為台灣本地時間的十分快照觀測 slot。"""
     if scheduled_execution_time.tzinfo is None:
         local_tick = scheduled_execution_time
     else:
@@ -87,7 +88,7 @@ def _taiwan_tick_iso(scheduled_execution_time: datetime) -> str:
 def taipower_supply_demand_snapshot_schedule(
     context: ScheduleEvaluationContext,
 ) -> RunRequest:
-    """Every 10 minutes, materialize all realtime snapshots with a shared observed_at."""
+    """每十分鐘 materialize 全部即時快照，並共用同一個 observed_at。"""
     observed_at = _taiwan_tick_iso(context.scheduled_execution_time)
     ops_config = {
         asset_name: {"config": {"observed_at": observed_at}}
