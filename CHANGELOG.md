@@ -8,13 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- 在 API 與 Dagster 映像安裝 `libgomp1`，修復 LightGBM 因缺少 OpenMP runtime 無法啟動的問題（`docker/Dockerfile.api`、`docker/Dockerfile.dagster`）。
+- 新增台電電力供需快照擷取與 TimescaleDB 入庫，支援依觀測 slot 冪等 upsert 與手動 materialize。
 
 ### Changed
 
+- 定義台電電力供需快照的資料契約、保存策略與 Dagster 擷取規則（`CONTEXT.md`、`docs/SPEC.md`）。
 - 對齊套件版本字串為 `0.2.0`；前端改以 `pnpm` 與 Vite `5173` 埠啟動，避免與 Dagster `3000` 衝突。
+
+### Fixed
+
+- 在 API 與 Dagster 映像安裝 `libgomp1`，修復 LightGBM 因缺少 OpenMP runtime 無法啟動的問題（`docker/Dockerfile.api`、`docker/Dockerfile.dagster`）。
 
 ## [0.2.0] - 2026-09-04
 
