@@ -68,10 +68,12 @@ def test_timescale_init_ddl_content():
     assert "raw_taipower_load" in ddl
     assert "raw_cwa_weather" in ddl
     assert "raw_taipower_supply_demand_snapshot" in ddl
+    assert "raw_taipower_regional_supply_demand_snapshot" in ddl
 
     # Verify primary keys
     assert "PRIMARY KEY (time, location)" in ddl
     assert "PRIMARY KEY (observed_at)" in ddl
+    assert "PRIMARY KEY (observed_at, region)" in ddl
 
     # Verify 7-day chunk intervals
     assert "chunk_time_interval => INTERVAL '7 days'" in ddl
@@ -79,6 +81,7 @@ def test_timescale_init_ddl_content():
     assert "'raw_taipower_load'" in ddl
     assert "'raw_cwa_weather'" in ddl
     assert "'raw_taipower_supply_demand_snapshot'" in ddl
+    assert "'raw_taipower_regional_supply_demand_snapshot'" in ddl
 
 
 def test_timescale_init_ddl_file_not_found(tmp_path):
@@ -97,8 +100,10 @@ def test_docker_init_sql_file_exists_and_matches():
     assert "raw_taipower_load" in sql_content
     assert "raw_cwa_weather" in sql_content
     assert "raw_taipower_supply_demand_snapshot" in sql_content
+    assert "raw_taipower_regional_supply_demand_snapshot" in sql_content
     assert "PRIMARY KEY (time, location)" in sql_content
     assert "PRIMARY KEY (observed_at)" in sql_content
+    assert "PRIMARY KEY (observed_at, region)" in sql_content
     assert "INTERVAL '7 days'" in sql_content
 
 
@@ -146,7 +151,7 @@ def test_timescale_ddl_contains_migrate_data():
     content = sql_path.read_text(encoding="utf-8")
     assert "migrate_data => TRUE" in content
     # Ensure hypertables have migrate_data set
-    assert content.count("migrate_data => TRUE") >= 3
+    assert content.count("migrate_data => TRUE") >= 4
 
 
 def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path):
@@ -164,6 +169,7 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         assert "raw_taipower_load" in tables
         assert "raw_cwa_weather" in tables
         assert "raw_taipower_supply_demand_snapshot" in tables
+        assert "raw_taipower_regional_supply_demand_snapshot" in tables
 
         # 2. Populate existing volume with data
         with engine.connect() as conn:

@@ -9,7 +9,11 @@ from dagster import (
 # 1. Daily Training and Evaluation Job
 daily_training_job = define_asset_job(
     name="daily_training_job",
-    selection=AssetSelection.all() - AssetSelection.assets("raw_taipower_supply_demand_snapshot"),
+    selection=AssetSelection.all()
+    - AssetSelection.assets(
+        "raw_taipower_supply_demand_snapshot",
+        "raw_taipower_regional_supply_demand_snapshot",
+    ),
     description="Run ingestion, feature engineering, model training, and drift evaluation",
 )
 

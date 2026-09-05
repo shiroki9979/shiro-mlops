@@ -97,6 +97,17 @@ CREATE TABLE IF NOT EXISTS raw_taipower_supply_demand_snapshot (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (observed_at)
 );
+
+CREATE TABLE IF NOT EXISTS raw_taipower_regional_supply_demand_snapshot (
+    observed_at TIMESTAMP NOT NULL,
+    region VARCHAR(16) NOT NULL,
+    source_time TIMESTAMP NOT NULL,
+    generation_wan_kw DOUBLE PRECISION,
+    load_wan_kw DOUBLE PRECISION NOT NULL,
+    raw_payload TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (observed_at, region)
+);
 """
 
 
