@@ -90,30 +90,33 @@ def test_parse_supply_demand_payload_allows_missing_optional_groups() -> None:
     assert snapshot.real_hr_maxi_sply_capacity_wan_kw is None
 
 
-def test_parse_supply_demand_payload_treats_invalid_optional_fields_as_null() -> None:
-    """可選欄位無法解析時應存為空值，不阻斷整筆快照。"""
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fore_maxi_sply_capacity", "not-a-number"),
+        ("publish_time", "bad-time"),
+        ("publish_time", "115.13.01"),
+        ("yday_date", "???"),
+        ("real_hr_peak_time", "also-bad"),
+        ("real_hr_peak_time", "2026.02.30 16:47"),
+    ],
+)
+def test_parse_supply_demand_payload_rejects_invalid_optional_fields(
+    field: str, value: str
+) -> None:
+    """非空的可選欄位無法解析時應明確拒絕快照。"""
     payload = {
         "records": [
             {"curr_load": "3000", "curr_util_rate": "70"},
-            {
-                "fore_maxi_sply_capacity": "not-a-number",
-                "publish_time": "bad-time",
-                "yday_date": "???",
-                "real_hr_peak_time": "also-bad",
-            },
+            {field: value},
         ]
     }
 
-    snapshot = parse_supply_demand_payload(
-        payload,
-        observed_at=datetime(2026, 9, 5, 17, 30),
-    )
-
-    assert snapshot.curr_load_wan_kw == pytest.approx(3000.0)
-    assert snapshot.fore_maxi_sply_capacity_wan_kw is None
-    assert snapshot.source_publish_time is None
-    assert snapshot.yday_date is None
-    assert snapshot.real_hr_peak_time is None
+    with pytest.raises(SupplyDemandParseError, match=field):
+        parse_supply_demand_payload(
+            payload,
+            observed_at=datetime(2026, 9, 5, 17, 30),
+        )
 
 
 def test_parse_supply_demand_payload_rejects_missing_required_fields() -> None:
