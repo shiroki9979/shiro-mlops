@@ -18,18 +18,28 @@ class ParquetIOManager(UPathIOManager):
         super().__init__(base_path=base_path)
 
     def dump_to_path(self, context: OutputContext, obj: Any, path: UPath) -> None:
-        """Serialize DataFrame to Parquet format."""
-        if isinstance(obj, pd.DataFrame):
+        """Serialize DataFrame to Parquet format, with fallback for arbitrary Python objects."""
+        if not str(path).startswith("s3://"):
             path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(obj, pd.DataFrame):
             with path.open("wb") as f:
                 obj.to_parquet(f, index=False)
         else:
-            raise TypeError(f"Unsupported object type {type(obj)} for ParquetIOManager")
+            import pickle
 
-    def load_from_path(self, context: InputContext, path: UPath) -> pd.DataFrame:
-        """Load Parquet file into DataFrame."""
-        with path.open("rb") as f:
-            return pd.read_parquet(f)
+            with path.open("wb") as f:
+                pickle.dump(obj, f)
+
+    def load_from_path(self, context: InputContext, path: UPath) -> Any:
+        """Load Parquet file into DataFrame, or unpickle for non-DataFrame objects."""
+        try:
+            with path.open("rb") as f:
+                return pd.read_parquet(f)
+        except Exception:
+            import pickle
+
+            with path.open("rb") as f:
+                return pickle.load(f)
 
 
 class FeastParquetIOManager(UPathIOManager):

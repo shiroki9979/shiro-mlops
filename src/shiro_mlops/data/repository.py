@@ -49,6 +49,23 @@ def _utc_instant_to_taiwan(value: Any) -> datetime | None:
     return _to_python_datetime(utc_to_taiwan_datetime(pd.Series([value])).iloc[0])
 
 
+def _serialize_raw_payload(payload: Any) -> str:
+    """Serialize raw API payload to JSON text for TEXT column storage."""
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _deserialize_raw_payload(payload: Any) -> Any:
+    """Deserialize raw API payload from JSON text or pass through parsed objects."""
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except Exception:
+            return payload
+    return payload
+
+
 def _prepare_timeseries_df(
     df: pd.DataFrame, default_location: str = DEFAULT_LOCATION
 ) -> pd.DataFrame:
@@ -359,11 +376,7 @@ class TimeSeriesRepository:
             "yday_peak_resv_indicator": snapshot.yday_peak_resv_indicator,
             "real_hr_maxi_sply_capacity_wan_kw": snapshot.real_hr_maxi_sply_capacity_wan_kw,
             "real_hr_peak_time": _taiwan_instant_to_utc(snapshot.real_hr_peak_time),
-            "raw_payload": (
-                snapshot.raw_payload
-                if self.engine.dialect.name == "postgresql"
-                else json.dumps(snapshot.raw_payload, ensure_ascii=False)
-            ),
+            "raw_payload": _serialize_raw_payload(snapshot.raw_payload),
         }
 
         upsert_stmt = text(
@@ -478,9 +491,7 @@ class TimeSeriesRepository:
         if row is None:
             return None
 
-        raw_payload = row["raw_payload"]
-        if isinstance(raw_payload, str):
-            raw_payload = json.loads(raw_payload)
+        raw_payload = _deserialize_raw_payload(row["raw_payload"])
 
         yday_value = row["yday_date"]
         yday_date: date | None
@@ -554,11 +565,7 @@ class TimeSeriesRepository:
                     "source_time": _taiwan_instant_to_utc(snapshot.source_time),
                     "generation_wan_kw": snapshot.generation_wan_kw,
                     "load_wan_kw": float(snapshot.load_wan_kw),
-                    "raw_payload": (
-                        snapshot.raw_payload
-                        if self.engine.dialect.name == "postgresql"
-                        else json.dumps(snapshot.raw_payload, ensure_ascii=False)
-                    ),
+                    "raw_payload": _serialize_raw_payload(snapshot.raw_payload),
                 }
             )
 
@@ -600,9 +607,7 @@ class TimeSeriesRepository:
         }
         snapshots: list[TaipowerRegionalSupplyDemandSnapshot] = []
         for row in rows:
-            raw_payload = row["raw_payload"]
-            if isinstance(raw_payload, str):
-                raw_payload = json.loads(raw_payload)
+            raw_payload = _deserialize_raw_payload(row["raw_payload"])
             snapshots.append(
                 TaipowerRegionalSupplyDemandSnapshot(
                     observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
@@ -676,11 +681,7 @@ class TimeSeriesRepository:
                     "net_generation_mw": snapshot.net_generation_mw,
                     "capacity_ratio_pct": snapshot.capacity_ratio_pct,
                     "remark": snapshot.remark,
-                    "raw_payload": (
-                        snapshot.raw_payload
-                        if self.engine.dialect.name == "postgresql"
-                        else json.dumps(snapshot.raw_payload, ensure_ascii=False)
-                    ),
+                    "raw_payload": _serialize_raw_payload(snapshot.raw_payload),
                 }
             )
 
@@ -721,9 +722,7 @@ class TimeSeriesRepository:
 
         snapshots: list[TaipowerUnitGenerationSnapshot] = []
         for row in rows:
-            raw_payload = row["raw_payload"]
-            if isinstance(raw_payload, str):
-                raw_payload = json.loads(raw_payload)
+            raw_payload = _deserialize_raw_payload(row["raw_payload"])
             snapshots.append(
                 TaipowerUnitGenerationSnapshot(
                     observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
