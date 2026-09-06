@@ -54,6 +54,7 @@ services:
       - "8000:8000"
     environment:
       ENVIRONMENT: local
+      CWA_API_KEY: ${CWA_API_KEY:-}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -77,6 +78,7 @@ services:
       DAGSTER_HOME: /dagster_home
       ENVIRONMENT: local
       DATA_DIR: /workspace/data
+      CWA_API_KEY: ${CWA_API_KEY:-}
       REDIS_HOST: redis
       MLFLOW_TRACKING_URI: http://mlflow:5000
       TIMESCALE_HOST: postgres

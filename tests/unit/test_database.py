@@ -47,6 +47,15 @@ def test_database_contract_consistency():
     assert f"/{expected_db}" in compose_content
 
 
+def test_cwa_api_key_is_available_to_runtime_services() -> None:
+    """Verify the CWA API key placeholder and Compose interpolation are wired safely."""
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+    compose_content = Path("docker/docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "CWA_API_KEY=" in env_example
+    assert "CWA_API_KEY: ${CWA_API_KEY:-}" in compose_content
+
+
 def test_settings_timescaledb_env_override(monkeypatch):
     """Verify environment variables override TimescaleDB settings."""
     monkeypatch.setenv("TIMESCALE_HOST", "timescale.internal")

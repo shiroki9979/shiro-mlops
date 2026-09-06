@@ -21,6 +21,13 @@
 
 ## 2. 啟動所有服務
 
+先在專案根目錄準備本機環境變數，並填入 `CWA_API_KEY`；`.env` 已被 Git 忽略：
+
+```bash
+cp .env.example .env
+# 編輯 .env，將 CWA_API_KEY= 設為實際授權碼
+```
+
 在專案根目錄執行：
 
 ```bash
