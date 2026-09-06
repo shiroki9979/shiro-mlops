@@ -17,6 +17,12 @@ class ParquetIOManager(UPathIOManager):
     def __init__(self, base_path: UPath):
         super().__init__(base_path=base_path)
 
+    def make_directory(self, path: UPath) -> None:
+        """Create local parents only; S3 object stores need no directory mkdir."""
+        if str(path).startswith("s3://"):
+            return
+        super().make_directory(path)
+
     def dump_to_path(self, context: OutputContext, obj: Any, path: UPath) -> None:
         """Serialize DataFrame to Parquet format, with fallback for arbitrary Python objects."""
         if not str(path).startswith("s3://"):

@@ -3,7 +3,9 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from dagster import AssetKey, build_input_context, build_output_context
+from upath import UPath
 
 from shiro_mlops.core.io_managers import get_parquet_io_manager
 
@@ -35,3 +37,23 @@ def test_parquet_io_manager_roundtrip_dataframe_and_arbitrary_objects(
     obj_in_context = build_input_context(asset_key=AssetKey(["obj_asset"]))
     loaded_obj = manager.load_input(obj_in_context)
     assert loaded_obj == obj
+
+
+def test_parquet_io_manager_does_not_create_s3_virtual_directories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3 artifact 輸出不應要求建立虛擬目錄。"""
+    manager = get_parquet_io_manager(
+        environment="aws",
+        s3_bucket="test-bucket",
+        data_dir=Path("unused"),
+    )
+
+    def fail_mkdir(*args: object, **kwargs: object) -> None:
+        raise AssertionError("S3 virtual directories must not be created")
+
+    monkeypatch.setattr(UPath, "mkdir", fail_mkdir)
+    monkeypatch.setattr(manager, "dump_to_path", lambda **kwargs: None)
+
+    context = build_output_context(asset_key=AssetKey(["artifact"]))
+    manager.handle_output(context, {"status": "HEALTHY"})
