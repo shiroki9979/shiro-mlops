@@ -65,3 +65,63 @@ def test_upsert_unit_generation_snapshots_is_idempotent(
             "SELECT COUNT(*) FROM raw_taipower_unit_generation_snapshot"
         ).scalar()
     assert count == 4
+
+
+def test_upsert_unit_generation_snapshots_excludes_corrupted_and_fake_identity_rows(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """含缺失識別鍵與格式損壞列的 payload 經解析後僅有效列入庫，資料庫無任何 None/假識別資料。"""
+    payload = {
+        "DateTime": "2026-09-05T17:30:00",
+        "aaData": [
+            {
+                "機組類型": None,
+                "機組名稱": "Null型態機組",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "50.0",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "50.0",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "損壞機組",
+                "裝置容量(MW)": "corrupted",
+                "淨發電量(MW)": "50.0",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "有效機組A",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "50.0",
+                "淨發電量/裝置容量比(%)": "50.0%",
+                "備註": "正常運轉",
+            },
+        ],
+    }
+
+    observed_at = datetime(2026, 9, 5, 17, 30)
+    snapshots = parse_unit_generation_payload(payload, observed_at=observed_at)
+    assert len(snapshots) == 1
+    assert snapshots[0].unit_name == "有效機組A"
+
+    assert test_repo.upsert_unit_generation_snapshots(snapshots) == 1
+
+    fetched = test_repo.fetch_unit_generation_snapshots(observed_at)
+    assert len(fetched) == 1
+    assert fetched[0].unit_name == "有效機組A"
+
+    with test_repo.engine.connect() as conn:
+        fake_count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM raw_taipower_unit_generation_snapshot "
+            "WHERE unit_type = 'None' OR unit_name = 'None' OR unit_type = '' OR unit_name = ''"
+        ).scalar()
+        total_count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM raw_taipower_unit_generation_snapshot"
+        ).scalar()
+
+    assert fake_count == 0
+    assert total_count == 1
