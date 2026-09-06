@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from dagster import AssetKey, build_input_context, build_output_context
+from pyarrow.lib import ArrowInvalid
 from upath import UPath
 
 from shiro_mlops.core.io_managers import get_parquet_io_manager
@@ -57,3 +58,19 @@ def test_parquet_io_manager_does_not_create_s3_virtual_directories(
 
     context = build_output_context(asset_key=AssetKey(["artifact"]))
     manager.handle_output(context, {"status": "HEALTHY"})
+
+
+def test_parquet_io_manager_preserves_corrupt_parquet_error(
+    tmp_path: Path,
+) -> None:
+    """損毀的 Parquet artifact 應保留原始格式錯誤。"""
+    manager = get_parquet_io_manager(
+        environment="local",
+        s3_bucket="unused",
+        data_dir=tmp_path,
+    )
+    (tmp_path / "corrupt").write_bytes(b"PAR1-corrupt")
+
+    context = build_input_context(asset_key=AssetKey(["corrupt"]))
+    with pytest.raises(ArrowInvalid):
+        manager.load_input(context)

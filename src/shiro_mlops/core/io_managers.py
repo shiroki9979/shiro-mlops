@@ -1,6 +1,7 @@
 """Dagster IO Managers for Local filesystem and AWS S3."""
 
 import io
+import pickle
 from pathlib import Path
 from typing import Any, Literal
 
@@ -31,21 +32,20 @@ class ParquetIOManager(UPathIOManager):
             with path.open("wb") as f:
                 obj.to_parquet(f, index=False)
         else:
-            import pickle
-
             with path.open("wb") as f:
                 pickle.dump(obj, f)
 
     def load_from_path(self, context: InputContext, path: UPath) -> Any:
         """Load Parquet file into DataFrame, or unpickle for non-DataFrame objects."""
-        try:
+        with path.open("rb") as f:
+            header = f.read(4)
+
+        if header == b"PAR1":
             with path.open("rb") as f:
                 return pd.read_parquet(f)
-        except Exception:
-            import pickle
 
-            with path.open("rb") as f:
-                return pickle.load(f)
+        with path.open("rb") as f:
+            return pickle.load(f)
 
 
 class FeastParquetIOManager(UPathIOManager):

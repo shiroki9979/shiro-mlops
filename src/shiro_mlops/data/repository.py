@@ -50,7 +50,7 @@ def _utc_instant_to_taiwan(value: Any) -> datetime | None:
 
 
 def _serialize_raw_payload(payload: Any) -> str:
-    """Serialize raw API payload to JSON text for TEXT column storage."""
+    """Serialize raw API payload to JSON text for database column storage."""
     if isinstance(payload, str):
         return payload
     return json.dumps(payload, ensure_ascii=False)
@@ -61,8 +61,8 @@ def _deserialize_raw_payload(payload: Any) -> Any:
     if isinstance(payload, str):
         try:
             return json.loads(payload)
-        except Exception:
-            return payload
+        except json.JSONDecodeError as exc:
+            raise ValueError("raw_payload must contain valid JSON") from exc
     return payload
 
 
