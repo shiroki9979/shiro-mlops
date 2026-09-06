@@ -5,8 +5,12 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.repository import (
+    TaipowerUnitGenerationRepository,
+    TimeSeriesRepository,
+)
 from shiro_mlops.data.taipower_unit_generation import parse_unit_generation_payload
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
@@ -125,3 +129,45 @@ def test_upsert_unit_generation_snapshots_excludes_corrupted_and_fake_identity_r
 
     assert fake_count == 0
     assert total_count == 1
+
+
+def test_standalone_taipower_unit_generation_repository_lifecycle(
+    sqlite_engine: Engine,
+) -> None:
+    """獨立 TaipowerUnitGenerationRepository 應可獨立初始化、驗證、冪等 upsert 與 fetch。"""
+    repo = TaipowerUnitGenerationRepository(engine=sqlite_engine)
+    snapshots = _sample_snapshots()
+    slot = datetime(2026, 9, 5, 17, 30)
+
+    # 驗證空資料與首次寫入
+    assert repo.upsert([]) == 0
+    assert repo.upsert(snapshots) == 4
+
+    # 驗證讀回與排序
+    fetched = repo.fetch(slot)
+    assert len(fetched) == 4
+    assert (fetched[0].unit_type, fetched[0].unit_name) <= (
+        fetched[1].unit_type,
+        fetched[1].unit_name,
+    )
+
+    # 驗證同一機組與 slot 冪等更新
+    with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
+        payload = json.load(f)
+    payload["aaData"][0]["淨發電量(MW)"] = "750.0"
+    revised = parse_unit_generation_payload(payload, observed_at=slot)
+    assert repo.upsert(revised) == 4
+
+    updated = repo.fetch(slot)
+    target = next(item for item in updated if item.unit_name == "大潭CC#1")
+    assert target.net_generation_mw == pytest.approx(750.0)
+
+    # 驗證非法機組識別（空白、假標識）直接防禦拒絕
+    invalid_snapshot = snapshots[0]
+    object.__setattr__(invalid_snapshot, "unit_name", "")
+    with pytest.raises(ValueError, match="unit_name"):
+        repo.upsert([invalid_snapshot])
+
+    object.__setattr__(invalid_snapshot, "unit_name", "None")
+    with pytest.raises(ValueError, match="unit_name"):
+        repo.upsert([invalid_snapshot])

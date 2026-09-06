@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 拆分台電快照儲存責任：將全台供需、區域供需與機組快照解耦至專屬 Repository（`TaipowerSupplyDemandRepository`、`TaipowerRegionalSupplyDemandRepository`、`TaipowerUnitGenerationRepository`），並由 `TimeSeriesRepository` 委派維持向後相容（#26）。
 - 封裝 Feast 發布目標設定（`FeastPublicationTarget`）與特徵備援來源（`FallbackFeatureSources`），精簡工廠函式與特徵提取介面參數（#17）。
 - 定義台電電力供需快照的資料契約、保存策略與 Dagster 擷取規則（`CONTEXT.md`、`docs/SPEC.md`）。
 - 對齊套件版本字串為 `0.2.0`；前端改以 `pnpm` 與 Vite `5173` 埠啟動，避免與 Dagster `3000` 衝突。

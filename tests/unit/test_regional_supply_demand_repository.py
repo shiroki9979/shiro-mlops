@@ -4,8 +4,12 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.repository import (
+    TaipowerRegionalSupplyDemandRepository,
+    TimeSeriesRepository,
+)
 from shiro_mlops.data.taipower_regional_supply_demand import parse_regional_supply_demand_csv
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
@@ -94,3 +98,43 @@ def test_upsert_regional_snapshots_excludes_corrupted_rows(
             "SELECT COUNT(*) FROM raw_taipower_regional_supply_demand_snapshot"
         ).scalar()
     assert total_count == 2
+
+
+def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
+    sqlite_engine: Engine,
+) -> None:
+    """獨立 TaipowerRegionalSupplyDemandRepository 應可獨立初始化、驗證、冪等 upsert 與 fetch。"""
+    repo = TaipowerRegionalSupplyDemandRepository(engine=sqlite_engine)
+    snapshots = _sample_snapshots()
+    slot = datetime(2026, 9, 5, 17, 30)
+
+    # 驗證空資料與首次寫入
+    assert repo.upsert([]) == 0
+    assert repo.upsert(snapshots) == 4
+
+    # 驗證依北中南東領域順序讀回
+    fetched = repo.fetch(slot)
+    assert len(fetched) == 4
+    assert [item.region for item in fetched] == ["北部", "中部", "南部", "東部"]
+    assert fetched[0].load_wan_kw == pytest.approx(1091.7)
+
+    # 驗證同一 slot 冪等更新
+    revised_csv = (
+        "時間,區域,發電(萬瓩),用電(萬瓩)\n"
+        "20260905T173000,北部,1200.0,1150.0\n"
+        "20260905T173000,中部,1088.7,977.5\n"
+        "20260905T173000,南部,997.0,1146.3\n"
+        "20260905T173000,東部,12.8,38.5\n"
+    )
+    revised = parse_regional_supply_demand_csv(revised_csv, observed_at=slot)
+    assert repo.upsert(revised) == 4
+
+    updated = repo.fetch(slot)
+    north = next(item for item in updated if item.region == "北部")
+    assert north.load_wan_kw == pytest.approx(1150.0)
+
+    # 驗證非法 region 直接防禦拒絕
+    invalid_snapshot = _sample_snapshots(datetime(2026, 9, 5, 18, 0))[0]
+    object.__setattr__(invalid_snapshot, "region", "未知區域")
+    with pytest.raises(ValueError, match="region"):
+        repo.upsert([invalid_snapshot])

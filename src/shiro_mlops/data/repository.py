@@ -1,9 +1,7 @@
 """Time-series database repository for persisting and querying raw load and weather data."""
 
-import json
 import logging
-import math
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -21,50 +19,21 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
 from shiro_mlops.data.taipower_regional_supply_demand import (
-    REGIONAL_SUPPLY_DEMAND_REGIONS,
     TaipowerRegionalSupplyDemandSnapshot,
 )
+from shiro_mlops.data.taipower_regional_supply_demand_repository import (
+    TaipowerRegionalSupplyDemandRepository,
+)
 from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
+from shiro_mlops.data.taipower_supply_demand_repository import (
+    TaipowerSupplyDemandRepository,
+)
 from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationSnapshot
+from shiro_mlops.data.taipower_unit_generation_repository import (
+    TaipowerUnitGenerationRepository,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _to_python_datetime(value: Any) -> datetime:
-    """Normalize pandas/SQLAlchemy timestamps to timezone-naive Python datetime."""
-    timestamp = pd.Timestamp(value)
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
-    return timestamp.to_pydatetime()
-
-
-def _taiwan_instant_to_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    return _to_python_datetime(taiwan_local_to_utc(pd.Series([value])).iloc[0])
-
-
-def _utc_instant_to_taiwan(value: Any) -> datetime | None:
-    if value is None or pd.isna(value):
-        return None
-    return _to_python_datetime(utc_to_taiwan_datetime(pd.Series([value])).iloc[0])
-
-
-def _serialize_raw_payload(payload: Any) -> str:
-    """Serialize raw API payload to JSON text for database column storage."""
-    if isinstance(payload, str):
-        return payload
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _deserialize_raw_payload(payload: Any) -> Any:
-    """Deserialize raw API payload from JSON text or pass through parsed objects."""
-    if isinstance(payload, str):
-        try:
-            return json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ValueError("raw_payload must contain valid JSON") from exc
-    return payload
 
 
 def _prepare_timeseries_df(
@@ -150,6 +119,12 @@ class TimeSeriesRepository:
                 logger.warning(
                     f"Could not automatically ensure hypertables on repository init: {e}"
                 )
+
+        self.supply_demand_repo = TaipowerSupplyDemandRepository(engine=self.engine)
+        self.regional_supply_demand_repo = TaipowerRegionalSupplyDemandRepository(
+            engine=self.engine
+        )
+        self.unit_generation_repo = TaipowerUnitGenerationRepository(engine=self.engine)
 
     def upsert_taipower_load(
         self,
@@ -358,430 +333,42 @@ class TimeSeriesRepository:
 
     def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
         """Upsert a Taipower supply-demand snapshot keyed by observed_at."""
-        if (
-            snapshot.curr_load_wan_kw is None
-            or pd.isna(snapshot.curr_load_wan_kw)
-            or math.isnan(snapshot.curr_load_wan_kw)
-            or math.isinf(snapshot.curr_load_wan_kw)
-        ):
-            raise ValueError(f"Invalid curr_load_wan_kw in snapshot: {snapshot.curr_load_wan_kw!r}")
-        if (
-            snapshot.curr_util_rate_pct is None
-            or pd.isna(snapshot.curr_util_rate_pct)
-            or math.isnan(snapshot.curr_util_rate_pct)
-            or math.isinf(snapshot.curr_util_rate_pct)
-        ):
-            raise ValueError(
-                f"Invalid curr_util_rate_pct in snapshot: {snapshot.curr_util_rate_pct!r}"
-            )
-
-        record = {
-            "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
-            "source_publish_time": _taiwan_instant_to_utc(snapshot.source_publish_time),
-            "curr_load_wan_kw": float(snapshot.curr_load_wan_kw),
-            "curr_util_rate_pct": float(snapshot.curr_util_rate_pct),
-            "fore_maxi_sply_capacity_wan_kw": snapshot.fore_maxi_sply_capacity_wan_kw,
-            "fore_peak_dema_load_wan_kw": snapshot.fore_peak_dema_load_wan_kw,
-            "fore_peak_resv_capacity_wan_kw": snapshot.fore_peak_resv_capacity_wan_kw,
-            "fore_peak_resv_rate_pct": snapshot.fore_peak_resv_rate_pct,
-            "fore_peak_resv_indicator": snapshot.fore_peak_resv_indicator,
-            "fore_peak_hour_range": snapshot.fore_peak_hour_range,
-            "yday_date": snapshot.yday_date,
-            "yday_maxi_sply_capacity_wan_kw": snapshot.yday_maxi_sply_capacity_wan_kw,
-            "yday_peak_dema_load_wan_kw": snapshot.yday_peak_dema_load_wan_kw,
-            "yday_peak_resv_capacity_wan_kw": snapshot.yday_peak_resv_capacity_wan_kw,
-            "yday_peak_resv_rate_pct": snapshot.yday_peak_resv_rate_pct,
-            "yday_peak_resv_indicator": snapshot.yday_peak_resv_indicator,
-            "real_hr_maxi_sply_capacity_wan_kw": snapshot.real_hr_maxi_sply_capacity_wan_kw,
-            "real_hr_peak_time": _taiwan_instant_to_utc(snapshot.real_hr_peak_time),
-            "raw_payload": _serialize_raw_payload(snapshot.raw_payload),
-        }
-
-        upsert_stmt = text(
-            """
-            INSERT INTO raw_taipower_supply_demand_snapshot (
-                observed_at,
-                source_publish_time,
-                curr_load_wan_kw,
-                curr_util_rate_pct,
-                fore_maxi_sply_capacity_wan_kw,
-                fore_peak_dema_load_wan_kw,
-                fore_peak_resv_capacity_wan_kw,
-                fore_peak_resv_rate_pct,
-                fore_peak_resv_indicator,
-                fore_peak_hour_range,
-                yday_date,
-                yday_maxi_sply_capacity_wan_kw,
-                yday_peak_dema_load_wan_kw,
-                yday_peak_resv_capacity_wan_kw,
-                yday_peak_resv_rate_pct,
-                yday_peak_resv_indicator,
-                real_hr_maxi_sply_capacity_wan_kw,
-                real_hr_peak_time,
-                raw_payload
-            ) VALUES (
-                :observed_at,
-                :source_publish_time,
-                :curr_load_wan_kw,
-                :curr_util_rate_pct,
-                :fore_maxi_sply_capacity_wan_kw,
-                :fore_peak_dema_load_wan_kw,
-                :fore_peak_resv_capacity_wan_kw,
-                :fore_peak_resv_rate_pct,
-                :fore_peak_resv_indicator,
-                :fore_peak_hour_range,
-                :yday_date,
-                :yday_maxi_sply_capacity_wan_kw,
-                :yday_peak_dema_load_wan_kw,
-                :yday_peak_resv_capacity_wan_kw,
-                :yday_peak_resv_rate_pct,
-                :yday_peak_resv_indicator,
-                :real_hr_maxi_sply_capacity_wan_kw,
-                :real_hr_peak_time,
-                :raw_payload
-            )
-            ON CONFLICT (observed_at) DO UPDATE SET
-                source_publish_time = EXCLUDED.source_publish_time,
-                curr_load_wan_kw = EXCLUDED.curr_load_wan_kw,
-                curr_util_rate_pct = EXCLUDED.curr_util_rate_pct,
-                fore_maxi_sply_capacity_wan_kw = EXCLUDED.fore_maxi_sply_capacity_wan_kw,
-                fore_peak_dema_load_wan_kw = EXCLUDED.fore_peak_dema_load_wan_kw,
-                fore_peak_resv_capacity_wan_kw = EXCLUDED.fore_peak_resv_capacity_wan_kw,
-                fore_peak_resv_rate_pct = EXCLUDED.fore_peak_resv_rate_pct,
-                fore_peak_resv_indicator = EXCLUDED.fore_peak_resv_indicator,
-                fore_peak_hour_range = EXCLUDED.fore_peak_hour_range,
-                yday_date = EXCLUDED.yday_date,
-                yday_maxi_sply_capacity_wan_kw = EXCLUDED.yday_maxi_sply_capacity_wan_kw,
-                yday_peak_dema_load_wan_kw = EXCLUDED.yday_peak_dema_load_wan_kw,
-                yday_peak_resv_capacity_wan_kw = EXCLUDED.yday_peak_resv_capacity_wan_kw,
-                yday_peak_resv_rate_pct = EXCLUDED.yday_peak_resv_rate_pct,
-                yday_peak_resv_indicator = EXCLUDED.yday_peak_resv_indicator,
-                real_hr_maxi_sply_capacity_wan_kw = EXCLUDED.real_hr_maxi_sply_capacity_wan_kw,
-                real_hr_peak_time = EXCLUDED.real_hr_peak_time,
-                raw_payload = EXCLUDED.raw_payload
-            """
-        )
-
-        with self.engine.begin() as conn:
-            conn.execute(upsert_stmt, record)
-
-        logger.info(
-            "Upserted supply-demand snapshot for observed_at=%s",
-            snapshot.observed_at.isoformat(),
-        )
-        return 1
+        return self.supply_demand_repo.upsert(snapshot)
 
     def fetch_supply_demand_snapshot(
         self, observed_at: datetime
     ) -> TaipowerSupplyDemandSnapshot | None:
         """Fetch a supply-demand snapshot by Taiwan-local observation slot."""
-        query = text(
-            """
-            SELECT
-                observed_at,
-                source_publish_time,
-                curr_load_wan_kw,
-                curr_util_rate_pct,
-                fore_maxi_sply_capacity_wan_kw,
-                fore_peak_dema_load_wan_kw,
-                fore_peak_resv_capacity_wan_kw,
-                fore_peak_resv_rate_pct,
-                fore_peak_resv_indicator,
-                fore_peak_hour_range,
-                yday_date,
-                yday_maxi_sply_capacity_wan_kw,
-                yday_peak_dema_load_wan_kw,
-                yday_peak_resv_capacity_wan_kw,
-                yday_peak_resv_rate_pct,
-                yday_peak_resv_indicator,
-                real_hr_maxi_sply_capacity_wan_kw,
-                real_hr_peak_time,
-                raw_payload
-            FROM raw_taipower_supply_demand_snapshot
-            WHERE observed_at = :observed_at
-            """
-        )
-        params = {"observed_at": _taiwan_instant_to_utc(observed_at)}
-
-        with self.engine.connect() as conn:
-            row = conn.execute(query, params).mappings().first()
-
-        if row is None:
-            return None
-
-        raw_payload = _deserialize_raw_payload(row["raw_payload"])
-
-        yday_value = row["yday_date"]
-        yday_date: date | None
-        if yday_value is None or pd.isna(yday_value):
-            yday_date = None
-        elif isinstance(yday_value, date) and not isinstance(yday_value, datetime):
-            yday_date = yday_value
-        else:
-            yday_date = pd.Timestamp(yday_value).date()
-
-        return TaipowerSupplyDemandSnapshot(
-            observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
-            curr_load_wan_kw=float(row["curr_load_wan_kw"]),
-            curr_util_rate_pct=float(row["curr_util_rate_pct"]),
-            source_publish_time=_utc_instant_to_taiwan(row["source_publish_time"]),
-            fore_maxi_sply_capacity_wan_kw=row["fore_maxi_sply_capacity_wan_kw"],
-            fore_peak_dema_load_wan_kw=row["fore_peak_dema_load_wan_kw"],
-            fore_peak_resv_capacity_wan_kw=row["fore_peak_resv_capacity_wan_kw"],
-            fore_peak_resv_rate_pct=row["fore_peak_resv_rate_pct"],
-            fore_peak_resv_indicator=row["fore_peak_resv_indicator"],
-            fore_peak_hour_range=row["fore_peak_hour_range"],
-            yday_date=yday_date,
-            yday_maxi_sply_capacity_wan_kw=row["yday_maxi_sply_capacity_wan_kw"],
-            yday_peak_dema_load_wan_kw=row["yday_peak_dema_load_wan_kw"],
-            yday_peak_resv_capacity_wan_kw=row["yday_peak_resv_capacity_wan_kw"],
-            yday_peak_resv_rate_pct=row["yday_peak_resv_rate_pct"],
-            yday_peak_resv_indicator=row["yday_peak_resv_indicator"],
-            real_hr_maxi_sply_capacity_wan_kw=row["real_hr_maxi_sply_capacity_wan_kw"],
-            real_hr_peak_time=_utc_instant_to_taiwan(row["real_hr_peak_time"]),
-            raw_payload=raw_payload,
-        )
+        return self.supply_demand_repo.fetch(observed_at)
 
     def upsert_regional_supply_demand_snapshots(
         self, snapshots: list[TaipowerRegionalSupplyDemandSnapshot]
     ) -> int:
         """Upsert regional supply-demand snapshots keyed by (observed_at, region)."""
-        if not snapshots:
-            return 0
-
-        upsert_stmt = text(
-            """
-            INSERT INTO raw_taipower_regional_supply_demand_snapshot (
-                observed_at,
-                region,
-                source_time,
-                generation_wan_kw,
-                load_wan_kw,
-                raw_payload
-            ) VALUES (
-                :observed_at,
-                :region,
-                :source_time,
-                :generation_wan_kw,
-                :load_wan_kw,
-                :raw_payload
-            )
-            ON CONFLICT (observed_at, region) DO UPDATE SET
-                source_time = EXCLUDED.source_time,
-                generation_wan_kw = EXCLUDED.generation_wan_kw,
-                load_wan_kw = EXCLUDED.load_wan_kw,
-                raw_payload = EXCLUDED.raw_payload
-            """
-        )
-
-        records = []
-        for snapshot in snapshots:
-            if snapshot.region not in REGIONAL_SUPPLY_DEMAND_REGIONS:
-                raise ValueError(f"Invalid region in snapshot: {snapshot.region!r}")
-            if snapshot.load_wan_kw is None or pd.isna(snapshot.load_wan_kw):
-                raise ValueError(f"Invalid load_wan_kw in snapshot: {snapshot.load_wan_kw!r}")
-
-            records.append(
-                {
-                    "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
-                    "region": snapshot.region,
-                    "source_time": _taiwan_instant_to_utc(snapshot.source_time),
-                    "generation_wan_kw": snapshot.generation_wan_kw,
-                    "load_wan_kw": float(snapshot.load_wan_kw),
-                    "raw_payload": _serialize_raw_payload(snapshot.raw_payload),
-                }
-            )
-
-        with self.engine.begin() as conn:
-            conn.execute(upsert_stmt, records)
-
-        logger.info(
-            "Upserted %s regional supply-demand snapshots for observed_at=%s",
-            len(snapshots),
-            snapshots[0].observed_at.isoformat(),
-        )
-        return len(snapshots)
+        return self.regional_supply_demand_repo.upsert(snapshots)
 
     def fetch_regional_supply_demand_snapshots(
         self, observed_at: datetime
     ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
         """Fetch regional snapshots for a Taiwan-local observation slot."""
-        query = text(
-            """
-            SELECT
-                observed_at,
-                region,
-                source_time,
-                generation_wan_kw,
-                load_wan_kw,
-                raw_payload
-            FROM raw_taipower_regional_supply_demand_snapshot
-            WHERE observed_at = :observed_at
-            """
-        )
-        params = {"observed_at": _taiwan_instant_to_utc(observed_at)}
-
-        with self.engine.connect() as conn:
-            rows = conn.execute(query, params).mappings().all()
-
-        # 以北中南東固定順序回傳，避免字碼排序打亂領域慣用順序。
-        region_order = {
-            region: index for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS)
-        }
-        snapshots: list[TaipowerRegionalSupplyDemandSnapshot] = []
-        for row in rows:
-            raw_payload = _deserialize_raw_payload(row["raw_payload"])
-            snapshots.append(
-                TaipowerRegionalSupplyDemandSnapshot(
-                    observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
-                    region=str(row["region"]),
-                    source_time=_utc_instant_to_taiwan(row["source_time"])
-                    or _utc_instant_to_taiwan(row["observed_at"])
-                    or observed_at,
-                    generation_wan_kw=(
-                        None
-                        if row["generation_wan_kw"] is None
-                        else float(row["generation_wan_kw"])
-                    ),
-                    load_wan_kw=float(row["load_wan_kw"]),
-                    raw_payload=raw_payload,
-                )
-            )
-
-        unknown_rank = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
-        snapshots.sort(key=lambda item: region_order.get(item.region, unknown_rank))
-        return snapshots
+        return self.regional_supply_demand_repo.fetch(observed_at)
 
     def upsert_unit_generation_snapshots(
         self, snapshots: list[TaipowerUnitGenerationSnapshot]
     ) -> int:
         """Upsert unit net-generation snapshots keyed by identity and observed_at."""
-        if not snapshots:
-            return 0
-
-        upsert_stmt = text(
-            """
-            INSERT INTO raw_taipower_unit_generation_snapshot (
-                observed_at,
-                unit_type,
-                unit_name,
-                source_time,
-                capacity_mw,
-                net_generation_mw,
-                capacity_ratio_pct,
-                remark,
-                raw_payload
-            ) VALUES (
-                :observed_at,
-                :unit_type,
-                :unit_name,
-                :source_time,
-                :capacity_mw,
-                :net_generation_mw,
-                :capacity_ratio_pct,
-                :remark,
-                :raw_payload
-            )
-            ON CONFLICT (observed_at, unit_type, unit_name) DO UPDATE SET
-                source_time = EXCLUDED.source_time,
-                capacity_mw = EXCLUDED.capacity_mw,
-                net_generation_mw = EXCLUDED.net_generation_mw,
-                capacity_ratio_pct = EXCLUDED.capacity_ratio_pct,
-                remark = EXCLUDED.remark,
-                raw_payload = EXCLUDED.raw_payload
-            """
-        )
-
-        records = []
-        for snapshot in snapshots:
-            if (
-                not snapshot.unit_type
-                or not str(snapshot.unit_type).strip()
-                or str(snapshot.unit_type).strip().lower() in ("none", "null", "-", "n/a")
-            ):
-                raise ValueError(f"Invalid unit_type in snapshot: {snapshot.unit_type!r}")
-            if (
-                not snapshot.unit_name
-                or not str(snapshot.unit_name).strip()
-                or str(snapshot.unit_name).strip().lower() in ("none", "null", "-", "n/a")
-            ):
-                raise ValueError(f"Invalid unit_name in snapshot: {snapshot.unit_name!r}")
-
-            records.append(
-                {
-                    "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
-                    "unit_type": snapshot.unit_type,
-                    "unit_name": snapshot.unit_name,
-                    "source_time": _taiwan_instant_to_utc(snapshot.source_time),
-                    "capacity_mw": snapshot.capacity_mw,
-                    "net_generation_mw": snapshot.net_generation_mw,
-                    "capacity_ratio_pct": snapshot.capacity_ratio_pct,
-                    "remark": snapshot.remark,
-                    "raw_payload": _serialize_raw_payload(snapshot.raw_payload),
-                }
-            )
-
-        with self.engine.begin() as conn:
-            conn.execute(upsert_stmt, records)
-
-        logger.info(
-            "Upserted %s unit-generation snapshots for observed_at=%s",
-            len(snapshots),
-            snapshots[0].observed_at.isoformat(),
-        )
-        return len(snapshots)
+        return self.unit_generation_repo.upsert(snapshots)
 
     def fetch_unit_generation_snapshots(
         self, observed_at: datetime
     ) -> list[TaipowerUnitGenerationSnapshot]:
         """Fetch unit net-generation snapshots for a Taiwan-local observation slot."""
-        query = text(
-            """
-            SELECT
-                observed_at,
-                unit_type,
-                unit_name,
-                source_time,
-                capacity_mw,
-                net_generation_mw,
-                capacity_ratio_pct,
-                remark,
-                raw_payload
-            FROM raw_taipower_unit_generation_snapshot
-            WHERE observed_at = :observed_at
-            """
-        )
-        params = {"observed_at": _taiwan_instant_to_utc(observed_at)}
+        return self.unit_generation_repo.fetch(observed_at)
 
-        with self.engine.connect() as conn:
-            rows = conn.execute(query, params).mappings().all()
 
-        snapshots: list[TaipowerUnitGenerationSnapshot] = []
-        for row in rows:
-            raw_payload = _deserialize_raw_payload(row["raw_payload"])
-            snapshots.append(
-                TaipowerUnitGenerationSnapshot(
-                    observed_at=_utc_instant_to_taiwan(row["observed_at"]) or observed_at,
-                    unit_type=str(row["unit_type"]),
-                    unit_name=str(row["unit_name"]),
-                    source_time=_utc_instant_to_taiwan(row["source_time"])
-                    or _utc_instant_to_taiwan(row["observed_at"])
-                    or observed_at,
-                    capacity_mw=(None if row["capacity_mw"] is None else float(row["capacity_mw"])),
-                    net_generation_mw=(
-                        None
-                        if row["net_generation_mw"] is None
-                        else float(row["net_generation_mw"])
-                    ),
-                    capacity_ratio_pct=(
-                        None
-                        if row["capacity_ratio_pct"] is None
-                        else float(row["capacity_ratio_pct"])
-                    ),
-                    remark=row["remark"],
-                    raw_payload=raw_payload,
-                )
-            )
-
-        snapshots.sort(key=lambda item: (item.unit_type, item.unit_name))
-        return snapshots
+__all__ = [
+    "TimeSeriesRepository",
+    "TaipowerSupplyDemandRepository",
+    "TaipowerRegionalSupplyDemandRepository",
+    "TaipowerUnitGenerationRepository",
+]

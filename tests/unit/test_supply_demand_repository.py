@@ -5,8 +5,12 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.repository import (
+    TaipowerSupplyDemandRepository,
+    TimeSeriesRepository,
+)
 from shiro_mlops.data.taipower_supply_demand import parse_supply_demand_payload
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
@@ -112,3 +116,37 @@ def test_upsert_supply_demand_snapshot_rejects_invalid_snapshot_directly(
     object.__setattr__(snapshot, "curr_load_wan_kw", float("nan"))
     with pytest.raises(ValueError, match="curr_load_wan_kw"):
         test_repo.upsert_supply_demand_snapshot(snapshot)
+
+
+def test_standalone_taipower_supply_demand_repository_lifecycle(
+    sqlite_engine: Engine,
+) -> None:
+    """獨立 TaipowerSupplyDemandRepository 應可獨立初始化、驗證、冪等 upsert 與 fetch。"""
+    repo = TaipowerSupplyDemandRepository(engine=sqlite_engine)
+    snapshot = _sample_snapshot()
+
+    # 驗證首次寫入與讀取
+    assert repo.upsert(snapshot) == 1
+    fetched = repo.fetch(snapshot.observed_at)
+    assert fetched is not None
+    assert fetched.observed_at == snapshot.observed_at
+    assert fetched.curr_load_wan_kw == pytest.approx(3242.1)
+
+    # 驗證相同 slot 重跑時冪等更新
+    with open(FIXTURES_DIR / "taipower_supply_demand_sample.json", encoding="utf-8") as f:
+        payload = json.load(f)
+    payload["records"][0]["curr_load"] = "3400.0"
+    payload["records"][0]["curr_util_rate"] = "82"
+    revised = parse_supply_demand_payload(payload, observed_at=snapshot.observed_at)
+    assert repo.upsert(revised) == 1
+
+    updated = repo.fetch(snapshot.observed_at)
+    assert updated is not None
+    assert updated.curr_load_wan_kw == pytest.approx(3400.0)
+    assert updated.curr_util_rate_pct == pytest.approx(82.0)
+
+    # 驗證直接防禦拒絕非法數值
+    invalid_snapshot = _sample_snapshot(datetime(2026, 9, 5, 18, 0))
+    object.__setattr__(invalid_snapshot, "curr_load_wan_kw", float("nan"))
+    with pytest.raises(ValueError, match="curr_load_wan_kw"):
+        repo.upsert(invalid_snapshot)
