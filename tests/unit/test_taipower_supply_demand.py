@@ -125,3 +125,68 @@ def test_parse_supply_demand_payload_rejects_missing_required_fields() -> None:
 
     with pytest.raises(SupplyDemandParseError, match="curr_util_rate"):
         parse_supply_demand_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+
+@pytest.mark.parametrize("bad_val", ["NaN", "nan", "inf", "-inf"])
+def test_parse_supply_demand_payload_rejects_non_finite_required_fields(bad_val: str) -> None:
+    """必填欄位為 NaN 或 Inf 時必須失敗。"""
+    payload = {"records": [{"curr_load": bad_val, "curr_util_rate": "70"}]}
+    with pytest.raises(SupplyDemandParseError, match="curr_load"):
+        parse_supply_demand_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+    payload2 = {"records": [{"curr_load": "3000", "curr_util_rate": bad_val}]}
+    with pytest.raises(SupplyDemandParseError, match="curr_util_rate"):
+        parse_supply_demand_payload(payload2, observed_at=datetime(2026, 9, 5, 17, 30))
+
+
+@pytest.mark.parametrize("bad_val", ["NaN", "nan", "inf", "-inf"])
+def test_parse_supply_demand_payload_rejects_non_finite_optional_floats(bad_val: str) -> None:
+    """可選浮點欄位為 NaN 或 Inf 時必須失敗。"""
+    payload = {
+        "records": [
+            {"curr_load": "3000", "curr_util_rate": "70"},
+            {"fore_maxi_sply_capacity": bad_val},
+        ]
+    }
+    with pytest.raises(SupplyDemandParseError, match="fore_maxi_sply_capacity"):
+        parse_supply_demand_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+
+def test_parse_supply_demand_payload_rejects_complex_structure_in_str_fields() -> None:
+    """字串型別的可選欄位夾帶 list 或 dict 時必須失敗，避免轉成假字串。"""
+    payload = {
+        "records": [
+            {"curr_load": "3000", "curr_util_rate": "70"},
+            {"fore_peak_resv_indicator": {"nested": "object"}},
+        ]
+    }
+    with pytest.raises(SupplyDemandParseError, match="fore_peak_resv_indicator"):
+        parse_supply_demand_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+
+def test_supply_demand_snapshot_dataclass_rejects_invalid_values() -> None:
+    """TaipowerSupplyDemandSnapshot dataclass 應拒絕非有限浮點數。"""
+    from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
+
+    with pytest.raises(ValueError, match="curr_load_wan_kw"):
+        TaipowerSupplyDemandSnapshot(
+            observed_at=datetime(2026, 9, 5, 17, 30),
+            curr_load_wan_kw=float("nan"),
+            curr_util_rate_pct=70.0,
+            source_publish_time=None,
+            fore_maxi_sply_capacity_wan_kw=None,
+            fore_peak_dema_load_wan_kw=None,
+            fore_peak_resv_capacity_wan_kw=None,
+            fore_peak_resv_rate_pct=None,
+            fore_peak_resv_indicator=None,
+            fore_peak_hour_range=None,
+            yday_date=None,
+            yday_maxi_sply_capacity_wan_kw=None,
+            yday_peak_dema_load_wan_kw=None,
+            yday_peak_resv_capacity_wan_kw=None,
+            yday_peak_resv_rate_pct=None,
+            yday_peak_resv_indicator=None,
+            real_hr_maxi_sply_capacity_wan_kw=None,
+            real_hr_peak_time=None,
+            raw_payload={},
+        )

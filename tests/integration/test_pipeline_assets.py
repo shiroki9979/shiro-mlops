@@ -9,7 +9,7 @@ import pytest
 from dagster import build_asset_context, materialize
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
+from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.assets import (
     engineered_feature_set,
@@ -141,10 +141,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
             resources={
                 "time_series_repo": test_repo,
                 "feast_io_manager": get_feast_parquet_io_manager(
-                    offline_store_type="file",
-                    s3_bucket=settings.S3_BUCKET_NAME,
-                    s3_prefix=settings.FEAST_S3_PREFIX,
-                    data_dir=settings.DATA_DIR,
+                    FeastPublicationTarget.from_settings(settings)
                 ),
             },
             instance=dagster_instance,

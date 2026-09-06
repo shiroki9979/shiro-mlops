@@ -9,7 +9,14 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import Settings
-from shiro_mlops.core.database import get_timescale_engine, get_timescale_init_ddl, init_db
+from shiro_mlops.core.database import (
+    SQLITE_DEFAULT_SCHEMA,
+    convert_timescale_ddl_to_sqlite,
+    get_sqlite_schema,
+    get_timescale_engine,
+    get_timescale_init_ddl,
+    init_db,
+)
 
 
 def test_settings_timescaledb_defaults():
@@ -221,5 +228,167 @@ def test_repository_auto_init_on_existing_volume(tmp_path):
         persisted = repo2.fetch_load_range(location="Taipei")
         assert len(persisted) == 1
         assert persisted.iloc[0]["load_mw"] == 30000.0
+    finally:
+        engine.dispose()
+
+
+def test_repository_auto_init_false_does_not_initialize_schema(tmp_path):
+    """Verify externally managed schemas are untouched when auto initialization is disabled."""
+    from shiro_mlops.data.repository import TimeSeriesRepository
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'externally_managed.db'}")
+    try:
+        TimeSeriesRepository(engine=engine, auto_init=False)
+
+        assert inspect(engine).get_table_names() == []
+    finally:
+        engine.dispose()
+
+
+def test_convert_timescale_ddl_to_sqlite_statements():
+    """Verify TimescaleDB DDL is cleanly converted to SQLite compatible DDL."""
+    ddl = """
+    -- Extension
+    CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+
+    -- Table
+    CREATE TABLE IF NOT EXISTS test_snapshot (
+        observed_at TIMESTAMPTZ NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (observed_at)
+    );
+
+    SELECT create_hypertable('test_snapshot', 'observed_at');
+    """
+    stmts = convert_timescale_ddl_to_sqlite(ddl)
+    assert len(stmts) == 1
+    stmt = stmts[0]
+    assert "CREATE TABLE IF NOT EXISTS test_snapshot" in stmt
+    assert "observed_at TIMESTAMP NOT NULL" in stmt
+    assert "data TEXT NOT NULL" in stmt
+    assert "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP" in stmt
+    assert "PRIMARY KEY (observed_at)" in stmt
+    assert "timescaledb" not in stmt
+    assert "create_hypertable" not in stmt
+
+
+def test_sqlite_and_timescale_schema_parity(tmp_path):
+    """Verify SQLite schema dynamically derived from 01_init_hypertables.sql has 100% parity."""
+    import re
+
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    db_path = tmp_path / "parity.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    try:
+        ensure_timescale_hypertables(engine)
+        inspector = inspect(engine)
+        sqlite_tables = set(inspector.get_table_names())
+
+        ddl = get_timescale_init_ddl()
+        table_matches = re.findall(
+            r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_]+)\s*\((.*?)\);",
+            ddl,
+            re.DOTALL | re.IGNORECASE,
+        )
+        assert len(table_matches) >= 5
+
+        for table_name, body in table_matches:
+            # 1. Verify table exists in SQLite
+            assert table_name in sqlite_tables, f"Table {table_name} missing in SQLite"
+
+            # 2. Verify Primary Key constraints match
+            pk_match = re.search(r"PRIMARY\s+KEY\s*\((.*?)\)", body, re.IGNORECASE)
+            assert pk_match, f"No PRIMARY KEY found in DDL for {table_name}"
+            expected_pk = [col.strip() for col in pk_match.group(1).split(",")]
+            actual_pk = inspector.get_pk_constraint(table_name)["constrained_columns"]
+            assert expected_pk == actual_pk, (
+                f"PK mismatch for {table_name}: {expected_pk} vs {actual_pk}"
+            )
+
+            # 3. Verify ALL columns and NOT NULL constraints across all tables
+            db_cols = {c["name"]: c for c in inspector.get_columns(table_name)}
+            for line in body.splitlines():
+                line = line.strip().rstrip(",")
+                if not line or line.upper().startswith("PRIMARY KEY"):
+                    continue
+                parts = line.split()
+                col_name = parts[0]
+                assert col_name in db_cols, f"Column {col_name} missing from table {table_name}"
+                is_not_null = "NOT NULL" in line.upper()
+                assert (not db_cols[col_name]["nullable"]) == is_not_null, (
+                    f"Nullability mismatch for {table_name}.{col_name}"
+                )
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_test_schema_matches_production_ddl(tmp_path):
+    """Verify test fixtures utilizing SQLITE_TEST_SCHEMA create tables matching production DDL."""
+    import importlib.util
+    import re
+
+    conftest_path = Path(__file__).resolve().parents[1] / "conftest.py"
+    spec = importlib.util.spec_from_file_location("test_conftest", conftest_path)
+    assert spec is not None and spec.loader is not None
+    conftest_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(conftest_mod)
+
+    derived_schema = get_sqlite_schema()
+    assert SQLITE_DEFAULT_SCHEMA.strip() == derived_schema.strip()
+    test_schema = getattr(conftest_mod, "SQLITE_TEST_SCHEMA").strip()
+    assert test_schema == derived_schema.strip()
+
+    # Verify execution of SQLITE_TEST_SCHEMA yields all production tables
+    engine = create_engine(f"sqlite:///{tmp_path / 'conftest_test.db'}")
+    try:
+        from shiro_mlops.core.database import _execute_sql_statements
+
+        _execute_sql_statements(engine, test_schema.split(";"))
+        inspector = inspect(engine)
+        ddl = get_timescale_init_ddl()
+        expected_tables = set(
+            re.findall(
+                r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_]+)",
+                ddl,
+                re.IGNORECASE,
+            )
+        )
+        assert expected_tables.issubset(set(inspector.get_table_names()))
+    finally:
+        engine.dispose()
+
+
+def test_new_table_in_ddl_automatically_propagates_to_sqlite(tmp_path):
+    """Verify adding a new hypertable to DDL automatically produces valid SQLite schema."""
+    custom_ddl = """
+    CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+
+    CREATE TABLE IF NOT EXISTS raw_future_snapshot (
+        observed_at TIMESTAMPTZ NOT NULL,
+        feature_val DOUBLE PRECISION NOT NULL,
+        meta JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (observed_at)
+    );
+
+    SELECT create_hypertable('raw_future_snapshot', 'observed_at');
+    """
+    stmts = convert_timescale_ddl_to_sqlite(custom_ddl)
+    assert len(stmts) == 1
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'future.db'}")
+    try:
+        with engine.connect() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+            conn.commit()
+
+        inspector = inspect(engine)
+        assert "raw_future_snapshot" in inspector.get_table_names()
+        pk = inspector.get_pk_constraint("raw_future_snapshot")
+        assert pk["constrained_columns"] == ["observed_at"]
     finally:
         engine.dispose()

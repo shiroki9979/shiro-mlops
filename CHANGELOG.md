@@ -8,19 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-06
+
 ### Added
 
 - 新增台電電力供需快照擷取與 TimescaleDB 入庫，支援依觀測 slot 冪等 upsert 與手動 materialize。
 
 ### Changed
 
+- 拆分台電快照儲存責任：將全台供需、區域供需與機組快照解耦至專屬 Repository（`TaipowerSupplyDemandRepository`、`TaipowerRegionalSupplyDemandRepository`、`TaipowerUnitGenerationRepository`），並由 `TimeSeriesRepository` 委派維持向後相容（#26）。
+- 封裝 Feast 發布目標設定（`FeastPublicationTarget`）與特徵備援來源（`FallbackFeatureSources`），精簡工廠函式與特徵提取介面參數（#17）。
 - 定義台電電力供需快照的資料契約、保存策略與 Dagster 擷取規則（`CONTEXT.md`、`docs/SPEC.md`）。
 - 對齊套件版本字串為 `0.2.0`；前端改以 `pnpm` 與 Vite `5173` 埠啟動，避免與 Dagster `3000` 衝突。
+- 統一正式 TimescaleDB DDL（`docker/init-db/01_init_hypertables.sql`）與測試 SQLite fixture 之 schema 來源，透過 DDL 方言動態轉換杜絕 schema 漂移與重複維護（#25）。
 
 ### Fixed
 
+- 修正機組容量比格式與備註缺值處理，拒絕重複百分比符號並保留非空來源備註（#23）。
+- 修正 `TimeSeriesRepository` 在 `auto_init=False` 時仍建立快照資料表的副作用，改由 aggregate repository 統一初始化 schema（#26）。
 - 在 API 與 Dagster 映像安裝 `libgomp1`，修復 LightGBM 因缺少 OpenMP runtime 無法啟動的問題（`docker/Dockerfile.api`、`docker/Dockerfile.dagster`）。
 - 修正台電即時快照在 PostgreSQL 下 raw_payload 未序列化導致寫入失敗，強化 `ParquetIOManager` 支援非 DataFrame 物件序列化，並修正 Dagster 容器工作目錄以隔絕本機 `.env` 變數污染（`src/shiro_mlops/data/repository.py`、`src/shiro_mlops/core/io_managers.py`、`docker/docker-compose.yml`）。
+- 拒絕台電快照無效來源欄位：修復機組快照因缺少識別欄位產生 "None" 假識別鍵之缺陷，嚴格區分約定缺值與格式損壞，明確記錄警告並拒絕異常列，確保 TimescaleDB 不寫入假資料（#23）。
 
 ## [0.2.0] - 2026-09-04
 
@@ -57,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 實作 FastAPI 隨需推論服務（`/predict`、`/health`、`/features/latest`）。
 - 建立 AWS Terraform 基礎設施配置（S3、ECR、App Runner、IAM OIDC）。
 
-[Unreleased]: https://github.com/ShirokiXue/shiro-mlops/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/ShirokiXue/shiro-mlops/releases/tag/v0.2.0
-[0.1.0]: https://github.com/ShirokiXue/shiro-mlops/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shiroki9979/shiro-mlops/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shiroki9979/shiro-mlops/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.2.0
+[0.1.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.1.0
