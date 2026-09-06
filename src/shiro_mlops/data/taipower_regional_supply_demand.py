@@ -100,9 +100,12 @@ def _parse_required_float(raw: Any, field_name: str) -> float:
     return val
 
 
+_AGREED_REGIONAL_MISSING = frozenset({"", "-", "n/a"})
+
+
 def _parse_optional_float(raw: Any, field_name: str = "generation_wan_kw") -> float | None:
     cleaned = _strip_bom(raw)
-    if cleaned == "":
+    if cleaned.lower() in _AGREED_REGIONAL_MISSING:
         return None
     try:
         val = float(cleaned)

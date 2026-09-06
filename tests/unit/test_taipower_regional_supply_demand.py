@@ -41,17 +41,22 @@ def test_parse_regional_csv_skips_rows_missing_core_fields() -> None:
         ",中部,1088.7,977.5\n"
         "20260905T173000,,997.0,1146.3\n"
         "20260905T173000,東部,12.8,\n"
-        "20260905T173000,南部,900.0,1000.0\n"
+        "20260905T173000,南部,-,1000.0\n"
+        "20260905T173000,中部,N/A,980.0\n"
     )
 
     snapshots = parse_regional_supply_demand_csv(csv_text, observed_at=datetime(2026, 9, 5, 17, 30))
 
-    assert len(snapshots) == 2
+    assert len(snapshots) == 3
     assert snapshots[0].region == "北部"
     assert snapshots[0].generation_wan_kw is None
     assert snapshots[0].load_wan_kw == pytest.approx(1091.7)
     assert snapshots[1].region == "南部"
+    assert snapshots[1].generation_wan_kw is None
     assert snapshots[1].load_wan_kw == pytest.approx(1000.0)
+    assert snapshots[2].region == "中部"
+    assert snapshots[2].generation_wan_kw is None
+    assert snapshots[2].load_wan_kw == pytest.approx(980.0)
 
 
 def test_parse_regional_csv_strips_bom_from_region() -> None:

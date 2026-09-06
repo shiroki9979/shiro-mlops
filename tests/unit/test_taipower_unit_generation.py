@@ -104,13 +104,19 @@ def test_parse_unit_generation_payload_skips_rows_missing_identity() -> None:
             },
             {
                 "機組類型": "燃氣",
-                "機組名稱": "  \ufeff  ",
+                "機組名稱": "<b>  </b>",
                 "裝置容量(MW)": "10",
                 "淨發電量(MW)": "1",
             },
             {
                 "機組類型": "燃氣",
-                "機組名稱": "有效機組",
+                "機組名稱": "  \ufeff  ",
+                "裝置容量(MW)": "10",
+                "淨發電量(MW)": "1",
+            },
+            {
+                "機組類型": "<b>燃氣</b>",
+                "機組名稱": "<b>有效機組</b>",
                 "裝置容量(MW)": "-",
                 "淨發電量(MW)": "5.0",
                 "淨發電量/裝置容量比(%)": "-",
@@ -123,13 +129,14 @@ def test_parse_unit_generation_payload_skips_rows_missing_identity() -> None:
 
     assert len(snapshots) == 1
     assert snapshots[0].unit_name == "有效機組"
+    assert snapshots[0].unit_type == "燃氣"
     assert snapshots[0].capacity_mw is None
     assert snapshots[0].capacity_ratio_pct is None
     assert snapshots[0].remark == "新機組試俥"
 
 
 def test_parse_unit_generation_payload_skips_non_agreed_format_errors() -> None:
-    """非約定缺值的來源格式錯誤（如字串損壞、NaN）不應靜默轉為 None，該列應略過並記錄。"""
+    """非約定缺值的來源格式錯誤（如字串損壞、NaN、none/null字串）不應靜默轉為 None，該列應略過並記錄。"""
     payload = {
         "DateTime": "2026-09-05T17:30:00",
         "aaData": [
@@ -159,6 +166,20 @@ def test_parse_unit_generation_payload_skips_non_agreed_format_errors() -> None:
                 "機組名稱": "NaN損壞機組4",
                 "裝置容量(MW)": "NaN",
                 "淨發電量(MW)": "50.0",
+                "淨發電量/裝置容量比(%)": "50%",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "None字串損壞機組5",
+                "裝置容量(MW)": "None",
+                "淨發電量(MW)": "50.0",
+                "淨發電量/裝置容量比(%)": "50%",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "Null字串損壞機組6",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "null",
                 "淨發電量/裝置容量比(%)": "50%",
             },
             {
