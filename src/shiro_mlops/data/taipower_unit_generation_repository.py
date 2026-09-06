@@ -14,11 +14,12 @@ from shiro_mlops.data.repository_utils import (
     taiwan_instant_to_utc,
     utc_instant_to_taiwan,
 )
-from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationSnapshot
+from shiro_mlops.data.taipower_unit_generation import (
+    TaipowerUnitGenerationSnapshot,
+    is_valid_unit_identity,
+)
 
 logger = logging.getLogger(__name__)
-
-INVALID_UNIT_IDENTIFIERS = frozenset({"none", "null", "-", "n/a"})
 
 
 class TaipowerUnitGenerationRepository:
@@ -168,9 +169,5 @@ class TaipowerUnitGenerationRepository:
 
 def _validate_unit_identity(value: str | None, field_name: str) -> None:
     """Ensure unit identification fields are non-empty and not dummy placeholders."""
-    if (
-        not value
-        or not str(value).strip()
-        or str(value).strip().lower() in INVALID_UNIT_IDENTIFIERS
-    ):
+    if not is_valid_unit_identity(value):
         raise ValueError(f"Invalid {field_name} in snapshot: {value!r}")

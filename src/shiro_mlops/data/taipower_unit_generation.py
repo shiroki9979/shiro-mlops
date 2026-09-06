@@ -26,7 +26,7 @@ DEFAULT_UNIT_GENERATION_URL = (
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _SOURCE_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
-_INVALID_IDENTITY_VALUES = frozenset({"", "-", "n/a", "none", "null"})
+INVALID_UNIT_IDENTIFIERS = frozenset({"-", "n/a", "none", "null"})
 _AGREED_MISSING_NUMERIC = frozenset({"", "-", "n/a"})
 
 
@@ -53,17 +53,9 @@ class TaipowerUnitGenerationSnapshot:
     raw_payload: dict[str, Any]
 
     def __post_init__(self) -> None:
-        if (
-            not self.unit_type
-            or not self.unit_type.strip()
-            or self.unit_type.strip().lower() in _INVALID_IDENTITY_VALUES
-        ):
+        if not is_valid_unit_identity(self.unit_type):
             raise ValueError(f"Invalid unit_type: {self.unit_type!r}")
-        if (
-            not self.unit_name
-            or not self.unit_name.strip()
-            or self.unit_name.strip().lower() in _INVALID_IDENTITY_VALUES
-        ):
+        if not is_valid_unit_identity(self.unit_name):
             raise ValueError(f"Invalid unit_name: {self.unit_name!r}")
         if self.capacity_mw is not None and (
             math.isnan(self.capacity_mw) or math.isinf(self.capacity_mw)
@@ -85,12 +77,18 @@ def _strip_noise(value: Any) -> str:
     return str(value).replace("\ufeff", "").strip()
 
 
+def is_valid_unit_identity(value: Any) -> bool:
+    """Return whether a normalized unit identity is usable as part of a snapshot key."""
+    cleaned = _strip_noise(value)
+    return bool(cleaned) and cleaned.lower() not in INVALID_UNIT_IDENTIFIERS
+
+
 def _normalize_unit_type(raw: Any) -> str | None:
     # 來源偶發夾帶 HTML 殘片（如 </b>），去除後才作為機組識別鍵的一部分。
     if raw is None:
         return None
     cleaned = _HTML_TAG_RE.sub("", _strip_noise(raw)).strip()
-    if not cleaned or cleaned.lower() in _INVALID_IDENTITY_VALUES:
+    if not is_valid_unit_identity(cleaned):
         return None
     return cleaned
 
@@ -99,7 +97,7 @@ def _normalize_unit_name(raw: Any) -> str | None:
     if raw is None:
         return None
     cleaned = _HTML_TAG_RE.sub("", _strip_noise(raw)).strip()
-    if not cleaned or cleaned.lower() in _INVALID_IDENTITY_VALUES:
+    if not is_valid_unit_identity(cleaned):
         return None
     return cleaned
 
@@ -122,11 +120,14 @@ def _parse_optional_mw(raw: Any, field_name: str = "mw") -> float | None:
 def _parse_optional_ratio_pct(raw: Any, field_name: str = "ratio_pct") -> float | None:
     if raw is None:
         return None
-    cleaned = _strip_noise(raw).rstrip("%").strip()
+    cleaned = _strip_noise(raw)
     if cleaned.lower() in _AGREED_MISSING_NUMERIC:
         return None
+    numeric_text = cleaned[:-1].strip() if cleaned.endswith("%") else cleaned
+    if "%" in numeric_text:
+        raise UnitGenerationFormatError(f"Invalid percentage value for {field_name}: {raw!r}")
     try:
-        val = float(cleaned)
+        val = float(numeric_text)
     except (ValueError, TypeError) as exc:
         raise UnitGenerationFormatError(
             f"Invalid percentage value for {field_name}: {raw!r}"
@@ -140,7 +141,7 @@ def _parse_optional_remark(raw: Any) -> str | None:
     if raw is None:
         return None
     cleaned = _strip_noise(raw)
-    if not cleaned or cleaned.lower() in _INVALID_IDENTITY_VALUES:
+    if not cleaned:
         return None
     return cleaned
 
