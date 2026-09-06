@@ -27,7 +27,7 @@ DEFAULT_UNIT_GENERATION_URL = (
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _SOURCE_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 _INVALID_IDENTITY_VALUES = frozenset({"", "-", "n/a", "none", "null"})
-_AGREED_MISSING_NUMERIC = frozenset({"", "-", "n/a", "none", "null"})
+_AGREED_MISSING_NUMERIC = frozenset({"", "-", "n/a"})
 
 
 class UnitGenerationParseError(ValueError):
@@ -98,7 +98,7 @@ def _normalize_unit_type(raw: Any) -> str | None:
 def _normalize_unit_name(raw: Any) -> str | None:
     if raw is None:
         return None
-    cleaned = _strip_noise(raw)
+    cleaned = _HTML_TAG_RE.sub("", _strip_noise(raw)).strip()
     if not cleaned or cleaned.lower() in _INVALID_IDENTITY_VALUES:
         return None
     return cleaned

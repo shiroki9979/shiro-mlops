@@ -102,3 +102,13 @@ def test_upsert_supply_demand_snapshot_rejects_corrupted_payload_without_writing
             "SELECT COUNT(*) FROM raw_taipower_supply_demand_snapshot"
         ).scalar()
     assert count == 0
+
+
+def test_upsert_supply_demand_snapshot_rejects_invalid_snapshot_directly(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """直接傳入非法 snapshot 至 repository 時應拋出 ValueError。"""
+    snapshot = _sample_snapshot()
+    object.__setattr__(snapshot, "curr_load_wan_kw", float("nan"))
+    with pytest.raises(ValueError, match="curr_load_wan_kw"):
+        test_repo.upsert_supply_demand_snapshot(snapshot)
