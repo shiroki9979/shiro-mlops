@@ -261,7 +261,9 @@ def test_convert_timescale_ddl_to_sqlite_statements():
 
 
 def test_sqlite_and_timescale_schema_parity(tmp_path):
-    """Verify SQLite schema derived from 01_init_hypertables.sql has 100% structural parity."""
+    """Verify SQLite schema dynamically derived from 01_init_hypertables.sql has 100% parity."""
+    import re
+
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
     db_path = tmp_path / "parity.db"
@@ -270,53 +272,50 @@ def test_sqlite_and_timescale_schema_parity(tmp_path):
     try:
         ensure_timescale_hypertables(engine)
         inspector = inspect(engine)
-        tables = inspector.get_table_names()
+        sqlite_tables = set(inspector.get_table_names())
 
-        expected_tables = {
-            "raw_taipower_load",
-            "raw_cwa_weather",
-            "raw_taipower_supply_demand_snapshot",
-            "raw_taipower_regional_supply_demand_snapshot",
-            "raw_taipower_unit_generation_snapshot",
-        }
-        assert expected_tables.issubset(set(tables))
+        ddl = get_timescale_init_ddl()
+        table_matches = re.findall(
+            r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_]+)\s*\((.*?)\);",
+            ddl,
+            re.DOTALL | re.IGNORECASE,
+        )
+        assert len(table_matches) >= 5
 
-        expected_pks = {
-            "raw_taipower_load": ["time", "location"],
-            "raw_cwa_weather": ["time", "location"],
-            "raw_taipower_supply_demand_snapshot": ["observed_at"],
-            "raw_taipower_regional_supply_demand_snapshot": ["observed_at", "region"],
-            "raw_taipower_unit_generation_snapshot": ["observed_at", "unit_type", "unit_name"],
-        }
-        for table_name, expected_pk in expected_pks.items():
-            pk_constraint = inspector.get_pk_constraint(table_name)
-            assert pk_constraint["constrained_columns"] == expected_pk
+        for table_name, body in table_matches:
+            # 1. Verify table exists in SQLite
+            assert table_name in sqlite_tables, f"Table {table_name} missing in SQLite"
 
-        # Check column types & nullability for snapshot tables
-        unit_columns = {
-            col["name"]: col
-            for col in inspector.get_columns("raw_taipower_unit_generation_snapshot")
-        }
-        assert unit_columns["observed_at"]["nullable"] is False
-        assert unit_columns["unit_type"]["nullable"] is False
-        assert unit_columns["unit_name"]["nullable"] is False
-        assert unit_columns["raw_payload"]["nullable"] is False
-        assert unit_columns["capacity_mw"]["nullable"] is True
+            # 2. Verify Primary Key constraints match
+            pk_match = re.search(r"PRIMARY\s+KEY\s*\((.*?)\)", body, re.IGNORECASE)
+            assert pk_match, f"No PRIMARY KEY found in DDL for {table_name}"
+            expected_pk = [col.strip() for col in pk_match.group(1).split(",")]
+            actual_pk = inspector.get_pk_constraint(table_name)["constrained_columns"]
+            assert expected_pk == actual_pk, (
+                f"PK mismatch for {table_name}: {expected_pk} vs {actual_pk}"
+            )
 
-        sd_columns = {
-            col["name"]: col for col in inspector.get_columns("raw_taipower_supply_demand_snapshot")
-        }
-        assert sd_columns["observed_at"]["nullable"] is False
-        assert sd_columns["curr_load_wan_kw"]["nullable"] is False
-        assert sd_columns["curr_util_rate_pct"]["nullable"] is False
-        assert sd_columns["raw_payload"]["nullable"] is False
+            # 3. Verify ALL columns and NOT NULL constraints across all tables
+            db_cols = {c["name"]: c for c in inspector.get_columns(table_name)}
+            for line in body.splitlines():
+                line = line.strip().rstrip(",")
+                if not line or line.upper().startswith("PRIMARY KEY"):
+                    continue
+                parts = line.split()
+                col_name = parts[0]
+                assert col_name in db_cols, f"Column {col_name} missing from table {table_name}"
+                is_not_null = "NOT NULL" in line.upper()
+                assert (not db_cols[col_name]["nullable"]) == is_not_null, (
+                    f"Nullability mismatch for {table_name}.{col_name}"
+                )
     finally:
         engine.dispose()
 
 
-def test_sqlite_test_schema_matches_production_ddl():
-    """Verify SQLITE_TEST_SCHEMA and SQLITE_DEFAULT_SCHEMA match get_sqlite_schema() exactly."""
+def test_sqlite_test_schema_matches_production_ddl(tmp_path):
+    """Verify test fixtures utilizing SQLITE_TEST_SCHEMA create tables matching production DDL."""
     import importlib.util
+    import re
 
     conftest_path = Path(__file__).resolve().parents[1] / "conftest.py"
     spec = importlib.util.spec_from_file_location("test_conftest", conftest_path)
@@ -326,7 +325,27 @@ def test_sqlite_test_schema_matches_production_ddl():
 
     derived_schema = get_sqlite_schema()
     assert SQLITE_DEFAULT_SCHEMA.strip() == derived_schema.strip()
-    assert getattr(conftest_mod, "SQLITE_TEST_SCHEMA").strip() == derived_schema.strip()
+    test_schema = getattr(conftest_mod, "SQLITE_TEST_SCHEMA").strip()
+    assert test_schema == derived_schema.strip()
+
+    # Verify execution of SQLITE_TEST_SCHEMA yields all production tables
+    engine = create_engine(f"sqlite:///{tmp_path / 'conftest_test.db'}")
+    try:
+        from shiro_mlops.core.database import _execute_sql_statements
+
+        _execute_sql_statements(engine, test_schema.split(";"))
+        inspector = inspect(engine)
+        ddl = get_timescale_init_ddl()
+        expected_tables = set(
+            re.findall(
+                r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_]+)",
+                ddl,
+                re.IGNORECASE,
+            )
+        )
+        assert expected_tables.issubset(set(inspector.get_table_names()))
+    finally:
+        engine.dispose()
 
 
 def test_new_table_in_ddl_automatically_propagates_to_sqlite(tmp_path):
