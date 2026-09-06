@@ -81,3 +81,24 @@ def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
 
     with pytest.raises(ValueError, match="raw_payload"):
         test_repo.fetch_supply_demand_snapshot(snapshot.observed_at)
+
+
+def test_upsert_supply_demand_snapshot_rejects_corrupted_payload_without_writing(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """來源包含格式損壞的 payload 在解析時應被拒絕，且不寫入任何資料至資料庫。"""
+    from shiro_mlops.data.taipower_supply_demand import SupplyDemandParseError
+
+    invalid_payload = {
+        "records": [
+            {"curr_load": "corrupted", "curr_util_rate": "70"},
+        ]
+    }
+    with pytest.raises(SupplyDemandParseError):
+        parse_supply_demand_payload(invalid_payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+    with test_repo.engine.connect() as conn:
+        count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM raw_taipower_supply_demand_snapshot"
+        ).scalar()
+    assert count == 0

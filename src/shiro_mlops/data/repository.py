@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 from datetime import date, datetime
 from typing import Any
 
@@ -357,6 +358,23 @@ class TimeSeriesRepository:
 
     def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
         """Upsert a Taipower supply-demand snapshot keyed by observed_at."""
+        if (
+            snapshot.curr_load_wan_kw is None
+            or pd.isna(snapshot.curr_load_wan_kw)
+            or math.isnan(snapshot.curr_load_wan_kw)
+            or math.isinf(snapshot.curr_load_wan_kw)
+        ):
+            raise ValueError(f"Invalid curr_load_wan_kw in snapshot: {snapshot.curr_load_wan_kw!r}")
+        if (
+            snapshot.curr_util_rate_pct is None
+            or pd.isna(snapshot.curr_util_rate_pct)
+            or math.isnan(snapshot.curr_util_rate_pct)
+            or math.isinf(snapshot.curr_util_rate_pct)
+        ):
+            raise ValueError(
+                f"Invalid curr_util_rate_pct in snapshot: {snapshot.curr_util_rate_pct!r}"
+            )
+
         record = {
             "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
             "source_publish_time": _taiwan_instant_to_utc(snapshot.source_publish_time),
@@ -558,6 +576,11 @@ class TimeSeriesRepository:
 
         records = []
         for snapshot in snapshots:
+            if snapshot.region not in REGIONAL_SUPPLY_DEMAND_REGIONS:
+                raise ValueError(f"Invalid region in snapshot: {snapshot.region!r}")
+            if snapshot.load_wan_kw is None or pd.isna(snapshot.load_wan_kw):
+                raise ValueError(f"Invalid load_wan_kw in snapshot: {snapshot.load_wan_kw!r}")
+
             records.append(
                 {
                     "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),
@@ -671,6 +694,19 @@ class TimeSeriesRepository:
 
         records = []
         for snapshot in snapshots:
+            if (
+                not snapshot.unit_type
+                or not str(snapshot.unit_type).strip()
+                or str(snapshot.unit_type).strip().lower() in ("none", "null", "-", "n/a")
+            ):
+                raise ValueError(f"Invalid unit_type in snapshot: {snapshot.unit_type!r}")
+            if (
+                not snapshot.unit_name
+                or not str(snapshot.unit_name).strip()
+                or str(snapshot.unit_name).strip().lower() in ("none", "null", "-", "n/a")
+            ):
+                raise ValueError(f"Invalid unit_name in snapshot: {snapshot.unit_name!r}")
+
             records.append(
                 {
                     "observed_at": _taiwan_instant_to_utc(snapshot.observed_at),

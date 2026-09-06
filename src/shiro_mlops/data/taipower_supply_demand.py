@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -56,6 +57,34 @@ class TaipowerSupplyDemandSnapshot:
     real_hr_peak_time: datetime | None
     raw_payload: dict[str, Any]
 
+    def __post_init__(self) -> None:
+        if (
+            self.curr_load_wan_kw is None
+            or math.isnan(self.curr_load_wan_kw)
+            or math.isinf(self.curr_load_wan_kw)
+        ):
+            raise ValueError(f"Invalid curr_load_wan_kw: {self.curr_load_wan_kw!r}")
+        if (
+            self.curr_util_rate_pct is None
+            or math.isnan(self.curr_util_rate_pct)
+            or math.isinf(self.curr_util_rate_pct)
+        ):
+            raise ValueError(f"Invalid curr_util_rate_pct: {self.curr_util_rate_pct!r}")
+        for field_name in (
+            "fore_maxi_sply_capacity_wan_kw",
+            "fore_peak_dema_load_wan_kw",
+            "fore_peak_resv_capacity_wan_kw",
+            "fore_peak_resv_rate_pct",
+            "yday_maxi_sply_capacity_wan_kw",
+            "yday_peak_dema_load_wan_kw",
+            "yday_peak_resv_capacity_wan_kw",
+            "yday_peak_resv_rate_pct",
+            "real_hr_maxi_sply_capacity_wan_kw",
+        ):
+            val = getattr(self, field_name)
+            if val is not None and (math.isnan(val) or math.isinf(val)):
+                raise ValueError(f"Invalid {field_name}: {val!r}")
+
 
 def floor_to_ten_minutes(moment: datetime) -> datetime:
     """Floor a timestamp to the start of its 10-minute observation slot."""
@@ -100,24 +129,35 @@ def _parse_optional_float(raw: Any, field: str) -> float | None:
     if raw is None or raw == "":
         return None
     try:
-        return float(raw)
+        val = float(raw)
     except (TypeError, ValueError) as error:
         raise SupplyDemandParseError(f"Cannot parse optional field: {field}") from error
+    if math.isnan(val) or math.isinf(val):
+        raise SupplyDemandParseError(f"Cannot parse optional field: {field}")
+    return val
 
 
 def _require_float(merged: dict[str, Any], field: str) -> float:
     if field not in merged or merged[field] in (None, ""):
         raise SupplyDemandParseError(f"Missing required field: {field}")
     try:
-        return float(merged[field])
+        val = float(merged[field])
     except (TypeError, ValueError) as error:
         raise SupplyDemandParseError(f"Cannot parse required field: {field}") from error
+    if math.isnan(val) or math.isinf(val):
+        raise SupplyDemandParseError(f"Cannot parse required field: {field}")
+    return val
 
 
-def _optional_str(raw: Any) -> str | None:
+def _optional_str(raw: Any, field: str = "optional_field") -> str | None:
     if raw in (None, ""):
         return None
-    return str(raw)
+    if isinstance(raw, (dict, list, tuple, set)):
+        raise SupplyDemandParseError(
+            f"Unexpected complex structure in optional string field: {field}"
+        )
+    cleaned = str(raw).strip()
+    return cleaned or None
 
 
 def _parse_gregorian_datetime(value: str) -> datetime:
@@ -204,8 +244,12 @@ def parse_supply_demand_payload(
         fore_peak_resv_rate_pct=_parse_optional_float(
             merged.get("fore_peak_resv_rate"), "fore_peak_resv_rate"
         ),
-        fore_peak_resv_indicator=_optional_str(merged.get("fore_peak_resv_indicator")),
-        fore_peak_hour_range=_optional_str(merged.get("fore_peak_hour_range")),
+        fore_peak_resv_indicator=_optional_str(
+            merged.get("fore_peak_resv_indicator"), "fore_peak_resv_indicator"
+        ),
+        fore_peak_hour_range=_optional_str(
+            merged.get("fore_peak_hour_range"), "fore_peak_hour_range"
+        ),
         yday_date=yday_date,
         yday_maxi_sply_capacity_wan_kw=_parse_optional_float(
             merged.get("yday_maxi_sply_capacity"), "yday_maxi_sply_capacity"
@@ -219,7 +263,9 @@ def parse_supply_demand_payload(
         yday_peak_resv_rate_pct=_parse_optional_float(
             merged.get("yday_peak_resv_rate"), "yday_peak_resv_rate"
         ),
-        yday_peak_resv_indicator=_optional_str(merged.get("yday_peak_resv_indicator")),
+        yday_peak_resv_indicator=_optional_str(
+            merged.get("yday_peak_resv_indicator"), "yday_peak_resv_indicator"
+        ),
         real_hr_maxi_sply_capacity_wan_kw=_parse_optional_float(
             merged.get("real_hr_maxi_sply_capacity"), "real_hr_maxi_sply_capacity"
         ),

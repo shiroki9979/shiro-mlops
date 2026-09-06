@@ -65,3 +65,32 @@ def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
             "SELECT COUNT(*) FROM raw_taipower_regional_supply_demand_snapshot"
         ).scalar()
     assert count == 4
+
+
+def test_upsert_regional_snapshots_excludes_corrupted_rows(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """含非約定格式錯誤列的 CSV 經解析後僅有效區域寫入資料庫，損壞列不寫入。"""
+    corrupted_csv = (
+        "時間,區域,發電(萬瓩),用電(萬瓩)\n"
+        "20260905T173000,北部,corrupted,1091.7\n"  # 損壞列
+        "20260905T173000,中部,1088.7,977.5\n"  # 有效列
+        "20260905T173000,南投,997.0,1146.3\n"  # 未知區域列
+        "20260905T173000,東部,12.8,38.5\n"  # 有效列
+    )
+    observed_at = datetime(2026, 9, 5, 17, 30)
+    snapshots = parse_regional_supply_demand_csv(corrupted_csv, observed_at=observed_at)
+    assert len(snapshots) == 2
+    assert [item.region for item in snapshots] == ["中部", "東部"]
+
+    assert test_repo.upsert_regional_supply_demand_snapshots(snapshots) == 2
+
+    fetched = test_repo.fetch_regional_supply_demand_snapshots(observed_at)
+    assert len(fetched) == 2
+    assert [item.region for item in fetched] == ["中部", "東部"]
+
+    with test_repo.engine.connect() as conn:
+        total_count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM raw_taipower_regional_supply_demand_snapshot"
+        ).scalar()
+    assert total_count == 2
