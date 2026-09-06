@@ -64,3 +64,20 @@ def test_upsert_supply_demand_snapshot_is_idempotent_on_observed_at(
             "SELECT COUNT(*) FROM raw_taipower_supply_demand_snapshot"
         ).scalar()
     assert count == 1
+
+
+def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """資料庫中的無效 raw_payload 應明確回報錯誤。"""
+    snapshot = _sample_snapshot()
+    test_repo.upsert_supply_demand_snapshot(snapshot)
+
+    with test_repo.engine.begin() as conn:
+        conn.exec_driver_sql(
+            "UPDATE raw_taipower_supply_demand_snapshot "
+            "SET raw_payload = 'not-json' WHERE observed_at = '2026-09-05 09:30:00'"
+        )
+
+    with pytest.raises(ValueError, match="raw_payload"):
+        test_repo.fetch_supply_demand_snapshot(snapshot.observed_at)

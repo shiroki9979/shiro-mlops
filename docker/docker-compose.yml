@@ -69,12 +69,14 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.dagster
     container_name: shiro_dagster_webserver
-    command: dagster dev -h 0.0.0.0 -p 3000 -f src/shiro_mlops/pipelines/definitions.py
+    working_dir: /dagster_home
+    command: dagster dev -h 0.0.0.0 -p 3000 -f /workspace/src/shiro_mlops/pipelines/definitions.py
     ports:
       - "3000:3000"
     environment:
       DAGSTER_HOME: /dagster_home
       ENVIRONMENT: local
+      DATA_DIR: /workspace/data
       REDIS_HOST: redis
       MLFLOW_TRACKING_URI: http://mlflow:5000
       TIMESCALE_HOST: postgres
