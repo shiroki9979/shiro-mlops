@@ -2,6 +2,7 @@
 
 import io
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -119,6 +120,61 @@ class FeastParquetIOManager(UPathIOManager):
             return pd.read_parquet(f)
 
 
+@dataclass(frozen=True)
+class FeastPublicationTarget:
+    """Target configuration for Feast offline-store Parquet artifact publication."""
+
+    offline_store_type: Literal["file", "s3"] = "file"
+    s3_bucket: str = ""
+    s3_prefix: str = ""
+    data_dir: Path | None = None
+    s3_client: Any | None = None
+
+    @classmethod
+    def local(cls, data_dir: Path) -> "FeastPublicationTarget":
+        """Target a local filesystem directory."""
+        return cls(offline_store_type="file", data_dir=data_dir)
+
+    @classmethod
+    def s3(
+        cls,
+        bucket: str,
+        prefix: str = "features",
+        *,
+        s3_client: Any | None = None,
+    ) -> "FeastPublicationTarget":
+        """Target an AWS S3 bucket and key prefix."""
+        return cls(
+            offline_store_type="s3",
+            s3_bucket=bucket,
+            s3_prefix=prefix,
+            s3_client=s3_client,
+        )
+
+    @classmethod
+    def from_settings(cls, app_settings: Any | None = None) -> "FeastPublicationTarget":
+        """Derive publication target directly from application settings."""
+        cfg = app_settings or settings
+        s3_bucket = getattr(cfg, "S3_BUCKET_NAME", getattr(cfg, "S3_BUCKET", ""))
+        return cls(
+            offline_store_type=cfg.FEAST_OFFLINE_STORE_TYPE,
+            s3_bucket=s3_bucket,
+            s3_prefix=cfg.FEAST_S3_PREFIX,
+            data_dir=cfg.DATA_DIR,
+        )
+
+    @property
+    def base_path(self) -> UPath:
+        """Derive the appropriate local or S3 UPath."""
+        if self.offline_store_type == "s3":
+            prefix = self.s3_prefix.strip("/")
+            prefix_part = f"/{prefix}" if prefix else ""
+            return UPath(f"s3://{self.s3_bucket}{prefix_part}")
+        if self.data_dir is not None:
+            return UPath(self.data_dir.resolve())
+        return UPath(settings.DATA_DIR.resolve())
+
+
 def get_parquet_io_manager(environment: str, s3_bucket: str, data_dir: Path) -> ParquetIOManager:
     """Factory to create appropriate ParquetIOManager based on environment."""
     if environment == "aws":
@@ -129,15 +185,11 @@ def get_parquet_io_manager(environment: str, s3_bucket: str, data_dir: Path) -> 
 
 
 def get_feast_parquet_io_manager(
-    offline_store_type: Literal["file", "s3"],
-    s3_bucket: str,
-    s3_prefix: str,
-    data_dir: Path,
-    s3_client: Any | None = None,
+    target: FeastPublicationTarget | None = None,
 ) -> FeastParquetIOManager:
-    """Factory for Feast offline-store publication; feature logic stays storage-agnostic."""
-    if offline_store_type == "s3":
-        base_path = UPath(f"s3://{s3_bucket}/{s3_prefix}")
-    else:
-        base_path = UPath(data_dir.resolve())
-    return FeastParquetIOManager(base_path=base_path, s3_client=s3_client)
+    """建立 Feast offline-store 匯出專用之 ParquetIOManager，使特徵管線與儲存目標解耦。"""
+    resolved_target = target or FeastPublicationTarget.from_settings()
+    return FeastParquetIOManager(
+        base_path=resolved_target.base_path,
+        s3_client=resolved_target.s3_client,
+    )

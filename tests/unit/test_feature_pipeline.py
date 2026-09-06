@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.feature_pipeline import (
+    FallbackFeatureSources,
     FeatureQueryWindow,
     FeatureSourceData,
     build_feast_feature_frames,
@@ -42,7 +43,9 @@ def test_fetch_feature_source_data_uses_bounded_window_and_normalizes_storage_co
     repository.fetch_weather_range.return_value = persisted_weather
     window = _sample_window()
 
-    source_data = fetch_feature_source_data(repository, taipower_raw_df, cwa_obs_df, window)
+    source_data = fetch_feature_source_data(
+        repository, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), window
+    )
 
     assert "datetime" in source_data.load.columns
     assert "datetime" in source_data.weather.columns
@@ -70,7 +73,7 @@ def test_fetch_feature_source_data_logs_and_falls_back_when_repository_is_unavai
     repository.fetch_load_range.side_effect = SQLAlchemyError("TimescaleDB unavailable")
 
     source_data = fetch_feature_source_data(
-        repository, taipower_raw_df, cwa_obs_df, _sample_window()
+        repository, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), _sample_window()
     )
 
     assert source_data.load.equals(taipower_raw_df)
@@ -86,7 +89,9 @@ def test_fetch_feature_source_data_propagates_unexpected_repository_errors(
     repository.fetch_load_range.side_effect = RuntimeError("Unexpected repository failure")
 
     with pytest.raises(RuntimeError, match="Unexpected repository failure"):
-        fetch_feature_source_data(repository, taipower_raw_df, cwa_obs_df, _sample_window())
+        fetch_feature_source_data(
+            repository, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), _sample_window()
+        )
 
 
 def test_build_feature_query_window_expands_start_by_lookback(

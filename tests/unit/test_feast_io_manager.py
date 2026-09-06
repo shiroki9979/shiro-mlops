@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 from dagster import AssetKey, build_output_context
 
-from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
+from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
 from shiro_mlops.pipelines.feature_pipeline import (
     FeatureSourceData,
     build_feast_feature_frames,
@@ -56,19 +56,10 @@ def test_feast_parquet_io_manager_writes_identical_contracts_for_file_and_s3(
         transform_feature_source_data(FeatureSourceData(taipower_raw_df, cwa_obs_df)),
         cwa_obs_df,
     )
-    local_manager = get_feast_parquet_io_manager(
-        offline_store_type="file",
-        s3_bucket="unused",
-        s3_prefix="features",
-        data_dir=tmp_path,
-    )
+    local_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
     mock_s3 = MagicMock()
     s3_manager = get_feast_parquet_io_manager(
-        offline_store_type="s3",
-        s3_bucket="my-s3-feast-bucket",
-        s3_prefix="features",
-        data_dir=tmp_path,
-        s3_client=mock_s3,
+        FeastPublicationTarget.s3("my-s3-feast-bucket", "features", s3_client=mock_s3)
     )
 
     local_context = build_output_context(asset_key=AssetKey(["taipower_features"]))

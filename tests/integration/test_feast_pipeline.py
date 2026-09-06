@@ -9,7 +9,7 @@ from feast import FeatureStore
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
+from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.definitions import (
     create_load_source,
@@ -27,16 +27,12 @@ from shiro_mlops.pipelines.assets import (
     raw_weather_obs_data,
     trained_forecaster_model,
 )
+from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
 
 
 def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.DataFrame) -> None:
     """Publish Feast frames through the same I/O Manager boundary used by Dagster assets."""
-    manager = get_feast_parquet_io_manager(
-        offline_store_type="file",
-        s3_bucket=settings.S3_BUCKET_NAME,
-        s3_prefix=settings.FEAST_S3_PREFIX,
-        data_dir=data_dir,
-    )
+    manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(data_dir))
     manager.handle_output(
         build_output_context(asset_key=AssetKey(["taipower_features"])),
         taipower,
@@ -58,7 +54,7 @@ def test_engineered_features_extracts_db_and_materializes_feast_parquet(
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
-        populated_repo, taipower_raw_df, cwa_obs_df
+        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
@@ -99,7 +95,7 @@ def test_engineered_features_multi_location_isolation_and_export(
     repo.upsert_cwa_weather(kh_weather, default_location="Kaohsiung")
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
-        repo, taipower_raw_df, cwa_obs_df, location=None
+        repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), location=None
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
@@ -146,8 +142,7 @@ def test_feature_computation_isolates_requested_location_and_training_window(
     taipei_weather = source_weather.iloc[[1]].copy()
     taipei_features, _, _ = compute_engineered_feature_outputs(
         repository,
-        taipei_reference,
-        taipei_weather,
+        FallbackFeatureSources(taipei_reference, taipei_weather),
         location="Taipei",
     )
 
@@ -155,8 +150,7 @@ def test_feature_computation_isolates_requested_location_and_training_window(
     kaohsiung_weather = source_weather.iloc[[4]].copy()
     kaohsiung_features, _, _ = compute_engineered_feature_outputs(
         repository,
-        kaohsiung_reference,
-        kaohsiung_weather,
+        FallbackFeatureSources(kaohsiung_reference, kaohsiung_weather),
         location="Kaohsiung",
     )
 
@@ -173,37 +167,31 @@ def test_short_dataset_feast_parquet_schema_contract(
     tmp_path: Path,
     monkeypatch,
 ):
-    """Verify short data windows produce complete Feast Parquet schemas with float32/int64 types."""
+    """Verify Feast Parquet output maintains strict schema even on small sample datasets."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
     short_load = pd.DataFrame(
-        [
-            {
-                "datetime": f"2026-08-20 0{i}:00:00",
-                "load_mw": 25000.0 + i * 100,
-                "location": "Taipei",
-            }
-            for i in range(5)
-        ]
+        {
+            "datetime": pd.date_range("2026-08-20", periods=5, freq="h"),
+            "load_mw": [100.0, 110.0, 105.0, 120.0, 115.0],
+            "location": ["Taipei"] * 5,
+        }
     )
     short_weather = pd.DataFrame(
-        [
-            {
-                "datetime": f"2026-08-20 0{i}:00:00",
-                "temperature": 28.0 + i * 0.5,
-                "relative_humidity": 80.0 - i,
-                "location": "Taipei",
-            }
-            for i in range(5)
-        ]
+        {
+            "datetime": pd.date_range("2026-08-20", periods=5, freq="h"),
+            "temperature": [25.0, 26.0, 25.5, 27.0, 26.5],
+            "relative_humidity": [70.0, 68.0, 72.0, 65.0, 67.0],
+            "location": ["Taipei"] * 5,
+        }
     )
 
     repo.upsert_taipower_load(short_load)
     repo.upsert_cwa_weather(short_weather)
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
-        repo, short_load, short_weather
+        repo, FallbackFeatureSources(short_load, short_weather)
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
@@ -245,7 +233,7 @@ def test_feast_offline_feature_retrieval(
 ):
     """Verify Feast get_historical_features retrieves features and trains forecaster without error."""
     _, taipower, weather = compute_engineered_feature_outputs(
-        populated_repo, taipower_raw_df, cwa_obs_df
+        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
@@ -314,12 +302,7 @@ def test_full_dagster_mlops_pipeline_materialization(
     """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring offline and fast."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
-    feast_io_manager = get_feast_parquet_io_manager(
-        offline_store_type="file",
-        s3_bucket=settings.S3_BUCKET_NAME,
-        s3_prefix=settings.FEAST_S3_PREFIX,
-        data_dir=tmp_path,
-    )
+    feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
 
     with (
         patch(
@@ -406,15 +389,11 @@ def test_engineered_features_publishes_to_s3_via_io_manager(
 ):
     """Verify Feast I/O Manager publishes feature files to S3 when configured."""
     _, taipower, weather = compute_engineered_feature_outputs(
-        populated_repo, taipower_raw_df, cwa_obs_df
+        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
     )
     mock_s3 = MagicMock()
     feast_manager = get_feast_parquet_io_manager(
-        offline_store_type="s3",
-        s3_bucket="my-s3-feast-bucket",
-        s3_prefix="features",
-        data_dir=tmp_path,
-        s3_client=mock_s3,
+        FeastPublicationTarget.s3("my-s3-feast-bucket", "features", s3_client=mock_s3)
     )
     feast_manager.handle_output(
         build_output_context(asset_key=AssetKey(["taipower_features"])),
@@ -458,14 +437,10 @@ def test_feast_retrieves_s3_published_features_offline(
         s3_client.create_bucket(Bucket=bucket)
 
         _, taipower, weather = compute_engineered_feature_outputs(
-            populated_repo, taipower_raw_df, cwa_obs_df
+            populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
         )
         feast_manager = get_feast_parquet_io_manager(
-            offline_store_type="s3",
-            s3_bucket=bucket,
-            s3_prefix=prefix,
-            data_dir=tmp_path,
-            s3_client=s3_client,
+            FeastPublicationTarget.s3(bucket, prefix, s3_client=s3_client)
         )
         feast_manager.handle_output(
             build_output_context(asset_key=AssetKey(["taipower_features"])),
@@ -518,10 +493,10 @@ def test_feature_calculation_is_decoupled_from_storage_target(
 ):
     """Feature calculation returns identical Feast contracts regardless of storage settings."""
     features_a, taipower_a, weather_a = compute_engineered_feature_outputs(
-        populated_repo, taipower_raw_df, cwa_obs_df
+        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
     )
     features_b, taipower_b, weather_b = compute_engineered_feature_outputs(
-        populated_repo, taipower_raw_df, cwa_obs_df
+        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
     )
 
     pd.testing.assert_frame_equal(features_a, features_b)
