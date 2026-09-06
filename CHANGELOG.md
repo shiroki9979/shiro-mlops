@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 修正機組容量比格式與備註缺值處理，拒絕重複百分比符號並保留非空來源備註（#23）。
 - 修正 `TimeSeriesRepository` 在 `auto_init=False` 時仍建立快照資料表的副作用，改由 aggregate repository 統一初始化 schema（#26）。
 - 在 API 與 Dagster 映像安裝 `libgomp1`，修復 LightGBM 因缺少 OpenMP runtime 無法啟動的問題（`docker/Dockerfile.api`、`docker/Dockerfile.dagster`）。
 - 修正台電即時快照在 PostgreSQL 下 raw_payload 未序列化導致寫入失敗，強化 `ParquetIOManager` 支援非 DataFrame 物件序列化，並修正 Dagster 容器工作目錄以隔絕本機 `.env` 變數污染（`src/shiro_mlops/data/repository.py`、`src/shiro_mlops/core/io_managers.py`、`docker/docker-compose.yml`）。

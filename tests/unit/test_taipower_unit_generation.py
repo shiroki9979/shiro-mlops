@@ -135,6 +135,36 @@ def test_parse_unit_generation_payload_skips_rows_missing_identity() -> None:
     assert snapshots[0].remark == "新機組試俥"
 
 
+def test_parse_unit_generation_payload_preserves_non_empty_remarks() -> None:
+    """Only blank remarks are missing; non-empty source text remains observable."""
+    payload = {
+        "DateTime": "2026-09-05T17:30:00",
+        "aaData": [
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "備註破折號機組",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "50.0",
+                "淨發電量/裝置容量比(%)": "50%",
+                "備註": "-",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "備註空白機組",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "50.0",
+                "淨發電量/裝置容量比(%)": "50%",
+                "備註": "   ",
+            },
+        ],
+    }
+
+    snapshots = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+    assert snapshots[0].remark == "-"
+    assert snapshots[1].remark is None
+
+
 def test_parse_unit_generation_payload_skips_non_agreed_format_errors() -> None:
     """非約定缺值的來源格式錯誤（如字串損壞、NaN、none/null字串）不應靜默轉為 None，該列應略過並記錄。"""
     payload = {
@@ -160,6 +190,13 @@ def test_parse_unit_generation_payload_skips_non_agreed_format_errors() -> None:
                 "裝置容量(MW)": "100.0",
                 "淨發電量(MW)": "50.0",
                 "淨發電量/裝置容量比(%)": "invalid%",
+            },
+            {
+                "機組類型": "燃氣",
+                "機組名稱": "重複百分比符號機組",
+                "裝置容量(MW)": "100.0",
+                "淨發電量(MW)": "50.0",
+                "淨發電量/裝置容量比(%)": "50%%",
             },
             {
                 "機組類型": "燃氣",
