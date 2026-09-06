@@ -3,7 +3,11 @@
 from dagster import Definitions, load_assets_from_modules
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.io_managers import get_feast_parquet_io_manager, get_parquet_io_manager
+from shiro_mlops.core.io_managers import (
+    FeastPublicationTarget,
+    get_feast_parquet_io_manager,
+    get_parquet_io_manager,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets
 from shiro_mlops.pipelines.schedules import (
@@ -22,12 +26,7 @@ io_manager = get_parquet_io_manager(
     s3_bucket=settings.S3_BUCKET_NAME,
     data_dir=settings.DATA_DIR,
 )
-feast_io_manager = get_feast_parquet_io_manager(
-    offline_store_type=settings.FEAST_OFFLINE_STORE_TYPE,
-    s3_bucket=settings.S3_BUCKET_NAME,
-    s3_prefix=settings.FEAST_S3_PREFIX,
-    data_dir=settings.DATA_DIR,
-)
+feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.from_settings(settings))
 
 defs = Definitions(
     assets=all_assets,

@@ -64,6 +64,14 @@ class FeatureSourceData:
     weather: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class FallbackFeatureSources:
+    """Raw ingestion fallback frames used when persisted repository sources are unavailable."""
+
+    load: pd.DataFrame
+    weather: pd.DataFrame
+
+
 def build_feature_query_window(
     reference_load: pd.DataFrame,
     *,
@@ -123,11 +131,10 @@ def _filter_frame_to_window(df: pd.DataFrame, window: FeatureQueryWindow) -> pd.
 
 def fetch_feature_source_data(
     repository: TimeSeriesRepository,
-    fallback_load: pd.DataFrame,
-    fallback_weather: pd.DataFrame,
+    fallbacks: FallbackFeatureSources,
     window: FeatureQueryWindow,
 ) -> FeatureSourceData:
-    """Fetch persisted sources for an explicit window, falling back to ingestion outputs."""
+    """根據時間窗口提取特徵來源資料；若資料庫不可用則退回使用落地備援資料。"""
     try:
         persisted_load = repository.fetch_load_range(
             start_time=window.fetch_start_time,
@@ -148,8 +155,8 @@ def fetch_feature_source_data(
         persisted_load = pd.DataFrame()
         persisted_weather = pd.DataFrame()
 
-    load = persisted_load if not persisted_load.empty else fallback_load
-    weather = persisted_weather if not persisted_weather.empty else fallback_weather
+    load = persisted_load if not persisted_load.empty else fallbacks.load
+    weather = persisted_weather if not persisted_weather.empty else fallbacks.weather
     return FeatureSourceData(_to_transformer_input(load), _to_transformer_input(weather))
 
 
@@ -188,7 +195,7 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     for lag in TAIPOWER_EXPORT_LAG_HOURS:
         column = f"load_mw_lag_{lag}"
         if column not in result.columns:
-            result[column] = result.groupby("location")[LOAD_MW_COL].transform(
+            result[column] = result.groupby(LOCATION_COL)[LOAD_MW_COL].transform(
                 lambda values, lag_hours=lag: _fill_load_history_without_leakage(
                     values.shift(lag_hours)
                 )
@@ -197,7 +204,7 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     for window in TAIPOWER_EXPORT_ROLLING_WINDOWS:
         column = f"load_mw_rolling_mean_{window}"
         if column not in result.columns:
-            result[column] = result.groupby("location")[LOAD_MW_COL].transform(
+            result[column] = result.groupby(LOCATION_COL)[LOAD_MW_COL].transform(
                 lambda values, rolling_window=window: _fill_load_history_without_leakage(
                     values.shift(1).rolling(window=rolling_window, min_periods=1).mean()
                 )

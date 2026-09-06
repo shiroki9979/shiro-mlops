@@ -31,6 +31,7 @@ from shiro_mlops.data.taipower_unit_generation import (
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.feature_pipeline import (
+    FallbackFeatureSources,
     build_feast_feature_frames,
     build_feature_query_window,
     fetch_feature_source_data,
@@ -68,16 +69,14 @@ def _persist_ingested_data(
 
 def compute_engineered_feature_outputs(
     repository: TimeSeriesRepository,
-    raw_taipower_load_data: pd.DataFrame,
-    raw_weather_obs_data: pd.DataFrame,
+    fallbacks: FallbackFeatureSources,
     location: str | None = DEFAULT_LOCATION,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Compute training features and Feast frames without selecting a storage target."""
-    query_window = build_feature_query_window(raw_taipower_load_data, location=location)
+    """計算模型訓練特徵矩陣與 Feast 資料合約，儲存目標交由 I/O Manager 決定。"""
+    query_window = build_feature_query_window(fallbacks.load, location=location)
     source_data = fetch_feature_source_data(
         repository,
-        raw_taipower_load_data,
-        raw_weather_obs_data,
+        fallbacks,
         query_window,
     )
     features_df = transform_feature_source_data(source_data, window=query_window)
@@ -211,10 +210,13 @@ def engineered_feature_set(
     raw_weather_obs_data: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build training features and Feast frames; I/O Manager selects local or S3 publication."""
+    fallbacks = FallbackFeatureSources(
+        load=raw_taipower_load_data,
+        weather=raw_weather_obs_data,
+    )
     features_df, taipower_features, weather_features = compute_engineered_feature_outputs(
         _get_time_series_repo(context),
-        raw_taipower_load_data,
-        raw_weather_obs_data,
+        fallbacks,
     )
     context.log.info(
         "Constructed engineered features table with shape %s; Feast frames ready for I/O Manager",
