@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 封裝 Feast 發布目標設定（`FeastPublicationTarget`）與特徵備援來源（`FallbackFeatureSources`），精簡工廠函式與特徵提取介面參數（#17）。
 - 定義台電電力供需快照的資料契約、保存策略與 Dagster 擷取規則（`CONTEXT.md`、`docs/SPEC.md`）。
 - 對齊套件版本字串為 `0.2.0`；前端改以 `pnpm` 與 Vite `5173` 埠啟動，避免與 Dagster `3000` 衝突。
+- 統一正式 TimescaleDB DDL（`docker/init-db/01_init_hypertables.sql`）與測試 SQLite fixture 之 schema 來源，透過 DDL 方言動態轉換杜絕 schema 漂移與重複維護（#25）。
 
 ### Fixed
 

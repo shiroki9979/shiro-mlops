@@ -1,6 +1,7 @@
 """TimescaleDB database connection helpers and schema initialization."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -56,73 +57,59 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
     return create_engine(db_uri, **engine_kwargs)
 
 
-SQLITE_DEFAULT_SCHEMA = """
-CREATE TABLE IF NOT EXISTS raw_taipower_load (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    load_mw DOUBLE PRECISION NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
+def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
+    """Convert TimescaleDB/PostgreSQL DDL script into executable SQLite DDL statements.
 
-CREATE TABLE IF NOT EXISTS raw_cwa_weather (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    temperature DOUBLE PRECISION,
-    relative_humidity DOUBLE PRECISION,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
+    Strips comments, TimescaleDB-specific extension and hypertable commands,
+    and maps PostgreSQL types to SQLite-compatible types (TIMESTAMPTZ -> TIMESTAMP,
+    NOW() -> CURRENT_TIMESTAMP, JSONB -> TEXT).
 
-CREATE TABLE IF NOT EXISTS raw_taipower_supply_demand_snapshot (
-    observed_at TIMESTAMP NOT NULL,
-    source_publish_time TIMESTAMP,
-    curr_load_wan_kw DOUBLE PRECISION NOT NULL,
-    curr_util_rate_pct DOUBLE PRECISION NOT NULL,
-    fore_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
-    fore_peak_dema_load_wan_kw DOUBLE PRECISION,
-    fore_peak_resv_capacity_wan_kw DOUBLE PRECISION,
-    fore_peak_resv_rate_pct DOUBLE PRECISION,
-    fore_peak_resv_indicator VARCHAR(8),
-    fore_peak_hour_range VARCHAR(32),
-    yday_date DATE,
-    yday_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
-    yday_peak_dema_load_wan_kw DOUBLE PRECISION,
-    yday_peak_resv_capacity_wan_kw DOUBLE PRECISION,
-    yday_peak_resv_rate_pct DOUBLE PRECISION,
-    yday_peak_resv_indicator VARCHAR(8),
-    real_hr_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
-    real_hr_peak_time TIMESTAMP,
-    raw_payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (observed_at)
-);
+    Parameters
+    ----------
+    ddl : str
+        The PostgreSQL / TimescaleDB DDL script.
 
-CREATE TABLE IF NOT EXISTS raw_taipower_regional_supply_demand_snapshot (
-    observed_at TIMESTAMP NOT NULL,
-    region VARCHAR(16) NOT NULL,
-    source_time TIMESTAMP NOT NULL,
-    generation_wan_kw DOUBLE PRECISION,
-    load_wan_kw DOUBLE PRECISION NOT NULL,
-    raw_payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (observed_at, region)
-);
+    Returns
+    -------
+    list[str]
+        List of SQLite CREATE TABLE statement strings.
+    """
+    statements: list[str] = []
+    for chunk in ddl.split(";"):
+        cleaned = "\n".join(
+            line for line in chunk.splitlines() if not line.strip().startswith("--")
+        ).strip()
+        if not cleaned:
+            continue
+        if re.match(r"^\s*(CREATE\s+EXTENSION|SELECT\s+create_hypertable)", cleaned, re.IGNORECASE):
+            continue
+        # Apply PostgreSQL to SQLite dialect conversions
+        cleaned = re.sub(r"\bTIMESTAMPTZ\b", "TIMESTAMP", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bNOW\(\)", "CURRENT_TIMESTAMP", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bJSONB\b", "TEXT", cleaned, flags=re.IGNORECASE)
+        statements.append(cleaned)
+    return statements
 
-CREATE TABLE IF NOT EXISTS raw_taipower_unit_generation_snapshot (
-    observed_at TIMESTAMP NOT NULL,
-    unit_type VARCHAR(128) NOT NULL,
-    unit_name VARCHAR(128) NOT NULL,
-    source_time TIMESTAMP NOT NULL,
-    capacity_mw DOUBLE PRECISION,
-    net_generation_mw DOUBLE PRECISION,
-    capacity_ratio_pct DOUBLE PRECISION,
-    remark VARCHAR(256),
-    raw_payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (observed_at, unit_type, unit_name)
-);
-"""
+
+def get_sqlite_schema(sql_path: Path | None = None) -> str:
+    """Return unified SQLite schema generated from TimescaleDB initialization DDL.
+
+    Parameters
+    ----------
+    sql_path : Path | None
+        Optional custom path to the SQL initialization file.
+
+    Returns
+    -------
+    str
+        SQLite DDL statements separated by semicolons and newlines.
+    """
+    ddl = get_timescale_init_ddl(sql_path=sql_path)
+    statements = convert_timescale_ddl_to_sqlite(ddl)
+    return "\n\n".join(stmt + ";" for stmt in statements)
+
+
+SQLITE_DEFAULT_SCHEMA = get_sqlite_schema()
 
 
 def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
@@ -136,8 +123,9 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
     dialect = getattr(dialect_obj, "name", "postgresql").lower()
 
     if dialect == "sqlite":
+        statements = convert_timescale_ddl_to_sqlite(get_timescale_init_ddl())
         with db_engine.connect() as conn:
-            for statement in SQLITE_DEFAULT_SCHEMA.split(";"):
+            for statement in statements:
                 cleaned = statement.strip()
                 if cleaned:
                     conn.execute(text(cleaned))
