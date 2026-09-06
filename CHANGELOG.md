@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-06
+
 ### Added
 
 - 新增台電電力供需快照擷取與 TimescaleDB 入庫，支援依觀測 slot 冪等 upsert 與手動 materialize。
@@ -63,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 實作 FastAPI 隨需推論服務（`/predict`、`/health`、`/features/latest`）。
 - 建立 AWS Terraform 基礎設施配置（S3、ECR、App Runner、IAM OIDC）。
 
-[Unreleased]: https://github.com/ShirokiXue/shiro-mlops/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/ShirokiXue/shiro-mlops/releases/tag/v0.2.0
-[0.1.0]: https://github.com/ShirokiXue/shiro-mlops/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shiroki9979/shiro-mlops/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shiroki9979/shiro-mlops/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.2.0
+[0.1.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.1.0
