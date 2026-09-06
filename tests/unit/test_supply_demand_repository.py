@@ -6,11 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from shiro_mlops.data.repository import (
-    TimeSeriesRepository,
-    _deserialize_raw_payload,
-    _serialize_raw_payload,
-)
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_supply_demand import parse_supply_demand_payload
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
@@ -70,17 +66,18 @@ def test_upsert_supply_demand_snapshot_is_idempotent_on_observed_at(
     assert count == 1
 
 
-def test_raw_payload_serialization_and_deserialization_helpers() -> None:
-    """Helper 函式應正確轉換 dict 為 JSON 字串，並在反序列化時正確還原。"""
-    sample_dict = {"records": [{"load": 123.4}], "success": "true"}
-    serialized = _serialize_raw_payload(sample_dict)
-    assert isinstance(serialized, str)
-    assert json.loads(serialized) == sample_dict
+def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """資料庫中的無效 raw_payload 應明確回報錯誤。"""
+    snapshot = _sample_snapshot()
+    test_repo.upsert_supply_demand_snapshot(snapshot)
 
-    # 傳入已為字串時不應被重複跳脫
-    assert _serialize_raw_payload(serialized) == serialized
+    with test_repo.engine.begin() as conn:
+        conn.exec_driver_sql(
+            "UPDATE raw_taipower_supply_demand_snapshot "
+            "SET raw_payload = 'not-json' WHERE observed_at = '2026-09-05 09:30:00'"
+        )
 
-    # 反序列化
-    deserialized = _deserialize_raw_payload(serialized)
-    assert deserialized == sample_dict
-    assert _deserialize_raw_payload(sample_dict) == sample_dict
+    with pytest.raises(ValueError, match="raw_payload"):
+        test_repo.fetch_supply_demand_snapshot(snapshot.observed_at)
