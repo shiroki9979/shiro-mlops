@@ -232,6 +232,19 @@ def test_repository_auto_init_on_existing_volume(tmp_path):
         engine.dispose()
 
 
+def test_repository_auto_init_false_does_not_initialize_schema(tmp_path):
+    """Verify externally managed schemas are untouched when auto initialization is disabled."""
+    from shiro_mlops.data.repository import TimeSeriesRepository
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'externally_managed.db'}")
+    try:
+        TimeSeriesRepository(engine=engine, auto_init=False)
+
+        assert inspect(engine).get_table_names() == []
+    finally:
+        engine.dispose()
+
+
 def test_convert_timescale_ddl_to_sqlite_statements():
     """Verify TimescaleDB DDL is cleanly converted to SQLite compatible DDL."""
     ddl = """
