@@ -120,11 +120,15 @@ class TimeSeriesRepository:
                     f"Could not automatically ensure hypertables on repository init: {e}"
                 )
 
-        self.supply_demand_repo = TaipowerSupplyDemandRepository(engine=self.engine)
-        self.regional_supply_demand_repo = TaipowerRegionalSupplyDemandRepository(
-            engine=self.engine
+        self.supply_demand_repo = TaipowerSupplyDemandRepository(
+            engine=self.engine, auto_init=False
         )
-        self.unit_generation_repo = TaipowerUnitGenerationRepository(engine=self.engine)
+        self.regional_supply_demand_repo = TaipowerRegionalSupplyDemandRepository(
+            engine=self.engine, auto_init=False
+        )
+        self.unit_generation_repo = TaipowerUnitGenerationRepository(
+            engine=self.engine, auto_init=False
+        )
 
     def upsert_taipower_load(
         self,
