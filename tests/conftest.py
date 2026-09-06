@@ -6,82 +6,17 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-SQLITE_TEST_SCHEMA = """
-CREATE TABLE IF NOT EXISTS raw_taipower_load (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    load_mw DOUBLE PRECISION NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
-
-CREATE TABLE IF NOT EXISTS raw_cwa_weather (
-    time TIMESTAMP NOT NULL,
-    location VARCHAR(64) NOT NULL,
-    temperature DOUBLE PRECISION,
-    relative_humidity DOUBLE PRECISION,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (time, location)
-);
-
-CREATE TABLE IF NOT EXISTS raw_taipower_supply_demand_snapshot (
-    observed_at TIMESTAMP NOT NULL,
-    source_publish_time TIMESTAMP,
-    curr_load_wan_kw DOUBLE PRECISION NOT NULL,
-    curr_util_rate_pct DOUBLE PRECISION NOT NULL,
-    fore_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
-    fore_peak_dema_load_wan_kw DOUBLE PRECISION,
-    fore_peak_resv_capacity_wan_kw DOUBLE PRECISION,
-    fore_peak_resv_rate_pct DOUBLE PRECISION,
-    fore_peak_resv_indicator VARCHAR(8),
-    fore_peak_hour_range VARCHAR(32),
-    yday_date DATE,
-    yday_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
-    yday_peak_dema_load_wan_kw DOUBLE PRECISION,
-    yday_peak_resv_capacity_wan_kw DOUBLE PRECISION,
-    yday_peak_resv_rate_pct DOUBLE PRECISION,
-    yday_peak_resv_indicator VARCHAR(8),
-    real_hr_maxi_sply_capacity_wan_kw DOUBLE PRECISION,
-    real_hr_peak_time TIMESTAMP,
-    raw_payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (observed_at)
-);
-
-CREATE TABLE IF NOT EXISTS raw_taipower_regional_supply_demand_snapshot (
-    observed_at TIMESTAMP NOT NULL,
-    region VARCHAR(16) NOT NULL,
-    source_time TIMESTAMP NOT NULL,
-    generation_wan_kw DOUBLE PRECISION,
-    load_wan_kw DOUBLE PRECISION NOT NULL,
-    raw_payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (observed_at, region)
-);
-
-CREATE TABLE IF NOT EXISTS raw_taipower_unit_generation_snapshot (
-    observed_at TIMESTAMP NOT NULL,
-    unit_type VARCHAR(128) NOT NULL,
-    unit_name VARCHAR(128) NOT NULL,
-    source_time TIMESTAMP NOT NULL,
-    capacity_mw DOUBLE PRECISION,
-    net_generation_mw DOUBLE PRECISION,
-    capacity_ratio_pct DOUBLE PRECISION,
-    remark VARCHAR(256),
-    raw_payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (observed_at, unit_type, unit_name)
-);
-"""
+SQLITE_TEST_SCHEMA = SQLITE_DEFAULT_SCHEMA
 
 
 @pytest.fixture(autouse=True)
@@ -114,15 +49,10 @@ def dagster_instance(tmp_path: Path) -> Generator:
 
 @pytest.fixture
 def sqlite_engine(tmp_path_factory: pytest.TempPathFactory) -> Generator[Engine, None, None]:
-    """Create an isolated SQLite engine with canonical test schema."""
+    """Create an isolated SQLite engine with canonical test schema derived from production DDL."""
     db_file = tmp_path_factory.mktemp("db") / "test_repo.db"
     engine = create_engine(f"sqlite:///{db_file}")
-    with engine.connect() as conn:
-        for stmt in SQLITE_TEST_SCHEMA.split(";"):
-            cleaned = stmt.strip()
-            if cleaned:
-                conn.execute(text(cleaned))
-        conn.commit()
+    ensure_timescale_hypertables(engine)
     yield engine
     engine.dispose()
 
