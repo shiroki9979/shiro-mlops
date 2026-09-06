@@ -57,12 +57,21 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
     return create_engine(db_uri, **engine_kwargs)
 
 
+def _execute_sql_statements(engine: Engine, statements: list[str]) -> None:
+    """Execute a list of SQL statements with leading/trailing whitespace stripped."""
+    with engine.connect() as conn:
+        for statement in statements:
+            cleaned = statement.strip()
+            if cleaned:
+                conn.execute(text(cleaned))
+        conn.commit()
+
+
 def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
     """Convert TimescaleDB/PostgreSQL DDL script into executable SQLite DDL statements.
 
-    Strips comments, TimescaleDB-specific extension and hypertable commands,
-    and maps PostgreSQL types to SQLite-compatible types (TIMESTAMPTZ -> TIMESTAMP,
-    NOW() -> CURRENT_TIMESTAMP, JSONB -> TEXT).
+    Strips comments and non-table TimescaleDB directives, and maps PostgreSQL types to
+    SQLite-compatible types (TIMESTAMPTZ -> TIMESTAMP, NOW() -> CURRENT_TIMESTAMP, JSONB -> TEXT).
 
     Parameters
     ----------
@@ -81,7 +90,7 @@ def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
         ).strip()
         if not cleaned:
             continue
-        if re.match(r"^\s*(CREATE\s+EXTENSION|SELECT\s+create_hypertable)", cleaned, re.IGNORECASE):
+        if not re.match(r"^\s*CREATE\s+TABLE", cleaned, re.IGNORECASE):
             continue
         # Apply PostgreSQL to SQLite dialect conversions
         cleaned = re.sub(r"\bTIMESTAMPTZ\b", "TIMESTAMP", cleaned, flags=re.IGNORECASE)
@@ -109,7 +118,10 @@ def get_sqlite_schema(sql_path: Path | None = None) -> str:
     return "\n\n".join(stmt + ";" for stmt in statements)
 
 
-SQLITE_DEFAULT_SCHEMA = get_sqlite_schema()
+try:
+    SQLITE_DEFAULT_SCHEMA = get_sqlite_schema()
+except FileNotFoundError:
+    SQLITE_DEFAULT_SCHEMA = ""
 
 
 def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
@@ -124,22 +136,12 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
 
     if dialect == "sqlite":
         statements = convert_timescale_ddl_to_sqlite(get_timescale_init_ddl())
-        with db_engine.connect() as conn:
-            for statement in statements:
-                cleaned = statement.strip()
-                if cleaned:
-                    conn.execute(text(cleaned))
-            conn.commit()
+        _execute_sql_statements(db_engine, statements)
         return
 
     # PostgreSQL / TimescaleDB
     ddl = get_timescale_init_ddl()
-    with db_engine.connect() as conn:
-        for statement in ddl.split(";"):
-            cleaned = statement.strip()
-            if cleaned:
-                conn.execute(text(cleaned))
-        conn.commit()
+    _execute_sql_statements(db_engine, ddl.split(";"))
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
 
@@ -159,10 +161,5 @@ def init_db(engine: Engine | None = None, sql_path: Path | None = None) -> None:
         return
 
     ddl = get_timescale_init_ddl(sql_path=sql_path)
-    with db_engine.connect() as conn:
-        for statement in ddl.split(";"):
-            cleaned_stmt = statement.strip()
-            if cleaned_stmt:
-                conn.execute(text(cleaned_stmt))
-        conn.commit()
+    _execute_sql_statements(db_engine, ddl.split(";"))
     logger.info("Database initialization completed successfully.")
