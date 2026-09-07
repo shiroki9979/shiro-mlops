@@ -106,23 +106,6 @@ def raw_taipower_load_data(context: AssetExecutionContext) -> pd.DataFrame:
     return df
 
 
-def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
-    """Legacy direct-fetch helper retained for callers during migration.
-
-    It is intentionally not a Dagster asset; scheduled ingestion uses the
-    canonical ``raw_cwa_station_observation`` asset instead.
-    """
-    client = CWAClient(api_key=settings.CWA_API_KEY)
-    df = client.fetch_observations()
-    context.log.info(f"Fetched {len(df)} CWA weather observation records.")
-
-    _persist_ingested_data(
-        context, df, _get_time_series_repo(context).upsert_cwa_weather, "CWA weather"
-    )
-
-    return df
-
-
 @asset(
     name="raw_cwa_station_observation",
     group_name="ingestion",

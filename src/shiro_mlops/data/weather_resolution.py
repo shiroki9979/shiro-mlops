@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Literal
 
 import pandas as pd
 
@@ -22,6 +23,8 @@ FORECAST_FIELDS = {
     "wind_direction": "wind_direction",
 }
 DEFAULT_RESOLUTION_FIELDS = (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
+NON_INTERPOLATED_FORECAST_FIELDS = {"wind_direction"}
+WeatherResolutionMode = Literal["normal", "degraded", "unavailable"]
 
 
 @dataclass(frozen=True)
@@ -30,7 +33,7 @@ class WeatherResolution:
 
     dataframe: pd.DataFrame
     sources: tuple[dict[str, dict[str, str]], ...]
-    mode: str
+    mode: WeatherResolutionMode
     reason: str | None = None
 
 
@@ -72,6 +75,8 @@ def _point_value(
     exact = points[points["valid_from"] == moment]
     if not exact.empty and pd.notna(exact.iloc[-1].get(column)):
         return exact.iloc[-1][column], exact.iloc[-1]
+    if column in NON_INTERPOLATED_FORECAST_FIELDS:
+        return None, None
     before = points[(points["valid_from"] < moment) & points[column].notna()].tail(1)
     after = points[(points["valid_from"] > moment) & points[column].notna()].head(1)
     if before.empty or after.empty:
@@ -154,20 +159,25 @@ def resolve_weather(
         repository.fetch_cwa_forecast_rows(
             geocode=geocode,
             issued_before=cutoff,
+            source_updated_before=cutoff,
             valid_start=start,
             valid_end=end,
         )
     )
     observations = repository.fetch_cwa_station_observations(
         start_time=start - timedelta(days=366),
-        end_time=end,
+        end_time=cutoff,
         station_id=station_id,
     )
     issued = forecasts["issued_at"].max() if not forecasts.empty else None
     stale = issued is None or cutoff - issued > timedelta(hours=7)
     datasets = {
-        "F-D0047-089": forecasts[forecasts["dataset_id"] == "F-D0047-089"],
-        "F-D0047-091": forecasts[forecasts["dataset_id"] == "F-D0047-091"],
+        dataset_id: (
+            forecasts[forecasts["dataset_id"] == dataset_id]
+            if "dataset_id" in forecasts.columns
+            else pd.DataFrame()
+        )
+        for dataset_id in ("F-D0047-089", "F-D0047-091")
     }
     rows: list[dict[str, object]] = []
     sources: list[dict[str, dict[str, str]]] = []

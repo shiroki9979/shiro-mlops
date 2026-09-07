@@ -24,7 +24,6 @@ from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
     CWAObservationBatch,
-    CWAStationObservation,
 )
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
@@ -106,6 +105,43 @@ def _build_time_location_filter(
         params["location"] = str(location)
 
     return " AND ".join(clauses), params
+
+
+def _forecast_version_key(row: pd.Series) -> tuple[str, pd.Timestamp, pd.Timestamp]:
+    """Build a comparable forecast-vintage identity from a query row."""
+
+    def normalize(value: object) -> pd.Timestamp:
+        timestamp = pd.Timestamp(value)
+        return timestamp.tz_convert("UTC").tz_localize(None) if timestamp.tzinfo else timestamp
+
+    return (
+        str(row["dataset_id"]),
+        normalize(row["issued_at"]),
+        normalize(row["source_updated_at"]),
+    )
+
+
+def _select_forecast_versions(
+    headers: pd.DataFrame,
+    available_versions: pd.DataFrame,
+) -> set[tuple[str, pd.Timestamp, pd.Timestamp]]:
+    """Select a latest release or its prior complete fallback per forecast dataset."""
+    if headers.empty:
+        return set()
+    available = {_forecast_version_key(row) for _, row in available_versions.iterrows()}
+    selected: set[tuple[str, pd.Timestamp, pd.Timestamp]] = set()
+    for _, releases in headers.groupby("dataset_id"):
+        ordered = releases.sort_values(["issued_at", "source_updated_at"], ascending=False)
+        latest = _forecast_version_key(ordered.iloc[0])
+        if latest in available:
+            selected.add(latest)
+            continue
+        for _, release in ordered.iterrows():
+            version = _forecast_version_key(release)
+            if release["status"] == "complete" and version in available:
+                selected.add(version)
+                break
+    return selected
 
 
 class TimeSeriesRepository:
@@ -214,90 +250,11 @@ class TimeSeriesRepository:
         df: pd.DataFrame,
         default_location: str = DEFAULT_LOCATION,
     ) -> int:
-        """Compatibility upsert; canonical station rows are the serving source.
-
-        Handles composite primary key conflict on (time, location) by updating
-        temperature and relative_humidity with non-null values.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            DataFrame containing 'datetime' (or 'time'), 'temperature', and 'relative_humidity'.
-        default_location : str
-            Fallback location identifier when 'location' column is missing or null.
-
-        Returns
-        -------
-        int
-            Number of records upserted.
-        """
-        if df.empty:
-            return 0
-
-        work_df = _prepare_timeseries_df(df, default_location=default_location)
-
-        station_by_alias = {location.alias: location for location in DEFAULT_CWA_LOCATIONS.values()}
-        observations = tuple(
-            CWAStationObservation(
-                observed_at=pd.Timestamp(row["time"]),
-                station_id=station_by_alias.get(
-                    str(row[LOCATION_COL]), DEFAULT_CWA_LOCATIONS["Taipei"]
-                ).station_id,
-                station_name=str(row[LOCATION_COL]),
-                town_code=None,
-                temperature_c=(
-                    float(row[TEMPERATURE_COL])
-                    if TEMPERATURE_COL in row and pd.notna(row[TEMPERATURE_COL])
-                    else None
-                ),
-                relative_humidity_pct=(
-                    float(row[RELATIVE_HUMIDITY_COL])
-                    if RELATIVE_HUMIDITY_COL in row and pd.notna(row[RELATIVE_HUMIDITY_COL])
-                    else None
-                ),
-                air_pressure_hpa=None,
-                precipitation_mm=None,
-                wind_speed_m_s=None,
-                wind_direction_deg=None,
-            )
-            for _, row in work_df.iterrows()
+        """Reject deprecated weather writes that do not carry source StationId provenance."""
+        del df, default_location
+        raise RuntimeError(
+            "Legacy CWA weather writes are not supported; use upsert_cwa_observation_batch."
         )
-        fetched_at = pd.Timestamp(work_df["time"].max()).to_pydatetime()
-        batch = CWAObservationBatch(
-            fetched_at=fetched_at,
-            status="complete",
-            missing_station_ids=(),
-            raw_payload={"compatibility": "upsert_cwa_weather"},
-            observations=observations,
-        )
-        count = self.upsert_cwa_observation_batch(batch)
-        legacy_records = [
-            {
-                "time": (
-                    row["time"].to_pydatetime()
-                    if hasattr(row["time"], "to_pydatetime")
-                    else row["time"]
-                ),
-                "location": row[LOCATION_COL],
-                "temperature": row.get(TEMPERATURE_COL),
-                "relative_humidity": row.get(RELATIVE_HUMIDITY_COL),
-            }
-            for _, row in work_df.iterrows()
-        ]
-        with self.engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO raw_cwa_weather (time, location, temperature, relative_humidity)
-                    VALUES (:time, :location, :temperature, :relative_humidity)
-                    ON CONFLICT (time, location) DO UPDATE SET
-                        temperature = COALESCE(EXCLUDED.temperature, raw_cwa_weather.temperature),
-                        relative_humidity = COALESCE(EXCLUDED.relative_humidity, raw_cwa_weather.relative_humidity)
-                    """
-                ),
-                legacy_records,
-            )
-        return count
 
     def upsert_cwa_observation_batch(self, batch: CWAObservationBatch) -> int:
         """Persist one canonical CWA observation batch and its typed children atomically."""
@@ -488,6 +445,7 @@ class TimeSeriesRepository:
         geocode: str | None = None,
         dataset_id: str | None = None,
         issued_before: datetime | str | None = None,
+        source_updated_before: datetime | str | None = None,
         valid_start: datetime | str | None = None,
         valid_end: datetime | str | None = None,
     ) -> pd.DataFrame:
@@ -504,6 +462,11 @@ class TimeSeriesRepository:
             clauses.append("issued_at <= :issued_before")
             params["issued_before"] = _taiwan_instant_to_utc(
                 pd.Timestamp(issued_before).to_pydatetime()
+            )
+        if source_updated_before is not None:
+            clauses.append("source_updated_at <= :source_updated_before")
+            params["source_updated_before"] = _taiwan_instant_to_utc(
+                pd.Timestamp(source_updated_before).to_pydatetime()
             )
         if valid_start is not None:
             clauses.append("valid_to >= :valid_start")
@@ -524,6 +487,44 @@ class TimeSeriesRepository:
         """
         with self.engine.connect() as conn:
             frame = pd.read_sql_query(text(query), conn, params=params)
+            if geocode is not None and issued_before is not None:
+                header_clauses = ["issued_at <= :issued_before"]
+                header_params: dict[str, Any] = {"issued_before": params["issued_before"]}
+                if dataset_id is not None:
+                    header_clauses.append("dataset_id = :dataset_id")
+                    header_params["dataset_id"] = dataset_id
+                if source_updated_before is not None:
+                    header_clauses.append("source_updated_at <= :source_updated_before")
+                    header_params["source_updated_before"] = params["source_updated_before"]
+                headers = pd.read_sql_query(
+                    text(
+                        f"""
+                        SELECT dataset_id, issued_at, source_updated_at, status
+                        FROM raw_cwa_forecast_release
+                        WHERE {" AND ".join(header_clauses)}
+                        """
+                    ),
+                    conn,
+                    params=header_params,
+                )
+                available_versions = pd.read_sql_query(
+                    text(
+                        """
+                        SELECT DISTINCT dataset_id, issued_at, source_updated_at
+                        FROM raw_cwa_township_forecast
+                        WHERE geocode = :geocode
+                        """
+                    ),
+                    conn,
+                    params={"geocode": geocode},
+                )
+                selected_versions = _select_forecast_versions(headers, available_versions)
+                frame = frame.loc[
+                    frame.apply(
+                        lambda row: _forecast_version_key(row) in selected_versions,
+                        axis=1,
+                    )
+                ]
         if frame.empty:
             return pd.DataFrame(
                 columns=[
@@ -546,34 +547,6 @@ class TimeSeriesRepository:
         for column in ("issued_at", "source_updated_at", "valid_from", "valid_to"):
             frame[column] = utc_to_taiwan_datetime(frame[column])
         return frame
-
-    def archive_legacy_cwa_weather(self) -> None:
-        """Move ambiguous legacy CWA rows to their permanent read-only archive."""
-        from sqlalchemy import inspect
-
-        inspector = inspect(self.engine)
-        tables = set(inspector.get_table_names())
-        if "raw_cwa_weather" not in tables:
-            return
-        with self.engine.begin() as conn:
-            if "legacy_cwa_weather" not in tables:
-                conn.execute(text("ALTER TABLE raw_cwa_weather RENAME TO legacy_cwa_weather"))
-                return
-            insert_prefix = "INSERT OR IGNORE" if self.engine.dialect.name == "sqlite" else "INSERT"
-            conflict_suffix = (
-                "" if self.engine.dialect.name == "sqlite" else "ON CONFLICT DO NOTHING"
-            )
-            conn.execute(
-                text(
-                    f"""
-                    {insert_prefix} INTO legacy_cwa_weather (time, location, temperature, relative_humidity, created_at)
-                    SELECT time, location, temperature, relative_humidity, created_at
-                    FROM raw_cwa_weather
-                    {conflict_suffix}
-                    """
-                )
-            )
-            conn.execute(text("DROP TABLE raw_cwa_weather"))
 
     def fetch_load_range(
         self,
@@ -664,7 +637,16 @@ class TimeSeriesRepository:
         )
         if result.empty:
             result["time"] = pd.to_datetime(result["time"])
-        return result[["time", LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL, "created_at"]]
+        return result[
+            [
+                "time",
+                "station_id",
+                LOCATION_COL,
+                TEMPERATURE_COL,
+                RELATIVE_HUMIDITY_COL,
+                "created_at",
+            ]
+        ]
 
     def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
         """Upsert a Taipower supply-demand snapshot keyed by observed_at."""

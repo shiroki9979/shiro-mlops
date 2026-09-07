@@ -5,8 +5,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import settings
 
@@ -65,6 +66,41 @@ def _execute_sql_statements(engine: Engine, statements: list[str]) -> None:
             if cleaned:
                 conn.execute(text(cleaned))
         conn.commit()
+
+
+def _isolate_legacy_cwa_weather(engine: Engine) -> None:
+    """Move ambiguous pre-canonical weather rows into the permanent legacy table."""
+    try:
+        tables = set(inspect(engine).get_table_names())
+    except NoInspectionAvailable:
+        return
+    if "raw_cwa_weather" not in tables:
+        return
+
+    if "legacy_cwa_weather" not in tables:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE raw_cwa_weather RENAME TO legacy_cwa_weather"))
+        return
+
+    insert_statement = (
+        """
+        INSERT OR IGNORE INTO legacy_cwa_weather
+            (time, location, temperature, relative_humidity, created_at)
+        SELECT time, location, temperature, relative_humidity, created_at
+        FROM raw_cwa_weather
+        """
+        if engine.dialect.name == "sqlite"
+        else """
+        INSERT INTO legacy_cwa_weather
+            (time, location, temperature, relative_humidity, created_at)
+        SELECT time, location, temperature, relative_humidity, created_at
+        FROM raw_cwa_weather
+        ON CONFLICT (time, location) DO NOTHING
+        """
+    )
+    with engine.begin() as connection:
+        connection.execute(text(insert_statement))
+        connection.execute(text("DROP TABLE raw_cwa_weather"))
 
 
 def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
@@ -137,11 +173,13 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
     if dialect == "sqlite":
         statements = convert_timescale_ddl_to_sqlite(get_timescale_init_ddl())
         _execute_sql_statements(db_engine, statements)
+        _isolate_legacy_cwa_weather(db_engine)
         return
 
     # PostgreSQL / TimescaleDB
     ddl = get_timescale_init_ddl()
     _execute_sql_statements(db_engine, ddl.split(";"))
+    _isolate_legacy_cwa_weather(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
 

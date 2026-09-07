@@ -165,13 +165,10 @@ def transform_feature_source_data(
     window: FeatureQueryWindow | None = None,
 ) -> pd.DataFrame:
     """Create the model-training feature matrix, optionally clipped to the training window."""
-    # Canonical station rows carry ``station_id``; legacy fallback frames keep
-    # the historical permissive behavior for backwards-compatible callers.
-    strict_weather = "station_id" in source_data.weather.columns
     features = build_feature_pipeline(
         load_df=source_data.load,
         weather_df=source_data.weather,
-        strict_weather=strict_weather,
+        strict_weather=True,
     )
     if window is None:
         return features
