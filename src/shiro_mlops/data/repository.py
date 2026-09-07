@@ -7,8 +7,8 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
