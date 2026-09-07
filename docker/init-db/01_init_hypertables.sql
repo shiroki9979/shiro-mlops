@@ -18,8 +18,9 @@ SELECT create_hypertable(
     migrate_data => TRUE
 );
 
--- 2. Raw CWA Weather Observations Table & Hypertable
-CREATE TABLE IF NOT EXISTS raw_cwa_weather (
+-- 2. Legacy CWA weather records. These rows lack trustworthy StationId provenance
+-- and are retained for audit only; canonical consumers use station observations below.
+CREATE TABLE IF NOT EXISTS legacy_cwa_weather (
     time TIMESTAMPTZ NOT NULL,
     location VARCHAR(64) NOT NULL,
     temperature DOUBLE PRECISION,
@@ -29,11 +30,93 @@ CREATE TABLE IF NOT EXISTS raw_cwa_weather (
 );
 
 SELECT create_hypertable(
-    'raw_cwa_weather',
+    'legacy_cwa_weather',
     'time',
     chunk_time_interval => INTERVAL '7 days',
     if_not_exists => TRUE,
     migrate_data => TRUE
+);
+
+-- 3. Canonical CWA observation batches and typed station observations
+CREATE TABLE IF NOT EXISTS raw_cwa_observation_batch (
+    fetched_at TIMESTAMPTZ NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    missing_station_ids JSONB NOT NULL,
+    raw_payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (fetched_at)
+);
+
+CREATE TABLE IF NOT EXISTS raw_cwa_station_observation (
+    observed_at TIMESTAMPTZ NOT NULL,
+    station_id VARCHAR(16) NOT NULL,
+    station_name VARCHAR(128),
+    town_code VARCHAR(16),
+    temperature_c DOUBLE PRECISION,
+    relative_humidity_pct DOUBLE PRECISION,
+    air_pressure_hpa DOUBLE PRECISION,
+    precipitation_mm DOUBLE PRECISION,
+    wind_speed_m_s DOUBLE PRECISION,
+    wind_direction_deg DOUBLE PRECISION,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (observed_at, station_id)
+);
+
+SELECT create_hypertable(
+    'raw_cwa_station_observation',
+    'observed_at',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE,
+    migrate_data => TRUE
+);
+
+-- 4. Canonical CWA forecast releases and typed township forecast rows
+CREATE TABLE IF NOT EXISTS raw_cwa_forecast_release (
+    dataset_id VARCHAR(16) NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL,
+    source_updated_at TIMESTAMPTZ NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    missing_geocodes JSONB NOT NULL,
+    raw_payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (dataset_id, issued_at, source_updated_at)
+);
+
+CREATE TABLE IF NOT EXISTS raw_cwa_township_forecast (
+    dataset_id VARCHAR(16) NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL,
+    source_updated_at TIMESTAMPTZ NOT NULL,
+    valid_from TIMESTAMPTZ NOT NULL,
+    valid_to TIMESTAMPTZ NOT NULL,
+    geocode VARCHAR(16) NOT NULL,
+    temperature_c DOUBLE PRECISION,
+    dew_point_c DOUBLE PRECISION,
+    apparent_temperature_c DOUBLE PRECISION,
+    relative_humidity_pct DOUBLE PRECISION,
+    probability_of_precipitation_pct DOUBLE PRECISION,
+    wind_speed_m_s DOUBLE PRECISION,
+    wind_direction VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode)
+);
+
+SELECT create_hypertable(
+    'raw_cwa_township_forecast',
+    'valid_from',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE,
+    migrate_data => TRUE
+);
+
+-- 5. Read-only archive target for ambiguous legacy weather rows
+CREATE TABLE IF NOT EXISTS legacy_cwa_weather (
+    time TIMESTAMPTZ NOT NULL,
+    location VARCHAR(64) NOT NULL,
+    temperature DOUBLE PRECISION,
+    relative_humidity DOUBLE PRECISION,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (time, location)
 );
 
 -- 3. 台電電力供需快照：與逐時負載分表保存，避免快照資料混入訓練序列。

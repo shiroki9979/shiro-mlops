@@ -292,3 +292,32 @@ def test_multi_location_features_have_no_cross_location_future_leakage() -> None
     assert set(taipei["load_mw_lag_1"]).isdisjoint({5000.0, 5100.0})
     assert taipei.iloc[0]["load_mw_lag_1"] == 0.0
     assert taipei.iloc[1]["load_mw_lag_1"] == 100.0
+
+
+def test_weather_gap_forward_fills_at_most_two_hours_and_drops_remaining_rows() -> None:
+    load_df = pd.DataFrame(
+        {
+            "datetime": pd.date_range("2026-08-20 00:00", periods=5, freq="h"),
+            "load_mw": [100, 110, 120, 130, 140],
+            "location": "Taipei",
+        }
+    )
+    weather_df = pd.DataFrame(
+        {
+            "datetime": [pd.Timestamp("2026-08-20 00:00"), pd.Timestamp("2026-08-20 04:00")],
+            "temperature": [30.0, 34.0],
+            "relative_humidity": [70.0, 66.0],
+            "location": "Taipei",
+        }
+    )
+
+    features = build_feature_pipeline(
+        load_df, weather_df, lags=[1], windows=[2], drop_na=True, strict_weather=True
+    )
+
+    assert list(features["datetime"]) == [
+        pd.Timestamp("2026-08-20 01:00"),
+        pd.Timestamp("2026-08-20 02:00"),
+        pd.Timestamp("2026-08-20 04:00"),
+    ]
+    assert list(features["temperature"]) == [30.0, 30.0, 34.0]

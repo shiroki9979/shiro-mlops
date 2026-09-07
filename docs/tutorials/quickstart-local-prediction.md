@@ -22,7 +22,18 @@ uv sync --all-extras
 
 ---
 
-## 步驟 2：執行自動化測試確認環境
+## 步驟 2：設定 CWA 授權碼
+
+複製環境變數範本並填入中央氣象署 OpenData 授權碼；`.env` 已被 Git 忽略，不應提交實際密鑰：
+
+```bash
+cp .env.example .env
+# 編輯 .env，將 CWA_API_KEY= 設為實際授權碼
+```
+
+---
+
+## 步驟 3：執行自動化測試確認環境
 
 執行測試套件驗證特徵工程與遞迴預測邏輯：
 
@@ -34,7 +45,7 @@ uv run pytest tests/ -v
 
 ---
 
-## 步驟 3：啟動本地 API 服務
+## 步驟 4：啟動本地 API 服務
 
 在終端機中啟動 FastAPI 開發伺服器：
 
@@ -46,7 +57,7 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 ---
 
-## 步驟 4：發送第一次預測請求
+## 步驟 5：發送第一次預測請求
 
 開啟另一個終端機視窗，使用 `curl` 請求未來 24 小時的負載預報：
 

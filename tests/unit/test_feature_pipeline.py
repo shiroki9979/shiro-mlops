@@ -124,6 +124,31 @@ def test_transform_feature_source_data_preserves_model_feature_contract(
     }.issubset(features.columns)
 
 
+def test_transform_feature_source_data_drops_weather_gaps_after_two_hour_forward_fill() -> None:
+    """Canonical training must not backfill or synthesize weather after a short outage."""
+    times = pd.date_range("2026-08-20 00:00:00", periods=31, freq="h")
+    load = pd.DataFrame(
+        {
+            "datetime": times,
+            "location": "Taipei",
+            "load_mw": range(31),
+        }
+    )
+    weather = pd.DataFrame(
+        {
+            "datetime": times[:28],
+            "location": "Taipei",
+            "temperature": 30.0,
+            "relative_humidity": 70.0,
+        }
+    )
+
+    features = transform_feature_source_data(FeatureSourceData(load, weather))
+
+    assert features["datetime"].max() == pd.Timestamp("2026-08-21 05:00:00")
+    assert pd.Timestamp("2026-08-21 06:00:00") not in set(features["datetime"])
+
+
 def test_feast_export_lag_features_do_not_use_future_load() -> None:
     """Feast export warm-up lags must use a non-leaking sentinel, not later load values."""
     load_df = pd.DataFrame(

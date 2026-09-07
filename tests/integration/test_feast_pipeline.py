@@ -4,12 +4,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-from dagster import AssetKey, build_output_context, materialize
+from dagster import AssetKey, build_asset_context, build_output_context, materialize
 from feast import FeatureStore
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
+from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.definitions import (
     create_load_source,
@@ -21,13 +22,15 @@ from shiro_mlops.features.definitions import (
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.assets import (
     compute_engineered_feature_outputs,
+    cwa_observation_feature_source,
     drift_monitoring_report,
     engineered_feature_set,
+    raw_cwa_station_observation,
     raw_taipower_load_data,
-    raw_weather_obs_data,
     trained_forecaster_model,
 )
 from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
+from tests.helpers import canonical_observation_batch
 
 
 def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.DataFrame) -> None:
@@ -82,7 +85,7 @@ def test_engineered_features_multi_location_isolation_and_export(
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
     repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
-    repo.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
+    repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
 
     kh_taipower = taipower_raw_df.copy()
     kh_taipower["load_mw"] = kh_taipower["load_mw"] * 0.6
@@ -92,7 +95,7 @@ def test_engineered_features_multi_location_isolation_and_export(
     kh_weather = cwa_obs_df.copy()
     kh_weather["temperature"] = kh_weather["temperature"] + 3.0
     kh_weather["location"] = "Kaohsiung"
-    repo.upsert_cwa_weather(kh_weather, default_location="Kaohsiung")
+    repo.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
         repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), location=None
@@ -136,7 +139,7 @@ def test_feature_computation_isolates_requested_location_and_training_window(
         ]
     )
     repository.upsert_taipower_load(source_load)
-    repository.upsert_cwa_weather(source_weather)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(source_weather))
 
     taipei_reference = source_load.iloc[[1]].copy()
     taipei_weather = source_weather.iloc[[1]].copy()
@@ -188,7 +191,7 @@ def test_short_dataset_feast_parquet_schema_contract(
     )
 
     repo.upsert_taipower_load(short_load)
-    repo.upsert_cwa_weather(short_weather)
+    repo.upsert_cwa_observation_batch(canonical_observation_batch(short_weather))
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
         repo, FallbackFeatureSources(short_load, short_weather)
@@ -300,6 +303,33 @@ def test_full_dagster_mlops_pipeline_materialization(
     monkeypatch,
 ):
     """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring offline and fast."""
+    observation_batch = CWAObservationBatch(
+        fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
+        status="complete",
+        observations=tuple(
+            CWAStationObservation(
+                observed_at=row.datetime.to_pydatetime(),
+                station_id="466920",
+                station_name="Taipei",
+                town_code="63000050",
+                temperature_c=float(row.temperature),
+                relative_humidity_pct=float(row.relative_humidity),
+                air_pressure_hpa=None,
+                precipitation_mm=None,
+                wind_speed_m_s=None,
+                wind_direction_deg=None,
+            )
+            for row in cwa_obs_df.itertuples()
+        ),
+        missing_station_ids=(),
+        raw_payload={},
+    )
+    repository = TimeSeriesRepository(engine=sqlite_engine)
+    with patch(
+        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+        return_value=observation_batch,
+    ):
+        raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": repository}))
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
     feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
@@ -310,8 +340,8 @@ def test_full_dagster_mlops_pipeline_materialization(
             return_value=taipower_raw_df,
         ),
         patch(
-            "shiro_mlops.pipelines.assets.CWAClient.fetch_observations",
-            return_value=cwa_obs_df,
+            "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+            return_value=observation_batch,
         ),
         patch("shiro_mlops.pipelines.assets.mlflow") as mock_mlflow,
     ):
@@ -322,7 +352,7 @@ def test_full_dagster_mlops_pipeline_materialization(
         res = materialize(
             assets=[
                 raw_taipower_load_data,
-                raw_weather_obs_data,
+                cwa_observation_feature_source,
                 engineered_feature_set,
                 trained_forecaster_model,
                 drift_monitoring_report,
@@ -482,7 +512,7 @@ def test_feast_retrieves_s3_published_features_offline(
     finally:
         moto_server.stop()
 
-    assert result.loc[0, "load_mw"] == 38500.0
+    assert result.loc[0, "load_mw"] == 25400.0
     assert result.loc[0, "temperature"] == 28.0
 
 
