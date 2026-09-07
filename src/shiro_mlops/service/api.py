@@ -1,5 +1,6 @@
 """FastAPI dynamic on-demand load forecasting service."""
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -32,6 +33,7 @@ class ModelStore:
 
 model_store = ModelStore()
 repository_store: TimeSeriesRepository | None = None
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -42,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         init_db()
     except Exception:
-        pass
+        logger.exception("Database initialization failed; readiness will remain unavailable.")
 
     model_path = settings.DATA_DIR / "model.joblib"
 
@@ -50,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             model_store.forecaster = LightGBMRecursiveForecaster.load(model_path)
         except Exception:
+            logger.exception("Could not load model artifact from %s.", model_path)
             model_store.forecaster = None
     yield
 
