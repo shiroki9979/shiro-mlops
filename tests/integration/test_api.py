@@ -1,5 +1,7 @@
 """Integration tests for FastAPI endpoints."""
 
+from unittest.mock import MagicMock
+
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -41,15 +43,24 @@ def test_api_predict_dynamic_horizon(
     forecaster.fit(feat_df)
     model_store.forecaster = forecaster
 
-    # 2. Mock external client calls in api.py
-    monkeypatch.setattr(
-        "shiro_mlops.data.taipower_client.TaipowerClient.fetch_load_data",
-        lambda self: taipower_raw_df,
+    repository = MagicMock()
+    repository.fetch_load_range.return_value = taipower_raw_df
+    repository.fetch_cwa_station_observations.return_value = cwa_obs_df.rename(
+        columns={
+            "datetime": "observed_at",
+            "temperature": "temperature_c",
+            "relative_humidity": "relative_humidity_pct",
+        }
     )
-    monkeypatch.setattr(
-        "shiro_mlops.data.cwa_client.CWAClient.fetch_forecast",
-        lambda self, location, horizon_hours: cwa_forecast_df.head(horizon_hours),
-    )
+    repository.fetch_cwa_forecast_rows.return_value = cwa_forecast_df.assign(
+        dataset_id="F-D0047-089",
+        issued_at=pd.Timestamp("2026-08-21 22:00"),
+        source_updated_at=pd.Timestamp("2026-08-21 22:10"),
+        valid_from=lambda frame: frame["datetime"],
+        valid_to=lambda frame: frame["datetime"],
+        geocode="63000050",
+    ).rename(columns={"temperature": "temperature_c", "relative_humidity": "relative_humidity_pct"})
+    monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
 
     client = TestClient(app)
     payload = {"horizon_hours": 12, "location": "Taipei"}

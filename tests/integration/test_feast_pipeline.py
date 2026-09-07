@@ -4,12 +4,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-from dagster import AssetKey, build_output_context, materialize
+from dagster import AssetKey, build_asset_context, build_output_context, materialize
 from feast import FeatureStore
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
+from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.definitions import (
     create_load_source,
@@ -21,10 +22,11 @@ from shiro_mlops.features.definitions import (
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.assets import (
     compute_engineered_feature_outputs,
+    cwa_observation_feature_source,
     drift_monitoring_report,
     engineered_feature_set,
+    raw_cwa_station_observation,
     raw_taipower_load_data,
-    raw_weather_obs_data,
     trained_forecaster_model,
 )
 from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
@@ -300,6 +302,33 @@ def test_full_dagster_mlops_pipeline_materialization(
     monkeypatch,
 ):
     """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring offline and fast."""
+    observation_batch = CWAObservationBatch(
+        fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
+        status="complete",
+        observations=tuple(
+            CWAStationObservation(
+                observed_at=row.datetime.to_pydatetime(),
+                station_id="466920",
+                station_name="Taipei",
+                town_code="63000050",
+                temperature_c=float(row.temperature),
+                relative_humidity_pct=float(row.relative_humidity),
+                air_pressure_hpa=None,
+                precipitation_mm=None,
+                wind_speed_m_s=None,
+                wind_direction_deg=None,
+            )
+            for row in cwa_obs_df.itertuples()
+        ),
+        missing_station_ids=(),
+        raw_payload={},
+    )
+    repository = TimeSeriesRepository(engine=sqlite_engine)
+    with patch(
+        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+        return_value=observation_batch,
+    ):
+        raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": repository}))
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
     feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
@@ -310,8 +339,8 @@ def test_full_dagster_mlops_pipeline_materialization(
             return_value=taipower_raw_df,
         ),
         patch(
-            "shiro_mlops.pipelines.assets.CWAClient.fetch_observations",
-            return_value=cwa_obs_df,
+            "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+            return_value=observation_batch,
         ),
         patch("shiro_mlops.pipelines.assets.mlflow") as mock_mlflow,
     ):
@@ -322,7 +351,7 @@ def test_full_dagster_mlops_pipeline_materialization(
         res = materialize(
             assets=[
                 raw_taipower_load_data,
-                raw_weather_obs_data,
+                cwa_observation_feature_source,
                 engineered_feature_set,
                 trained_forecaster_model,
                 drift_monitoring_report,

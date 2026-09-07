@@ -10,9 +10,17 @@ from dagster import build_asset_context, materialize
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
+from shiro_mlops.data.cwa_client import (
+    CWAForecastRelease,
+    CWAObservationBatch,
+    CWAStationObservation,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.assets import (
+    cwa_observation_feature_source,
     engineered_feature_set,
+    raw_cwa_station_observation,
+    raw_cwa_township_forecast,
     raw_taipower_load_data,
     raw_weather_obs_data,
 )
@@ -58,6 +66,45 @@ def test_raw_weather_obs_data_persists_to_db(
     persisted = test_repo.fetch_weather_range(location="Taipei")
     assert len(persisted) == len(cwa_obs_df)
     assert persisted.iloc[0]["temperature"] == pytest.approx(cwa_obs_df.iloc[0]["temperature"])
+
+
+def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    batch = MagicMock(spec=CWAObservationBatch)
+    batch.status = "complete"
+    batch.missing_station_ids = ()
+    monkeypatch.setattr(
+        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+        lambda *args, **kwargs: batch,
+    )
+    repository = MagicMock(spec=TimeSeriesRepository)
+    context = build_asset_context(resources={"time_series_repo": repository})
+
+    result = raw_cwa_station_observation(context)
+
+    assert result is batch
+    repository.upsert_cwa_observation_batch.assert_called_once_with(batch)
+
+
+def test_canonical_cwa_forecast_asset_persists_both_products(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    releases = [
+        MagicMock(spec=CWAForecastRelease, status="complete"),
+        MagicMock(spec=CWAForecastRelease, status="complete"),
+    ]
+    monkeypatch.setattr(
+        "shiro_mlops.pipelines.assets.CWAClient.fetch_forecast_release",
+        lambda self, dataset_id, locations: releases[0 if dataset_id.endswith("089") else 1],
+    )
+    repository = MagicMock(spec=TimeSeriesRepository)
+    context = build_asset_context(resources={"time_series_repo": repository})
+
+    result = raw_cwa_township_forecast(context)
+
+    assert result == releases
+    assert repository.upsert_cwa_forecast_release.call_count == 2
 
 
 def test_raw_taipower_load_data_graceful_fallback_on_db_failure(
@@ -126,18 +173,44 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     dagster_instance,
 ):
     """Verify Dagster materialize executes ingestion through feature engineering and persists to repository."""
+    observation_batch = CWAObservationBatch(
+        fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
+        status="complete",
+        observations=tuple(
+            CWAStationObservation(
+                observed_at=row.datetime.to_pydatetime(),
+                station_id="466920",
+                station_name="Taipei",
+                town_code="63000050",
+                temperature_c=float(row.temperature),
+                relative_humidity_pct=float(row.relative_humidity),
+                air_pressure_hpa=None,
+                precipitation_mm=None,
+                wind_speed_m_s=None,
+                wind_direction_deg=None,
+            )
+            for row in cwa_obs_df.itertuples()
+        ),
+        missing_station_ids=(),
+        raw_payload={},
+    )
+    with patch(
+        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+        return_value=observation_batch,
+    ):
+        raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": test_repo}))
     with (
         patch(
             "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
             return_value=taipower_raw_df,
         ),
         patch(
-            "shiro_mlops.pipelines.assets.CWAClient.fetch_observations",
-            return_value=cwa_obs_df,
+            "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+            return_value=observation_batch,
         ),
     ):
         res = materialize(
-            assets=[raw_taipower_load_data, raw_weather_obs_data, engineered_feature_set],
+            assets=[raw_taipower_load_data, cwa_observation_feature_source, engineered_feature_set],
             resources={
                 "time_series_repo": test_repo,
                 "feast_io_manager": get_feast_parquet_io_manager(

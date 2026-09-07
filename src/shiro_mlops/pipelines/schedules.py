@@ -26,10 +26,21 @@ TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
 # 含首次嘗試最多重試 2 次，每次間隔 10 秒。
 TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
 
+CWA_INGESTION_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
+CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
+CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
+CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
+LEGACY_CWA_ASSET = "raw_weather_obs_data"
+
 # 1. Daily Training and Evaluation Job
 daily_training_job = define_asset_job(
     name="daily_training_job",
-    selection=AssetSelection.all() - AssetSelection.assets(*TAIPOWER_REALTIME_SNAPSHOT_ASSETS),
+    selection=(
+        AssetSelection.all()
+        - AssetSelection.assets(*TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
+        - AssetSelection.assets(*CWA_INGESTION_ASSETS)
+        - AssetSelection.assets(LEGACY_CWA_ASSET)
+    ),
     description="Run ingestion, feature engineering, model training, and drift evaluation",
 )
 
@@ -42,9 +53,7 @@ daily_training_schedule = ScheduleDefinition(
 # 2. Hourly Drift and Monitoring Job
 hourly_drift_job = define_asset_job(
     name="hourly_drift_job",
-    selection=AssetSelection.assets(
-        "raw_taipower_load_data", "raw_weather_obs_data", "drift_monitoring_report"
-    ),
+    selection=AssetSelection.assets("raw_taipower_load_data", "drift_monitoring_report"),
     description="Check latest actual load against previous forecasts",
 )
 
@@ -52,6 +61,36 @@ hourly_drift_schedule = ScheduleDefinition(
     job=hourly_drift_job,
     cron_schedule="0 * * * *",  # Every hour
     description="Hourly drift evaluation schedule",
+)
+
+
+cwa_observation_job = define_asset_job(
+    name="cwa_observation_ingestion_job",
+    selection=AssetSelection.assets(CWA_OBSERVATION_ASSET),
+    description="Fetch canonical CWA hourly station observations",
+    op_retry_policy=CWA_INGESTION_RETRY_POLICY,
+)
+
+cwa_observation_schedule = ScheduleDefinition(
+    job=cwa_observation_job,
+    cron_schedule="10 * * * *",
+    execution_timezone=TAIWAN_TZ,
+    description="Fetch CWA station observations at ten minutes past each hour",
+)
+
+
+cwa_forecast_job = define_asset_job(
+    name="cwa_forecast_ingestion_job",
+    selection=AssetSelection.assets(CWA_FORECAST_ASSET),
+    description="Fetch canonical CWA township forecast vintages",
+    op_retry_policy=CWA_INGESTION_RETRY_POLICY,
+)
+
+cwa_forecast_schedule = ScheduleDefinition(
+    job=cwa_forecast_job,
+    cron_schedule="40 * * * *",
+    execution_timezone=TAIWAN_TZ,
+    description="Fetch CWA township forecasts at forty minutes past each hour",
 )
 
 

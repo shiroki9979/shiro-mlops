@@ -3,7 +3,7 @@
 > - Created: 2026-09-07
 > - Last Updated: 2026-09-07
 > - Author: White Hunag
-> - Status: 提議中
+> - Status: 已接受
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[Issue #30](https://github.com/shiroki9979/shiro-mlops/issues/30)
 
 ---
@@ -42,4 +42,4 @@ CWA 外部 API 只允許由彼此獨立的 Dagster 測站觀測與鄉鎮預報 i
 
 - 本 ADR 補充 [ADR-0006](0006-timescaledb-local-storage-layer.md) 的 CWA 外部整合與消費邊界，不取代其 TimescaleDB／Parquet 分層決策。
 - Issue #30 原本只涵蓋 CWA API key wiring；本次設計確認後將擴大為完整 CWA 本機 ingestion 垂直切片。
-- 實作與遷移尚未開始；待 grilling 共識確認後進行。
+- 已於 2026-09-07 完成第一階段實作與離線測試；後續資料庫部署與歷史資料遷移依各環境 rollout 執行。

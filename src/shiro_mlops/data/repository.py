@@ -1,11 +1,13 @@
 """Time-series database repository for persisting and querying raw load and weather data."""
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import (
@@ -18,6 +20,11 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
+from shiro_mlops.data.cwa_client import (
+    DEFAULT_CWA_LOCATIONS,
+    CWAForecastRelease,
+    CWAObservationBatch,
+)
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -34,6 +41,21 @@ from shiro_mlops.data.taipower_unit_generation_repository import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _taiwan_instant_to_utc(value: datetime | pd.Timestamp | None) -> datetime | None:
+    """Convert a Taiwan-local timestamp to a timezone-naive UTC datetime."""
+    if value is None:
+        return None
+    converted = taiwan_local_to_utc(pd.Series([value])).iloc[0]
+    return pd.Timestamp(converted).to_pydatetime()
+
+
+def _serialize_raw_payload(payload: Any) -> str:
+    """Serialize a source payload for JSONB or SQLite TEXT storage."""
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _prepare_timeseries_df(
@@ -251,6 +273,272 @@ class TimeSeriesRepository:
         logger.info(f"Upserted {len(records)} CWA weather records into raw_cwa_weather.")
         return len(records)
 
+    def upsert_cwa_observation_batch(self, batch: CWAObservationBatch) -> int:
+        """Persist one canonical CWA observation batch and its typed children atomically."""
+        header = {
+            "fetched_at": _taiwan_instant_to_utc(batch.fetched_at),
+            "status": batch.status,
+            "missing_station_ids": _serialize_raw_payload(list(batch.missing_station_ids)),
+            "raw_payload": _serialize_raw_payload(batch.raw_payload),
+        }
+        observation_records = [
+            {
+                "observed_at": _taiwan_instant_to_utc(observation.observed_at),
+                "station_id": observation.station_id,
+                "station_name": observation.station_name,
+                "town_code": observation.town_code,
+                "temperature_c": observation.temperature_c,
+                "relative_humidity_pct": observation.relative_humidity_pct,
+                "air_pressure_hpa": observation.air_pressure_hpa,
+                "precipitation_mm": observation.precipitation_mm,
+                "wind_speed_m_s": observation.wind_speed_m_s,
+                "wind_direction_deg": observation.wind_direction_deg,
+            }
+            for observation in batch.observations
+        ]
+        header_stmt = text(
+            """
+            INSERT INTO raw_cwa_observation_batch
+                (fetched_at, status, missing_station_ids, raw_payload)
+            VALUES (:fetched_at, :status, :missing_station_ids, :raw_payload)
+            ON CONFLICT (fetched_at) DO UPDATE SET
+                status = EXCLUDED.status,
+                missing_station_ids = EXCLUDED.missing_station_ids,
+                raw_payload = EXCLUDED.raw_payload
+            """
+        )
+        child_stmt = text(
+            """
+            INSERT INTO raw_cwa_station_observation (
+                observed_at, station_id, station_name, town_code,
+                temperature_c, relative_humidity_pct, air_pressure_hpa,
+                precipitation_mm, wind_speed_m_s, wind_direction_deg
+            ) VALUES (
+                :observed_at, :station_id, :station_name, :town_code,
+                :temperature_c, :relative_humidity_pct, :air_pressure_hpa,
+                :precipitation_mm, :wind_speed_m_s, :wind_direction_deg
+            )
+            ON CONFLICT (observed_at, station_id) DO UPDATE SET
+                station_name = EXCLUDED.station_name,
+                town_code = EXCLUDED.town_code,
+                temperature_c = EXCLUDED.temperature_c,
+                relative_humidity_pct = EXCLUDED.relative_humidity_pct,
+                air_pressure_hpa = EXCLUDED.air_pressure_hpa,
+                precipitation_mm = EXCLUDED.precipitation_mm,
+                wind_speed_m_s = EXCLUDED.wind_speed_m_s,
+                wind_direction_deg = EXCLUDED.wind_direction_deg
+            """
+        )
+        with self.engine.begin() as conn:
+            conn.execute(header_stmt, header)
+            if observation_records:
+                conn.execute(child_stmt, observation_records)
+        return len(observation_records)
+
+    def fetch_cwa_station_observations(
+        self,
+        start_time: datetime | str | None = None,
+        end_time: datetime | str | None = None,
+        station_id: str | None = None,
+    ) -> pd.DataFrame:
+        """Fetch canonical CWA station observations in Taiwan local time."""
+        clauses = ["1=1"]
+        params: dict[str, Any] = {}
+        if start_time is not None:
+            clauses.append("observed_at >= :start_time")
+            params["start_time"] = _taiwan_instant_to_utc(pd.Timestamp(start_time).to_pydatetime())
+        if end_time is not None:
+            clauses.append("observed_at <= :end_time")
+            params["end_time"] = _taiwan_instant_to_utc(pd.Timestamp(end_time).to_pydatetime())
+        if station_id is not None:
+            clauses.append("station_id = :station_id")
+            params["station_id"] = station_id
+        query = f"""
+            SELECT observed_at, station_id, station_name, town_code,
+                   temperature_c, relative_humidity_pct, air_pressure_hpa,
+                   precipitation_mm, wind_speed_m_s, wind_direction_deg, created_at
+            FROM raw_cwa_station_observation
+            WHERE {" AND ".join(clauses)}
+            ORDER BY observed_at ASC, station_id ASC
+        """
+        with self.engine.connect() as conn:
+            frame = pd.read_sql_query(text(query), conn, params=params)
+        if frame.empty:
+            return pd.DataFrame(
+                columns=[
+                    "observed_at",
+                    "station_id",
+                    "station_name",
+                    "town_code",
+                    "temperature_c",
+                    "relative_humidity_pct",
+                    "air_pressure_hpa",
+                    "precipitation_mm",
+                    "wind_speed_m_s",
+                    "wind_direction_deg",
+                    "created_at",
+                ]
+            )
+        frame["observed_at"] = utc_to_taiwan_datetime(frame["observed_at"])
+        return frame
+
+    def upsert_cwa_forecast_release(self, release: CWAForecastRelease) -> int:
+        """Persist one CWA forecast vintage and all typed township rows atomically."""
+        header = {
+            "dataset_id": release.dataset_id,
+            "issued_at": _taiwan_instant_to_utc(release.issued_at),
+            "source_updated_at": _taiwan_instant_to_utc(release.source_updated_at),
+            "fetched_at": _taiwan_instant_to_utc(release.fetched_at),
+            "status": release.status,
+            "missing_geocodes": _serialize_raw_payload(list(release.missing_geocodes)),
+            "raw_payload": _serialize_raw_payload(release.raw_payload),
+        }
+        child_records = [
+            {
+                "dataset_id": release.dataset_id,
+                "issued_at": _taiwan_instant_to_utc(release.issued_at),
+                "source_updated_at": _taiwan_instant_to_utc(release.source_updated_at),
+                "valid_from": _taiwan_instant_to_utc(point.valid_from),
+                "valid_to": _taiwan_instant_to_utc(point.valid_to),
+                "geocode": point.geocode,
+                "temperature_c": point.temperature_c,
+                "dew_point_c": point.dew_point_c,
+                "apparent_temperature_c": point.apparent_temperature_c,
+                "relative_humidity_pct": point.relative_humidity_pct,
+                "probability_of_precipitation_pct": point.probability_of_precipitation_pct,
+                "wind_speed_m_s": point.wind_speed_m_s,
+                "wind_direction": point.wind_direction,
+            }
+            for point in release.forecasts
+        ]
+        header_stmt = text(
+            """
+            INSERT INTO raw_cwa_forecast_release (
+                dataset_id, issued_at, source_updated_at, fetched_at,
+                status, missing_geocodes, raw_payload
+            ) VALUES (
+                :dataset_id, :issued_at, :source_updated_at, :fetched_at,
+                :status, :missing_geocodes, :raw_payload
+            )
+            ON CONFLICT (dataset_id, issued_at, source_updated_at) DO UPDATE SET
+                fetched_at = EXCLUDED.fetched_at,
+                status = EXCLUDED.status,
+                missing_geocodes = EXCLUDED.missing_geocodes,
+                raw_payload = EXCLUDED.raw_payload
+            """
+        )
+        child_stmt = text(
+            """
+            INSERT INTO raw_cwa_township_forecast (
+                dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
+                temperature_c, dew_point_c, apparent_temperature_c, relative_humidity_pct,
+                probability_of_precipitation_pct, wind_speed_m_s, wind_direction
+            ) VALUES (
+                :dataset_id, :issued_at, :source_updated_at, :valid_from, :valid_to, :geocode,
+                :temperature_c, :dew_point_c, :apparent_temperature_c, :relative_humidity_pct,
+                :probability_of_precipitation_pct, :wind_speed_m_s, :wind_direction
+            )
+            ON CONFLICT (
+                dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode
+            ) DO UPDATE SET
+                temperature_c = EXCLUDED.temperature_c,
+                dew_point_c = EXCLUDED.dew_point_c,
+                apparent_temperature_c = EXCLUDED.apparent_temperature_c,
+                relative_humidity_pct = EXCLUDED.relative_humidity_pct,
+                probability_of_precipitation_pct = EXCLUDED.probability_of_precipitation_pct,
+                wind_speed_m_s = EXCLUDED.wind_speed_m_s,
+                wind_direction = EXCLUDED.wind_direction
+            """
+        )
+        with self.engine.begin() as conn:
+            conn.execute(header_stmt, header)
+            if child_records:
+                conn.execute(child_stmt, child_records)
+        return len(child_records)
+
+    def fetch_cwa_forecast_rows(
+        self,
+        *,
+        geocode: str | None = None,
+        dataset_id: str | None = None,
+        issued_before: datetime | str | None = None,
+    ) -> pd.DataFrame:
+        """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
+        clauses = ["1=1"]
+        params: dict[str, Any] = {}
+        if geocode is not None:
+            clauses.append("geocode = :geocode")
+            params["geocode"] = geocode
+        if dataset_id is not None:
+            clauses.append("dataset_id = :dataset_id")
+            params["dataset_id"] = dataset_id
+        if issued_before is not None:
+            clauses.append("issued_at <= :issued_before")
+            params["issued_before"] = _taiwan_instant_to_utc(
+                pd.Timestamp(issued_before).to_pydatetime()
+            )
+        query = f"""
+            SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
+                   temperature_c, dew_point_c, apparent_temperature_c, relative_humidity_pct,
+                   probability_of_precipitation_pct, wind_speed_m_s, wind_direction, created_at
+            FROM raw_cwa_township_forecast
+            WHERE {" AND ".join(clauses)}
+            ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
+                     issued_at DESC, source_updated_at DESC
+        """
+        with self.engine.connect() as conn:
+            frame = pd.read_sql_query(text(query), conn, params=params)
+        if frame.empty:
+            return pd.DataFrame(
+                columns=[
+                    "dataset_id",
+                    "issued_at",
+                    "source_updated_at",
+                    "valid_from",
+                    "valid_to",
+                    "geocode",
+                    "temperature_c",
+                    "dew_point_c",
+                    "apparent_temperature_c",
+                    "relative_humidity_pct",
+                    "probability_of_precipitation_pct",
+                    "wind_speed_m_s",
+                    "wind_direction",
+                    "created_at",
+                ]
+            )
+        for column in ("issued_at", "source_updated_at", "valid_from", "valid_to"):
+            frame[column] = utc_to_taiwan_datetime(frame[column])
+        return frame
+
+    def archive_legacy_cwa_weather(self) -> None:
+        """Move ambiguous legacy CWA rows to their permanent read-only archive."""
+        from sqlalchemy import inspect
+
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        if "raw_cwa_weather" not in tables:
+            return
+        with self.engine.begin() as conn:
+            if "legacy_cwa_weather" not in tables:
+                conn.execute(text("ALTER TABLE raw_cwa_weather RENAME TO legacy_cwa_weather"))
+                return
+            insert_prefix = "INSERT OR IGNORE" if self.engine.dialect.name == "sqlite" else "INSERT"
+            conflict_suffix = (
+                "" if self.engine.dialect.name == "sqlite" else "ON CONFLICT DO NOTHING"
+            )
+            conn.execute(
+                text(
+                    f"""
+                    {insert_prefix} INTO legacy_cwa_weather (time, location, temperature, relative_humidity, created_at)
+                    SELECT time, location, temperature, relative_humidity, created_at
+                    FROM raw_cwa_weather
+                    {conflict_suffix}
+                    """
+                )
+            )
+            conn.execute(text("DROP TABLE raw_cwa_weather"))
+
     def fetch_load_range(
         self,
         start_time: datetime | str | None = None,
@@ -314,6 +602,35 @@ class TimeSeriesRepository:
         pd.DataFrame
             Sorted DataFrame of weather observation records.
         """
+        station_by_alias = {
+            value.alias: value.station_id for value in DEFAULT_CWA_LOCATIONS.values()
+        }
+        try:
+            canonical = self.fetch_cwa_station_observations(
+                start_time=start_time,
+                end_time=end_time,
+                station_id=station_by_alias.get(location) if location else None,
+            )
+        except SQLAlchemyError:
+            canonical = pd.DataFrame()
+        if not canonical.empty:
+            result = canonical.rename(
+                columns={
+                    "observed_at": "time",
+                    "temperature_c": TEMPERATURE_COL,
+                    "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
+                }
+            )
+            aliases_by_station = {
+                value.station_id: value.alias for value in DEFAULT_CWA_LOCATIONS.values()
+            }
+            result[LOCATION_COL] = (
+                result["station_id"].map(aliases_by_station).fillna(location or DEFAULT_LOCATION)
+            )
+            return result[
+                ["time", LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL, "created_at"]
+            ]
+
         where_clause, params = _build_time_location_filter(start_time, end_time, location)
         query = f"""
             SELECT time, location, temperature, relative_humidity, created_at
