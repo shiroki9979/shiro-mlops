@@ -1,13 +1,15 @@
 """FastAPI dynamic on-demand load forecasting service."""
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
+from starlette.responses import JSONResponse
 
 from shiro_mlops import __version__
 from shiro_mlops.core.config import settings
@@ -18,9 +20,9 @@ from shiro_mlops.core.constants import (
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
-from shiro_mlops.data.cwa_client import CWAClient
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
-from shiro_mlops.features.transformers import build_feature_pipeline
+from shiro_mlops.data.weather_resolution import WeatherResolution, resolve_weather
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 
 
@@ -30,6 +32,8 @@ class ModelStore:
 
 
 model_store = ModelStore()
+repository_store: TimeSeriesRepository | None = None
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -40,30 +44,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         init_db()
     except Exception:
-        pass
+        logger.exception("Database initialization failed; readiness will remain unavailable.")
 
-    model_path = Path("data/model.joblib")
+    model_path = settings.DATA_DIR / "model.joblib"
 
     if model_path.exists():
         try:
             model_store.forecaster = LightGBMRecursiveForecaster.load(model_path)
         except Exception:
+            logger.exception("Could not load model artifact from %s.", model_path)
             model_store.forecaster = None
-    if model_store.forecaster is None:
-        # Train a bootstrap model if not yet trained
-        try:
-            taipower_client = TaipowerClient()
-            cwa_client = CWAClient(api_key=settings.CWA_API_KEY)
-            load_df = taipower_client.fetch_load_data()
-            weather_df = cwa_client.fetch_observations()
-            feat_df = build_feature_pipeline(load_df, weather_df)
-            forecaster = LightGBMRecursiveForecaster()
-            forecaster.fit(feat_df)
-            forecaster.save(model_path)
-            model_store.forecaster = forecaster
-        except Exception:
-            # Safe dummy fallback for testing
-            pass
     yield
 
 
@@ -89,11 +79,19 @@ class HealthResponse(BaseModel):
     model_loaded: bool
 
 
+class ReadyResponse(BaseModel):
+    status: str
+    mode: str | None = None
+    model_loaded: bool
+    reason: str | None = None
+
+
 class PredictionItem(BaseModel):
     datetime: str
     predicted_load_mw: float
     temperature: float
     relative_humidity: float
+    weather_sources: dict[str, dict[str, str]]
 
 
 class PredictionRequest(BaseModel):
@@ -107,6 +105,7 @@ class PredictionResponse(BaseModel):
     status: str = "success"
     horizon_hours: int
     location: str
+    mode: str = "normal"
     predictions: list[PredictionItem]
 
 
@@ -119,6 +118,60 @@ def health_check() -> HealthResponse:
         environment=settings.ENVIRONMENT,
         model_loaded=model_store.forecaster is not None,
     )
+
+
+def _get_repository() -> TimeSeriesRepository:
+    """Return the process repository, allowing tests to inject an isolated store."""
+    return repository_store or TimeSeriesRepository()
+
+
+def _load_history(repository: TimeSeriesRepository) -> pd.DataFrame:
+    """Load persisted Taipei load history in the model's feature-column contract."""
+    history = repository.fetch_load_range(location=DEFAULT_LOCATION)
+    if history.empty:
+        return history
+    if DATETIME_COL not in history.columns and "time" in history.columns:
+        history = history.rename(columns={"time": DATETIME_COL})
+    return history
+
+
+def _resolve_prediction_weather(
+    repository: TimeSeriesRepository, history: pd.DataFrame, horizon_hours: int
+) -> WeatherResolution:
+    """Resolve future weather from canonical storage for a prediction request."""
+    last_time = pd.Timestamp(history[DATETIME_COL].max())
+    return resolve_weather(
+        repository,
+        start_time=last_time + pd.Timedelta(hours=1),
+        horizon_hours=horizon_hours,
+        as_of=last_time,
+    )
+
+
+@app.get("/ready", response_model=ReadyResponse)
+def readiness_check() -> ReadyResponse:
+    """Report whether a model and full normal/degraded weather horizon are available."""
+    if model_store.forecaster is None:
+        response = ReadyResponse(
+            status="not_ready", model_loaded=False, reason="Model is not loaded or trained yet."
+        )
+        return JSONResponse(status_code=503, content=response.model_dump())
+    try:
+        repository = _get_repository()
+        history = _load_history(repository)
+        if history.empty:
+            raise RuntimeError("No persisted Taipei load history is available.")
+        weather = _resolve_prediction_weather(repository, history, 168)
+        if weather.mode == "unavailable":
+            raise RuntimeError(weather.reason or "Weather coverage is unavailable.")
+        return ReadyResponse(
+            status="ready",
+            mode=weather.mode,
+            model_loaded=True,
+        )
+    except Exception as error:
+        response = ReadyResponse(status="not_ready", model_loaded=True, reason=str(error))
+        return JSONResponse(status_code=503, content=response.model_dump())
 
 
 @app.get("/features/latest")
@@ -139,40 +192,28 @@ def get_latest_features(limit: int = 24) -> list[dict]:
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
-    """Predict dynamic horizon future power loads using latest available history and CWA weather forecasts."""
+    """Predict dynamic horizon future power loads from persisted weather and load data."""
     if model_store.forecaster is None:
         raise HTTPException(status_code=503, detail="Model is not loaded or trained yet.")
 
+    if request.location != DEFAULT_LOCATION:
+        raise HTTPException(status_code=400, detail="Only Taipei is supported in this model phase.")
+
     try:
-        taipower_client = TaipowerClient()
-        cwa_client = CWAClient(api_key=settings.CWA_API_KEY)
-
-        # 1. Fetch recent historical load data
-        history_df = taipower_client.fetch_load_data()
-
-        # 2. Fetch dynamic horizon future weather forecast
-        forecast_weather_df = cwa_client.fetch_forecast(
-            location=request.location, horizon_hours=request.horizon_hours
-        )
-
-        if forecast_weather_df.empty:
-            # Generate synthetic future timestamps with fallback weather if API returns empty
-            last_dt = pd.to_datetime(history_df[DATETIME_COL].max())
-            future_dts = [
-                last_dt + pd.Timedelta(hours=i) for i in range(1, request.horizon_hours + 1)
-            ]
-            forecast_weather_df = pd.DataFrame(
-                {
-                    DATETIME_COL: future_dts,
-                    TEMPERATURE_COL: 28.0,
-                    RELATIVE_HUMIDITY_COL: 75.0,
-                }
+        repository = _get_repository()
+        history_df = _load_history(repository)
+        if history_df.empty:
+            raise HTTPException(
+                status_code=503, detail="No persisted Taipei load history available."
             )
-
-        # 3. Perform recursive multi-step forecasting
+        weather = _resolve_prediction_weather(repository, history_df, request.horizon_hours)
+        if weather.mode == "unavailable" or weather.dataframe.empty:
+            raise HTTPException(
+                status_code=503, detail=weather.reason or "Weather coverage unavailable."
+            )
         pred_df = model_store.forecaster.predict_recursive(
             history_df=history_df,
-            future_weather_df=forecast_weather_df,
+            future_weather_df=weather.dataframe,
             horizon_hours=request.horizon_hours,
         )
 
@@ -182,15 +223,21 @@ def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
                 predicted_load_mw=float(row["predicted_load_mw"]),
                 temperature=float(row[TEMPERATURE_COL]),
                 relative_humidity=float(row[RELATIVE_HUMIDITY_COL]),
+                weather_sources=weather.sources[index],
             )
-            for _, row in pred_df.iterrows()
+            for index, (_, row) in enumerate(pred_df.iterrows())
         ]
 
         return PredictionResponse(
             status="success",
             horizon_hours=len(items),
             location=request.location,
+            mode=weather.mode,
             predictions=items,
         )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as error:
+        raise HTTPException(status_code=503, detail=f"Persistence unavailable: {error}") from error
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}") from e

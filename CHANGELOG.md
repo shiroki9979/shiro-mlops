@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 新增可追溯的 CWA 觀測與預報版本本機資料服務，供訓練與推論讀取 canonical TimescaleDB 資料（#30）。
+
+### Fixed
+
+- 隔離缺乏可信 StationId provenance 的舊版 CWA 氣象資料，並禁止 legacy 寫入混入 canonical 觀測資料。
+- 修正 point-in-time 預報版本選取、風向插值與訓練氣象缺口處理，避免未來資料洩漏及固定值回填。
+
 ## [0.3.0] - 2026-09-06
 
 ### Added

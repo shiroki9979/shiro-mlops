@@ -1,9 +1,14 @@
 # Feature Spec: TimescaleDB Local Time-Series Storage & Ingestion Pipeline
 
-**Status:** implemented
+**Status:** superseded for CWA by ADR-0007 and `docs/SPEC.md`
 **Created:** 2026-08-26
-**Last Updated:** 2026-09-04
+**Last Updated:** 2026-09-07
 **Feature Slug:** `timescaledb-local-storage`
+
+---
+
+> [!NOTE]
+> 本文件保留 TimescaleDB 初始導入的歷史設計。CWA canonical schema、scheduled ingestion 邊界與消費契約已由 [ADR-0007](../adr/0007-isolate-cwa-access-behind-scheduled-ingestion.md) 及 [系統規格](../SPEC.md) 取代；不得將本文的 `raw_cwa_weather`、`upsert_cwa_weather` 或 `raw_weather_obs_data` 視為現行介面。
 
 ---
 

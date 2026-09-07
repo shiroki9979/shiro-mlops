@@ -1,5 +1,8 @@
 # 如何在全地端運行完整 MLOps 容器化環境
 
+- 建立日期：2026-08-23
+- 最後更新：2026-09-07
+
 > [!NOTE]
 > **Diátaxis 象限鎖定**
 >
@@ -20,6 +23,13 @@
 ---
 
 ## 2. 啟動所有服務
+
+先在專案根目錄準備本機環境變數，並填入 `CWA_API_KEY`；`.env` 已被 Git 忽略：
+
+```bash
+cp .env.example .env
+# 編輯 .env，將 CWA_API_KEY= 設為實際授權碼
+```
 
 在專案根目錄執行：
 
@@ -44,23 +54,22 @@ docker compose -f docker/docker-compose.yml up -d
 | **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:5173` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表與監控 |
 | **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程（Compose 映射 `3000`） |
 | **MLflow Server** | `shiro_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
-| **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | 存取 Swagger UI 或執行 `curl /health` |
+| **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | `/health` 驗證存活；`/ready` 驗證是否可提供完整預測 |
 | **Feast Online Redis** | `shiro_redis` | `localhost:6379` | `docker exec -it shiro_redis redis-cli ping` |
 | **TimescaleDB (時序與 MLflow)** | `shiro_postgres` | `localhost:5432` | 內部容器通訊與時序 Hypertables 存取 |
 
 ---
 
-## 4. 手動觸發 Dagster 完整訓練資產
+## 4. 首次擷取資料並訓練模型
 
 1. 開啟瀏覽器進入 `http://localhost:3000`。
-2. 進入 **Assets** 頁面，點選右上角 **Materialize All**。
-3. Dagster 將依序執行：
-   - `raw_taipower_load_data` (台電資料擷取並 Upsert 至 TimescaleDB)
-   - `raw_weather_obs_data` (氣象觀測擷取並 Upsert 至 TimescaleDB)
-   - `engineered_feature_set` → 產出 `engineered_features` / `taipower_features` / `weather_features`（後兩者經 `feast_io_manager` 發布 Parquet）
-   - `trained_forecaster_model` (LightGBM 訓練並記錄於 MLflow)
-   - `drift_monitoring_report` (計算 MAPE/RMSE 與漂移報告)
-4. 完成後至 `http://localhost:5001` (MLflow) 即可檢視最新產出的模型參數與評估指標。
+2. 先 materialize `raw_cwa_station_observation`，確認三個預設測站觀測已寫入 TimescaleDB。
+3. materialize `raw_cwa_township_forecast`，確認三日與一週預報版本已寫入 TimescaleDB。
+4. 啟動 `daily_training_job`；訓練與推論只讀已入庫的 canonical CWA tables，不會自行呼叫外部 CWA API。
+5. 完成後執行 `curl -i http://localhost:8000/ready`，確認回傳 HTTP 200 及 `normal` 或 `degraded` mode。
+6. 至 `http://localhost:5001` 檢視最新模型參數與評估指標。
+
+在上述資料與模型尚未備妥前，`/health` 仍回傳 HTTP 200，但 `/ready` 與 `/predict` 會明確回報尚未就緒。
 
 ---
 

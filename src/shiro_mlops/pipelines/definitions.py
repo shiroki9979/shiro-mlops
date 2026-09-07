@@ -11,6 +11,10 @@ from shiro_mlops.core.io_managers import (
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets
 from shiro_mlops.pipelines.schedules import (
+    cwa_forecast_job,
+    cwa_forecast_schedule,
+    cwa_observation_job,
+    cwa_observation_schedule,
     daily_training_job,
     daily_training_schedule,
     hourly_drift_job,
@@ -34,11 +38,15 @@ defs = Definitions(
         daily_training_schedule,
         hourly_drift_schedule,
         taipower_supply_demand_snapshot_schedule,
+        cwa_observation_schedule,
+        cwa_forecast_schedule,
     ],
     jobs=[
         daily_training_job,
         hourly_drift_job,
         taipower_supply_demand_snapshot_job,
+        cwa_observation_job,
+        cwa_forecast_job,
     ],
     resources={
         "io_manager": io_manager,

@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hypertables
+from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 
@@ -67,12 +68,12 @@ def test_repo(sqlite_engine: Engine) -> TimeSeriesRepository:
 def populated_repo(
     sqlite_engine: Engine,
     taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
 ) -> TimeSeriesRepository:
     """Create and populate TimeSeriesRepository with fixture data."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
     repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
-    repo.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
+    repo.upsert_cwa_observation_batch(cwa_observation_batch)
     return repo
 
 
@@ -102,6 +103,32 @@ def cwa_obs_df() -> pd.DataFrame:
     df = pd.DataFrame(data)
     df["datetime"] = pd.to_datetime(df["datetime"])
     return df
+
+
+@pytest.fixture
+def cwa_observation_batch(cwa_obs_df: pd.DataFrame) -> CWAObservationBatch:
+    """Build a canonical Taipei observation batch from the stable weather fixture."""
+    return CWAObservationBatch(
+        fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
+        status="complete",
+        missing_station_ids=(),
+        raw_payload={"fixture": "cwa_obs_sample"},
+        observations=tuple(
+            CWAStationObservation(
+                observed_at=row.datetime.to_pydatetime(),
+                station_id="466920",
+                station_name="臺北",
+                town_code="63000050",
+                temperature_c=float(row.temperature),
+                relative_humidity_pct=float(row.relative_humidity),
+                air_pressure_hpa=None,
+                precipitation_mm=None,
+                wind_speed_m_s=None,
+                wind_direction_deg=None,
+            )
+            for row in cwa_obs_df.itertuples()
+        ),
+    )
 
 
 @pytest.fixture

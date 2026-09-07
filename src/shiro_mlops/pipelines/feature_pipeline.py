@@ -165,7 +165,11 @@ def transform_feature_source_data(
     window: FeatureQueryWindow | None = None,
 ) -> pd.DataFrame:
     """Create the model-training feature matrix, optionally clipped to the training window."""
-    features = build_feature_pipeline(load_df=source_data.load, weather_df=source_data.weather)
+    features = build_feature_pipeline(
+        load_df=source_data.load,
+        weather_df=source_data.weather,
+        strict_weather=True,
+    )
     if window is None:
         return features
     return _filter_frame_to_window(features, window)

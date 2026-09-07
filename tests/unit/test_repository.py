@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.transformers import merge_weather_features
+from tests.helpers import canonical_observation_batch
 
 
 @pytest.fixture
@@ -74,15 +75,15 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     )
 
     repository.upsert_taipower_load(load_df)
-    repository.upsert_cwa_weather(weather_df)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(weather_df))
 
     with repository.engine.connect() as conn:
         stored_load_time = pd.read_sql_query("SELECT time FROM raw_taipower_load", conn).iloc[0][
             "time"
         ]
-        stored_weather_time = pd.read_sql_query("SELECT time FROM raw_cwa_weather", conn).iloc[0][
-            "time"
-        ]
+        stored_weather_time = pd.read_sql_query(
+            "SELECT observed_at FROM raw_cwa_station_observation", conn
+        ).iloc[0]["observed_at"]
 
     expected_utc = pd.Timestamp("2026-08-20 06:00:00+00:00")
     assert pd.Timestamp(stored_load_time) == expected_utc
@@ -133,10 +134,10 @@ def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepos
 
 
 def test_upsert_cwa_weather_insert_and_fetch(
-    repository: TimeSeriesRepository, cwa_obs_df: pd.DataFrame
+    repository: TimeSeriesRepository, cwa_obs_df: pd.DataFrame, cwa_observation_batch
 ):
-    """Verify upsert_cwa_weather inserts records and fetch_weather_range retrieves them."""
-    affected = repository.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
+    """Verify canonical observations are exposed through the training weather query."""
+    affected = repository.upsert_cwa_observation_batch(cwa_observation_batch)
     assert affected == len(cwa_obs_df)
 
     fetched_df = repository.fetch_weather_range(location="Taipei")
@@ -149,31 +150,64 @@ def test_upsert_cwa_weather_insert_and_fetch(
     assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(80.0)
 
 
+def test_legacy_weather_upsert_is_rejected_before_it_can_create_canonical_provenance(
+    repository: TimeSeriesRepository,
+) -> None:
+    """Legacy location labels must never be converted into canonical station identities."""
+    legacy_weather = pd.DataFrame(
+        [
+            {
+                "datetime": "2026-08-20 00:00:00",
+                "location": "Unknown",
+                "temperature": 27.0,
+                "relative_humidity": 80.0,
+            }
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
+        repository.upsert_cwa_weather(legacy_weather)
+
+    assert repository.fetch_cwa_station_observations().empty
+
+
+def test_fetch_weather_range_keeps_canonical_station_identity(
+    repository: TimeSeriesRepository,
+    cwa_observation_batch,
+) -> None:
+    """Training source rows retain StationId so strict gap handling is selected."""
+    repository.upsert_cwa_observation_batch(cwa_observation_batch)
+
+    weather = repository.fetch_weather_range(location="Taipei")
+
+    assert set(weather["station_id"]) == {"466920"}
+
+
 def test_upsert_cwa_weather_idempotency_and_update(repository: TimeSeriesRepository):
     """Verify ON CONFLICT DO UPDATE updates temperature and relative_humidity on conflict."""
     initial_df = pd.DataFrame(
         [
             {
-                "time": "2026-08-20 00:00:00",
+                "datetime": "2026-08-20 00:00:00",
                 "temperature": 27.0,
                 "relative_humidity": 80.0,
                 "location": "Taipei",
             }
         ]
     )
-    repository.upsert_cwa_weather(initial_df)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(initial_df))
 
     updated_df = pd.DataFrame(
         [
             {
-                "time": "2026-08-20 00:00:00",
+                "datetime": "2026-08-20 00:00:00",
                 "temperature": 29.5,
                 "relative_humidity": 75.0,
                 "location": "Taipei",
             }
         ]
     )
-    repository.upsert_cwa_weather(updated_df)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(updated_df))
 
     fetched_df = repository.fetch_weather_range(location="Taipei")
     assert len(fetched_df) == 1
@@ -188,27 +222,27 @@ def test_upsert_cwa_weather_preserves_non_null_fields_on_partial_update(
     initial_df = pd.DataFrame(
         [
             {
-                "time": "2026-08-20 00:00:00",
+                "datetime": "2026-08-20 00:00:00",
                 "temperature": 27.0,
                 "relative_humidity": 80.0,
                 "location": "Taipei",
             }
         ]
     )
-    repository.upsert_cwa_weather(initial_df)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(initial_df))
 
     # Partial update: new temperature, relative_humidity is None/NaN
     partial_df = pd.DataFrame(
         [
             {
-                "time": "2026-08-20 00:00:00",
+                "datetime": "2026-08-20 00:00:00",
                 "temperature": 31.0,
                 "relative_humidity": None,
                 "location": "Taipei",
             }
         ]
     )
-    repository.upsert_cwa_weather(partial_df)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(partial_df))
 
     fetched_df = repository.fetch_weather_range(location="Taipei")
     assert len(fetched_df) == 1
@@ -221,7 +255,8 @@ def test_upsert_empty_dataframe(repository: TimeSeriesRepository):
     """Verify upsert methods gracefully handle empty DataFrames returning 0."""
     empty_df = pd.DataFrame()
     assert repository.upsert_taipower_load(empty_df) == 0
-    assert repository.upsert_cwa_weather(empty_df) == 0
+    with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
+        repository.upsert_cwa_weather(empty_df)
 
 
 def test_fetch_load_range_filters_and_sorting(repository: TimeSeriesRepository):
@@ -273,7 +308,7 @@ def test_fetch_weather_range_filters_and_sorting(repository: TimeSeriesRepositor
             },
         ]
     )
-    repository.upsert_cwa_weather(df)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(df))
 
     filtered_df = repository.fetch_weather_range(
         start_time="2026-08-20 01:00:00",

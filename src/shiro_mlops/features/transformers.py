@@ -15,6 +15,13 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 
+def _fill_weather_series(series: pd.Series, *, strict: bool, default: float) -> pd.Series:
+    """Fill weather values without future leakage in strict training mode."""
+    if strict:
+        return series.ffill(limit=2)
+    return series.ffill().bfill().fillna(default)
+
+
 def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL) -> pd.DataFrame:
     """Generate cyclical and calendar features from datetime."""
     df = df.copy()
@@ -91,6 +98,7 @@ def merge_weather_features(
     weather_df: pd.DataFrame,
     datetime_col: str = DATETIME_COL,
     location_col: str = LOCATION_COL,
+    strict_weather: bool = False,
 ) -> pd.DataFrame:
     """Merge load DataFrame with weather observations or forecasts matching datetime and location."""
     load_df = load_df.copy()
@@ -116,27 +124,31 @@ def merge_weather_features(
 
     merged = pd.merge(load_df, clean_weather, on=join_keys, how="left")
 
-    # Forward fill or fill mean for missing weather values, isolated per location when available
+    # Forward fill weather values; strict training mode disables future-looking fill.
     if TEMPERATURE_COL in merged.columns:
         if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[TEMPERATURE_COL] = (
-                merged.groupby(location_col)[TEMPERATURE_COL]
-                .transform(lambda s: s.ffill().bfill())
-                .fillna(25.0)
+            merged[TEMPERATURE_COL] = merged.groupby(location_col)[TEMPERATURE_COL].transform(
+                lambda series: _fill_weather_series(series, strict=strict_weather, default=25.0)
             )
         else:
-            merged[TEMPERATURE_COL] = merged[TEMPERATURE_COL].ffill().bfill().fillna(25.0)
+            merged[TEMPERATURE_COL] = (
+                merged[TEMPERATURE_COL].ffill(limit=2)
+                if strict_weather
+                else merged[TEMPERATURE_COL].ffill().bfill().fillna(25.0)
+            )
 
     if RELATIVE_HUMIDITY_COL in merged.columns:
         if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[RELATIVE_HUMIDITY_COL] = (
-                merged.groupby(location_col)[RELATIVE_HUMIDITY_COL]
-                .transform(lambda s: s.ffill().bfill())
-                .fillna(70.0)
+            merged[RELATIVE_HUMIDITY_COL] = merged.groupby(location_col)[
+                RELATIVE_HUMIDITY_COL
+            ].transform(
+                lambda series: _fill_weather_series(series, strict=strict_weather, default=70.0)
             )
         else:
             merged[RELATIVE_HUMIDITY_COL] = (
-                merged[RELATIVE_HUMIDITY_COL].ffill().bfill().fillna(70.0)
+                merged[RELATIVE_HUMIDITY_COL].ffill(limit=2)
+                if strict_weather
+                else merged[RELATIVE_HUMIDITY_COL].ffill().bfill().fillna(70.0)
             )
 
     return merged
@@ -149,6 +161,7 @@ def build_feature_pipeline(
     windows: list[int] | None = None,
     drop_na: bool = True,
     location_col: str = LOCATION_COL,
+    strict_weather: bool = False,
 ) -> pd.DataFrame:
     """End-to-end feature pipeline building calendar, weather, lag, and rolling features isolated by location."""
     df = load_df.copy()
@@ -159,7 +172,9 @@ def build_feature_pipeline(
     df = df.sort_values(sort_cols).reset_index(drop=True)
 
     if weather_df is not None:
-        df = merge_weather_features(df, weather_df, location_col=location_col)
+        df = merge_weather_features(
+            df, weather_df, location_col=location_col, strict_weather=strict_weather
+        )
 
     if has_location and df[location_col].nunique() > 1:
         min_len = int(df.groupby(location_col).size().min())
@@ -222,8 +237,17 @@ def build_feature_pipeline(
         ]
         for col in load_feature_cols:
             df[col] = df[col].ffill().fillna(non_leaking_fill)
-        other_cols = [col for col in df.columns if col not in load_feature_cols]
-        df[other_cols] = df[other_cols].ffill().bfill().fillna(0.0)
+        if strict_weather:
+            weather_columns = [
+                column
+                for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
+                if column in df.columns
+            ]
+            if weather_columns:
+                df = df.dropna(subset=weather_columns)
+        else:
+            other_cols = [col for col in df.columns if col not in load_feature_cols]
+            df[other_cols] = df[other_cols].ffill().bfill().fillna(0.0)
         df = df.reset_index(drop=True)
 
     return df
