@@ -2,7 +2,6 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -45,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         pass
 
-    model_path = Path("data/model.joblib")
+    model_path = settings.DATA_DIR / "model.joblib"
 
     if model_path.exists():
         try:

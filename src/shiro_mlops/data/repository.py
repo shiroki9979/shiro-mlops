@@ -24,6 +24,7 @@ from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
     CWAObservationBatch,
+    CWAStationObservation,
 )
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
@@ -213,7 +214,7 @@ class TimeSeriesRepository:
         df: pd.DataFrame,
         default_location: str = DEFAULT_LOCATION,
     ) -> int:
-        """Upsert CWA weather observation records into raw_cwa_weather table.
+        """Compatibility upsert; canonical station rows are the serving source.
 
         Handles composite primary key conflict on (time, location) by updating
         temperature and relative_humidity with non-null values.
@@ -235,43 +236,68 @@ class TimeSeriesRepository:
 
         work_df = _prepare_timeseries_df(df, default_location=default_location)
 
-        records: list[dict[str, Any]] = [
+        station_by_alias = {location.alias: location for location in DEFAULT_CWA_LOCATIONS.values()}
+        observations = tuple(
+            CWAStationObservation(
+                observed_at=pd.Timestamp(row["time"]),
+                station_id=station_by_alias.get(
+                    str(row[LOCATION_COL]), DEFAULT_CWA_LOCATIONS["Taipei"]
+                ).station_id,
+                station_name=str(row[LOCATION_COL]),
+                town_code=None,
+                temperature_c=(
+                    float(row[TEMPERATURE_COL])
+                    if TEMPERATURE_COL in row and pd.notna(row[TEMPERATURE_COL])
+                    else None
+                ),
+                relative_humidity_pct=(
+                    float(row[RELATIVE_HUMIDITY_COL])
+                    if RELATIVE_HUMIDITY_COL in row and pd.notna(row[RELATIVE_HUMIDITY_COL])
+                    else None
+                ),
+                air_pressure_hpa=None,
+                precipitation_mm=None,
+                wind_speed_m_s=None,
+                wind_direction_deg=None,
+            )
+            for _, row in work_df.iterrows()
+        )
+        fetched_at = pd.Timestamp(work_df["time"].max()).to_pydatetime()
+        batch = CWAObservationBatch(
+            fetched_at=fetched_at,
+            status="complete",
+            missing_station_ids=(),
+            raw_payload={"compatibility": "upsert_cwa_weather"},
+            observations=observations,
+        )
+        count = self.upsert_cwa_observation_batch(batch)
+        legacy_records = [
             {
                 "time": (
                     row["time"].to_pydatetime()
                     if hasattr(row["time"], "to_pydatetime")
                     else row["time"]
                 ),
-                "location": str(row[LOCATION_COL]),
-                "temperature": (
-                    float(row[TEMPERATURE_COL])
-                    if TEMPERATURE_COL in row and pd.notna(row[TEMPERATURE_COL])
-                    else None
-                ),
-                "relative_humidity": (
-                    float(row[RELATIVE_HUMIDITY_COL])
-                    if RELATIVE_HUMIDITY_COL in row and pd.notna(row[RELATIVE_HUMIDITY_COL])
-                    else None
-                ),
+                "location": row[LOCATION_COL],
+                "temperature": row.get(TEMPERATURE_COL),
+                "relative_humidity": row.get(RELATIVE_HUMIDITY_COL),
             }
             for _, row in work_df.iterrows()
         ]
-
-        upsert_stmt = text(
-            """
-            INSERT INTO raw_cwa_weather (time, location, temperature, relative_humidity)
-            VALUES (:time, :location, :temperature, :relative_humidity)
-            ON CONFLICT (time, location) DO UPDATE SET
-                temperature = COALESCE(EXCLUDED.temperature, raw_cwa_weather.temperature),
-                relative_humidity = COALESCE(EXCLUDED.relative_humidity, raw_cwa_weather.relative_humidity)
-            """
-        )
-
         with self.engine.begin() as conn:
-            conn.execute(upsert_stmt, records)
-
-        logger.info(f"Upserted {len(records)} CWA weather records into raw_cwa_weather.")
-        return len(records)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO raw_cwa_weather (time, location, temperature, relative_humidity)
+                    VALUES (:time, :location, :temperature, :relative_humidity)
+                    ON CONFLICT (time, location) DO UPDATE SET
+                        temperature = COALESCE(EXCLUDED.temperature, raw_cwa_weather.temperature),
+                        relative_humidity = COALESCE(EXCLUDED.relative_humidity, raw_cwa_weather.relative_humidity)
+                    """
+                ),
+                legacy_records,
+            )
+        return count
 
     def upsert_cwa_observation_batch(self, batch: CWAObservationBatch) -> int:
         """Persist one canonical CWA observation batch and its typed children atomically."""
@@ -321,8 +347,8 @@ class TimeSeriesRepository:
             ON CONFLICT (observed_at, station_id) DO UPDATE SET
                 station_name = EXCLUDED.station_name,
                 town_code = EXCLUDED.town_code,
-                temperature_c = EXCLUDED.temperature_c,
-                relative_humidity_pct = EXCLUDED.relative_humidity_pct,
+                temperature_c = COALESCE(EXCLUDED.temperature_c, raw_cwa_station_observation.temperature_c),
+                relative_humidity_pct = COALESCE(EXCLUDED.relative_humidity_pct, raw_cwa_station_observation.relative_humidity_pct),
                 air_pressure_hpa = EXCLUDED.air_pressure_hpa,
                 precipitation_mm = EXCLUDED.precipitation_mm,
                 wind_speed_m_s = EXCLUDED.wind_speed_m_s,
@@ -462,6 +488,8 @@ class TimeSeriesRepository:
         geocode: str | None = None,
         dataset_id: str | None = None,
         issued_before: datetime | str | None = None,
+        valid_start: datetime | str | None = None,
+        valid_end: datetime | str | None = None,
     ) -> pd.DataFrame:
         """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
         clauses = ["1=1"]
@@ -477,6 +505,14 @@ class TimeSeriesRepository:
             params["issued_before"] = _taiwan_instant_to_utc(
                 pd.Timestamp(issued_before).to_pydatetime()
             )
+        if valid_start is not None:
+            clauses.append("valid_to >= :valid_start")
+            params["valid_start"] = _taiwan_instant_to_utc(
+                pd.Timestamp(valid_start).to_pydatetime()
+            )
+        if valid_end is not None:
+            clauses.append("valid_from <= :valid_end")
+            params["valid_end"] = _taiwan_instant_to_utc(pd.Timestamp(valid_end).to_pydatetime())
         query = f"""
             SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
                    temperature_c, dew_point_c, apparent_temperature_c, relative_humidity_pct,
@@ -613,44 +649,22 @@ class TimeSeriesRepository:
             )
         except SQLAlchemyError:
             canonical = pd.DataFrame()
-        if not canonical.empty:
-            result = canonical.rename(
-                columns={
-                    "observed_at": "time",
-                    "temperature_c": TEMPERATURE_COL,
-                    "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
-                }
-            )
-            aliases_by_station = {
-                value.station_id: value.alias for value in DEFAULT_CWA_LOCATIONS.values()
+        result = canonical.rename(
+            columns={
+                "observed_at": "time",
+                "temperature_c": TEMPERATURE_COL,
+                "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
             }
-            result[LOCATION_COL] = (
-                result["station_id"].map(aliases_by_station).fillna(location or DEFAULT_LOCATION)
-            )
-            return result[
-                ["time", LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL, "created_at"]
-            ]
-
-        where_clause, params = _build_time_location_filter(start_time, end_time, location)
-        query = f"""
-            SELECT time, location, temperature, relative_humidity, created_at
-            FROM raw_cwa_weather
-            WHERE {where_clause}
-            ORDER BY time ASC, location ASC
-        """
-
-        with self.engine.connect() as conn:
-            df = pd.read_sql_query(text(query), con=conn, params=params)
-
-        if df.empty:
-            empty_df = pd.DataFrame(
-                columns=["time", "location", "temperature", "relative_humidity", "created_at"]
-            )
-            empty_df["time"] = pd.to_datetime(empty_df["time"])
-            return empty_df
-
-        df["time"] = utc_to_taiwan_datetime(df["time"])
-        return df
+        )
+        aliases_by_station = {
+            value.station_id: value.alias for value in DEFAULT_CWA_LOCATIONS.values()
+        }
+        result[LOCATION_COL] = (
+            result["station_id"].map(aliases_by_station).fillna(location or DEFAULT_LOCATION)
+        )
+        if result.empty:
+            result["time"] = pd.to_datetime(result["time"])
+        return result[["time", LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL, "created_at"]]
 
     def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
         """Upsert a Taipower supply-demand snapshot keyed by observed_at."""
