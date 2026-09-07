@@ -82,7 +82,7 @@ def test_timescale_init_ddl_content():
 
     assert "CREATE EXTENSION IF NOT EXISTS timescaledb" in ddl
     assert "raw_taipower_load" in ddl
-    assert "raw_cwa_weather" in ddl
+    assert "legacy_cwa_weather" in ddl
     assert "raw_taipower_supply_demand_snapshot" in ddl
     assert "raw_taipower_regional_supply_demand_snapshot" in ddl
     assert "raw_taipower_unit_generation_snapshot" in ddl
@@ -97,7 +97,7 @@ def test_timescale_init_ddl_content():
     assert "chunk_time_interval => INTERVAL '7 days'" in ddl
     assert "create_hypertable" in ddl
     assert "'raw_taipower_load'" in ddl
-    assert "'raw_cwa_weather'" in ddl
+    assert "'legacy_cwa_weather'" in ddl
     assert "'raw_taipower_supply_demand_snapshot'" in ddl
     assert "'raw_taipower_regional_supply_demand_snapshot'" in ddl
     assert "'raw_taipower_unit_generation_snapshot'" in ddl
@@ -117,7 +117,7 @@ def test_docker_init_sql_file_exists_and_matches():
 
     sql_content = sql_path.read_text(encoding="utf-8")
     assert "raw_taipower_load" in sql_content
-    assert "raw_cwa_weather" in sql_content
+    assert "legacy_cwa_weather" in sql_content
     assert "raw_taipower_supply_demand_snapshot" in sql_content
     assert "raw_taipower_regional_supply_demand_snapshot" in sql_content
     assert "raw_taipower_unit_generation_snapshot" in sql_content
@@ -188,7 +188,7 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         inspector = inspect(engine)
         tables = inspector.get_table_names()
         assert "raw_taipower_load" in tables
-        assert "raw_cwa_weather" in tables
+        assert "legacy_cwa_weather" in tables
         assert "raw_taipower_supply_demand_snapshot" in tables
         assert "raw_taipower_regional_supply_demand_snapshot" in tables
         assert "raw_taipower_unit_generation_snapshot" in tables
@@ -213,6 +213,48 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
             assert len(rows) == 1
             assert rows[0][1] == "Taipei"
             assert rows[0][2] == 26500.0
+    finally:
+        engine.dispose()
+
+
+def test_ensure_timescale_hypertables_moves_old_weather_rows_to_legacy_storage(tmp_path) -> None:
+    """An existing ambiguous weather table must not survive as a canonical-looking source."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_weather.db'}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE raw_cwa_weather (
+                        time TIMESTAMP NOT NULL,
+                        location VARCHAR(64) NOT NULL,
+                        temperature DOUBLE PRECISION,
+                        relative_humidity DOUBLE PRECISION,
+                        created_at TIMESTAMP,
+                        PRIMARY KEY (time, location)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO raw_cwa_weather (time, location, temperature, relative_humidity)
+                    VALUES ('2026-08-20 00:00:00', 'Unknown', 27.0, 80.0)
+                    """
+                )
+            )
+
+        ensure_timescale_hypertables(engine)
+
+        inspector = inspect(engine)
+        assert "raw_cwa_weather" not in inspector.get_table_names()
+        assert "legacy_cwa_weather" in inspector.get_table_names()
+        with engine.connect() as connection:
+            rows = connection.execute(text("SELECT location FROM legacy_cwa_weather")).fetchall()
+        assert rows == [("Unknown",)]
     finally:
         engine.dispose()
 

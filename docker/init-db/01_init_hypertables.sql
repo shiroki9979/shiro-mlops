@@ -18,8 +18,9 @@ SELECT create_hypertable(
     migrate_data => TRUE
 );
 
--- 2. Raw CWA Weather Observations Table & Hypertable
-CREATE TABLE IF NOT EXISTS raw_cwa_weather (
+-- 2. Legacy CWA weather records. These rows lack trustworthy StationId provenance
+-- and are retained for audit only; canonical consumers use station observations below.
+CREATE TABLE IF NOT EXISTS legacy_cwa_weather (
     time TIMESTAMPTZ NOT NULL,
     location VARCHAR(64) NOT NULL,
     temperature DOUBLE PRECISION,
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS raw_cwa_weather (
 );
 
 SELECT create_hypertable(
-    'raw_cwa_weather',
+    'legacy_cwa_weather',
     'time',
     chunk_time_interval => INTERVAL '7 days',
     if_not_exists => TRUE,

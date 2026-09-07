@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -33,6 +33,8 @@ DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
     "Kaohsiung": CWALocation("Kaohsiung", "467441", "64000040"),
 }
 
+CWAIngestionStatus = Literal["complete", "incomplete"]
+
 
 @dataclass(frozen=True)
 class CWAStationObservation:
@@ -55,7 +57,7 @@ class CWAObservationBatch:
     """One source response and its canonical observations."""
 
     fetched_at: datetime
-    status: str
+    status: CWAIngestionStatus
     missing_station_ids: tuple[str, ...]
     raw_payload: Any
     observations: tuple[CWAStationObservation, ...]
@@ -86,7 +88,7 @@ class CWAForecastRelease:
     issued_at: pd.Timestamp
     source_updated_at: pd.Timestamp
     fetched_at: datetime
-    status: str
+    status: CWAIngestionStatus
     missing_geocodes: tuple[str, ...]
     raw_payload: Any
     forecasts: tuple[CWATownshipForecast, ...]
@@ -371,8 +373,11 @@ def parse_forecast_release(
         geocode = str(location.get("geocode") or location.get("Geocode") or "").strip()
         if not geocode or geocode not in expected_geocodes:
             continue
+        element_rows = _forecast_element_rows(location)
+        if not element_rows:
+            continue
         seen_geocodes.add(geocode)
-        for (valid_from, valid_to), values in _forecast_element_rows(location).items():
+        for (valid_from, valid_to), values in element_rows.items():
             forecasts.append(
                 CWATownshipForecast(
                     valid_from=valid_from,
@@ -504,11 +509,7 @@ class CWAClient:
         self, locations: dict[str, CWALocation] | None = None
     ) -> CWAObservationBatch:
         """Fetch and parse all configured station observations as one batch."""
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(self.obs_url, params={"Authorization": self.api_key})
-            if hasattr(response, "raise_for_status"):
-                response.raise_for_status()
-            payload = json.loads(response.text)
+        payload = self._fetch_json(self.obs_url)
         return parse_observation_batch(payload, locations=locations)
 
     def fetch_forecast_release(
@@ -519,60 +520,13 @@ class CWAClient:
         """Fetch and parse one versioned township forecast dataset."""
         if dataset_id not in self.forecast_urls:
             raise ValueError(f"Unsupported CWA forecast dataset: {dataset_id}")
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(
-                self.forecast_urls[dataset_id], params={"Authorization": self.api_key}
-            )
-            if hasattr(response, "raise_for_status"):
-                response.raise_for_status()
-            payload = json.loads(response.text)
+        payload = self._fetch_json(self.forecast_urls[dataset_id])
         return parse_forecast_release(payload, dataset_id=dataset_id, locations=locations)
 
-    def fetch_observations(self, location: str = "Taipei") -> pd.DataFrame:
-        """Fetch latest weather observations."""
+    def _fetch_json(self, url: str) -> Any:
+        """Fetch one CWA source payload through the canonical ingestion boundary."""
         with httpx.Client(timeout=10.0) as client:
-            response = client.get(
-                self.obs_url, params={"Authorization": self.api_key, "locationName": location}
-            )
+            response = client.get(url, params={"Authorization": self.api_key})
             if hasattr(response, "raise_for_status"):
                 response.raise_for_status()
-            data = json.loads(response.text)
-
-        df = _parse_cwa_observations_payload(data, fallback_location=location)
-
-        if DATETIME_COL in df.columns:
-            df[DATETIME_COL] = standardize_taiwan_datetime(df[DATETIME_COL])
-        if TEMPERATURE_COL in df.columns:
-            df[TEMPERATURE_COL] = pd.to_numeric(df[TEMPERATURE_COL], errors="coerce").astype(float)
-        if RELATIVE_HUMIDITY_COL in df.columns:
-            df[RELATIVE_HUMIDITY_COL] = pd.to_numeric(
-                df[RELATIVE_HUMIDITY_COL], errors="coerce"
-            ).astype(float)
-
-        return df
-
-    def fetch_forecast(self, location: str = "Taipei", horizon_hours: int = 24) -> pd.DataFrame:
-        """Fetch future weather forecasts for up to horizon_hours."""
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(
-                self.forecast_url, params={"Authorization": self.api_key, "locationName": location}
-            )
-            if hasattr(response, "raise_for_status"):
-                response.raise_for_status()
-            data = json.loads(response.text)
-
-        df = _parse_cwa_observations_payload(data, fallback_location=location)
-
-        if DATETIME_COL in df.columns:
-            df[DATETIME_COL] = standardize_taiwan_datetime(df[DATETIME_COL])
-        if TEMPERATURE_COL in df.columns:
-            df[TEMPERATURE_COL] = pd.to_numeric(df[TEMPERATURE_COL], errors="coerce").astype(float)
-        if RELATIVE_HUMIDITY_COL in df.columns:
-            df[RELATIVE_HUMIDITY_COL] = pd.to_numeric(
-                df[RELATIVE_HUMIDITY_COL], errors="coerce"
-            ).astype(float)
-
-        if len(df) > horizon_hours:
-            df = df.head(horizon_hours)
-
-        return df
+            return json.loads(response.text)

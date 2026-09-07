@@ -88,3 +88,59 @@ def test_resolver_uses_previous_day_observation_when_forecast_is_stale() -> None
     assert result.dataframe.loc[0, "temperature"] == 28.0
     assert result.dataframe.loc[0, "relative_humidity"] == 75.0
     assert result.sources[0]["temperature"]["source"] == "previous_day_observation"
+
+
+def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
+    """Degraded backtests may only use observations that already existed at prediction time."""
+    repository = MagicMock()
+    repository.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
+    repository.fetch_cwa_station_observations.return_value = pd.DataFrame()
+    as_of = datetime(2026, 8, 20, 12)
+
+    resolve_weather(
+        repository,
+        start_time=datetime(2026, 8, 20, 13),
+        horizon_hours=24,
+        as_of=as_of,
+    )
+
+    assert repository.fetch_cwa_station_observations.call_args.kwargs["end_time"] == as_of
+    assert repository.fetch_cwa_forecast_rows.call_args.kwargs["source_updated_before"] == as_of
+
+
+def test_resolver_does_not_interpolate_wind_direction() -> None:
+    """Categorical wind direction may be exact but must never be fabricated between points."""
+    repository = MagicMock()
+    repository.fetch_cwa_forecast_rows.return_value = pd.DataFrame(
+        [
+            {
+                "dataset_id": "F-D0047-089",
+                "issued_at": pd.Timestamp("2026-08-20 10:00"),
+                "source_updated_at": pd.Timestamp("2026-08-20 10:00"),
+                "valid_from": pd.Timestamp("2026-08-20 12:00"),
+                "valid_to": pd.Timestamp("2026-08-20 12:00"),
+                "geocode": "63000050",
+                "wind_direction": "East",
+            },
+            {
+                "dataset_id": "F-D0047-089",
+                "issued_at": pd.Timestamp("2026-08-20 10:00"),
+                "source_updated_at": pd.Timestamp("2026-08-20 10:00"),
+                "valid_from": pd.Timestamp("2026-08-20 14:00"),
+                "valid_to": pd.Timestamp("2026-08-20 14:00"),
+                "geocode": "63000050",
+                "wind_direction": "West",
+            },
+        ]
+    )
+    repository.fetch_cwa_station_observations.return_value = pd.DataFrame()
+
+    result = resolve_weather(
+        repository,
+        start_time=datetime(2026, 8, 20, 13),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 11),
+        fields=("wind_direction",),
+    )
+
+    assert result.mode == "unavailable"

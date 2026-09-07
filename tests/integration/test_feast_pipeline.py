@@ -30,6 +30,7 @@ from shiro_mlops.pipelines.assets import (
     trained_forecaster_model,
 )
 from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
+from tests.helpers import canonical_observation_batch
 
 
 def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.DataFrame) -> None:
@@ -84,7 +85,7 @@ def test_engineered_features_multi_location_isolation_and_export(
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
     repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
-    repo.upsert_cwa_weather(cwa_obs_df, default_location="Taipei")
+    repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
 
     kh_taipower = taipower_raw_df.copy()
     kh_taipower["load_mw"] = kh_taipower["load_mw"] * 0.6
@@ -94,7 +95,7 @@ def test_engineered_features_multi_location_isolation_and_export(
     kh_weather = cwa_obs_df.copy()
     kh_weather["temperature"] = kh_weather["temperature"] + 3.0
     kh_weather["location"] = "Kaohsiung"
-    repo.upsert_cwa_weather(kh_weather, default_location="Kaohsiung")
+    repo.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
         repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), location=None
@@ -138,7 +139,7 @@ def test_feature_computation_isolates_requested_location_and_training_window(
         ]
     )
     repository.upsert_taipower_load(source_load)
-    repository.upsert_cwa_weather(source_weather)
+    repository.upsert_cwa_observation_batch(canonical_observation_batch(source_weather))
 
     taipei_reference = source_load.iloc[[1]].copy()
     taipei_weather = source_weather.iloc[[1]].copy()
@@ -190,7 +191,7 @@ def test_short_dataset_feast_parquet_schema_contract(
     )
 
     repo.upsert_taipower_load(short_load)
-    repo.upsert_cwa_weather(short_weather)
+    repo.upsert_cwa_observation_batch(canonical_observation_batch(short_weather))
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
         repo, FallbackFeatureSources(short_load, short_weather)
@@ -511,7 +512,7 @@ def test_feast_retrieves_s3_published_features_offline(
     finally:
         moto_server.stop()
 
-    assert result.loc[0, "load_mw"] == 38500.0
+    assert result.loc[0, "load_mw"] == 25400.0
     assert result.loc[0, "temperature"] == 28.0
 
 

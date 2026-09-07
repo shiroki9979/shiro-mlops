@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from shiro_mlops.data.weather_resolution import WeatherResolution
 from shiro_mlops.features.transformers import build_feature_pipeline
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.service.api import app, model_store
@@ -19,6 +20,41 @@ def test_api_health_endpoint() -> None:
     assert data["status"] == "ok"
     assert "version" in data
     assert "environment" in data
+
+
+def test_api_ready_reports_cold_start_without_constructing_a_cwa_client(monkeypatch) -> None:
+    """An empty database is live but not ready until ingestion and training complete."""
+    model_store.forecaster = None
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+
+
+def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
+    """Readiness exposes a usable full-horizon weather mode from persisted sources."""
+    repository = MagicMock()
+    repository.fetch_load_range.return_value = pd.DataFrame(
+        [{"datetime": pd.Timestamp("2026-08-20 12:00"), "load_mw": 30000.0, "location": "Taipei"}]
+    )
+    monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
+    model_store.forecaster = MagicMock()
+    weather = WeatherResolution(
+        dataframe=pd.DataFrame({"datetime": [pd.Timestamp("2026-08-20 13:00")]}),
+        sources=({},),
+        mode="degraded",
+    )
+    monkeypatch.setattr(
+        "shiro_mlops.service.api._resolve_prediction_weather", lambda *args: weather
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "degraded"
 
 
 def test_api_predict_dynamic_horizon(

@@ -1,6 +1,5 @@
 """Offline contract tests for canonical CWA ingestion."""
 
-import json
 from datetime import datetime
 
 import pandas as pd
@@ -8,7 +7,8 @@ import pandas as pd
 from shiro_mlops.core.config import Settings
 from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
-    CWAClient,
+    CWAForecastRelease,
+    CWATownshipForecast,
     parse_forecast_release,
     parse_observation_batch,
 )
@@ -70,24 +70,6 @@ def test_parse_observation_batch_preserves_raw_and_normalizes_special_values() -
     assert observation.air_pressure_hpa == 1008.2
     assert observation.precipitation_mm == 0.0
     assert observation.wind_direction_deg is None
-
-
-def test_client_observation_compatibility_dataframe_still_works(monkeypatch) -> None:
-    payload = _observation_payload()
-
-    class Response:
-        text = json.dumps(payload)
-
-        def raise_for_status(self) -> None:
-            return None
-
-    monkeypatch.setattr("httpx.Client.get", lambda *args, **kwargs: Response())
-
-    frame = CWAClient(api_key="test").fetch_observations()
-
-    assert isinstance(frame, pd.DataFrame)
-    assert frame.loc[0, "temperature"] == 35.7
-    assert frame.loc[0, "relative_humidity"] == 57.0
 
 
 def test_repository_persists_canonical_observation_batch(test_repo: TimeSeriesRepository) -> None:
@@ -202,6 +184,40 @@ def test_parse_forecast_release_uses_interval_boundaries() -> None:
     assert point.valid_to == pd.Timestamp("2026-08-20 15:00:00")
 
 
+def test_parse_forecast_release_marks_a_geocode_missing_when_all_its_times_are_invalid() -> None:
+    """A present location without usable child rows must remain retryable as incomplete."""
+    payload = {
+        "records": {
+            "IssueTime": "2026-08-20T11:00:00+08:00",
+            "Update": "2026-08-20T11:00:00+08:00",
+            "locations": [
+                {
+                    "location": [
+                        {
+                            "geocode": "63000050",
+                            "weatherElement": [
+                                {
+                                    "elementName": "T",
+                                    "time": [
+                                        {
+                                            "DataTime": "not-a-time",
+                                            "elementValue": [{"value": "30"}],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+    release = parse_forecast_release(payload, dataset_id="F-D0047-089")
+
+    assert "63000050" in release.missing_geocodes
+
+
 def test_repository_persists_forecast_vintages_without_overwriting(
     test_repo: TimeSeriesRepository,
 ) -> None:
@@ -246,24 +262,55 @@ def test_repository_persists_forecast_vintages_without_overwriting(
     assert len(set(rows["source_updated_at"])) == 2
 
 
-def test_repository_archives_legacy_weather_without_deleting_values(
+def test_forecast_query_uses_previous_complete_release_when_latest_lacks_requested_geocode(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    frame = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 12:00",
-                "location": "Taipei",
-                "temperature": 30.0,
-                "relative_humidity": 70.0,
-            }
-        ]
+    """A newer incomplete release without Taipei must not hide the prior complete vintage."""
+
+    def release(
+        issued_at: str,
+        status: str,
+        geocode: str,
+        temperature: float,
+    ) -> CWAForecastRelease:
+        timestamp = pd.Timestamp(issued_at)
+        return CWAForecastRelease(
+            dataset_id="F-D0047-089",
+            issued_at=timestamp,
+            source_updated_at=timestamp,
+            fetched_at=timestamp.to_pydatetime(),
+            status=status,  # type: ignore[arg-type]
+            missing_geocodes=() if status == "complete" else ("63000050",),
+            raw_payload={},
+            forecasts=(
+                CWATownshipForecast(
+                    valid_from=pd.Timestamp("2026-08-20 14:00"),
+                    valid_to=pd.Timestamp("2026-08-20 14:00"),
+                    geocode=geocode,
+                    location_name=None,
+                    temperature_c=temperature,
+                    dew_point_c=None,
+                    apparent_temperature_c=None,
+                    relative_humidity_pct=70.0,
+                    probability_of_precipitation_pct=None,
+                    wind_speed_m_s=None,
+                    wind_direction=None,
+                ),
+            ),
+        )
+
+    test_repo.upsert_cwa_forecast_release(release("2026-08-20 10:00", "complete", "63000050", 30.0))
+    test_repo.upsert_cwa_forecast_release(
+        release("2026-08-20 11:00", "incomplete", "63000050", 31.0)
     )
-    test_repo.upsert_cwa_weather(frame)
+    test_repo.upsert_cwa_forecast_release(
+        release("2026-08-20 12:00", "incomplete", "64000040", 32.0)
+    )
 
-    test_repo.archive_legacy_cwa_weather()
-    test_repo.archive_legacy_cwa_weather()
+    rows = test_repo.fetch_cwa_forecast_rows(
+        geocode="63000050",
+        issued_before="2026-08-20 12:00",
+        source_updated_before="2026-08-20 12:00",
+    )
 
-    archived = pd.read_sql_query("SELECT * FROM legacy_cwa_weather", test_repo.engine)
-    assert len(archived) == 1
-    assert archived.iloc[0]["temperature"] == 30.0
+    assert list(rows["temperature_c"]) == [30.0]

@@ -35,41 +35,6 @@ def test_taipower_client_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(df) == 48
 
 
-def test_cwa_client_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test CWAClient observation and forecast parsing with mock JSON fixtures."""
-    with open(FIXTURES_DIR / "cwa_obs_sample.json", encoding="utf-8") as f:
-        obs_json_str = f.read()
-
-    with open(FIXTURES_DIR / "cwa_forecast_sample.json", encoding="utf-8") as f:
-        forecast_json_str = f.read()
-
-    class MockObsResponse:
-        status_code = 200
-        text = obs_json_str
-
-    class MockForecastResponse:
-        status_code = 200
-        text = forecast_json_str
-
-    cwa_client = CWAClient(api_key="test_key")
-
-    monkeypatch.setattr(
-        httpx.Client,
-        "get",
-        lambda self, url, *args, **kwargs: (
-            MockForecastResponse() if "F-D0047-089" in str(url) else MockObsResponse()
-        ),
-    )
-
-    obs_df = cwa_client.fetch_observations()
-    assert not obs_df.empty
-    assert "temperature" in obs_df.columns
-
-    forecast_df = cwa_client.fetch_forecast(horizon_hours=12)
-    assert len(forecast_df) == 12
-    assert "temperature" in forecast_df.columns
-
-
 def test_taipower_client_csv_parsing_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test TaipowerClient with realistic CSV open data fixture."""
     with open(FIXTURES_DIR / "taipower_sample.csv", encoding="utf-8") as f:
@@ -113,24 +78,17 @@ def test_cwa_client_nested_payload_mocked(monkeypatch: pytest.MonkeyPatch) -> No
     cwa_client = CWAClient(api_key="test_key")
     monkeypatch.setattr(httpx.Client, "get", lambda *args, **kwargs: MockResponse())
 
-    df = cwa_client.fetch_observations()
-    assert not df.empty
-    assert DATETIME_COL in df.columns
-    assert "location" in df.columns
-    assert "temperature" in df.columns
-    assert "relative_humidity" in df.columns
-    assert len(df) == 2
+    batch = cwa_client.fetch_observation_batch()
+    assert len(batch.observations) == 1
 
-    locations = set(df["location"])
-    assert "Taipei" in locations
-    assert "Kaohsiung" in locations
-
-    taipei_row = df[df["location"] == "Taipei"].iloc[0]
-    assert taipei_row["temperature"] == pytest.approx(35.7)
-    assert taipei_row["relative_humidity"] == pytest.approx(57.0)
-    # Datetime should be normalized to timezone-naive Taiwan local time
-    assert getattr(df[DATETIME_COL].dtype, "tz", None) is None
-    assert df[DATETIME_COL].iloc[0] == pd.Timestamp("2026-08-20 14:00:00")
+    stations = {observation.station_id for observation in batch.observations}
+    assert stations == {"466920"}
+    taipei = next(
+        observation for observation in batch.observations if observation.station_id == "466920"
+    )
+    assert taipei.temperature_c == pytest.approx(35.7)
+    assert taipei.relative_humidity_pct == pytest.approx(57.0)
+    assert taipei.observed_at == pd.Timestamp("2026-08-20 14:00:00")
 
 
 def test_taipower_and_cwa_timezone_alignment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,13 +118,13 @@ def test_taipower_and_cwa_timezone_alignment(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(httpx.Client, "get", lambda self, url, *a, **kw: MockJSONResp())
     cwa_client = CWAClient(api_key="test_key")
-    weather_df = cwa_client.fetch_observations()
+    weather_batch = cwa_client.fetch_observation_batch()
 
     # Both clients must yield naive datetime64[ns] in Asia/Taipei
     assert getattr(load_df[DATETIME_COL].dtype, "tz", None) is None
-    assert getattr(weather_df[DATETIME_COL].dtype, "tz", None) is None
+    assert all(observation.observed_at.tzinfo is None for observation in weather_batch.observations)
 
     # Target timestamp: 2026-08-20 14:00:00 exists in both
     target_dt = pd.Timestamp("2026-08-20 14:00:00")
     assert target_dt in load_df[DATETIME_COL].values
-    assert target_dt in weather_df[DATETIME_COL].values
+    assert target_dt in {observation.observed_at for observation in weather_batch.observations}
