@@ -149,10 +149,20 @@ def resolve_weather(
     start = _as_timestamp(start_time)
     cutoff = _as_timestamp(as_of or start)
     moments = [start + timedelta(hours=index) for index in range(horizon_hours)]
+    end = moments[-1] if moments else start
     forecasts = _latest_rows(
-        repository.fetch_cwa_forecast_rows(geocode=geocode, issued_before=cutoff)
+        repository.fetch_cwa_forecast_rows(
+            geocode=geocode,
+            issued_before=cutoff,
+            valid_start=start,
+            valid_end=end,
+        )
     )
-    observations = repository.fetch_cwa_station_observations(station_id=station_id)
+    observations = repository.fetch_cwa_station_observations(
+        start_time=start - timedelta(days=366),
+        end_time=end,
+        station_id=station_id,
+    )
     issued = forecasts["issued_at"].max() if not forecasts.empty else None
     stale = issued is None or cutoff - issued > timedelta(hours=7)
     datasets = {
