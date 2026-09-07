@@ -56,6 +56,7 @@ services:
       ENVIRONMENT: local
       CWA_API_KEY: ${CWA_API_KEY:-}
       CWA_LOCATION_ALLOWLIST: ${CWA_LOCATION_ALLOWLIST:-}
+      DATA_DIR: /workspace/data
       REDIS_HOST: redis
       REDIS_PORT: 6379
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -65,6 +66,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    volumes:
+      - ..:/workspace:ro
 
   dagster-webserver:
     build:

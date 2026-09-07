@@ -106,13 +106,12 @@ def raw_taipower_load_data(context: AssetExecutionContext) -> pd.DataFrame:
     return df
 
 
-@asset(
-    group_name="ingestion",
-    description="Fetch raw weather observation data from CWA Open Data",
-    required_resource_keys={"time_series_repo"},
-)
 def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
-    """Asset: Raw CWA weather observation data."""
+    """Legacy direct-fetch helper retained for callers during migration.
+
+    It is intentionally not a Dagster asset; scheduled ingestion uses the
+    canonical ``raw_cwa_station_observation`` asset instead.
+    """
     client = CWAClient(api_key=settings.CWA_API_KEY)
     df = client.fetch_observations()
     context.log.info(f"Fetched {len(df)} CWA weather observation records.")
@@ -151,16 +150,20 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
 )
 def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
     """Asset: repository-only weather source consumed by feature engineering."""
-    observations = _get_time_series_repo(context).fetch_cwa_station_observations()
+    observations = _get_time_series_repo(context).fetch_cwa_station_observations(
+        station_id="466920"
+    )
     if observations.empty:
         raise RuntimeError("No canonical CWA station observations available for training")
-    return observations.rename(
+    result = observations.rename(
         columns={
             "observed_at": "datetime",
             "temperature_c": "temperature",
             "relative_humidity_pct": "relative_humidity",
         }
     )
+    result["location"] = "Taipei"
+    return result
 
 
 @asset(

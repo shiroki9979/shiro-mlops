@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -188,7 +189,7 @@ def parse_observation_batch(
 
     for station in _station_records(payload):
         station_id = str(station.get("StationId") or station.get("stationId") or "").strip()
-        if not station_id:
+        if not station_id or station_id not in stations_by_id:
             continue
         observed_at = _observation_datetime(
             station.get("ObsTime") or station.get("obsTime") or station.get("time")
@@ -230,7 +231,7 @@ def parse_observation_batch(
 
     missing = tuple(sorted(set(stations_by_id) - seen_station_ids))
     return CWAObservationBatch(
-        fetched_at=fetched_at or datetime.now(),
+        fetched_at=fetched_at or datetime.now(ZoneInfo("Asia/Taipei")),
         status="complete" if not missing else "incomplete",
         missing_station_ids=missing,
         raw_payload=payload,
@@ -350,11 +351,9 @@ def parse_forecast_release(
         or records.get("update")
         or (payload.get("Update") if isinstance(payload, dict) else None)
     )
-    fetch_time = fetched_at or datetime.now()
-    issued_at = issued_at or _forecast_timestamp(fetch_time)
-    source_updated_at = source_updated_at or issued_at
+    fetch_time = fetched_at or datetime.now(ZoneInfo("Asia/Taipei"))
     if issued_at is None or source_updated_at is None:
-        raise ValueError("CWA forecast response is missing IssueTime or Update")
+        raise ValueError("CWA forecast response is missing or invalid IssueTime/Update")
 
     catalog = locations or DEFAULT_CWA_LOCATIONS
     expected_geocodes = {location.geocode for location in catalog.values()}
@@ -370,7 +369,7 @@ def parse_forecast_release(
     }
     for location in _forecast_locations(payload):
         geocode = str(location.get("geocode") or location.get("Geocode") or "").strip()
-        if not geocode:
+        if not geocode or geocode not in expected_geocodes:
             continue
         seen_geocodes.add(geocode)
         for (valid_from, valid_to), values in _forecast_element_rows(location).items():
