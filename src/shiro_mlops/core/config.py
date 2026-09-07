@@ -1,9 +1,15 @@
 """Configuration settings with Pydantic."""
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from shiro_mlops.data.cwa_client import CWALocation
 
 
 class Settings(BaseSettings):
@@ -52,6 +58,7 @@ class Settings(BaseSettings):
 
     # External APIs
     CWA_API_KEY: str = ""
+    CWA_LOCATION_ALLOWLIST: str = ""
     TAIPOWER_API_URL: str = (
         "https://data.taipower.com.tw/opendata/apply/file/d015046/台灣電力公司_過去電力供需資訊.csv"
     )
@@ -75,6 +82,35 @@ class Settings(BaseSettings):
     TIMESCALE_DB: str = "shiro_timeseries"
     TIMESCALE_USER: str = "postgres"
     TIMESCALE_PASSWORD: str = "postgrespassword"
+
+    @property
+    def cwa_locations(self) -> dict[str, CWALocation]:
+        """Return the configured CWA location catalog or its safe defaults."""
+        from shiro_mlops.data.cwa_client import DEFAULT_CWA_LOCATIONS, CWALocation
+
+        if not self.CWA_LOCATION_ALLOWLIST.strip():
+            return DEFAULT_CWA_LOCATIONS.copy()
+        try:
+            raw = json.loads(self.CWA_LOCATION_ALLOWLIST)
+        except json.JSONDecodeError as exc:
+            raise ValueError("CWA_LOCATION_ALLOWLIST must be valid JSON") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("CWA_LOCATION_ALLOWLIST must be a JSON object")
+        locations: dict[str, CWALocation] = {}
+        for alias, values in raw.items():
+            if not isinstance(values, dict):
+                raise ValueError(f"CWA location {alias!r} must be an object")
+            try:
+                locations[str(alias)] = CWALocation(
+                    alias=str(alias),
+                    station_id=str(values["station_id"]),
+                    geocode=str(values["geocode"]),
+                )
+            except KeyError as exc:
+                raise ValueError(f"CWA location {alias!r} is missing {exc.args[0]}") from exc
+        if not locations:
+            raise ValueError("CWA_LOCATION_ALLOWLIST cannot be empty")
+        return locations
 
     @property
     def timescale_uri(self) -> str:

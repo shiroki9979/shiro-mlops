@@ -12,7 +12,11 @@ from shiro_mlops.core.constants import (
     DEFAULT_LOCATION,
     LOAD_MW_COL,
 )
-from shiro_mlops.data.cwa_client import CWAClient
+from shiro_mlops.data.cwa_client import (
+    CWAClient,
+    CWAForecastRelease,
+    CWAObservationBatch,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_client import TaipowerClient
 from shiro_mlops.data.taipower_regional_supply_demand import (
@@ -121,6 +125,71 @@ def raw_weather_obs_data(context: AssetExecutionContext) -> pd.DataFrame:
 
 
 @asset(
+    name="raw_cwa_station_observation",
+    group_name="ingestion",
+    description="Fetch and persist canonical CWA station observations",
+    required_resource_keys={"time_series_repo"},
+)
+def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservationBatch:
+    """Asset: canonical CWA station observation batch."""
+    client = CWAClient(api_key=settings.CWA_API_KEY)
+    batch = client.fetch_observation_batch(locations=settings.cwa_locations)
+    repository = _get_time_series_repo(context)
+    persisted = repository.upsert_cwa_observation_batch(batch)
+    context.log.info("Persisted %s canonical CWA station observations.", persisted)
+    if batch.status != "complete":
+        missing = ", ".join(batch.missing_station_ids)
+        raise RuntimeError(f"CWA observation batch incomplete; missing station IDs: {missing}")
+    return batch
+
+
+@asset(
+    name="cwa_observation_feature_source",
+    group_name="features",
+    description="Read canonical CWA station observations for training features",
+    required_resource_keys={"time_series_repo"},
+)
+def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
+    """Asset: repository-only weather source consumed by feature engineering."""
+    observations = _get_time_series_repo(context).fetch_cwa_station_observations()
+    if observations.empty:
+        raise RuntimeError("No canonical CWA station observations available for training")
+    return observations.rename(
+        columns={
+            "observed_at": "datetime",
+            "temperature_c": "temperature",
+            "relative_humidity_pct": "relative_humidity",
+        }
+    )
+
+
+@asset(
+    name="raw_cwa_township_forecast",
+    group_name="ingestion",
+    description="Fetch and persist canonical CWA township forecast vintages",
+    required_resource_keys={"time_series_repo"},
+)
+def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecastRelease]:
+    """Asset: canonical CWA township forecast releases for three-day and weekly products."""
+    client = CWAClient(api_key=settings.CWA_API_KEY)
+    repository = _get_time_series_repo(context)
+    releases: list[CWAForecastRelease] = []
+    missing: dict[str, tuple[str, ...]] = {}
+    for dataset_id in ("F-D0047-089", "F-D0047-091"):
+        release = client.fetch_forecast_release(dataset_id, locations=settings.cwa_locations)
+        repository.upsert_cwa_forecast_release(release)
+        releases.append(release)
+        if release.status != "complete":
+            missing[dataset_id] = release.missing_geocodes
+    if missing:
+        details = "; ".join(
+            f"{dataset}: {', '.join(values)}" for dataset, values in missing.items()
+        )
+        raise RuntimeError(f"CWA forecast release incomplete; missing Geocodes: {details}")
+    return releases
+
+
+@asset(
     group_name="ingestion",
     description="Fetch current Taipower power supply-demand snapshot",
     required_resource_keys={"time_series_repo"},
@@ -207,12 +276,12 @@ def raw_taipower_unit_generation_snapshot(
 def engineered_feature_set(
     context: AssetExecutionContext,
     raw_taipower_load_data: pd.DataFrame,
-    raw_weather_obs_data: pd.DataFrame,
+    cwa_observation_feature_source: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build training features and Feast frames; I/O Manager selects local or S3 publication."""
     fallbacks = FallbackFeatureSources(
         load=raw_taipower_load_data,
-        weather=raw_weather_obs_data,
+        weather=cwa_observation_feature_source,
     )
     features_df, taipower_features, weather_features = compute_engineered_feature_outputs(
         _get_time_series_repo(context),
