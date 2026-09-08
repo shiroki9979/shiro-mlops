@@ -1,5 +1,8 @@
 # Triage Labels
 
+- 建立日期：2026-08-25
+- 最後更新：2026-08-25
+
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
 
 | Label in mattpocock/skills | Label in our tracker | Meaning                                  |

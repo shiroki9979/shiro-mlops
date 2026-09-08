@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-07
+- 最後更新：2026-09-08
 - 專案版本：`0.3.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
@@ -16,6 +16,7 @@
 | **M2: API 穩健度與降級快取** | 建立本地快取與自動重試，落實降級預報模式 | `src/shiro_mlops/data/` | 斷網條件下仍能產出標記 `DEGRADED` 之預測 |
 | **M3: 多測站與行事曆特徵** | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
 | **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
+| **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
 
 ---
 
@@ -94,3 +95,57 @@
 - **完成標準 (DoD)**：
   - 完成 GitHub Rulesets 設定，`main` 分支受 PR 與 CI 門禁保護。
   - 新增或更新相關治理文件，記錄 Rulesets 規範與 bypass 例外清單。
+
+---
+
+### Milestone 5: 營運資料檢視器 (Data Explorer) ([GitHub #40](https://github.com/shiroki9979/shiro-mlops/issues/40))
+
+#### [TICKET-501] 建立共用查詢契約與逐時負載 Explorer ([GitHub #41](https://github.com/shiroki9979/shiro-mlops/issues/41))
+
+- **目標**：以第一個完整垂直切片建立 dataset status、cursor pagination 與 Data Explorer 共用介面。
+- **完成標準 (DoD)**：逐時負載可在有界時間內篩選、分頁、檢視 typed detail 與匯出當頁 CSV；status 及 API／frontend 契約測試通過。
+
+#### [TICKET-502] 加入全台供需 Explorer ([GitHub #44](https://github.com/shiroki9979/shiro-mlops/issues/44))
+
+- **目標**：提供全台供需快照的唯讀營運檢視。
+- **完成標準 (DoD)**：可在七日有界時間內查詢、分頁、檢視 MW／萬瓩與全部 typed fields，並揭露可用性、新鮮度與完整度。
+
+#### [TICKET-503] 加入區域供需 Explorer ([GitHub #45](https://github.com/shiroki9979/shiro-mlops/issues/45))
+
+- **目標**：提供北、中、南、東四區發電與用電快照的唯讀營運檢視。
+- **完成標準 (DoD)**：可依時間、region 與完整度篩選，正確判定每個 slot 是否具備四區，並顯示 MW／萬瓩與 typed detail。
+
+#### [TICKET-504] 加入機組發電 Explorer ([GitHub #46](https://github.com/shiroki9979/shiro-mlops/issues/46))
+
+- **目標**：提供高筆數機組發電快照的唯讀營運檢視。
+- **完成標準 (DoD)**：可依時間、unit type 與 unit name 篩選及 keyset 分頁，正確呈現 nullable typed fields，且不以固定機組數量判定不完整。
+
+#### [TICKET-505] 加入 CWA 測站觀測 Explorer ([GitHub #42](https://github.com/shiroki9979/shiro-mlops/issues/42))
+
+- **目標**：提供 canonical CWA 測站觀測與逐時缺口的唯讀營運檢視。
+- **完成標準 (DoD)**：可依時間與 station 篩選、分頁與檢視 typed fields，並分開顯示 ingestion age、source age 與逐時缺口。
+
+#### [TICKET-506] 加入 CWA Observation Audit History ([GitHub #47](https://github.com/shiroki9979/shiro-mlops/issues/47))
+
+- **目標**：追查 CWA observation batch 的完整與不完整歷史。
+- **完成標準 (DoD)**：可依時間、status 與 missing station identifier 篩選及分頁，可從測站觀測頁 deep-link，且不回傳 raw payload。
+
+#### [TICKET-507] 加入 CWA 鄉鎮預報 Explorer ([GitHub #43](https://github.com/shiroki9979/shiro-mlops/issues/43))
+
+- **目標**：提供 canonical CWA 鄉鎮預報所有已保存 vintages 的唯讀營運檢視。
+- **完成標準 (DoD)**：預設顯示最新發布版本，並可依有效時間、dataset、geocode、issued/updated version 篩選、分頁與檢視 typed fields。
+
+#### [TICKET-508] 加入 CWA Forecast Audit History ([GitHub #48](https://github.com/shiroki9979/shiro-mlops/issues/48))
+
+- **目標**：追查 CWA forecast release 的版本、完整與不完整歷史。
+- **完成標準 (DoD)**：可依時間、dataset、status 與 missing geocode 篩選及分頁，可從鄉鎮預報頁 deep-link，且不回傳 raw payload。
+
+#### [TICKET-509] 整合 Monitoring Data Source Status ([GitHub #49](https://github.com/shiroki9979/shiro-mlops/issues/49))
+
+- **目標**：讓 Monitoring 使用共用 dataset status 顯示所有資料來源的營運狀態。
+- **完成標準 (DoD)**：Monitoring 顯示 availability、freshness 與 completeness，並 deep-link 至對應 Explorer；舊 Feature Store Snapshot 在過渡期間繼續可用。
+
+#### [TICKET-510] 退場舊 Feature Store Snapshot Contract ([GitHub #50](https://github.com/shiroki9979/shiro-mlops/issues/50))
+
+- **目標**：在 Data Explorer 完整可用後移除實際未查詢 Feast 的誤標快照路徑。
+- **完成標準 (DoD)**：舊 Feature Store Snapshot、`/features/latest`、相關 schema、mock、文件與測試已移除，Monitoring 只保留新 Data Source Status。
