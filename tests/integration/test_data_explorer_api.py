@@ -1,5 +1,7 @@
 """Data Explorer HTTP contracts against a real SQLite repository."""
 
+import json
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -22,6 +24,14 @@ def _now() -> datetime:
 
 def _rfc3339(value: datetime) -> str:
     return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
+
+
+def _replace_cursor_key(cursor: str, key: dict[str, str]) -> str:
+    padded = cursor + "=" * (-len(cursor) % 4)
+    payload = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
+    payload["k"] = key
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
 
 
 @pytest.fixture
@@ -53,6 +63,7 @@ def test_data_explorer_is_unavailable_when_disabled(
     monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", False)
     monkeypatch.setattr(settings, "ENVIRONMENT", "aws")
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
+    monkeypatch.setattr("shiro_mlops.core.database.init_db", lambda: None)
     with TestClient(app) as client:
         assert client.get("/data/status").status_code == 404
         assert client.get("/health").json()["data_explorer_enabled"] is False
@@ -62,6 +73,21 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     """過渡快照端點不得再作為營運資料來源。"""
     client, _ = explorer_client
     assert client.get("/features/latest").status_code == 404
+
+
+def test_data_explorer_does_not_allow_cross_origin_browser_access(explorer_client) -> None:
+    """Data Explorer 不得透過 wildcard CORS 提供跨來源讀取。"""
+    client, _ = explorer_client
+
+    response = client.options(
+        "/data/status",
+        headers={
+            "Origin": "https://untrusted.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_status_and_hourly_load_contract(explorer_client) -> None:
@@ -120,6 +146,9 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     )
     assert too_long.status_code == 422
 
+    invalid_time = client.get("/data/power/load", params={"start": "not-a-time"})
+    assert invalid_time.status_code == 422
+
     _upsert_hours(repo, [latest - timedelta(hours=1), latest])
     first_page = client.get(
         "/data/power/load",
@@ -142,6 +171,18 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     )
     assert mismatched.status_code == 400
     assert client.get("/data/power/load", params={"cursor": "not-a-cursor"}).status_code == 400
+
+    missing_key = _replace_cursor_key(cursor, {})
+    malformed = client.get(
+        "/data/power/load",
+        params={
+            "start": _rfc3339(latest - timedelta(hours=1)),
+            "end": _rfc3339(latest),
+            "limit": 1,
+            "cursor": missing_key,
+        },
+    )
+    assert malformed.status_code == 400
 
 
 def test_hourly_load_pagination_and_hourly_gaps(explorer_client) -> None:
@@ -195,6 +236,8 @@ def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_c
     client, repo = explorer_client
     observed = _now().replace(minute=30, second=0, microsecond=0)
     snapshot = _sample_snapshot(observed)
+    earlier_snapshot = _sample_snapshot(observed - timedelta(minutes=20))
+    repo.upsert_supply_demand_snapshot(earlier_snapshot)
     repo.upsert_supply_demand_snapshot(snapshot)
 
     body = client.get(
@@ -212,8 +255,8 @@ def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_c
         if item["id"] == "national_supply_demand"
     )
     assert status["availability"] == "available"
-    assert status["completeness"] == "complete"
-    assert status["missing_slot_count"] == 0
+    assert status["completeness"] == "incomplete"
+    assert status["missing_slot_count"] == 1
 
 
 def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
@@ -414,6 +457,7 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
     assert len(latest_page["items"]) == 1
     assert latest_page["items"][0]["temperature_c"] == 31.0
     assert latest_page["items"][0]["issued_at"] == _rfc3339(newer)
+    assert latest_page["items"][0]["location_name"] == "臺北"
     assert "raw_payload" not in latest_page["items"][0]
     all_vintages = client.get(
         "/data/weather/forecasts",
@@ -424,6 +468,15 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
         },
     ).json()
     assert len(all_vintages["items"]) == 2
+    older_vintage = client.get(
+        "/data/weather/forecasts",
+        params={
+            "start": _rfc3339(valid - timedelta(hours=1)),
+            "end": _rfc3339(valid),
+            "source_updated_at": _rfc3339(older),
+        },
+    ).json()
+    assert [item["temperature_c"] for item in older_vintage["items"]] == [28.0]
     audits = client.get(
         "/data/audits/cwa-forecasts",
         params={"start": _rfc3339(older - timedelta(hours=1)), "end": _rfc3339(newer)},

@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository_utils import deserialize_raw_payload, utc_instant_to_taiwan
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
-from shiro_mlops.service.data_explorer.cursor import decode_cursor, encode_cursor
+from shiro_mlops.service.data_explorer.cursor import CursorError, decode_cursor, encode_cursor
 from shiro_mlops.service.data_explorer.schemas import DatasetStatus, ListEnvelope, StatusResponse
 from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
 from shiro_mlops.service.data_explorer.timefmt import (
@@ -147,7 +147,11 @@ class DataExplorerStore:
     def list_forecasts(self, params: dict[str, Any]) -> ListEnvelope:
         """List persisted CWA township forecasts newest first."""
         query_params = dict(params)
-        if not query_params.get("issued_at") and not _truthy(query_params.get("all_vintages")):
+        if (
+            not query_params.get("issued_at")
+            and not query_params.get("source_updated_at")
+            and not _truthy(query_params.get("all_vintages"))
+        ):
             latest = self._latest_forecast_version(query_params.get("dataset_id"))
             if latest is not None:
                 query_params["dataset_id"] = latest["latest_dataset_id"]
@@ -491,8 +495,9 @@ class DataExplorerStore:
         sql_params.update(cursor_params)
         query = f"""
             SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                   temperature_c, dew_point_c, apparent_temperature_c, relative_humidity_pct,
-                   probability_of_precipitation_pct, wind_speed_m_s, wind_direction, created_at
+                   location_name, temperature_c, dew_point_c, apparent_temperature_c,
+                   relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+                   wind_direction, created_at
             FROM raw_cwa_township_forecast
             WHERE {where}
             ORDER BY valid_from DESC, issued_at DESC, source_updated_at DESC,
@@ -510,6 +515,7 @@ class DataExplorerStore:
                     "valid_from": format_taiwan_time(_taiwan(row["valid_from"])),
                     "valid_to": format_taiwan_time(_taiwan(row["valid_to"])),
                     "geocode": row["geocode"],
+                    "location_name": row["location_name"],
                     "temperature_c": _float(row["temperature_c"]),
                     "dew_point_c": _float(row["dew_point_c"]),
                     "apparent_temperature_c": _float(row["apparent_temperature_c"]),
@@ -627,10 +633,20 @@ class DataExplorerStore:
         missing: list[str] = []
         if latest:
             latest_source = _taiwan(latest["source_at"])
-            window = TimeWindow(latest_source, latest_source)
-            missing = self._ten_minute_gaps(
-                "raw_taipower_supply_demand_snapshot", window, slot_complete=None
+            earliest = self._latest_row(
+                "SELECT MIN(observed_at) AS source_at "
+                "FROM raw_taipower_supply_demand_snapshot "
+                "WHERE observed_at >= :start_time AND observed_at <= :end_time",
+                {
+                    "start_time": to_sql_utc(latest_source - timedelta(hours=24)),
+                    "end_time": to_sql_utc(latest_source),
+                },
             )
+            if earliest and earliest["source_at"] is not None:
+                window = TimeWindow(_taiwan(earliest["source_at"]), latest_source)
+                missing = self._ten_minute_gaps(
+                    "raw_taipower_supply_demand_snapshot", window, slot_complete=None
+                )
         return self._build_status("national_supply_demand", as_of, latest, missing)
 
     def _status_regional(self, as_of: datetime) -> DatasetStatus:
@@ -904,8 +920,13 @@ def resolve_window(
 ) -> TimeWindow:
     """Require a bounded window and reject ranges that exceed the dataset maximum."""
     clock = now_taiwan()
-    parsed_end = parse_api_time(end) if end is not None else clock
-    parsed_start = parse_api_time(start) if start is not None else parsed_end - timedelta(hours=24)
+    try:
+        parsed_end = parse_api_time(end) if end is not None else clock
+        parsed_start = (
+            parse_api_time(start) if start is not None else parsed_end - timedelta(hours=24)
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ExplorerQueryError("start and end must be valid RFC 3339 timestamps") from exc
     if parsed_start > parsed_end:
         raise ExplorerQueryError("start must be earlier than or equal to end")
     if parsed_end - parsed_start > timedelta(days=max_days):
@@ -974,11 +995,15 @@ def _apply_cursor(
 def _sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
     converted: dict[str, Any] = {}
     for column in columns:
-        value = key.get(column)
-        if column in CURSOR_TIME_COLS or column.endswith("_at"):
-            converted[column] = to_sql_utc(value)
-        else:
-            converted[column] = value
+        if column not in key or key[column] is None:
+            raise CursorError("Invalid cursor key")
+        value = key[column]
+        try:
+            converted[column] = (
+                to_sql_utc(value) if column in CURSOR_TIME_COLS or column.endswith("_at") else value
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CursorError("Invalid cursor key") from exc
     return converted
 
 

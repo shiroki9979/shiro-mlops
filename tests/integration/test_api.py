@@ -22,6 +22,19 @@ def test_api_health_endpoint() -> None:
     assert "environment" in data
 
 
+def test_app_startup_skips_timescale_initialization_in_test_environment(monkeypatch) -> None:
+    """測試環境啟動 API 時不得連線預設 TimescaleDB。"""
+    initialization_calls: list[None] = []
+    monkeypatch.setattr(
+        "shiro_mlops.core.database.init_db", lambda: initialization_calls.append(None)
+    )
+
+    with TestClient(app):
+        pass
+
+    assert initialization_calls == []
+
+
 def test_api_ready_reports_cold_start_without_constructing_a_cwa_client(monkeypatch) -> None:
     """An empty database is live but not ready until ingestion and training complete."""
     model_store.forecaster = None

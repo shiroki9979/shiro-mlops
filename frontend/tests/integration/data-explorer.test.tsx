@@ -65,6 +65,24 @@ describe('Data Explorer routes', () => {
       expect(screen.queryByText('營運資料檢視器')).not.toBeInTheDocument()
     })
   })
+
+  it.each([
+    [400, '分頁游標無效或已與目前篩選條件不相容。'],
+    [422, '篩選條件無效，請確認時間範圍與欄位格式。'],
+    [503, '資料庫目前無法連線，請稍後再試。'],
+  ])('distinguishes HTTP %s list failures', async (status, message) => {
+    server.use(
+      http.get('*/data/power/load', () =>
+        HttpResponse.json({ detail: 'request failed' }, { status }),
+      ),
+    )
+
+    renderPath('/data/power/load')
+
+    await waitFor(() => {
+      expect(screen.getByText(message)).toBeInTheDocument()
+    }, { timeout: status === 503 ? 2500 : 1000 })
+  })
 })
 
 describe('Monitoring Data Source Status', () => {
