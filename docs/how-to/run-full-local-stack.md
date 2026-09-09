@@ -1,7 +1,7 @@
 # 如何在全地端運行完整 MLOps 容器化環境
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-08
+- 最後更新：2026-09-09
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -51,10 +51,10 @@ docker compose -f docker/docker-compose.yml up -d
 
 | 元件名稱 | 容器名稱 | 監聽端口 | 驗證方式 |
 | :--- | :--- | :--- | :--- |
-| **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:5173` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表與監控 |
+| **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:5173` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表、監控與 `/data` 營運資料檢視器 |
 | **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程（Compose 映射 `3000`） |
 | **MLflow Server** | `shiro_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
-| **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | `/health` 驗證存活；`/ready` 驗證是否可提供完整預測 |
+| **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | `/health` 驗證存活；`/ready` 驗證是否可提供完整預測；本機環境另提供 `/data` Data Explorer |
 | **Feast Online Redis** | `shiro_redis` | `localhost:6379` | `docker exec -it shiro_redis redis-cli ping` |
 | **TimescaleDB (時序與 MLflow)** | `shiro_postgres` | `localhost:5432` | 內部容器通訊與時序 Hypertables 存取 |
 

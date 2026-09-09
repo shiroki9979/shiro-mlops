@@ -1,0 +1,114 @@
+import { describe, expect, it } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
+import { routeTree } from '../../src/routeTree'
+import { http, HttpResponse } from 'msw'
+import { server } from '../../src/mocks/server'
+
+function renderPath(path: string) {
+  const history = createMemoryHistory({ initialEntries: [path] })
+  const router = createRouter({ routeTree, history })
+  return render(<RouterProvider router={router} />)
+}
+
+describe('Data Explorer routes', () => {
+  it('shows hourly load status and deep link on the overview', async () => {
+    renderPath('/data')
+    await waitFor(() => {
+      expect(screen.getByText('逐時用電負載')).toBeInTheDocument()
+    })
+    expect(screen.getAllByText('開啟明細').length).toBeGreaterThan(0)
+    expect(screen.getByText(/Asia\/Taipei/)).toBeInTheDocument()
+  })
+
+  it('keeps filters in the URL, paginates, opens typed detail, and exports the current page', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load?start=2026-09-09T00:00:00%2B08:00&end=2026-09-09T20:00:00%2B08:00&location=Taipei')
+
+    await waitFor(() => {
+      expect(screen.getByText('32100.5')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/查詢區間缺口/)).toBeInTheDocument()
+    expect(screen.getByText(/最後取得時間/)).toBeInTheDocument()
+
+    await user.click(screen.getByText('32100.5'))
+    expect(screen.getByText('Typed detail')).toBeInTheDocument()
+    expect(screen.getByText('ingested_at')).toBeInTheDocument()
+
+    await user.click(screen.getByText('下一頁'))
+    await waitFor(() => {
+      expect(screen.getByText('30100')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByText('匯出 CSV'))
+    expect(screen.getByText('匯出 CSV')).toBeInTheDocument()
+  })
+
+  it('hides Data Explorer navigation when the feature is disabled', async () => {
+    server.use(
+      http.get('*/health', () =>
+        HttpResponse.json({
+          status: 'ok',
+          version: '0.1.0',
+          environment: 'aws',
+          model_loaded: true,
+          data_explorer_enabled: false,
+        }),
+      ),
+    )
+    renderPath('/')
+    await waitFor(() => {
+      expect(screen.getByText('即時預測總覽')).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('營運資料檢視器')).not.toBeInTheDocument()
+    })
+  })
+})
+
+describe('Monitoring Data Source Status', () => {
+  it('uses the shared status contract and deep-links into Data Explorer', async () => {
+    renderPath('/monitoring')
+    await waitFor(() => {
+      expect(screen.getByText('Data Source Status')).toBeInTheDocument()
+      expect(screen.getAllByText('開啟 Explorer').length).toBeGreaterThan(0)
+    })
+    const regionalLink = screen.getAllByText('開啟 Explorer').find((node) =>
+      node.getAttribute('href')?.includes('completeness=incomplete'),
+    )
+    expect(regionalLink).toBeDefined()
+    expect(screen.queryByText(/Feast Feature Store/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Feature Store Snapshot/)).not.toBeInTheDocument()
+  })
+
+  it('hides explorer links when Data Explorer is disabled', async () => {
+    server.use(
+      http.get('*/health', () =>
+        HttpResponse.json({
+          status: 'ok',
+          version: '0.1.0',
+          environment: 'aws',
+          model_loaded: true,
+          data_explorer_enabled: false,
+        }),
+      ),
+    )
+    renderPath('/monitoring')
+    await waitFor(() => {
+      expect(screen.getAllByText('Explorer 未啟用').length).toBeGreaterThan(0)
+    })
+    expect(screen.queryByText('開啟 Explorer')).not.toBeInTheDocument()
+  })
+})
+
+describe('CWA observation explorer', () => {
+  it('shows latest audit fetch time and missing identifiers', async () => {
+    renderPath('/data/weather/observations')
+    await waitFor(() => {
+      expect(screen.getByText(/最新 audit/)).toBeInTheDocument()
+    })
+    expect(screen.getAllByText(/466920/).length).toBeGreaterThan(0)
+    expect(screen.getByText('Audit History')).toBeInTheDocument()
+  })
+})

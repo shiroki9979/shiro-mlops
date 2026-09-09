@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-08
+- 最後更新：2026-09-09
 - 專案版本：`0.3.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
@@ -16,7 +16,7 @@
 | **M2: API 穩健度與降級快取** | 建立本地快取與自動重試，落實降級預報模式 | `src/shiro_mlops/data/` | 斷網條件下仍能產出標記 `DEGRADED` 之預測 |
 | **M3: 多測站與行事曆特徵** | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
 | **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
-| **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
+| **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 (已完成) |
 
 ---
 
