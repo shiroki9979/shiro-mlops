@@ -6,10 +6,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Availability = Literal["available", "empty", "unavailable"]
-FreshnessState = Literal["fresh", "warning", "unknown"]
-Completeness = Literal["complete", "incomplete", "unknown"]
-Overall = Literal["healthy", "warning", "critical", "unknown"]
+from shiro_mlops.service.data_explorer.status import (
+    Availability,
+    Completeness,
+    FreshnessState,
+    Overall,
+)
 
 
 class DatasetStatus(BaseModel):
