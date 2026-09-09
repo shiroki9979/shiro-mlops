@@ -5,6 +5,7 @@ export const HealthResponseSchema = z.object({
   version: z.string(),
   environment: z.string(),
   model_loaded: z.boolean(),
+  data_explorer_enabled: z.boolean().optional().default(false),
 })
 
 export type HealthResponse = z.infer<typeof HealthResponseSchema>
@@ -33,12 +34,3 @@ export const PredictionResponseSchema = z.object({
 })
 
 export type PredictionResponse = z.infer<typeof PredictionResponseSchema>
-
-export const FeatureSnapshotSchema = z.object({
-  datetime: z.string(),
-  load_mw: z.number().optional(),
-  temperature: z.number().optional(),
-  relative_humidity: z.number().optional(),
-}).passthrough()
-
-export type FeatureSnapshot = z.infer<typeof FeatureSnapshotSchema>

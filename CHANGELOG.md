@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - 新增可追溯的 CWA 觀測與預報版本本機資料服務，供訓練與推論讀取 canonical TimescaleDB 資料（#30）。
-- 完成唯讀 Data Explorer 的規格與十個垂直切片規劃，涵蓋六個 typed datasets、CWA ingestion audits、狀態判讀與分頁契約（#40）。
+- 新增唯讀營運資料檢視器（Data Explorer）：六個 typed datasets、CWA ingestion audits、共用狀態契約與 cursor 分頁，並在 Monitoring 顯示 Data Source Status（#40–#49）。
+
+### Removed
+
+- 移除誤標為 Feast 的 Monitoring Feature Store Snapshot 與 `GET /features/latest` 過渡端點（#50）。
 
 ### Fixed
 

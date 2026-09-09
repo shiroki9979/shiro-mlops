@@ -2,6 +2,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import {
   Activity,
   BarChart3,
+  Database,
   Flame,
   LayoutDashboard,
   Radio,
@@ -9,9 +10,10 @@ import {
   Zap,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useHealth } from '@/hooks/use-health'
 
 interface NavItem {
-  to: '/' | '/history' | '/monitoring' | '/settings'
+  to: '/' | '/history' | '/monitoring' | '/settings' | '/data'
   label: string
   icon: typeof LayoutDashboard
   badge?: string
@@ -35,6 +37,11 @@ const navItems: NavItem[] = [
     icon: Activity,
   },
   {
+    to: '/data',
+    label: '營運資料檢視器',
+    icon: Database,
+  },
+  {
     to: '/settings',
     label: '系統連線設定',
     icon: Settings,
@@ -44,6 +51,10 @@ const navItems: NavItem[] = [
 export function Sidebar() {
   const router = useRouterState()
   const currentPath = router.location.pathname
+  const { data: health } = useHealth()
+  const items = navItems.filter(
+    (item) => item.to !== '/data' || health?.data_explorer_enabled,
+  )
 
   return (
     <aside className="w-64 shrink-0 border-r border-slate-800 bg-slate-950/80 p-4 flex flex-col justify-between backdrop-blur-xl h-screen sticky top-0">
@@ -66,9 +77,10 @@ export function Sidebar() {
           <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             核心功能
           </div>
-          {navItems.map((item) => {
+          {items.map((item) => {
             const Icon = item.icon
-            const isActive = currentPath === item.to
+            const isActive =
+              item.to === '/data' ? currentPath.startsWith('/data') : currentPath === item.to
 
             return (
               <Link

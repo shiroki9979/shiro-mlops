@@ -1,13 +1,17 @@
+import { z } from 'zod'
 import {
-  FeatureSnapshot,
-  FeatureSnapshotSchema,
   HealthResponse,
   HealthResponseSchema,
   PredictionRequest,
   PredictionResponse,
   PredictionResponseSchema,
 } from '@/schemas/api'
-import { z } from 'zod'
+import {
+  ListEnvelope,
+  ListEnvelopeSchema,
+  StatusResponse,
+  StatusResponseSchema,
+} from '@/schemas/data-explorer'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -25,7 +29,7 @@ export class ApiError extends Error {
 async function request<T>(
   endpoint: string,
   options: RequestInit = {},
-  schema?: z.ZodType<T>,
+  schema?: z.ZodType<T, z.ZodTypeDef, unknown>,
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`
   const headers = new Headers(options.headers)
@@ -64,6 +68,15 @@ async function request<T>(
   return json as T
 }
 
+function toQuery(params: Record<string, string | undefined>): string {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) search.set(key, value)
+  })
+  const encoded = search.toString()
+  return encoded ? `?${encoded}` : ''
+}
+
 export const apiClient = {
   async getHealth(): Promise<HealthResponse> {
     return request<HealthResponse>('/health', { method: 'GET' }, HealthResponseSchema)
@@ -80,11 +93,14 @@ export const apiClient = {
     )
   },
 
-  async getLatestFeatures(limit = 24): Promise<FeatureSnapshot[]> {
-    return request<FeatureSnapshot[]>(
-      `/features/latest?limit=${limit}`,
-      { method: 'GET' },
-      z.array(FeatureSnapshotSchema),
-    )
+  async getDataStatus(): Promise<StatusResponse> {
+    return request<StatusResponse>('/data/status', { method: 'GET' }, StatusResponseSchema)
+  },
+
+  async getDataList(
+    path: string,
+    params: Record<string, string | undefined> = {},
+  ): Promise<ListEnvelope> {
+    return request<ListEnvelope>(`${path}${toQuery(params)}`, { method: 'GET' }, ListEnvelopeSchema)
   },
 }

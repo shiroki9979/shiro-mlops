@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-08
+- 最後更新：2026-09-09
 - 專案版本：`0.3.0`
 
 ---
@@ -173,11 +173,13 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
     "status": "ok",
     "version": "0.3.0",
     "environment": "local",
-    "model_loaded": true
+    "model_loaded": true,
+    "data_explorer_enabled": true
   }
   ```
 
 - 此端點只代表 process liveness，存活時固定回傳 HTTP 200；不得因模型或資料尚未就緒而改回 503。
+- `data_explorer_enabled` 表示當前 process 是否開放 Data Explorer 讀取面（`ENVIRONMENT=local` 或 `DATA_EXPLORER_ENABLED=true`）。
 
 ### 2.2 就緒狀態檢查
 
@@ -185,14 +187,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 - **語意**：模型已載入，且正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足時回傳 HTTP 503，並列出未就緒原因。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
 
-### 2.3 最新特徵快照
-
-- **路徑**：`GET /features/latest`
-- **查詢參數**：`limit`（預設 `24`）— 回傳最近 N 筆台電負載紀錄。
-- **回應**：物件陣列；每筆含 `datetime`（ISO 字串）與 `load_mw` 等負載欄位。資料來源失敗時回傳 HTTP 500。
-- **退場計畫**：此過渡端點與現有 Monitoring Feature Store Snapshot 不得作為 Data Explorer 資料來源；待 Data Explorer typed endpoints 上線時一併移除。
-
-### 2.4 隨需動態視界負載預報
+### 2.3 隨需動態視界負載預報
 
 - **路徑**：`POST /predict`
 - **相容性欄位**：`location` 暫時保留但只接受 `Taipei`，並標示為待移除；模型仍預測全臺負載，不宣稱支援區域負載模型。
@@ -273,8 +268,8 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 
 ## 4. 營運資料檢視器 (Data Explorer)
 
-> **狀態：規劃中。** 本節定義 [GitHub #40](https://github.com/shiroki9979/shiro-mlops/issues/40)
-> 與子工單 #41–#50 的目標契約；現行程式碼尚未提供 `/data` 前端路由或 API endpoints。
+> **狀態：已實作。** 本節定義 [GitHub #40](https://github.com/shiroki9979/shiro-mlops/issues/40)
+> 與子工單 #41–#50 的契約；`GET /data/*` 與前端 `/data` 路由僅在 local environment 或 `DATA_EXPLORER_ENABLED` 時可用。
 
 ### 4.1 產品邊界
 
@@ -323,7 +318,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 - **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
 - **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
 - **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。
-- **Monitoring 調整**：移除現有誤標為 Feast 的 Feature Store Snapshot 卡片，改為 Data Source Status 摘要並連結至 Data Explorer 對應資料集。
+- **Monitoring 調整**：Monitoring 以 Data Source Status 摘要顯示 availability、freshness 與 completeness，並連結至 Data Explorer 對應資料集；不再提供 Feature Store Snapshot。
 
 ### 4.7 狀態、存取與失敗契約
 
@@ -346,7 +341,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 6. 加入 CWA observation audit history。
 7. 加入 CWA 鄉鎮預報 Explorer。
 8. 加入 CWA forecast audit history。
-9. 將 Monitoring 改為 Data Source Status 摘要，並保留舊快照作為過渡。
-10. 在所有 Data Explorer 路徑可用後，移除現有 Feature Store Snapshot 與 `/features/latest`。
+9. 將 Monitoring 改為 Data Source Status 摘要。
+10. 移除 Feature Store Snapshot 與 `GET /features/latest`。
 
 每個切片皆必須同時交付 repository 查詢、typed API contract、frontend schema／query，可操作介面與對應自動化測試，不採用先完成全部 backend 後才開始 frontend 的水平切分。
