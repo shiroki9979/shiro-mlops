@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import JSONResponse
@@ -40,12 +39,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan event to ensure DB schema and load or initialize the LightGBM model."""
-    try:
-        from shiro_mlops.core.database import init_db
+    if settings.ENVIRONMENT != "test":
+        try:
+            from shiro_mlops.core.database import init_db
 
-        init_db()
-    except Exception:
-        logger.exception("Database initialization failed; readiness will remain unavailable.")
+            init_db()
+        except Exception:
+            logger.exception("Database initialization failed; readiness will remain unavailable.")
 
     model_path = settings.DATA_DIR / "model.joblib"
 
@@ -64,13 +64,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.include_router(data_explorer_router)
 
 

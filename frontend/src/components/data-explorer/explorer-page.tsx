@@ -22,6 +22,17 @@ import { ExplorerDatasetConfig } from './catalog'
 import { StatusBadges } from './status-badges'
 import { Database, Download, RefreshCw } from 'lucide-react'
 
+function listErrorMessage(error: unknown): string {
+  if (typeof error !== 'object' || error === null || !('status' in error)) {
+    return '查詢失敗，請稍後再試。'
+  }
+  const status = error.status
+  if (status === 400) return '分頁游標無效或已與目前篩選條件不相容。'
+  if (status === 422) return '篩選條件無效，請確認時間範圍與欄位格式。'
+  if (status === 503) return '資料庫目前無法連線，請稍後再試。'
+  return '查詢失敗，請稍後再試。'
+}
+
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const router = useRouterState()
   const navigate = useNavigate()
@@ -174,7 +185,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
           {listQuery.isLoading ? (
             <p className="text-xs text-slate-500">載入資料中...</p>
           ) : listQuery.isError ? (
-            <p className="text-xs text-rose-300">資料庫或查詢失敗，請檢查 TimescaleDB 連線。</p>
+            <p className="text-xs text-rose-300">{listErrorMessage(listQuery.error)}</p>
           ) : !listQuery.data || listQuery.data.items.length === 0 ? (
             <p className="text-xs text-slate-500">查無符合資料，查詢成功但結果為空。</p>
           ) : (

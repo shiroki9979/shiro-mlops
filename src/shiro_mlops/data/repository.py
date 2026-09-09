@@ -384,6 +384,7 @@ class TimeSeriesRepository:
                 "valid_from": _taiwan_instant_to_utc(point.valid_from),
                 "valid_to": _taiwan_instant_to_utc(point.valid_to),
                 "geocode": point.geocode,
+                "location_name": point.location_name,
                 "temperature_c": point.temperature_c,
                 "dew_point_c": point.dew_point_c,
                 "apparent_temperature_c": point.apparent_temperature_c,
@@ -414,16 +415,19 @@ class TimeSeriesRepository:
             """
             INSERT INTO raw_cwa_township_forecast (
                 dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                temperature_c, dew_point_c, apparent_temperature_c, relative_humidity_pct,
-                probability_of_precipitation_pct, wind_speed_m_s, wind_direction
+                location_name, temperature_c, dew_point_c, apparent_temperature_c,
+                relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+                wind_direction
             ) VALUES (
                 :dataset_id, :issued_at, :source_updated_at, :valid_from, :valid_to, :geocode,
-                :temperature_c, :dew_point_c, :apparent_temperature_c, :relative_humidity_pct,
-                :probability_of_precipitation_pct, :wind_speed_m_s, :wind_direction
+                :location_name, :temperature_c, :dew_point_c, :apparent_temperature_c,
+                :relative_humidity_pct, :probability_of_precipitation_pct, :wind_speed_m_s,
+                :wind_direction
             )
             ON CONFLICT (
                 dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode
             ) DO UPDATE SET
+                location_name = EXCLUDED.location_name,
                 temperature_c = EXCLUDED.temperature_c,
                 dew_point_c = EXCLUDED.dew_point_c,
                 apparent_temperature_c = EXCLUDED.apparent_temperature_c,
@@ -478,8 +482,9 @@ class TimeSeriesRepository:
             params["valid_end"] = _taiwan_instant_to_utc(pd.Timestamp(valid_end).to_pydatetime())
         query = f"""
             SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                   temperature_c, dew_point_c, apparent_temperature_c, relative_humidity_pct,
-                   probability_of_precipitation_pct, wind_speed_m_s, wind_direction, created_at
+                   location_name, temperature_c, dew_point_c, apparent_temperature_c,
+                   relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+                   wind_direction, created_at
             FROM raw_cwa_township_forecast
             WHERE {" AND ".join(clauses)}
             ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
