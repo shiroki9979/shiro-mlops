@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 將 Data Explorer 列表查詢抽出為 typed `ExplorerQuery`，並讓逐時負載改走共用 cursor／keyset 分頁 seam（#52）。
 - 將 CWA 觀測、鄉鎮預報與 audit 列表遷移至 typed query 上的 focused readers，保留 vintage 與 missing-identifier 契約（#53）。
+- 將全台／區域供需與機組發電列表遷移至 typed query readers，保留 MW 轉換、完整度與 nullable 欄位契約（#54）。
 
 ### Removed
 
