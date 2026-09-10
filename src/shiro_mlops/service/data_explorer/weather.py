@@ -22,7 +22,7 @@ def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> dict[str,
         clauses.append("dataset_id = :dataset_id")
         params["dataset_id"] = dataset_id
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    row = db.latest_row(
+    row = db.fetch_one(
         f"""
         SELECT dataset_id, issued_at, source_updated_at
         FROM raw_cwa_forecast_release

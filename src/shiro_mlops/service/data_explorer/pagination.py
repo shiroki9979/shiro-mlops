@@ -9,7 +9,7 @@ from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
-from shiro_mlops.service.data_explorer.timefmt import to_sql_utc
+from shiro_mlops.service.data_explorer.timefmt import to_naive_sql_utc
 
 CURSOR_TIME_COLS = {
     "time",
@@ -72,7 +72,9 @@ def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, A
         value = key[column]
         try:
             converted[column] = (
-                to_sql_utc(value) if column in CURSOR_TIME_COLS or column.endswith("_at") else value
+                to_naive_sql_utc(value)
+                if column in CURSOR_TIME_COLS or column.endswith("_at")
+                else value
             )
         except (TypeError, ValueError, OverflowError) as exc:
             raise CursorError("Invalid cursor key") from exc

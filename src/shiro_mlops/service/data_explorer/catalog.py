@@ -9,7 +9,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.service.data_explorer.completeness import (
-    NATIONAL_SNAPSHOT_TABLE,
     audit_missing_identifiers,
     hourly_gaps,
     missing_regional_identifiers,
@@ -103,7 +102,7 @@ class DatasetStatusCatalog:
             raise DatabaseUnavailableError(str(exc)) from exc
 
     def _hourly_load(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT time AS source_at, created_at AS ingested_at FROM raw_taipower_load "
             "ORDER BY time DESC LIMIT 1"
         )
@@ -112,14 +111,14 @@ class DatasetStatusCatalog:
         return compose_dataset_status("hourly_load", as_of, latest, missing)
 
     def _national(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT observed_at AS source_at, created_at AS ingested_at "
             "FROM raw_taipower_supply_demand_snapshot ORDER BY observed_at DESC LIMIT 1"
         )
         missing: list[str] = []
         if latest:
             latest_source = to_taiwan(latest["source_at"])
-            earliest = self.db.latest_row(
+            earliest = self.db.fetch_one(
                 "SELECT MIN(observed_at) AS source_at "
                 "FROM raw_taipower_supply_demand_snapshot "
                 "WHERE observed_at >= :start_time AND observed_at <= :end_time",
@@ -130,11 +129,11 @@ class DatasetStatusCatalog:
             )
             if earliest and earliest["source_at"] is not None:
                 window = TimeWindow(to_taiwan(earliest["source_at"]), latest_source)
-                missing = ten_minute_gaps(self.db, NATIONAL_SNAPSHOT_TABLE, window)
+                missing = ten_minute_gaps(self.db, window)
         return compose_dataset_status("national_supply_demand", as_of, latest, missing)
 
     def _regional(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT observed_at AS source_at, created_at AS ingested_at "
             "FROM raw_taipower_regional_supply_demand_snapshot ORDER BY observed_at DESC LIMIT 1"
         )
@@ -149,7 +148,7 @@ class DatasetStatusCatalog:
         return status
 
     def _units(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT observed_at AS source_at, created_at AS ingested_at "
             "FROM raw_taipower_unit_generation_snapshot ORDER BY observed_at DESC LIMIT 1"
         )
@@ -165,7 +164,7 @@ class DatasetStatusCatalog:
         return status
 
     def _observations(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT observed_at AS source_at, created_at AS ingested_at "
             "FROM raw_cwa_station_observation ORDER BY observed_at DESC LIMIT 1"
         )
@@ -177,7 +176,7 @@ class DatasetStatusCatalog:
         return compose_dataset_status("cwa_observations", as_of, latest, missing)
 
     def _forecasts(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT issued_at AS source_at, fetched_at AS ingested_at "
             "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
         )
@@ -193,7 +192,7 @@ class DatasetStatusCatalog:
         return status
 
     def _observation_audits(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT fetched_at AS source_at, created_at AS ingested_at "
             "FROM raw_cwa_observation_batch ORDER BY fetched_at DESC LIMIT 1"
         )
@@ -201,7 +200,7 @@ class DatasetStatusCatalog:
         return compose_dataset_status("cwa_observation_audits", as_of, latest, missing)
 
     def _forecast_audits(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.latest_row(
+        latest = self.db.fetch_one(
             "SELECT issued_at AS source_at, fetched_at AS ingested_at "
             "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
         )
@@ -209,7 +208,7 @@ class DatasetStatusCatalog:
         return compose_dataset_status("cwa_forecast_audits", as_of, latest, missing)
 
     def _latest_observation_audit(self) -> dict[str, Any] | None:
-        row = self.db.latest_row(
+        row = self.db.fetch_one(
             "SELECT fetched_at, status, missing_station_ids FROM raw_cwa_observation_batch "
             "ORDER BY fetched_at DESC LIMIT 1"
         )
@@ -222,7 +221,7 @@ class DatasetStatusCatalog:
         }
 
     def _latest_forecast_audit(self) -> dict[str, Any] | None:
-        row = self.db.latest_row(
+        row = self.db.fetch_one(
             "SELECT dataset_id, issued_at, fetched_at, status, missing_geocodes "
             "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
         )

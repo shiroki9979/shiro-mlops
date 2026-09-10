@@ -6,7 +6,6 @@ from typing import Any
 
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
 from shiro_mlops.service.data_explorer.completeness import (
-    NATIONAL_SNAPSHOT_TABLE,
     missing_regional_identifiers,
     regional_slot_map,
     ten_minute_gaps,
@@ -98,7 +97,7 @@ class NationalSupplyDemandReader(DatasetReader):
                     "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
                 }
             )
-        return items, ten_minute_gaps(self.db, NATIONAL_SNAPSHOT_TABLE, query.window)
+        return items, ten_minute_gaps(self.db, query.window)
 
 
 class RegionalSupplyDemandReader(DatasetReader):
@@ -135,7 +134,7 @@ class RegionalSupplyDemandReader(DatasetReader):
             ORDER BY observed_at DESC, region DESC
             LIMIT :limit
         """
-        sql_params["limit"] = limit * 4 if completeness else limit
+        sql_params["limit"] = limit * len(REGIONAL_SUPPLY_DEMAND_REGIONS) if completeness else limit
         rows = self.db.fetch(sql, sql_params)
         slot_regions = regional_slot_map(self.db, query.window)
         items = []

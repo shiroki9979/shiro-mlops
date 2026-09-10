@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.completeness import (
-    NATIONAL_SNAPSHOT_TABLE,
     audit_missing_identifiers,
     missing_regional_identifiers,
     observation_gaps,
@@ -58,7 +57,7 @@ def test_ten_minute_gaps_report_national_snapshot_holes(
     test_repo.upsert_supply_demand_snapshot(_sample_snapshot(later))
     db = ExplorerDb(test_repo.engine)
 
-    missing = ten_minute_gaps(db, NATIONAL_SNAPSHOT_TABLE, TimeWindow(earlier, later))
+    missing = ten_minute_gaps(db, TimeWindow(earlier, later))
 
     assert format_taiwan_time(earlier + timedelta(minutes=10)) in missing
     assert format_taiwan_time(earlier) not in missing

@@ -62,13 +62,10 @@ def observation_gaps(db: ExplorerDb, window: TimeWindow, station_id: str | None)
     return missing
 
 
-NATIONAL_SNAPSHOT_TABLE = "raw_taipower_supply_demand_snapshot"
-
-
-def ten_minute_gaps(db: ExplorerDb, table: str, window: TimeWindow) -> list[str]:
-    """Return expected 10-minute slots missing from a snapshot table."""
+def ten_minute_gaps(db: ExplorerDb, window: TimeWindow) -> list[str]:
+    """Return expected 10-minute slots missing from national supply-demand snapshots."""
     rows = db.fetch(
-        f"SELECT DISTINCT observed_at FROM {table} "
+        "SELECT DISTINCT observed_at FROM raw_taipower_supply_demand_snapshot "
         "WHERE observed_at >= :start_time AND observed_at <= :end_time",
         {"start_time": window.as_utc()[0], "end_time": window.as_utc()[1]},
     )
