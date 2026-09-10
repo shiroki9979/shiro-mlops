@@ -352,95 +352,85 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
     assert status["record_count"] == 4
 
 
-def test_power_endpoints_empty_invalid_window_and_pagination(explorer_client) -> None:
-    """電力列表無資料為 200；超時窗與非法篩選為 422；cursor 分頁保持最新優先。"""
-    from tests.unit.test_supply_demand_repository import _sample_snapshot
-    from tests.unit.test_unit_generation_repository import _sample_snapshots
+_POWER_LIST_PATHS = (
+    "/data/power/supply-demand",
+    "/data/power/regional",
+    "/data/power/units",
+)
 
-    client, repo = explorer_client
+
+def test_power_endpoints_empty_and_invalid_queries(explorer_client) -> None:
+    """電力列表無資料為 200；超時窗與非法篩選為 422；壞 cursor 為 400。"""
+    client, _ = explorer_client
     observed = _now().replace(minute=30, second=0, microsecond=0)
     empty_window = {
         "start": _rfc3339(observed - timedelta(hours=5)),
         "end": _rfc3339(observed - timedelta(hours=4)),
     }
+    too_long = {
+        "start": _rfc3339(observed - timedelta(days=8)),
+        "end": _rfc3339(observed),
+    }
 
-    empty_national = client.get("/data/power/supply-demand", params=empty_window)
-    assert empty_national.status_code == 200
-    assert empty_national.json()["items"] == []
+    for path in _POWER_LIST_PATHS:
+        empty = client.get(path, params=empty_window)
+        assert empty.status_code == 200
+        assert empty.json()["items"] == []
+        assert client.get(path, params=too_long).status_code == 422
+        assert (
+            client.get(path, params={**empty_window, "cursor": "not-a-cursor"}).status_code == 400
+        )
 
-    empty_units = client.get("/data/power/units", params=empty_window)
-    assert empty_units.status_code == 200
-    assert empty_units.json()["items"] == []
-
-    empty_regional = client.get("/data/power/regional", params=empty_window)
-    assert empty_regional.status_code == 200
-    assert empty_regional.json()["items"] == []
-
-    too_long = client.get(
-        "/data/power/supply-demand",
-        params={"start": _rfc3339(observed - timedelta(days=8)), "end": _rfc3339(observed)},
-    )
-    assert too_long.status_code == 422
     assert client.get("/data/power/regional", params={"region": "國外"}).status_code == 422
     assert client.get("/data/power/regional", params={"completeness": "bogus"}).status_code == 422
 
-    for offset in (20, 10, 0):
-        repo.upsert_supply_demand_snapshot(_sample_snapshot(observed - timedelta(minutes=offset)))
-    start = _rfc3339(observed - timedelta(minutes=20))
-    end = _rfc3339(observed)
-    first = client.get("/data/power/supply-demand", params={"start": start, "end": end, "limit": 1})
-    assert first.status_code == 200
-    assert first.json()["has_more"] is True
-    second = client.get(
-        "/data/power/supply-demand",
-        params={"start": start, "end": end, "limit": 1, "cursor": first.json()["next_cursor"]},
+
+def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
+    """全台、區域與機組 cursor 分頁必須先回較新的 observed_at。"""
+    from tests.unit.test_regional_supply_demand_repository import (
+        _sample_snapshots as _sample_regional_snapshots,
     )
-    assert second.status_code == 200
-    assert first.json()["items"][0]["observed_at"] > second.json()["items"][0]["observed_at"]
-    assert (
-        client.get(
-            "/data/power/supply-demand",
-            params={"start": start, "end": end, "cursor": "not-a-cursor"},
-        ).status_code
-        == 400
-    )
-    assert (
-        client.get(
-            "/data/power/regional",
-            params={"start": start, "end": end, "cursor": "not-a-cursor"},
-        ).status_code
-        == 400
-    )
-    assert (
-        client.get(
-            "/data/power/units",
-            params={"start": start, "end": end, "cursor": "not-a-cursor"},
-        ).status_code
-        == 400
+    from tests.unit.test_supply_demand_repository import _sample_snapshot
+    from tests.unit.test_unit_generation_repository import (
+        _sample_snapshots as _sample_unit_snapshots,
     )
 
-    repo.upsert_unit_generation_snapshots(_sample_snapshots(observed))
-    unit_page = client.get(
-        "/data/power/units",
-        params={
-            "start": _rfc3339(observed - timedelta(hours=1)),
-            "end": _rfc3339(observed),
-            "limit": 1,
-        },
+    client, repo = explorer_client
+    newer = _now().replace(minute=30, second=0, microsecond=0)
+    older = newer - timedelta(minutes=10)
+    start = _rfc3339(older)
+    end = _rfc3339(newer)
+    newer_at = _rfc3339(newer)
+    older_at = _rfc3339(older)
+
+    repo.upsert_supply_demand_snapshot(_sample_snapshot(older))
+    repo.upsert_supply_demand_snapshot(_sample_snapshot(newer))
+    repo.upsert_regional_supply_demand_snapshots(_sample_regional_snapshots(older))
+    repo.upsert_regional_supply_demand_snapshots(_sample_regional_snapshots(newer))
+    repo.upsert_unit_generation_snapshots(_sample_unit_snapshots(older))
+    repo.upsert_unit_generation_snapshots(_sample_unit_snapshots(newer))
+
+    pages = (
+        ("/data/power/supply-demand", 1),
+        ("/data/power/regional", 4),
+        ("/data/power/units", 4),
     )
-    assert unit_page.json()["has_more"] is True
-    next_units = client.get(
-        "/data/power/units",
-        params={
-            "start": _rfc3339(observed - timedelta(hours=1)),
-            "end": _rfc3339(observed),
-            "limit": 1,
-            "cursor": unit_page.json()["next_cursor"],
-        },
-    )
-    assert next_units.status_code == 200
-    assert next_units.json()["items"]
-    assert next_units.json()["items"][0] != unit_page.json()["items"][0]
+    for path, limit in pages:
+        first = client.get(path, params={"start": start, "end": end, "limit": limit})
+        assert first.status_code == 200
+        assert first.json()["has_more"] is True
+        assert {item["observed_at"] for item in first.json()["items"]} == {newer_at}
+        second = client.get(
+            path,
+            params={
+                "start": start,
+                "end": end,
+                "limit": limit,
+                "cursor": first.json()["next_cursor"],
+            },
+        )
+        assert second.status_code == 200
+        assert {item["observed_at"] for item in second.json()["items"]} == {older_at}
 
 
 def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> None:
