@@ -44,3 +44,9 @@ def to_sql_utc(value: datetime | str) -> datetime:
     """Convert a Taiwan-local timestamp to the UTC instant used in SQL filters."""
     converted = taiwan_local_to_utc(pd.Series([parse_api_time(value)])).iloc[0]
     return pd.Timestamp(converted).to_pydatetime()
+
+
+def to_naive_sql_utc(value: datetime | str) -> datetime:
+    """回傳無時區 UTC，對齊 snapshot 入庫格式，避免 SQLite 把 aware/naive 當字串比較。"""
+    instant = to_sql_utc(value)
+    return instant.replace(tzinfo=None) if instant.tzinfo is not None else instant

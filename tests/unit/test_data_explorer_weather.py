@@ -130,6 +130,9 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
     older_vintage = reader.list({**window, "source_updated_at": _rfc3339(older)})
     assert [item["temperature_c"] for item in older_vintage.items] == [28.0]
 
+    by_issued = reader.list({**window, "issued_at": _rfc3339(older)})
+    assert [item["temperature_c"] for item in by_issued.items] == [28.0]
+
     audits = ForecastAuditReader(test_repo.engine).list(
         {"start": _rfc3339(older - timedelta(hours=1)), "end": _rfc3339(newer)}
     )

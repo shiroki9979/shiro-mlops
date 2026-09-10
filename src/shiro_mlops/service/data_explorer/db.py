@@ -22,7 +22,7 @@ class ExplorerDb:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(text(query), params or {}).mappings()]
 
-    def latest_row(self, query: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def fetch_one(self, query: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         rows = self.fetch(query, params)
         return rows[0] if rows else None
 

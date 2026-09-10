@@ -45,9 +45,9 @@ def json_list(value: object) -> list[Any]:
     parsed = deserialize_raw_payload(value)
     if parsed is None:
         return []
-    if isinstance(parsed, list):
-        return parsed
-    return list(parsed)
+    if not isinstance(parsed, list):
+        raise ValueError("Identifier list must be a JSON array")
+    return parsed
 
 
 def floor_ten_minutes(value: datetime) -> datetime:

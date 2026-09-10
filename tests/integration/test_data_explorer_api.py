@@ -352,6 +352,97 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
     assert status["record_count"] == 4
 
 
+def test_power_endpoints_empty_invalid_window_and_pagination(explorer_client) -> None:
+    """電力列表無資料為 200；超時窗與非法篩選為 422；cursor 分頁保持最新優先。"""
+    from tests.unit.test_supply_demand_repository import _sample_snapshot
+    from tests.unit.test_unit_generation_repository import _sample_snapshots
+
+    client, repo = explorer_client
+    observed = _now().replace(minute=30, second=0, microsecond=0)
+    empty_window = {
+        "start": _rfc3339(observed - timedelta(hours=5)),
+        "end": _rfc3339(observed - timedelta(hours=4)),
+    }
+
+    empty_national = client.get("/data/power/supply-demand", params=empty_window)
+    assert empty_national.status_code == 200
+    assert empty_national.json()["items"] == []
+
+    empty_units = client.get("/data/power/units", params=empty_window)
+    assert empty_units.status_code == 200
+    assert empty_units.json()["items"] == []
+
+    empty_regional = client.get("/data/power/regional", params=empty_window)
+    assert empty_regional.status_code == 200
+    assert empty_regional.json()["items"] == []
+
+    too_long = client.get(
+        "/data/power/supply-demand",
+        params={"start": _rfc3339(observed - timedelta(days=8)), "end": _rfc3339(observed)},
+    )
+    assert too_long.status_code == 422
+    assert client.get("/data/power/regional", params={"region": "國外"}).status_code == 422
+    assert client.get("/data/power/regional", params={"completeness": "bogus"}).status_code == 422
+
+    for offset in (20, 10, 0):
+        repo.upsert_supply_demand_snapshot(_sample_snapshot(observed - timedelta(minutes=offset)))
+    start = _rfc3339(observed - timedelta(minutes=20))
+    end = _rfc3339(observed)
+    first = client.get("/data/power/supply-demand", params={"start": start, "end": end, "limit": 1})
+    assert first.status_code == 200
+    assert first.json()["has_more"] is True
+    second = client.get(
+        "/data/power/supply-demand",
+        params={"start": start, "end": end, "limit": 1, "cursor": first.json()["next_cursor"]},
+    )
+    assert second.status_code == 200
+    assert first.json()["items"][0]["observed_at"] > second.json()["items"][0]["observed_at"]
+    assert (
+        client.get(
+            "/data/power/supply-demand",
+            params={"start": start, "end": end, "cursor": "not-a-cursor"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.get(
+            "/data/power/regional",
+            params={"start": start, "end": end, "cursor": "not-a-cursor"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.get(
+            "/data/power/units",
+            params={"start": start, "end": end, "cursor": "not-a-cursor"},
+        ).status_code
+        == 400
+    )
+
+    repo.upsert_unit_generation_snapshots(_sample_snapshots(observed))
+    unit_page = client.get(
+        "/data/power/units",
+        params={
+            "start": _rfc3339(observed - timedelta(hours=1)),
+            "end": _rfc3339(observed),
+            "limit": 1,
+        },
+    )
+    assert unit_page.json()["has_more"] is True
+    next_units = client.get(
+        "/data/power/units",
+        params={
+            "start": _rfc3339(observed - timedelta(hours=1)),
+            "end": _rfc3339(observed),
+            "limit": 1,
+            "cursor": unit_page.json()["next_cursor"],
+        },
+    )
+    assert next_units.status_code == 200
+    assert next_units.json()["items"]
+    assert next_units.json()["items"][0] != unit_page.json()["items"][0]
+
+
 def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> None:
     """測站觀測與 audit 必須支援 station/status 篩選，且不得回傳 raw payload。"""
     from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
@@ -477,6 +568,15 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
         },
     ).json()
     assert [item["temperature_c"] for item in older_vintage["items"]] == [28.0]
+    issued_vintage = client.get(
+        "/data/weather/forecasts",
+        params={
+            "start": _rfc3339(valid - timedelta(hours=1)),
+            "end": _rfc3339(valid),
+            "issued_at": _rfc3339(older),
+        },
+    ).json()
+    assert [item["temperature_c"] for item in issued_vintage["items"]] == [28.0]
     audits = client.get(
         "/data/audits/cwa-forecasts",
         params={"start": _rfc3339(older - timedelta(hours=1)), "end": _rfc3339(newer)},
