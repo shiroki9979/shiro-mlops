@@ -98,3 +98,18 @@ def regional_slot_map(db: ExplorerDb, window: TimeWindow) -> dict[datetime, set[
 def missing_regional_identifiers(present: set[str]) -> list[str]:
     """Return allowlisted regions absent from one observation slot."""
     return [name for name in REGIONAL_SUPPLY_DEMAND_REGIONS if name not in present]
+
+
+def audit_missing_identifiers(
+    audit: dict[str, Any] | None,
+    field: str,
+    *,
+    incomplete_placeholder: str | None = None,
+) -> list[str]:
+    """Return audit missing ids; incomplete headers without ids use a placeholder."""
+    if audit is None:
+        return []
+    missing = [str(item) for item in audit.get(field, [])]
+    if incomplete_placeholder and audit.get("status") == "incomplete" and not missing:
+        return [incomplete_placeholder]
+    return missing
