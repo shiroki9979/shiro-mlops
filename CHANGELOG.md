@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 將 CWA 觀測、鄉鎮預報與 audit 列表遷移至 typed query 上的 focused readers，保留 vintage 與 missing-identifier 契約（#53）。
 - 將全台／區域供需與機組發電列表遷移至 typed query readers，保留 MW 轉換、完整度與 nullable 欄位契約（#54）。
 - 將 Data Explorer 狀態彙總抽成 focused collaborators，並移除單體 `DataExplorerStore`（#55）。
+- 簡化 Data Explorer 電力與預報 reader 的查詢、映射與測試資料 seam，讓列表契約可獨立維護與驗證。
 
 ### Removed
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - 拒絕 Data Explorer audit 非陣列 missing-identifier payload；keyset cursor 改以 naive UTC 比對，避免 SQLite 重複回傳當前列；並補齊電力列表空結果／非法查詢／分頁與預報 `issued_at` 契約測試。
+- 修正區域完整度在分頁截斷後才篩選、預報最新版本跨頁漂移與遺漏 `valid_to` cursor key 的問題；incomplete audit 即使未列出缺失識別碼也能正確呈現狀態。
 - 隔離缺乏可信 StationId provenance 的舊版 CWA 氣象資料，並禁止 legacy 寫入混入 canonical 觀測資料。
 - 修正 point-in-time 預報版本選取、風向插值與訓練氣象缺口處理，避免未來資料洩漏及固定值回填。
 
