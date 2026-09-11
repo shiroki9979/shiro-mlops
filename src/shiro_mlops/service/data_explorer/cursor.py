@@ -55,7 +55,7 @@ def _decode_cursor_payload(token: str, *, dataset: str) -> tuple[dict[str, Any],
 
 
 def decode_cursor_filters(token: str, *, dataset: str) -> dict[str, Any]:
-    """Decode the filters pinned into a valid cursor for one dataset."""
+    """取得 cursor 固定的篩選條件，避免跨頁期間重新解析動態預設值。"""
     filters, _ = _decode_cursor_payload(token, dataset=dataset)
     return filters
 

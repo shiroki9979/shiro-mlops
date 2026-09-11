@@ -13,7 +13,7 @@ from shiro_mlops.service.data_explorer.completeness import (
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
-from tests.unit.test_supply_demand_repository import _sample_snapshot
+from tests.helpers import supply_demand_snapshot
 
 
 def test_missing_regional_identifiers_lists_absent_allowlisted_regions() -> None:
@@ -53,8 +53,8 @@ def test_ten_minute_gaps_report_national_snapshot_holes(
     """全台供需每個 slot 預期一筆；20 分鐘間隔必須揭露中間缺口。"""
     later = datetime(2026, 9, 5, 17, 30)
     earlier = later - timedelta(minutes=20)
-    test_repo.upsert_supply_demand_snapshot(_sample_snapshot(earlier))
-    test_repo.upsert_supply_demand_snapshot(_sample_snapshot(later))
+    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(earlier))
+    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(later))
     db = ExplorerDb(test_repo.engine)
 
     missing = ten_minute_gaps(db, TimeWindow(earlier, later))

@@ -12,24 +12,16 @@ from shiro_mlops.data.repository import (
     TimeSeriesRepository,
 )
 from shiro_mlops.data.taipower_supply_demand import parse_supply_demand_payload
+from tests.helpers import supply_demand_snapshot
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
-
-
-def _sample_snapshot(observed_at: datetime | None = None):
-    with open(FIXTURES_DIR / "taipower_supply_demand_sample.json", encoding="utf-8") as f:
-        payload = json.load(f)
-    return parse_supply_demand_payload(
-        payload,
-        observed_at=observed_at or datetime(2026, 9, 5, 17, 30),
-    )
 
 
 def test_upsert_supply_demand_snapshot_insert_and_fetch(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """成功快照應可依 observed_at 寫入並讀回 typed 欄位與 raw payload。"""
-    snapshot = _sample_snapshot()
+    snapshot = supply_demand_snapshot()
     assert test_repo.upsert_supply_demand_snapshot(snapshot) == 1
 
     fetched = test_repo.fetch_supply_demand_snapshot(snapshot.observed_at)
@@ -48,7 +40,7 @@ def test_upsert_supply_demand_snapshot_is_idempotent_on_observed_at(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同觀測 slot 重跑時應更新既有快照而非新增列。"""
-    first = _sample_snapshot(datetime(2026, 9, 5, 17, 30))
+    first = supply_demand_snapshot(datetime(2026, 9, 5, 17, 30))
     test_repo.upsert_supply_demand_snapshot(first)
 
     with open(FIXTURES_DIR / "taipower_supply_demand_sample.json", encoding="utf-8") as f:
@@ -74,7 +66,7 @@ def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """資料庫中的無效 raw_payload 應明確回報錯誤。"""
-    snapshot = _sample_snapshot()
+    snapshot = supply_demand_snapshot()
     test_repo.upsert_supply_demand_snapshot(snapshot)
 
     with test_repo.engine.begin() as conn:
@@ -112,7 +104,7 @@ def test_upsert_supply_demand_snapshot_rejects_invalid_snapshot_directly(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """直接傳入非法 snapshot 至 repository 時應拋出 ValueError。"""
-    snapshot = _sample_snapshot()
+    snapshot = supply_demand_snapshot()
     object.__setattr__(snapshot, "curr_load_wan_kw", float("nan"))
     with pytest.raises(ValueError, match="curr_load_wan_kw"):
         test_repo.upsert_supply_demand_snapshot(snapshot)
@@ -123,7 +115,7 @@ def test_standalone_taipower_supply_demand_repository_lifecycle(
 ) -> None:
     """獨立 TaipowerSupplyDemandRepository 應可獨立初始化、驗證、冪等 upsert 與 fetch。"""
     repo = TaipowerSupplyDemandRepository(engine=sqlite_engine)
-    snapshot = _sample_snapshot()
+    snapshot = supply_demand_snapshot()
 
     # 驗證首次寫入與讀取
     assert repo.upsert(snapshot) == 1
@@ -146,7 +138,7 @@ def test_standalone_taipower_supply_demand_repository_lifecycle(
     assert updated.curr_util_rate_pct == pytest.approx(82.0)
 
     # 驗證直接防禦拒絕非法數值
-    invalid_snapshot = _sample_snapshot(datetime(2026, 9, 5, 18, 0))
+    invalid_snapshot = supply_demand_snapshot(datetime(2026, 9, 5, 18, 0))
     object.__setattr__(invalid_snapshot, "curr_load_wan_kw", float("nan"))
     with pytest.raises(ValueError, match="curr_load_wan_kw"):
         repo.upsert(invalid_snapshot)
