@@ -196,7 +196,11 @@ class DatasetStatusCatalog:
             "SELECT fetched_at AS source_at, created_at AS ingested_at "
             "FROM raw_cwa_observation_batch ORDER BY fetched_at DESC LIMIT 1"
         )
-        missing = audit_missing_identifiers(self._latest_observation_audit(), "missing_station_ids")
+        missing = audit_missing_identifiers(
+            self._latest_observation_audit(),
+            "missing_station_ids",
+            incomplete_placeholder="incomplete_batch",
+        )
         return compose_dataset_status("cwa_observation_audits", as_of, latest, missing)
 
     def _forecast_audits(self, as_of: datetime) -> DatasetStatus:
@@ -204,7 +208,11 @@ class DatasetStatusCatalog:
             "SELECT issued_at AS source_at, fetched_at AS ingested_at "
             "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
         )
-        missing = audit_missing_identifiers(self._latest_forecast_audit(), "missing_geocodes")
+        missing = audit_missing_identifiers(
+            self._latest_forecast_audit(),
+            "missing_geocodes",
+            incomplete_placeholder="incomplete_release",
+        )
         return compose_dataset_status("cwa_forecast_audits", as_of, latest, missing)
 
     def _latest_observation_audit(self) -> dict[str, Any] | None:

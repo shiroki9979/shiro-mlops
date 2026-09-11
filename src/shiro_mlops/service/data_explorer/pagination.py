@@ -47,7 +47,11 @@ def paginate_list(query: ExplorerQuery, fetch_page: PageFetcher) -> ListEnvelope
 
 
 def apply_cursor(
-    clauses: list[str], cursor: dict[str, Any] | None, columns: tuple[str, ...]
+    clauses: list[str],
+    cursor: dict[str, Any] | None,
+    columns: tuple[str, ...],
+    *,
+    dialect_name: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Append a newest-first keyset predicate to SQL WHERE clauses."""
     params: dict[str, Any] = {}
@@ -55,12 +59,25 @@ def apply_cursor(
         return " AND ".join(clauses), params
     parts: list[str] = []
     for index, column in enumerate(columns):
-        equal = " AND ".join(f"{item} = :k_{item}" for item in columns[:index])
-        comparison = f"{column} < :k_{column}"
+        equal = " AND ".join(
+            f"{_cursor_operand(item, item, dialect_name)} = "
+            f"{_cursor_operand(f':k_{item}', item, dialect_name)}"
+            for item in columns[:index]
+        )
+        comparison = (
+            f"{_cursor_operand(column, column, dialect_name)} < "
+            f"{_cursor_operand(f':k_{column}', column, dialect_name)}"
+        )
         parts.append(f"({equal} AND {comparison})" if equal else comparison)
         params[f"k_{column}"] = cursor[column]
     clauses.append("(" + " OR ".join(parts) + ")")
     return " AND ".join(clauses), params
+
+
+def _cursor_operand(value: str, column: str, dialect_name: str | None) -> str:
+    """Normalize SQLite timestamp text before keyset equality and ordering comparisons."""
+    is_time = column in CURSOR_TIME_COLS or column.endswith("_at")
+    return f"datetime({value})" if dialect_name == "sqlite" and is_time else value
 
 
 def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:

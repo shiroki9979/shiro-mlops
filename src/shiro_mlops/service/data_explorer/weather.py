@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from shiro_mlops.service.data_explorer.completeness import observation_gaps
+from shiro_mlops.service.data_explorer.cursor import decode_cursor_filters
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
@@ -113,15 +114,27 @@ class ForecastReader(DatasetReader):
             and not query_params.get("source_updated_at")
             and not is_truthy(query_params.get("all_vintages"))
         ):
-            latest = latest_forecast_version(self.db, query_params.get("dataset_id"))
-            if latest is not None:
-                query_params["dataset_id"] = latest["latest_dataset_id"]
-                query_params["issued_at"] = format_taiwan_time(
-                    to_taiwan(latest["latest_issued_at"])
-                )
-                query_params["source_updated_at"] = format_taiwan_time(
-                    to_taiwan(latest["latest_source_updated_at"])
-                )
+            cursor_filters = (
+                decode_cursor_filters(str(query_params["cursor"]), dataset=self.dataset)
+                if query_params.get("cursor")
+                else {}
+            )
+            pinned_issued_at = cursor_filters.get("issued_at")
+            pinned_source_updated_at = cursor_filters.get("source_updated_at")
+            if pinned_issued_at and pinned_source_updated_at:
+                query_params.setdefault("dataset_id", cursor_filters.get("dataset_id"))
+                query_params["issued_at"] = pinned_issued_at
+                query_params["source_updated_at"] = pinned_source_updated_at
+            else:
+                latest = latest_forecast_version(self.db, query_params.get("dataset_id"))
+                if latest is not None:
+                    query_params["dataset_id"] = latest["latest_dataset_id"]
+                    query_params["issued_at"] = format_taiwan_time(
+                        to_taiwan(latest["latest_issued_at"])
+                    )
+                    query_params["source_updated_at"] = format_taiwan_time(
+                        to_taiwan(latest["latest_source_updated_at"])
+                    )
         return ExplorerQuery.from_params(self.dataset, query_params)
 
     def fetch_page(
@@ -150,7 +163,8 @@ class ForecastReader(DatasetReader):
         where, cursor_params = apply_cursor(
             clauses,
             cursor,
-            ("valid_from", "issued_at", "source_updated_at", "dataset_id", "geocode"),
+            ("valid_from", "issued_at", "source_updated_at", "dataset_id", "geocode", "valid_to"),
+            dialect_name=self.db.engine.dialect.name,
         )
         sql_params.update(cursor_params)
         sql = f"""
@@ -161,7 +175,7 @@ class ForecastReader(DatasetReader):
             FROM raw_cwa_township_forecast
             WHERE {where}
             ORDER BY valid_from DESC, issued_at DESC, source_updated_at DESC,
-                     dataset_id DESC, geocode DESC
+                     dataset_id DESC, geocode DESC, valid_to DESC
             LIMIT :limit
         """
         sql_params["limit"] = limit

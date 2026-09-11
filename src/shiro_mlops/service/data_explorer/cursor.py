@@ -35,8 +35,7 @@ def encode_cursor(*, dataset: str, filters: dict[str, Any], key: dict[str, Any])
     return urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def decode_cursor(token: str, *, dataset: str, filters: dict[str, Any]) -> dict[str, Any]:
-    """Decode a cursor and reject invalid, version-incompatible, or filter-bound tokens."""
+def _decode_cursor_payload(token: str, *, dataset: str) -> tuple[dict[str, Any], dict[str, Any]]:
     padded = token + "=" * (-len(token) % 4)
     try:
         payload = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
@@ -48,9 +47,22 @@ def decode_cursor(token: str, *, dataset: str, filters: dict[str, Any]) -> dict[
         raise CursorError("Incompatible cursor version")
     if payload.get("ds") != dataset:
         raise CursorError("Cursor dataset mismatch")
-    if payload.get("f") != _canonical_filters(filters):
-        raise CursorError("Cursor filter mismatch")
+    cursor_filters = payload.get("f")
     key = payload.get("k")
-    if not isinstance(key, dict):
+    if not isinstance(cursor_filters, dict) or not isinstance(key, dict):
         raise CursorError("Invalid cursor")
+    return cursor_filters, key
+
+
+def decode_cursor_filters(token: str, *, dataset: str) -> dict[str, Any]:
+    """Decode the filters pinned into a valid cursor for one dataset."""
+    filters, _ = _decode_cursor_payload(token, dataset=dataset)
+    return filters
+
+
+def decode_cursor(token: str, *, dataset: str, filters: dict[str, Any]) -> dict[str, Any]:
+    """Decode a cursor and reject invalid, version-incompatible, or filter-bound tokens."""
+    cursor_filters, key = _decode_cursor_payload(token, dataset=dataset)
+    if cursor_filters != _canonical_filters(filters):
+        raise CursorError("Cursor filter mismatch")
     return key
