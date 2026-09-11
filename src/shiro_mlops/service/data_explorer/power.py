@@ -125,6 +125,22 @@ class RegionalSupplyDemandReader(DatasetReader):
                 raise ExplorerQueryError("region must be one of 北部, 中部, 南部, 東部")
             clauses.append("region = :region")
             sql_params["region"] = region
+        if completeness:
+            region_params = []
+            for index, expected_region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS):
+                name = f"expected_region_{index}"
+                region_params.append(f":{name}")
+                sql_params[name] = expected_region
+            comparison = "=" if completeness == "complete" else "<"
+            clauses.append(
+                "(SELECT COUNT(DISTINCT completeness_row.region) "
+                "FROM raw_taipower_regional_supply_demand_snapshot AS completeness_row "
+                "WHERE completeness_row.observed_at = "
+                "raw_taipower_regional_supply_demand_snapshot.observed_at "
+                f"AND completeness_row.region IN ({', '.join(region_params)})) "
+                f"{comparison} :expected_region_count"
+            )
+            sql_params["expected_region_count"] = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
         where, cursor_params = apply_cursor(clauses, cursor, ("observed_at", "region"))
         sql_params.update(cursor_params)
         sql = f"""
@@ -134,7 +150,7 @@ class RegionalSupplyDemandReader(DatasetReader):
             ORDER BY observed_at DESC, region DESC
             LIMIT :limit
         """
-        sql_params["limit"] = limit * len(REGIONAL_SUPPLY_DEMAND_REGIONS) if completeness else limit
+        sql_params["limit"] = limit
         rows = self.db.fetch(sql, sql_params)
         slot_regions = regional_slot_map(self.db, query.window)
         items = []

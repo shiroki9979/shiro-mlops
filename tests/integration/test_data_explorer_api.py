@@ -433,6 +433,32 @@ def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
         assert {item["observed_at"] for item in second.json()["items"]} == {older_at}
 
 
+def test_regional_completeness_filter_reaches_older_matching_slots(explorer_client) -> None:
+    """完整度篩選必須在分頁截斷前生效，較舊的符合 slot 仍需可達。"""
+    from tests.unit.test_regional_supply_demand_repository import _sample_snapshots
+
+    client, repo = explorer_client
+    newest = _now().replace(minute=30, second=0, microsecond=0)
+    middle = newest - timedelta(minutes=10)
+    oldest = newest - timedelta(minutes=20)
+    repo.upsert_regional_supply_demand_snapshots(_sample_snapshots(newest))
+    repo.upsert_regional_supply_demand_snapshots(_sample_snapshots(middle))
+    repo.upsert_regional_supply_demand_snapshots(_sample_snapshots(oldest)[:1])
+
+    response = client.get(
+        "/data/power/regional",
+        params={
+            "start": _rfc3339(oldest),
+            "end": _rfc3339(newest),
+            "limit": 1,
+            "completeness": "incomplete",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["observed_at"] for item in response.json()["items"]] == [_rfc3339(oldest)]
+
+
 def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> None:
     """測站觀測與 audit 必須支援 station/status 篩選，且不得回傳 raw payload。"""
     from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
@@ -580,3 +606,144 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
     )
     assert status["serving_stale"] is False
     assert status["freshness"] in {"fresh", "warning"}
+
+
+def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> None:
+    """分頁期間新增 release 時，既有 cursor 必須繼續讀取原本解析出的最新版本。"""
+    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
+
+    client, repo = explorer_client
+    issued_at = _now().replace(minute=0) - timedelta(hours=2)
+    valid_from = issued_at + timedelta(hours=3)
+
+    def release(issued: datetime, temperatures: tuple[float, ...]) -> CWAForecastRelease:
+        return CWAForecastRelease(
+            dataset_id="F-D0047-089",
+            issued_at=pd.Timestamp(issued),
+            source_updated_at=pd.Timestamp(issued),
+            fetched_at=issued,
+            status="complete",
+            missing_geocodes=(),
+            raw_payload={},
+            forecasts=tuple(
+                CWATownshipForecast(
+                    valid_from=pd.Timestamp(valid_from + timedelta(hours=index)),
+                    valid_to=pd.Timestamp(valid_from + timedelta(hours=index + 1)),
+                    geocode="63000050",
+                    location_name="臺北",
+                    temperature_c=temperature,
+                    dew_point_c=None,
+                    apparent_temperature_c=None,
+                    relative_humidity_pct=None,
+                    probability_of_precipitation_pct=None,
+                    wind_speed_m_s=None,
+                    wind_direction=None,
+                )
+                for index, temperature in enumerate(temperatures)
+            ),
+        )
+
+    repo.upsert_cwa_forecast_release(release(issued_at, (28.0, 29.0)))
+    params = {
+        "start": _rfc3339(valid_from),
+        "end": _rfc3339(valid_from + timedelta(hours=1)),
+        "limit": 1,
+    }
+    first = client.get("/data/weather/forecasts", params=params)
+    assert first.status_code == 200
+    assert first.json()["has_more"] is True
+
+    repo.upsert_cwa_forecast_release(release(issued_at + timedelta(hours=1), (31.0,)))
+    second = client.get(
+        "/data/weather/forecasts",
+        params={**params, "cursor": first.json()["next_cursor"]},
+    )
+
+    assert second.status_code == 200
+    assert second.json()["items"][0]["issued_at"] == _rfc3339(issued_at)
+
+
+def test_forecast_cursor_distinguishes_rows_by_valid_to(explorer_client) -> None:
+    """只有 valid_to 不同的預報列也必須能跨頁完整讀取。"""
+    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
+
+    client, repo = explorer_client
+    issued_at = _now().replace(minute=0) - timedelta(hours=1)
+    valid_from = issued_at + timedelta(hours=2)
+    release = CWAForecastRelease(
+        dataset_id="F-D0047-089",
+        issued_at=pd.Timestamp(issued_at),
+        source_updated_at=pd.Timestamp(issued_at),
+        fetched_at=issued_at,
+        status="complete",
+        missing_geocodes=(),
+        raw_payload={},
+        forecasts=tuple(
+            CWATownshipForecast(
+                valid_from=pd.Timestamp(valid_from),
+                valid_to=pd.Timestamp(valid_from + timedelta(hours=hours)),
+                geocode="63000050",
+                location_name="臺北",
+                temperature_c=temperature,
+                dew_point_c=None,
+                apparent_temperature_c=None,
+                relative_humidity_pct=None,
+                probability_of_precipitation_pct=None,
+                wind_speed_m_s=None,
+                wind_direction=None,
+            )
+            for hours, temperature in ((1, 28.0), (2, 31.0))
+        ),
+    )
+    repo.upsert_cwa_forecast_release(release)
+    params = {
+        "start": _rfc3339(valid_from),
+        "end": _rfc3339(valid_from),
+        "limit": 1,
+    }
+
+    first = client.get("/data/weather/forecasts", params=params)
+    second = client.get(
+        "/data/weather/forecasts",
+        params={**params, "cursor": first.json()["next_cursor"]},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["has_more"] is True
+    assert [item["temperature_c"] for item in first.json()["items"]] == [31.0]
+    assert second.status_code == 200
+    assert [item["temperature_c"] for item in second.json()["items"]] == [28.0]
+
+
+def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) -> None:
+    """Audit header 已標 incomplete 時，不得因 missing identifiers 為空而改標 complete。"""
+    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
+
+    client, repo = explorer_client
+    observed_at = _now().replace(minute=0)
+    repo.upsert_cwa_observation_batch(
+        CWAObservationBatch(
+            fetched_at=observed_at,
+            status="incomplete",
+            missing_station_ids=(),
+            raw_payload={},
+            observations=(),
+        )
+    )
+    repo.upsert_cwa_forecast_release(
+        CWAForecastRelease(
+            dataset_id="F-D0047-089",
+            issued_at=pd.Timestamp(observed_at),
+            source_updated_at=pd.Timestamp(observed_at),
+            fetched_at=observed_at,
+            status="incomplete",
+            missing_geocodes=(),
+            raw_payload={},
+            forecasts=(),
+        )
+    )
+
+    statuses = {item["id"]: item for item in client.get("/data/status").json()["datasets"]}
+
+    assert statuses["cwa_observation_audits"]["completeness"] == "incomplete"
+    assert statuses["cwa_forecast_audits"]["completeness"] == "incomplete"

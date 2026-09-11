@@ -46,7 +46,14 @@ DATASET_SPECS: dict[str, dict[str, Any]] = {
         "cadence": 3600,
         "max_days": 14,
         "href": "/data/weather/forecasts",
-        "sort": ("valid_from", "issued_at", "source_updated_at", "dataset_id", "geocode"),
+        "sort": (
+            "valid_from",
+            "issued_at",
+            "source_updated_at",
+            "dataset_id",
+            "geocode",
+            "valid_to",
+        ),
     },
     "cwa_observation_audits": {
         "label": "CWA 觀測批次審計",
