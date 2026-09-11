@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-07
+- 最後更新：2026-09-09
 - 專案版本：`0.3.0`
 
 ---
@@ -173,11 +173,13 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
     "status": "ok",
     "version": "0.3.0",
     "environment": "local",
-    "model_loaded": true
+    "model_loaded": true,
+    "data_explorer_enabled": true
   }
   ```
 
 - 此端點只代表 process liveness，存活時固定回傳 HTTP 200；不得因模型或資料尚未就緒而改回 503。
+- `data_explorer_enabled` 表示當前 process 是否開放 Data Explorer 讀取面（`ENVIRONMENT=local` 或 `DATA_EXPLORER_ENABLED=true`）。
 
 ### 2.2 就緒狀態檢查
 
@@ -185,13 +187,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 - **語意**：模型已載入，且正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足時回傳 HTTP 503，並列出未就緒原因。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
 
-### 2.3 最新特徵快照
-
-- **路徑**：`GET /features/latest`
-- **查詢參數**：`limit`（預設 `24`）— 回傳最近 N 筆台電負載紀錄。
-- **回應**：物件陣列；每筆含 `datetime`（ISO 字串）與 `load_mw` 等負載欄位。資料來源失敗時回傳 HTTP 500。
-
-### 2.4 隨需動態視界負載預報
+### 2.3 隨需動態視界負載預報
 
 - **路徑**：`POST /predict`
 - **相容性欄位**：`location` 暫時保留但只接受 `Taipei`，並標示為待移除；模型仍預測全臺負載，不宣稱支援區域負載模型。
@@ -267,3 +263,85 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 7. **本機冷啟動**：
    - 空資料庫啟動後，由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
    - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
+
+---
+
+## 4. 營運資料檢視器 (Data Explorer)
+
+> **狀態：已實作。** 本節定義 [GitHub #40](https://github.com/shiroki9979/shiro-mlops/issues/40)
+> 與子工單 #41–#50 的契約；`GET /data/*` 與前端 `/data` 路由僅在 local environment 或 `DATA_EXPLORER_ENABLED` 時可用。
+
+### 4.1 產品邊界
+
+- **主要用途**：讓營運人員確認 ingestion 是否成功、資料是否完整或過期，並檢視實際入庫內容。
+- **使用者**：僅限本機或受信任內網中的工程師。
+- **作業模式**：唯讀；不得透過 Data Explorer 觸發 ingestion、修改或刪除資料。
+- **非目標**：不作為分析建模工具、通用資料庫管理器或公開雲端服務。
+
+### 4.2 資料與呈現邊界
+
+- **領域資料集**：以逐時用電負載、全台供需、區域供需、機組發電、CWA 測站觀測與 CWA 鄉鎮預報六個 canonical typed datasets 為主要檢視單位。
+- **Ingestion audit**：納入 CWA 觀測批次與預報版本兩個 audit datasets，顯示狀態、擷取時間與缺少的測站或行政區；不回傳完整 `raw_payload`。
+- **排除資料**：v1 不顯示完整 `raw_payload`、`legacy_cwa_weather` 歸檔與 Feast derived features。
+- **呈現模型**：以領域資料集名稱、領域欄位、單位與專屬篩選條件組織介面；不將實體資料表名與任意資料庫 schema 當作使用者介面。
+
+### 4.3 導覽與查詢行為
+
+- **頂層導覽**：Data Explorer 使用獨立 `/data` 路由；`/monitoring` 專注於健康與新鮮度摘要，並可連結至對應資料集的篩選結果。
+- **排序與分頁**：查詢預設以最新資料優先，採 server-side cursor pagination；每頁預設 50 筆、上限 200 筆，不提供無界全表載入。
+- **歷史可達性**：使用者可透過有界時間範圍與 cursor 逐頁檢視所有保留中的歷史資料。
+- **時間呈現**：API 回傳帶 `+08:00` offset 的 RFC 3339 timestamp；介面明示時區為 `Asia/Taipei`。
+- **功率單位**：介面以 MW 為主要顯示單位；對於以萬瓩儲存的全台與區域供需 typed values，在明細或 tooltip 同時顯示儲存值，並依 `1 萬瓩 = 10 MW` 轉換。
+- **預報版本**：CWA 鄉鎮預報預設顯示最新發布版本；可以 `dataset_id`、`issued_at`、`source_updated_at` 與 `geocode` 篩選所有已保存 forecast vintages。v1 不另建 Effective Serving View。
+
+### 4.4 營運狀態語意
+
+- **新鮮度**：每個 dataset 依自身預期更新頻率判定；超過兩個預期更新週期未取得新資料時顯示 warning。CWA forecast ingestion 新鮮度與 serving 使用的七小時 stale 規則必須分開顯示，不得混為同一狀態。
+- **全台供需完整度**：每個 observation slot 預期一筆資料。
+- **區域供需完整度**：每個 observation slot 預期同時具備北、中、南、東四區；缺少任一區即標記該 slot 不完整。
+- **CWA 完整度**：以 allowlist 與 observation batch／forecast release audit header 判定缺少的測站或行政區。
+- **逐時負載完整度**：在查詢時間區間內檢查預期的逐小時時間點，並揭露缺口。
+- **機組完整度**：機組數量可變，不以固定筆數判定失敗。
+- **空值語意**：資料契約允許的 nullable 欄位不得僅因為值為 `NULL` 就標記 dataset 不完整。
+
+### 4.5 介面與 API 邊界
+
+- **前端路由**：提供 `/data/power/load`、`/data/power/supply-demand`、`/data/power/regional`、`/data/power/units`、`/data/weather/observations`、`/data/weather/forecasts` 與 `/data/audits` nested routes，支援重新整理與 deep link。
+- **資料 API**：每個領域 dataset 使用獨立 typed read endpoint：`GET /data/power/load`、`GET /data/power/supply-demand`、`GET /data/power/regional`、`GET /data/power/units`、`GET /data/weather/observations`、`GET /data/weather/forecasts`、`GET /data/audits/cwa-observations` 與 `GET /data/audits/cwa-forecasts`。所有 list endpoints 共用 cursor pagination response envelope；不提供任意 SQL 或任意實體資料表查詢。
+- **Audit 呈現**：CWA observation 與 forecast 資料頁顯示最新 audit 狀態及 Audit History 連結；`/data/audits` 提供批次歷史與 missing identifiers，但不提供完整 `raw_payload`。
+
+### 4.6 交互與診斷行為
+
+- **Freshness 維度**：分別顯示 ingestion age 與 source age。前者表示距上次成功入庫所經時間，後者表示最新來源事件或發布時間距今時間；不得以其中一者取代另一者。
+- **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。
+- **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供 location，區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
+- **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
+- **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
+- **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。
+- **Monitoring 調整**：Monitoring 以 Data Source Status 摘要顯示 availability、freshness 與 completeness，並連結至 Data Explorer 對應資料集；不再提供 Feature Store Snapshot。
+
+### 4.7 狀態、存取與失敗契約
+
+- **Data Explorer 首頁**：`/data` 顯示全部 datasets 的最新來源時間、最新入庫時間、freshness、completeness 與明細連結。
+- **狀態 API**：`GET /data/status` 是 Monitoring、Data Explorer 首頁與各資料頁的共用狀態來源。Typed list endpoints 不重複計算狀態，並共用含 `items`、`next_cursor` 與 `has_more` 的 pagination envelope。
+- **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
+- **Cursor 契約**：cursor 為 opaque、stateless 且與當前 filters 綁定的 keyset cursor，含最後一筆排序鍵與契約版本，不設時間期限。更改 filters、契約版本不相容或 cursor 格式無效時回傳 HTTP 400。
+- **開啟條件**：v1 不建立應用層登入與 RBAC。Data Explorer 路由與 API 僅在 local environment 或明確啟用功能旗標時可用；非本機存取必須由內網或 reverse proxy 限制，並使用 same-origin CORS，不得依賴現有 `CORS *` 對外暴露。
+- **顯示範圍**：v1 只提供狀態、資料表、篩選、typed detail drawer 與當頁 CSV 匯出；不提供趨勢圖或可設定維度的分析視覺化。
+- **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。
+- **時間範圍上限**：10 分鐘快照與機組資料單次最多查詢 7 天；逐時負載、測站觀測與 audits 最多 31 天；鄉鎮預報有效時間最多 14 天。更長歷史必須移動有界時間視窗取得。
+
+### 4.8 交付切片
+
+1. 建立共用 pagination／status 契約與逐時用電負載 Explorer。
+2. 加入全台供需 Explorer。
+3. 加入區域供需 Explorer。
+4. 加入機組發電 Explorer。
+5. 加入 CWA 測站觀測 Explorer。
+6. 加入 CWA observation audit history。
+7. 加入 CWA 鄉鎮預報 Explorer。
+8. 加入 CWA forecast audit history。
+9. 將 Monitoring 改為 Data Source Status 摘要。
+10. 移除 Feature Store Snapshot 與 `GET /features/latest`。
+
+每個切片皆必須同時交付 repository 查詢、typed API contract、frontend schema／query，可操作介面與對應自動化測試，不採用先完成全部 backend 後才開始 frontend 的水平切分。

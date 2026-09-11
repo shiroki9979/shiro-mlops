@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import JSONResponse
@@ -21,9 +20,10 @@ from shiro_mlops.core.constants import (
     TEMPERATURE_COL,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.data.taipower_client import TaipowerClient
 from shiro_mlops.data.weather_resolution import WeatherResolution, resolve_weather
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
+from shiro_mlops.service.data_explorer import is_data_explorer_enabled
+from shiro_mlops.service.data_explorer.router import router as data_explorer_router
 
 
 # In-memory cached model instance
@@ -39,12 +39,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan event to ensure DB schema and load or initialize the LightGBM model."""
-    try:
-        from shiro_mlops.core.database import init_db
+    if settings.ENVIRONMENT != "test":
+        try:
+            from shiro_mlops.core.database import init_db
 
-        init_db()
-    except Exception:
-        logger.exception("Database initialization failed; readiness will remain unavailable.")
+            init_db()
+        except Exception:
+            logger.exception("Database initialization failed; readiness will remain unavailable.")
 
     model_path = settings.DATA_DIR / "model.joblib"
 
@@ -63,13 +64,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.include_router(data_explorer_router)
 
 
 class HealthResponse(BaseModel):
@@ -77,6 +72,7 @@ class HealthResponse(BaseModel):
     version: str
     environment: str
     model_loaded: bool
+    data_explorer_enabled: bool
 
 
 class ReadyResponse(BaseModel):
@@ -117,6 +113,7 @@ def health_check() -> HealthResponse:
         version=__version__,
         environment=settings.ENVIRONMENT,
         model_loaded=model_store.forecaster is not None,
+        data_explorer_enabled=is_data_explorer_enabled(),
     )
 
 
@@ -172,22 +169,6 @@ def readiness_check() -> ReadyResponse:
     except Exception as error:
         response = ReadyResponse(status="not_ready", model_loaded=True, reason=str(error))
         return JSONResponse(status_code=503, content=response.model_dump())
-
-
-@app.get("/features/latest")
-def get_latest_features(limit: int = 24) -> list[dict]:
-    """Retrieve latest available raw load and weather snapshots."""
-    try:
-        taipower_client = TaipowerClient()
-        df = taipower_client.fetch_load_data()
-        latest = df.tail(limit).to_dict(orient="records")
-        # Format datetimes
-        for item in latest:
-            if isinstance(item.get(DATETIME_COL), pd.Timestamp):
-                item[DATETIME_COL] = item[DATETIME_COL].isoformat()
-        return latest
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch latest features: {e}") from e
 
 
 @app.post("/predict", response_model=PredictionResponse)

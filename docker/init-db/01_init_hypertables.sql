@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS raw_cwa_township_forecast (
     valid_from TIMESTAMPTZ NOT NULL,
     valid_to TIMESTAMPTZ NOT NULL,
     geocode VARCHAR(16) NOT NULL,
+    location_name VARCHAR(128),
     temperature_c DOUBLE PRECISION,
     dew_point_c DOUBLE PRECISION,
     apparent_temperature_c DOUBLE PRECISION,
@@ -100,6 +101,9 @@ CREATE TABLE IF NOT EXISTS raw_cwa_township_forecast (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode)
 );
+
+ALTER TABLE raw_cwa_township_forecast
+ADD COLUMN IF NOT EXISTS location_name VARCHAR(128);
 
 SELECT create_hypertable(
     'raw_cwa_township_forecast',
