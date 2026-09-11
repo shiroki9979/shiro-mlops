@@ -19,9 +19,18 @@ export interface ExplorerDatasetConfig {
   filters: ExplorerFilterField[]
   defaultHours: number
   lookAheadHours?: number
+  search?: Record<string, string>
   auditHref?: string
   auditLabel?: string
   auditDatasetId?: string
+}
+
+export type ExplorerNavGroup = '電力' | '氣象' | '審計'
+
+export function explorerNavGroup(dataset: ExplorerDatasetConfig): ExplorerNavGroup {
+  if (dataset.path.startsWith('/data/power')) return '電力'
+  if (dataset.path.startsWith('/data/weather')) return '氣象'
+  return '審計'
 }
 
 export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
@@ -139,6 +148,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: 'CWA 觀測批次審計',
     description: 'Observation batch 完整／不完整歷史，不含 raw payload。',
     path: '/data/audits',
+    search: { type: 'observations' },
     apiPath: '/data/audits/cwa-observations',
     defaultHours: 24,
     columns: [
@@ -156,6 +166,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: 'CWA 預報版本審計',
     description: 'Forecast release 版本與缺少行政區歷史，不含 raw payload。',
     path: '/data/audits',
+    search: { type: 'forecasts' },
     apiPath: '/data/audits/cwa-forecasts',
     defaultHours: 24,
     columns: [

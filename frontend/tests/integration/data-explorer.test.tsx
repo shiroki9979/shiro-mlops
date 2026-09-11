@@ -16,9 +16,9 @@ describe('Data Explorer routes', () => {
   it('shows hourly load status and deep link on the overview', async () => {
     renderPath('/data')
     await waitFor(() => {
-      expect(screen.getByText('逐時用電負載')).toBeInTheDocument()
+      expect(screen.getAllByText('開啟明細').length).toBeGreaterThan(0)
     })
-    expect(screen.getAllByText('開啟明細').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('逐時用電負載').length).toBeGreaterThan(1)
     expect(screen.getByText(/Asia\/Taipei/)).toBeInTheDocument()
   })
 
@@ -45,6 +45,27 @@ describe('Data Explorer routes', () => {
     expect(screen.getByText('匯出 CSV')).toBeInTheDocument()
   })
 
+  it('lists Data Explorer datasets in the sidebar when the feature is enabled', async () => {
+    renderPath('/')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: '營運資料檢視器' })).toHaveAttribute('href', '/data')
+    })
+    expect(screen.getByRole('link', { name: '逐時用電負載' })).toHaveAttribute('href', '/data/power/load')
+    expect(screen.getByRole('link', { name: '全台供需' })).toHaveAttribute('href', '/data/power/supply-demand')
+    expect(screen.getByRole('link', { name: '區域供需' })).toHaveAttribute('href', '/data/power/regional')
+    expect(screen.getByRole('link', { name: '機組發電' })).toHaveAttribute('href', '/data/power/units')
+    expect(screen.getByRole('link', { name: 'CWA 測站觀測' })).toHaveAttribute('href', '/data/weather/observations')
+    expect(screen.getByRole('link', { name: 'CWA 鄉鎮預報' })).toHaveAttribute('href', '/data/weather/forecasts')
+    expect(screen.getByRole('link', { name: 'CWA 觀測批次審計' })).toHaveAttribute(
+      'href',
+      '/data/audits?type=observations',
+    )
+    expect(screen.getByRole('link', { name: 'CWA 預報版本審計' })).toHaveAttribute(
+      'href',
+      '/data/audits?type=forecasts',
+    )
+  })
+
   it('hides Data Explorer navigation when the feature is disabled', async () => {
     server.use(
       http.get('*/health', () =>
@@ -64,6 +85,17 @@ describe('Data Explorer routes', () => {
     await waitFor(() => {
       expect(screen.queryByText('營運資料檢視器')).not.toBeInTheDocument()
     })
+    expect(screen.queryByRole('link', { name: '逐時用電負載' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'CWA 觀測批次審計' })).not.toBeInTheDocument()
+  })
+
+  it('keeps Data Explorer navigation visible when health is unavailable in development', async () => {
+    server.use(http.get('*/health', () => HttpResponse.error()))
+    renderPath('/')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: '營運資料檢視器' })).toBeInTheDocument()
+    })
+    expect(screen.getByRole('link', { name: '逐時用電負載' })).toHaveAttribute('href', '/data/power/load')
   })
 
   it.each([
