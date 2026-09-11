@@ -3,7 +3,6 @@
 import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -14,16 +13,19 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
-
-TAIWAN = ZoneInfo("Asia/Taipei")
+from tests.helpers import (
+    TAIWAN,
+    forecast_release,
+    regional_supply_demand_snapshots,
+    rfc3339,
+    supply_demand_snapshot,
+    township_forecast,
+    unit_generation_snapshots,
+)
 
 
 def _now() -> datetime:
     return datetime.now(TAIWAN).replace(tzinfo=None, second=0, microsecond=0)
-
-
-def _rfc3339(value: datetime) -> str:
-    return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
 
 
 def _replace_cursor_key(cursor: str, key: dict[str, str]) -> str:
@@ -106,8 +108,8 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     assert load_status["source_age_seconds"] is not None
     assert load_status["href"] == "/data/power/load"
 
-    start = _rfc3339(latest - timedelta(hours=1))
-    end = _rfc3339(latest)
+    start = rfc3339(latest - timedelta(hours=1))
+    end = rfc3339(latest)
     response = client.get(
         "/data/power/load", params={"start": start, "end": end, "location": "Taipei"}
     )
@@ -132,8 +134,8 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     empty = client.get(
         "/data/power/load",
         params={
-            "start": _rfc3339(latest - timedelta(hours=5)),
-            "end": _rfc3339(latest - timedelta(hours=4)),
+            "start": rfc3339(latest - timedelta(hours=5)),
+            "end": rfc3339(latest - timedelta(hours=4)),
             "location": "Taichung",
         },
     )
@@ -142,7 +144,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
 
     too_long = client.get(
         "/data/power/load",
-        params={"start": _rfc3339(latest - timedelta(days=32)), "end": _rfc3339(latest)},
+        params={"start": rfc3339(latest - timedelta(days=32)), "end": rfc3339(latest)},
     )
     assert too_long.status_code == 422
 
@@ -153,8 +155,8 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     first_page = client.get(
         "/data/power/load",
         params={
-            "start": _rfc3339(latest - timedelta(hours=1)),
-            "end": _rfc3339(latest),
+            "start": rfc3339(latest - timedelta(hours=1)),
+            "end": rfc3339(latest),
             "limit": 1,
         },
     )
@@ -163,8 +165,8 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     mismatched = client.get(
         "/data/power/load",
         params={
-            "start": _rfc3339(latest - timedelta(hours=1)),
-            "end": _rfc3339(latest),
+            "start": rfc3339(latest - timedelta(hours=1)),
+            "end": rfc3339(latest),
             "location": "Kaohsiung",
             "cursor": cursor,
         },
@@ -176,8 +178,8 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     malformed = client.get(
         "/data/power/load",
         params={
-            "start": _rfc3339(latest - timedelta(hours=1)),
-            "end": _rfc3339(latest),
+            "start": rfc3339(latest - timedelta(hours=1)),
+            "end": rfc3339(latest),
             "limit": 1,
             "cursor": missing_key,
         },
@@ -192,8 +194,8 @@ def test_hourly_load_pagination_and_hourly_gaps(explorer_client) -> None:
     hours = [latest - timedelta(hours=offset) for offset in (2, 1, 0)]
     _upsert_hours(repo, hours)
 
-    start = _rfc3339(latest - timedelta(hours=2))
-    end = _rfc3339(latest)
+    start = rfc3339(latest - timedelta(hours=2))
+    end = rfc3339(latest)
     first = client.get("/data/power/load", params={"start": start, "end": end, "limit": 1})
     assert first.status_code == 200
     assert first.json()["has_more"] is True
@@ -209,11 +211,11 @@ def test_hourly_load_pagination_and_hourly_gaps(explorer_client) -> None:
     gapped_page = client.get(
         "/data/power/load",
         params={
-            "start": _rfc3339(gap_start),
-            "end": _rfc3339(gap_start + timedelta(hours=2)),
+            "start": rfc3339(gap_start),
+            "end": rfc3339(gap_start + timedelta(hours=2)),
         },
     )
-    assert _rfc3339(gap_start + timedelta(hours=1)) in gapped_page.json()["missing_slots"]
+    assert rfc3339(gap_start + timedelta(hours=1)) in gapped_page.json()["missing_slots"]
 
 
 def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
@@ -231,18 +233,16 @@ def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
 
 def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_client) -> None:
     """全台供需以 MW 為主顯示，並保留契約允許的空值與萬瓩欄位。"""
-    from tests.unit.test_supply_demand_repository import _sample_snapshot
-
     client, repo = explorer_client
     observed = _now().replace(minute=30, second=0, microsecond=0)
-    snapshot = _sample_snapshot(observed)
-    earlier_snapshot = _sample_snapshot(observed - timedelta(minutes=20))
+    snapshot = supply_demand_snapshot(observed)
+    earlier_snapshot = supply_demand_snapshot(observed - timedelta(minutes=20))
     repo.upsert_supply_demand_snapshot(earlier_snapshot)
     repo.upsert_supply_demand_snapshot(snapshot)
 
     body = client.get(
         "/data/power/supply-demand",
-        params={"start": _rfc3339(observed - timedelta(hours=1)), "end": _rfc3339(observed)},
+        params={"start": rfc3339(observed - timedelta(hours=1)), "end": rfc3339(observed)},
     ).json()
     item = body["items"][0]
     assert item["curr_load_mw"] == pytest.approx(32421.0)
@@ -291,12 +291,12 @@ def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
     )
     repo.upsert_regional_supply_demand_snapshots(rows)
 
-    params = {"start": _rfc3339(complete_slot), "end": _rfc3339(observed), "limit": 50}
+    params = {"start": rfc3339(complete_slot), "end": rfc3339(observed), "limit": 50}
     page = client.get("/data/power/regional", params=params).json()
     north_current = next(
         item
         for item in page["items"]
-        if item["region"] == "北部" and item["observed_at"] == _rfc3339(observed)
+        if item["region"] == "北部" and item["observed_at"] == rfc3339(observed)
     )
     assert north_current["slot_complete"] is False
     assert "東部" in north_current["missing_regions"]
@@ -318,15 +318,13 @@ def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
 
 def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> None:
     """機組零發電必須保留，契約允許空值不得被當成缺失，且不以固定數量判定不完整。"""
-    from tests.unit.test_unit_generation_repository import _sample_snapshots
-
     client, repo = explorer_client
     observed = _now().replace(minute=10, second=0, microsecond=0)
-    repo.upsert_unit_generation_snapshots(_sample_snapshots(observed))
+    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
 
     page = client.get(
         "/data/power/units",
-        params={"start": _rfc3339(observed - timedelta(hours=1)), "end": _rfc3339(observed)},
+        params={"start": rfc3339(observed - timedelta(hours=1)), "end": rfc3339(observed)},
     ).json()
     names = {item["unit_name"]: item for item in page["items"]}
     assert names["大潭CC#3"]["net_generation_mw"] == 0.0
@@ -336,8 +334,8 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
     filtered = client.get(
         "/data/power/units",
         params={
-            "start": _rfc3339(observed - timedelta(hours=1)),
-            "end": _rfc3339(observed),
+            "start": rfc3339(observed - timedelta(hours=1)),
+            "end": rfc3339(observed),
             "unit_type": "燃氣",
             "unit_name": "大潭CC#1",
         },
@@ -364,12 +362,12 @@ def test_power_endpoints_empty_and_invalid_queries(explorer_client) -> None:
     client, _ = explorer_client
     observed = _now().replace(minute=30, second=0, microsecond=0)
     empty_window = {
-        "start": _rfc3339(observed - timedelta(hours=5)),
-        "end": _rfc3339(observed - timedelta(hours=4)),
+        "start": rfc3339(observed - timedelta(hours=5)),
+        "end": rfc3339(observed - timedelta(hours=4)),
     }
     too_long = {
-        "start": _rfc3339(observed - timedelta(days=8)),
-        "end": _rfc3339(observed),
+        "start": rfc3339(observed - timedelta(days=8)),
+        "end": rfc3339(observed),
     }
 
     for path in _POWER_LIST_PATHS:
@@ -387,28 +385,20 @@ def test_power_endpoints_empty_and_invalid_queries(explorer_client) -> None:
 
 def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
     """全台、區域與機組 cursor 分頁必須先回較新的 observed_at。"""
-    from tests.unit.test_regional_supply_demand_repository import (
-        _sample_snapshots as _sample_regional_snapshots,
-    )
-    from tests.unit.test_supply_demand_repository import _sample_snapshot
-    from tests.unit.test_unit_generation_repository import (
-        _sample_snapshots as _sample_unit_snapshots,
-    )
-
     client, repo = explorer_client
     newer = _now().replace(minute=30, second=0, microsecond=0)
     older = newer - timedelta(minutes=10)
-    start = _rfc3339(older)
-    end = _rfc3339(newer)
-    newer_at = _rfc3339(newer)
-    older_at = _rfc3339(older)
+    start = rfc3339(older)
+    end = rfc3339(newer)
+    newer_at = rfc3339(newer)
+    older_at = rfc3339(older)
 
-    repo.upsert_supply_demand_snapshot(_sample_snapshot(older))
-    repo.upsert_supply_demand_snapshot(_sample_snapshot(newer))
-    repo.upsert_regional_supply_demand_snapshots(_sample_regional_snapshots(older))
-    repo.upsert_regional_supply_demand_snapshots(_sample_regional_snapshots(newer))
-    repo.upsert_unit_generation_snapshots(_sample_unit_snapshots(older))
-    repo.upsert_unit_generation_snapshots(_sample_unit_snapshots(newer))
+    repo.upsert_supply_demand_snapshot(supply_demand_snapshot(older))
+    repo.upsert_supply_demand_snapshot(supply_demand_snapshot(newer))
+    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(older))
+    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(newer))
+    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(older))
+    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(newer))
 
     pages = (
         ("/data/power/supply-demand", 1),
@@ -435,28 +425,26 @@ def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
 
 def test_regional_completeness_filter_reaches_older_matching_slots(explorer_client) -> None:
     """完整度篩選必須在分頁截斷前生效，較舊的符合 slot 仍需可達。"""
-    from tests.unit.test_regional_supply_demand_repository import _sample_snapshots
-
     client, repo = explorer_client
     newest = _now().replace(minute=30, second=0, microsecond=0)
     middle = newest - timedelta(minutes=10)
     oldest = newest - timedelta(minutes=20)
-    repo.upsert_regional_supply_demand_snapshots(_sample_snapshots(newest))
-    repo.upsert_regional_supply_demand_snapshots(_sample_snapshots(middle))
-    repo.upsert_regional_supply_demand_snapshots(_sample_snapshots(oldest)[:1])
+    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(newest))
+    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(middle))
+    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(oldest)[:1])
 
     response = client.get(
         "/data/power/regional",
         params={
-            "start": _rfc3339(oldest),
-            "end": _rfc3339(newest),
+            "start": rfc3339(oldest),
+            "end": rfc3339(newest),
             "limit": 1,
             "completeness": "incomplete",
         },
     )
 
     assert response.status_code == 200
-    assert [item["observed_at"] for item in response.json()["items"]] == [_rfc3339(oldest)]
+    assert [item["observed_at"] for item in response.json()["items"]] == [rfc3339(oldest)]
 
 
 def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> None:
@@ -490,8 +478,8 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
     observations = client.get(
         "/data/weather/observations",
         params={
-            "start": _rfc3339(observed - timedelta(hours=1)),
-            "end": _rfc3339(observed),
+            "start": rfc3339(observed - timedelta(hours=1)),
+            "end": rfc3339(observed),
             "station_id": "466920",
         },
     ).json()
@@ -501,8 +489,8 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
     audits = client.get(
         "/data/audits/cwa-observations",
         params={
-            "start": _rfc3339(observed - timedelta(hours=1)),
-            "end": _rfc3339(observed),
+            "start": rfc3339(observed - timedelta(hours=1)),
+            "end": rfc3339(observed),
             "status": "incomplete",
             "missing_station_id": "467490",
         },
@@ -512,8 +500,8 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
     empty_history = client.get(
         "/data/audits/cwa-observations",
         params={
-            "start": _rfc3339(observed - timedelta(days=10)),
-            "end": _rfc3339(observed - timedelta(days=9)),
+            "start": rfc3339(observed - timedelta(days=10)),
+            "end": rfc3339(observed - timedelta(days=9)),
         },
     )
     assert empty_history.status_code == 200
@@ -522,55 +510,34 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
 
 def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_client) -> None:
     """未指定版本時預設最新發布；明確條件可取得全部 vintages，且分開 serving stale。"""
-    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
-
     client, repo = explorer_client
     older = _now().replace(minute=0) - timedelta(hours=2)
     newer = older + timedelta(hours=1)
     valid = newer + timedelta(hours=3)
 
-    def release(issued_at: datetime, temperature: float) -> CWAForecastRelease:
-        return CWAForecastRelease(
-            dataset_id="F-D0047-089",
-            issued_at=pd.Timestamp(issued_at),
-            source_updated_at=pd.Timestamp(issued_at),
-            fetched_at=issued_at,
-            status="complete",
-            missing_geocodes=(),
+    def release(issued_at: datetime, temperature: float):
+        return forecast_release(
+            issued_at,
+            (township_forecast(valid, temperature, relative_humidity_pct=70.0),),
             raw_payload={"secret": "do-not-return"},
-            forecasts=(
-                CWATownshipForecast(
-                    valid_from=pd.Timestamp(valid),
-                    valid_to=pd.Timestamp(valid),
-                    geocode="63000050",
-                    location_name="臺北",
-                    temperature_c=temperature,
-                    dew_point_c=None,
-                    apparent_temperature_c=None,
-                    relative_humidity_pct=70.0,
-                    probability_of_precipitation_pct=None,
-                    wind_speed_m_s=None,
-                    wind_direction=None,
-                ),
-            ),
         )
 
     repo.upsert_cwa_forecast_release(release(older, 28.0))
     repo.upsert_cwa_forecast_release(release(newer, 31.0))
     latest_page = client.get(
         "/data/weather/forecasts",
-        params={"start": _rfc3339(valid - timedelta(hours=1)), "end": _rfc3339(valid)},
+        params={"start": rfc3339(valid - timedelta(hours=1)), "end": rfc3339(valid)},
     ).json()
     assert len(latest_page["items"]) == 1
     assert latest_page["items"][0]["temperature_c"] == 31.0
-    assert latest_page["items"][0]["issued_at"] == _rfc3339(newer)
+    assert latest_page["items"][0]["issued_at"] == rfc3339(newer)
     assert latest_page["items"][0]["location_name"] == "臺北"
     assert "raw_payload" not in latest_page["items"][0]
     all_vintages = client.get(
         "/data/weather/forecasts",
         params={
-            "start": _rfc3339(valid - timedelta(hours=1)),
-            "end": _rfc3339(valid),
+            "start": rfc3339(valid - timedelta(hours=1)),
+            "end": rfc3339(valid),
             "all_vintages": "true",
         },
     ).json()
@@ -578,26 +545,26 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
     older_vintage = client.get(
         "/data/weather/forecasts",
         params={
-            "start": _rfc3339(valid - timedelta(hours=1)),
-            "end": _rfc3339(valid),
-            "source_updated_at": _rfc3339(older),
+            "start": rfc3339(valid - timedelta(hours=1)),
+            "end": rfc3339(valid),
+            "source_updated_at": rfc3339(older),
         },
     ).json()
     assert [item["temperature_c"] for item in older_vintage["items"]] == [28.0]
     issued_vintage = client.get(
         "/data/weather/forecasts",
         params={
-            "start": _rfc3339(valid - timedelta(hours=1)),
-            "end": _rfc3339(valid),
-            "issued_at": _rfc3339(older),
+            "start": rfc3339(valid - timedelta(hours=1)),
+            "end": rfc3339(valid),
+            "issued_at": rfc3339(older),
         },
     ).json()
     assert [item["temperature_c"] for item in issued_vintage["items"]] == [28.0]
     audits = client.get(
         "/data/audits/cwa-forecasts",
-        params={"start": _rfc3339(older - timedelta(hours=1)), "end": _rfc3339(newer)},
+        params={"start": rfc3339(older - timedelta(hours=1)), "end": rfc3339(newer)},
     ).json()
-    assert {item["issued_at"] for item in audits["items"]} == {_rfc3339(older), _rfc3339(newer)}
+    assert {item["issued_at"] for item in audits["items"]} == {rfc3339(older), rfc3339(newer)}
     assert "raw_payload" not in audits["items"][0]
     status = next(
         item
@@ -610,34 +577,18 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
 
 def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> None:
     """分頁期間新增 release 時，既有 cursor 必須繼續讀取原本解析出的最新版本。"""
-    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
-
     client, repo = explorer_client
     issued_at = _now().replace(minute=0) - timedelta(hours=2)
     valid_from = issued_at + timedelta(hours=3)
 
-    def release(issued: datetime, temperatures: tuple[float, ...]) -> CWAForecastRelease:
-        return CWAForecastRelease(
-            dataset_id="F-D0047-089",
-            issued_at=pd.Timestamp(issued),
-            source_updated_at=pd.Timestamp(issued),
-            fetched_at=issued,
-            status="complete",
-            missing_geocodes=(),
-            raw_payload={},
-            forecasts=tuple(
-                CWATownshipForecast(
-                    valid_from=pd.Timestamp(valid_from + timedelta(hours=index)),
-                    valid_to=pd.Timestamp(valid_from + timedelta(hours=index + 1)),
-                    geocode="63000050",
-                    location_name="臺北",
-                    temperature_c=temperature,
-                    dew_point_c=None,
-                    apparent_temperature_c=None,
-                    relative_humidity_pct=None,
-                    probability_of_precipitation_pct=None,
-                    wind_speed_m_s=None,
-                    wind_direction=None,
+    def release(issued: datetime, temperatures: tuple[float, ...]):
+        return forecast_release(
+            issued,
+            tuple(
+                township_forecast(
+                    valid_from + timedelta(hours=index),
+                    temperature,
+                    valid_to=valid_from + timedelta(hours=index + 1),
                 )
                 for index, temperature in enumerate(temperatures)
             ),
@@ -645,8 +596,8 @@ def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> No
 
     repo.upsert_cwa_forecast_release(release(issued_at, (28.0, 29.0)))
     params = {
-        "start": _rfc3339(valid_from),
-        "end": _rfc3339(valid_from + timedelta(hours=1)),
+        "start": rfc3339(valid_from),
+        "end": rfc3339(valid_from + timedelta(hours=1)),
         "limit": 1,
     }
     first = client.get("/data/weather/forecasts", params=params)
@@ -660,45 +611,29 @@ def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> No
     )
 
     assert second.status_code == 200
-    assert second.json()["items"][0]["issued_at"] == _rfc3339(issued_at)
+    assert second.json()["items"][0]["issued_at"] == rfc3339(issued_at)
 
 
 def test_forecast_cursor_distinguishes_rows_by_valid_to(explorer_client) -> None:
     """只有 valid_to 不同的預報列也必須能跨頁完整讀取。"""
-    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
-
     client, repo = explorer_client
     issued_at = _now().replace(minute=0) - timedelta(hours=1)
     valid_from = issued_at + timedelta(hours=2)
-    release = CWAForecastRelease(
-        dataset_id="F-D0047-089",
-        issued_at=pd.Timestamp(issued_at),
-        source_updated_at=pd.Timestamp(issued_at),
-        fetched_at=issued_at,
-        status="complete",
-        missing_geocodes=(),
-        raw_payload={},
-        forecasts=tuple(
-            CWATownshipForecast(
-                valid_from=pd.Timestamp(valid_from),
-                valid_to=pd.Timestamp(valid_from + timedelta(hours=hours)),
-                geocode="63000050",
-                location_name="臺北",
-                temperature_c=temperature,
-                dew_point_c=None,
-                apparent_temperature_c=None,
-                relative_humidity_pct=None,
-                probability_of_precipitation_pct=None,
-                wind_speed_m_s=None,
-                wind_direction=None,
+    release = forecast_release(
+        issued_at,
+        tuple(
+            township_forecast(
+                valid_from,
+                temperature,
+                valid_to=valid_from + timedelta(hours=hours),
             )
             for hours, temperature in ((1, 28.0), (2, 31.0))
         ),
     )
     repo.upsert_cwa_forecast_release(release)
     params = {
-        "start": _rfc3339(valid_from),
-        "end": _rfc3339(valid_from),
+        "start": rfc3339(valid_from),
+        "end": rfc3339(valid_from),
         "limit": 1,
     }
 

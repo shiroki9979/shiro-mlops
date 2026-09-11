@@ -1,7 +1,6 @@
 """Hourly-load reader exercises the typed query seam."""
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -11,12 +10,7 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
-
-TAIWAN = ZoneInfo("Asia/Taipei")
-
-
-def _rfc3339(value: datetime) -> str:
-    return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
+from tests.helpers import TAIWAN, rfc3339
 
 
 def _upsert_hours(
@@ -42,8 +36,8 @@ def test_hourly_load_reader_filters_location_and_traverses_next_page(
     _upsert_hours(test_repo, hours, location="Taichung")
     reader = HourlyLoadReader(test_repo.engine)
     params = {
-        "start": _rfc3339(latest - timedelta(hours=2)),
-        "end": _rfc3339(latest),
+        "start": rfc3339(latest - timedelta(hours=2)),
+        "end": rfc3339(latest),
         "location": "Taipei",
         "limit": "1",
     }
@@ -53,11 +47,11 @@ def test_hourly_load_reader_filters_location_and_traverses_next_page(
     assert first.has_more is True
     assert len(first.items) == 1
     assert first.items[0]["location"] == "Taipei"
-    assert first.items[0]["datetime"] == _rfc3339(latest)
+    assert first.items[0]["datetime"] == rfc3339(latest)
 
     second = reader.list({**params, "cursor": first.next_cursor})
 
-    assert second.items[0]["datetime"] == _rfc3339(latest - timedelta(hours=1))
+    assert second.items[0]["datetime"] == rfc3339(latest - timedelta(hours=1))
     assert second.items[0]["location"] == "Taipei"
 
 
@@ -69,16 +63,16 @@ def test_hourly_load_reader_rejects_invalid_window_and_cursor(
     _upsert_hours(test_repo, [latest - timedelta(hours=1), latest])
     reader = HourlyLoadReader(test_repo.engine)
     params = {
-        "start": _rfc3339(latest - timedelta(hours=1)),
-        "end": _rfc3339(latest),
+        "start": rfc3339(latest - timedelta(hours=1)),
+        "end": rfc3339(latest),
         "limit": "1",
     }
 
     with pytest.raises(ExplorerQueryError):
         reader.list(
             {
-                "start": _rfc3339(latest - timedelta(days=32)),
-                "end": _rfc3339(latest),
+                "start": rfc3339(latest - timedelta(days=32)),
+                "end": rfc3339(latest),
             }
         )
 

@@ -1,7 +1,6 @@
 """Power dataset readers preserve MW conversion, completeness, and nullable fields."""
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -15,14 +14,12 @@ from shiro_mlops.service.data_explorer.power import (
     RegionalSupplyDemandReader,
     UnitGenerationReader,
 )
-from tests.unit.test_supply_demand_repository import _sample_snapshot
-from tests.unit.test_unit_generation_repository import _sample_snapshots
-
-TAIWAN = ZoneInfo("Asia/Taipei")
-
-
-def _rfc3339(value: datetime) -> str:
-    return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
+from tests.helpers import (
+    TAIWAN,
+    rfc3339,
+    supply_demand_snapshot,
+    unit_generation_snapshots,
+)
 
 
 def test_national_reader_converts_mw_and_preserves_nullable_fields(
@@ -30,18 +27,20 @@ def test_national_reader_converts_mw_and_preserves_nullable_fields(
 ) -> None:
     """全台供需 reader 必須以 MW 為主顯示，並保留契約允許的空值與萬瓩欄位。"""
     observed = datetime.now(TAIWAN).replace(tzinfo=None, minute=30, second=0, microsecond=0)
-    test_repo.upsert_supply_demand_snapshot(_sample_snapshot(observed - timedelta(minutes=20)))
-    test_repo.upsert_supply_demand_snapshot(_sample_snapshot(observed))
+    test_repo.upsert_supply_demand_snapshot(
+        supply_demand_snapshot(observed - timedelta(minutes=20))
+    )
+    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed))
 
     page = NationalSupplyDemandReader(test_repo.engine).list(
-        {"start": _rfc3339(observed - timedelta(hours=1)), "end": _rfc3339(observed)}
+        {"start": rfc3339(observed - timedelta(hours=1)), "end": rfc3339(observed)}
     )
     item = page.items[0]
     assert item["curr_load_mw"] == pytest.approx(32421.0)
     assert item["curr_load_wan_kw"] == pytest.approx(3242.1)
     assert "raw_payload" not in item
     assert item["observed_at"].endswith("+08:00")
-    assert _rfc3339(observed - timedelta(minutes=10)) in page.missing_slots
+    assert rfc3339(observed - timedelta(minutes=10)) in page.missing_slots
 
 
 def test_regional_reader_marks_incomplete_slots_and_filters_completeness(
@@ -73,13 +72,13 @@ def test_regional_reader_marks_incomplete_slots_and_filters_completeness(
     )
     test_repo.upsert_regional_supply_demand_snapshots(rows)
     reader = RegionalSupplyDemandReader(test_repo.engine)
-    params = {"start": _rfc3339(complete_slot), "end": _rfc3339(observed), "limit": "50"}
+    params = {"start": rfc3339(complete_slot), "end": rfc3339(observed), "limit": "50"}
 
     page = reader.list(params)
     north_current = next(
         item
         for item in page.items
-        if item["region"] == "北部" and item["observed_at"] == _rfc3339(observed)
+        if item["region"] == "北部" and item["observed_at"] == rfc3339(observed)
     )
     assert north_current["slot_complete"] is False
     assert "東部" in north_current["missing_regions"]
@@ -99,11 +98,11 @@ def test_unit_generation_reader_preserves_zero_and_nullable_fields(
 ) -> None:
     """機組零發電必須保留，契約允許空值不得被當成缺失。"""
     observed = datetime.now(TAIWAN).replace(tzinfo=None, minute=10, second=0, microsecond=0)
-    test_repo.upsert_unit_generation_snapshots(_sample_snapshots(observed))
+    test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
     reader = UnitGenerationReader(test_repo.engine)
     window = {
-        "start": _rfc3339(observed - timedelta(hours=1)),
-        "end": _rfc3339(observed),
+        "start": rfc3339(observed - timedelta(hours=1)),
+        "end": rfc3339(observed),
     }
 
     page = reader.list(window)

@@ -1,7 +1,6 @@
 """Weather and audit readers preserve vintage, filter, and missing-identifier contracts."""
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -20,12 +19,7 @@ from shiro_mlops.service.data_explorer.weather import (
     ObservationAuditReader,
     ObservationReader,
 )
-
-TAIWAN = ZoneInfo("Asia/Taipei")
-
-
-def _rfc3339(value: datetime) -> str:
-    return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
+from tests.helpers import TAIWAN, rfc3339
 
 
 def test_observation_and_audit_readers_keep_station_and_missing_id_filters(
@@ -56,8 +50,8 @@ def test_observation_and_audit_readers_keep_station_and_missing_id_filters(
         )
     )
     window = {
-        "start": _rfc3339(observed - timedelta(hours=1)),
-        "end": _rfc3339(observed),
+        "start": rfc3339(observed - timedelta(hours=1)),
+        "end": rfc3339(observed),
     }
 
     observations = ObservationReader(test_repo.engine).list({**window, "station_id": "466920"})
@@ -114,27 +108,27 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
     test_repo.upsert_cwa_forecast_release(release(older, 28.0))
     test_repo.upsert_cwa_forecast_release(release(newer, 31.0))
     window = {
-        "start": _rfc3339(valid - timedelta(hours=1)),
-        "end": _rfc3339(valid),
+        "start": rfc3339(valid - timedelta(hours=1)),
+        "end": rfc3339(valid),
     }
     reader = ForecastReader(test_repo.engine)
 
     latest = reader.list(window)
     assert [item["temperature_c"] for item in latest.items] == [31.0]
-    assert latest.items[0]["issued_at"] == _rfc3339(newer)
+    assert latest.items[0]["issued_at"] == rfc3339(newer)
     assert "raw_payload" not in latest.items[0]
 
     all_vintages = reader.list({**window, "all_vintages": "true"})
     assert {item["temperature_c"] for item in all_vintages.items} == {28.0, 31.0}
 
-    older_vintage = reader.list({**window, "source_updated_at": _rfc3339(older)})
+    older_vintage = reader.list({**window, "source_updated_at": rfc3339(older)})
     assert [item["temperature_c"] for item in older_vintage.items] == [28.0]
 
-    by_issued = reader.list({**window, "issued_at": _rfc3339(older)})
+    by_issued = reader.list({**window, "issued_at": rfc3339(older)})
     assert [item["temperature_c"] for item in by_issued.items] == [28.0]
 
     audits = ForecastAuditReader(test_repo.engine).list(
-        {"start": _rfc3339(older - timedelta(hours=1)), "end": _rfc3339(newer)}
+        {"start": rfc3339(older - timedelta(hours=1)), "end": rfc3339(newer)}
     )
-    assert {item["issued_at"] for item in audits.items} == {_rfc3339(older), _rfc3339(newer)}
+    assert {item["issued_at"] for item in audits.items} == {rfc3339(older), rfc3339(newer)}
     assert "raw_payload" not in audits.items[0]

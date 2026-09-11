@@ -1,7 +1,6 @@
 """Unit tests for regional supply-demand snapshot repository persistence."""
 
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from sqlalchemy.engine import Engine
@@ -11,25 +10,14 @@ from shiro_mlops.data.repository import (
     TimeSeriesRepository,
 )
 from shiro_mlops.data.taipower_regional_supply_demand import parse_regional_supply_demand_csv
-
-FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
-
-
-def _sample_snapshots(observed_at: datetime | None = None):
-    csv_text = (FIXTURES_DIR / "taipower_regional_supply_demand_sample.csv").read_text(
-        encoding="utf-8"
-    )
-    return parse_regional_supply_demand_csv(
-        csv_text,
-        observed_at=observed_at or datetime(2026, 9, 5, 17, 30),
-    )
+from tests.helpers import regional_supply_demand_snapshots
 
 
 def test_upsert_regional_snapshots_insert_and_fetch(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """多區域快照應可依 (observed_at, region) 寫入並讀回萬瓩欄位與 raw payload。"""
-    snapshots = _sample_snapshots()
+    snapshots = regional_supply_demand_snapshots()
     assert test_repo.upsert_regional_supply_demand_snapshots(snapshots) == 4
 
     fetched = test_repo.fetch_regional_supply_demand_snapshots(datetime(2026, 9, 5, 17, 30))
@@ -44,7 +32,7 @@ def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同區域與觀測 slot 重跑時應更新既有快照而非新增列。"""
-    first = _sample_snapshots(datetime(2026, 9, 5, 17, 30))
+    first = regional_supply_demand_snapshots(datetime(2026, 9, 5, 17, 30))
     test_repo.upsert_regional_supply_demand_snapshots(first)
 
     revised_csv = (
@@ -105,7 +93,7 @@ def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
 ) -> None:
     """獨立 TaipowerRegionalSupplyDemandRepository 應可獨立初始化、驗證、冪等 upsert 與 fetch。"""
     repo = TaipowerRegionalSupplyDemandRepository(engine=sqlite_engine)
-    snapshots = _sample_snapshots()
+    snapshots = regional_supply_demand_snapshots()
     slot = datetime(2026, 9, 5, 17, 30)
 
     # 驗證空資料與首次寫入
@@ -134,7 +122,7 @@ def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
     assert north.load_wan_kw == pytest.approx(1150.0)
 
     # 驗證非法 region 直接防禦拒絕
-    invalid_snapshot = _sample_snapshots(datetime(2026, 9, 5, 18, 0))[0]
+    invalid_snapshot = regional_supply_demand_snapshots(datetime(2026, 9, 5, 18, 0))[0]
     object.__setattr__(invalid_snapshot, "region", "未知區域")
     with pytest.raises(ValueError, match="region"):
         repo.upsert([invalid_snapshot])

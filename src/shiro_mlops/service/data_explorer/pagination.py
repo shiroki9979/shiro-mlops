@@ -75,7 +75,7 @@ def apply_cursor(
 
 
 def _cursor_operand(value: str, column: str, dialect_name: str | None) -> str:
-    """Normalize SQLite timestamp text before keyset equality and ordering comparisons."""
+    """SQLite 時間字串格式不一，keyset 比較前需正規化以維持排序語意。"""
     is_time = column in CURSOR_TIME_COLS or column.endswith("_at")
     return f"datetime({value})" if dialect_name == "sqlite" and is_time else value
 

@@ -12,24 +12,16 @@ from shiro_mlops.data.repository import (
     TimeSeriesRepository,
 )
 from shiro_mlops.data.taipower_unit_generation import parse_unit_generation_payload
+from tests.helpers import unit_generation_snapshots
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
-
-
-def _sample_snapshots(observed_at: datetime | None = None):
-    with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
-        payload = json.load(f)
-    return parse_unit_generation_payload(
-        payload,
-        observed_at=observed_at or datetime(2026, 9, 5, 17, 30),
-    )
 
 
 def test_upsert_unit_generation_snapshots_insert_and_fetch(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """多機組快照應可依 (observed_at, unit_type, unit_name) 寫入並讀回。"""
-    snapshots = _sample_snapshots()
+    snapshots = unit_generation_snapshots()
     assert test_repo.upsert_unit_generation_snapshots(snapshots) == 4
 
     fetched = test_repo.fetch_unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
@@ -49,7 +41,7 @@ def test_upsert_unit_generation_snapshots_is_idempotent(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同機組識別與觀測 slot 重跑時應更新既有快照而非新增列。"""
-    first = _sample_snapshots(datetime(2026, 9, 5, 17, 30))
+    first = unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
     test_repo.upsert_unit_generation_snapshots(first)
 
     with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
@@ -136,7 +128,7 @@ def test_standalone_taipower_unit_generation_repository_lifecycle(
 ) -> None:
     """獨立 TaipowerUnitGenerationRepository 應可獨立初始化、驗證、冪等 upsert 與 fetch。"""
     repo = TaipowerUnitGenerationRepository(engine=sqlite_engine)
-    snapshots = _sample_snapshots()
+    snapshots = unit_generation_snapshots()
     slot = datetime(2026, 9, 5, 17, 30)
 
     # 驗證空資料與首次寫入

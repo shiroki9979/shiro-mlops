@@ -14,6 +14,18 @@ from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql_utc
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
+FORECAST_SQL = """
+    SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
+           location_name, temperature_c, dew_point_c, apparent_temperature_c,
+           relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+           wind_direction, created_at
+    FROM raw_cwa_township_forecast
+    WHERE {where}
+    ORDER BY valid_from DESC, issued_at DESC, source_updated_at DESC,
+             dataset_id DESC, geocode DESC, valid_to DESC
+    LIMIT :limit
+"""
+
 
 def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> dict[str, Any] | None:
     """Return the newest persisted forecast release, optionally scoped to one dataset."""
@@ -48,6 +60,82 @@ def _audit_status(value: str | None) -> str | None:
     if value not in {"complete", "incomplete"}:
         raise ExplorerQueryError("status must be complete or incomplete")
     return value
+
+
+def _has_explicit_forecast_version(params: dict[str, Any]) -> bool:
+    return bool(
+        params.get("issued_at")
+        or params.get("source_updated_at")
+        or is_truthy(params.get("all_vintages"))
+    )
+
+
+def _cursor_forecast_version(params: dict[str, Any], dataset: str) -> dict[str, Any]:
+    if not params.get("cursor"):
+        return {}
+    filters = decode_cursor_filters(str(params["cursor"]), dataset=dataset)
+    if filters.get("issued_at") and filters.get("source_updated_at"):
+        return filters
+    return {}
+
+
+def _pin_forecast_version(
+    db: ExplorerDb,
+    dataset: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    query_params = dict(params)
+    if _has_explicit_forecast_version(query_params):
+        return query_params
+    version = _cursor_forecast_version(query_params, dataset)
+    if version:
+        query_params.setdefault("dataset_id", version.get("dataset_id"))
+        query_params["issued_at"] = version["issued_at"]
+        query_params["source_updated_at"] = version["source_updated_at"]
+        return query_params
+    latest = latest_forecast_version(db, query_params.get("dataset_id"))
+    if latest is not None:
+        query_params["dataset_id"] = latest["latest_dataset_id"]
+        query_params["issued_at"] = format_taiwan_time(to_taiwan(latest["latest_issued_at"]))
+        query_params["source_updated_at"] = format_taiwan_time(
+            to_taiwan(latest["latest_source_updated_at"])
+        )
+    return query_params
+
+
+def _forecast_filters(query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+    start_time, end_time = query.window.as_utc()
+    clauses = ["valid_from >= :start_time", "valid_from <= :end_time"]
+    params: dict[str, Any] = {"start_time": start_time, "end_time": end_time}
+    for name in ("dataset_id", "geocode"):
+        if query.filters.get(name):
+            clauses.append(f"{name} = :{name}")
+            params[name] = query.filters[name]
+    for name in ("issued_at", "source_updated_at"):
+        if query.filters.get(name):
+            clauses.append(f"{name} = :{name}")
+            params[name] = to_sql_utc(query.filters[name])
+    return clauses, params
+
+
+def _forecast_item(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dataset_id": row["dataset_id"],
+        "issued_at": format_taiwan_time(to_taiwan(row["issued_at"])),
+        "source_updated_at": format_taiwan_time(to_taiwan(row["source_updated_at"])),
+        "valid_from": format_taiwan_time(to_taiwan(row["valid_from"])),
+        "valid_to": format_taiwan_time(to_taiwan(row["valid_to"])),
+        "geocode": row["geocode"],
+        "location_name": row["location_name"],
+        "temperature_c": to_float(row["temperature_c"]),
+        "dew_point_c": to_float(row["dew_point_c"]),
+        "apparent_temperature_c": to_float(row["apparent_temperature_c"]),
+        "relative_humidity_pct": to_float(row["relative_humidity_pct"]),
+        "probability_of_precipitation_pct": to_float(row["probability_of_precipitation_pct"]),
+        "wind_speed_m_s": to_float(row["wind_speed_m_s"]),
+        "wind_direction": row["wind_direction"],
+        "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+    }
 
 
 class ObservationReader(DatasetReader):
@@ -108,33 +196,7 @@ class ForecastReader(DatasetReader):
     dataset = "cwa_forecasts"
 
     def build_query(self, params: dict[str, Any]) -> ExplorerQuery:
-        query_params = dict(params)
-        if (
-            not query_params.get("issued_at")
-            and not query_params.get("source_updated_at")
-            and not is_truthy(query_params.get("all_vintages"))
-        ):
-            cursor_filters = (
-                decode_cursor_filters(str(query_params["cursor"]), dataset=self.dataset)
-                if query_params.get("cursor")
-                else {}
-            )
-            pinned_issued_at = cursor_filters.get("issued_at")
-            pinned_source_updated_at = cursor_filters.get("source_updated_at")
-            if pinned_issued_at and pinned_source_updated_at:
-                query_params.setdefault("dataset_id", cursor_filters.get("dataset_id"))
-                query_params["issued_at"] = pinned_issued_at
-                query_params["source_updated_at"] = pinned_source_updated_at
-            else:
-                latest = latest_forecast_version(self.db, query_params.get("dataset_id"))
-                if latest is not None:
-                    query_params["dataset_id"] = latest["latest_dataset_id"]
-                    query_params["issued_at"] = format_taiwan_time(
-                        to_taiwan(latest["latest_issued_at"])
-                    )
-                    query_params["source_updated_at"] = format_taiwan_time(
-                        to_taiwan(latest["latest_source_updated_at"])
-                    )
+        query_params = _pin_forecast_version(self.db, self.dataset, params)
         return ExplorerQuery.from_params(self.dataset, query_params)
 
     def fetch_page(
@@ -143,23 +205,7 @@ class ForecastReader(DatasetReader):
         cursor: dict[str, Any] | None,
         limit: int,
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        clauses = ["valid_from >= :start_time", "valid_from <= :end_time"]
-        sql_params: dict[str, Any] = {
-            "start_time": query.window.as_utc()[0],
-            "end_time": query.window.as_utc()[1],
-        }
-        if query.filters.get("dataset_id"):
-            clauses.append("dataset_id = :dataset_id")
-            sql_params["dataset_id"] = query.filters["dataset_id"]
-        if query.filters.get("geocode"):
-            clauses.append("geocode = :geocode")
-            sql_params["geocode"] = query.filters["geocode"]
-        if query.filters.get("issued_at"):
-            clauses.append("issued_at = :issued_at")
-            sql_params["issued_at"] = to_sql_utc(query.filters["issued_at"])
-        if query.filters.get("source_updated_at"):
-            clauses.append("source_updated_at = :source_updated_at")
-            sql_params["source_updated_at"] = to_sql_utc(query.filters["source_updated_at"])
+        clauses, sql_params = _forecast_filters(query)
         where, cursor_params = apply_cursor(
             clauses,
             cursor,
@@ -167,41 +213,9 @@ class ForecastReader(DatasetReader):
             dialect_name=self.db.engine.dialect.name,
         )
         sql_params.update(cursor_params)
-        sql = f"""
-            SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                   location_name, temperature_c, dew_point_c, apparent_temperature_c,
-                   relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
-                   wind_direction, created_at
-            FROM raw_cwa_township_forecast
-            WHERE {where}
-            ORDER BY valid_from DESC, issued_at DESC, source_updated_at DESC,
-                     dataset_id DESC, geocode DESC, valid_to DESC
-            LIMIT :limit
-        """
         sql_params["limit"] = limit
-        items = []
-        for row in self.db.fetch(sql, sql_params):
-            items.append(
-                {
-                    "dataset_id": row["dataset_id"],
-                    "issued_at": format_taiwan_time(to_taiwan(row["issued_at"])),
-                    "source_updated_at": format_taiwan_time(to_taiwan(row["source_updated_at"])),
-                    "valid_from": format_taiwan_time(to_taiwan(row["valid_from"])),
-                    "valid_to": format_taiwan_time(to_taiwan(row["valid_to"])),
-                    "geocode": row["geocode"],
-                    "location_name": row["location_name"],
-                    "temperature_c": to_float(row["temperature_c"]),
-                    "dew_point_c": to_float(row["dew_point_c"]),
-                    "apparent_temperature_c": to_float(row["apparent_temperature_c"]),
-                    "relative_humidity_pct": to_float(row["relative_humidity_pct"]),
-                    "probability_of_precipitation_pct": to_float(
-                        row["probability_of_precipitation_pct"]
-                    ),
-                    "wind_speed_m_s": to_float(row["wind_speed_m_s"]),
-                    "wind_direction": row["wind_direction"],
-                    "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
-                }
-            )
+        rows = self.db.fetch(FORECAST_SQL.format(where=where), sql_params)
+        items = [_forecast_item(row) for row in rows]
         return items, []
 
 
