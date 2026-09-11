@@ -1,5 +1,8 @@
 # shiro-mlops
 
+- Created: 2026-08-23
+- Last updated: 2026-09-08
+
 Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast, Dagster, MLflow, and LightGBM.
 
 ## Architecture
@@ -10,7 +13,7 @@ Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast,
 - **Forecasting Model**: LightGBM (Recursive multi-step forecasting with dynamic exogenous weather forecasts from CWA)
 - **Serving & API**: FastAPI (Dynamic horizon load predictions)
 - **Monitoring**: Evidently AI (Data Drift, Target Drift, and Evaluation Metrics)
-- **Infrastructure**: AWS + Terraform (S3, ECR, App Runner, IAM OIDC)
+- **Infrastructure**: AWS + Terraform (S3, ECR, IAM OIDC; App Runner remains a target deployment topology)
 - **Frontend Dashboard**: `frontend/` (React 19 + TypeScript + Vite + TanStack SPA)
 
 ---
