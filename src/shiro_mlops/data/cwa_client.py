@@ -286,12 +286,12 @@ _FORECAST_VALUE_KEYS = (
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
-    """Return a dict payload fragment, otherwise an empty mapping."""
+    """將 payload 片段正規化為 mapping。"""
     return value if isinstance(value, dict) else {}
 
 
 def _first_present(*values: Any) -> Any:
-    """Return the first non-empty CWA field candidate."""
+    """取得第一個非空的 CWA 欄位候選值。"""
     for value in values:
         if value not in (None, ""):
             return value
@@ -299,7 +299,7 @@ def _first_present(*values: Any) -> Any:
 
 
 def _forecast_value(value: Any) -> Any:
-    """Extract the value field from a forecast element value object."""
+    """從預報氣象因子值物件取得實際值。"""
     if isinstance(value, list):
         value = value[0] if value else None
     if isinstance(value, dict):
@@ -312,10 +312,16 @@ def _forecast_value(value: Any) -> Any:
     return value
 
 
-def _forecast_release_timestamps(
-    payload: Any, fetch_time: datetime
-) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """Read IssueTime/Update, or fall back to fetch time when OpenData omits them."""
+def _forecast_metadata_value(
+    sources: tuple[dict[str, Any], ...],
+    field_names: tuple[str, str],
+) -> Any:
+    """依 CWA payload 的常見層級取得預報版本欄位。"""
+    return _first_present(*(source.get(name) for source in sources for name in field_names))
+
+
+def _forecast_release_timestamps(payload: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """讀取來源 IssueTime 與 Update 作為預報版本身分。"""
     records = _as_mapping(payload.get("records") if isinstance(payload, dict) else None)
     dataset_info = _as_mapping(records.get("datasetInfo") or records.get("DatasetInfo"))
     containers = records.get("Locations") or records.get("locations") or []
@@ -324,34 +330,17 @@ def _forecast_release_timestamps(
     )
     payload_map = _as_mapping(payload)
     issued_at = _forecast_timestamp(
-        _first_present(
-            records.get("IssueTime"),
-            records.get("issueTime"),
-            dataset_info.get("IssueTime"),
-            dataset_info.get("issueTime"),
-            first_container.get("IssueTime"),
-            first_container.get("issueTime"),
-            payload_map.get("IssueTime"),
-            payload_map.get("issueTime"),
+        _forecast_metadata_value(
+            (records, dataset_info, first_container, payload_map),
+            ("IssueTime", "issueTime"),
         )
     )
     source_updated_at = _forecast_timestamp(
-        _first_present(
-            records.get("Update"),
-            records.get("update"),
-            dataset_info.get("Update"),
-            dataset_info.get("update"),
-            first_container.get("Update"),
-            first_container.get("update"),
-            payload_map.get("Update"),
-            payload_map.get("update"),
+        _forecast_metadata_value(
+            (records, dataset_info, first_container, payload_map),
+            ("Update", "update"),
         )
     )
-    fallback = _forecast_timestamp(fetch_time)
-    if issued_at is None:
-        issued_at = fallback
-    if source_updated_at is None:
-        source_updated_at = issued_at or fallback
     if issued_at is None or source_updated_at is None:
         raise ValueError("CWA forecast response is missing or invalid IssueTime/Update")
     return issued_at, source_updated_at
@@ -419,7 +408,7 @@ def parse_forecast_release(
 ) -> CWAForecastRelease:
     """Parse a versioned CWA township forecast response."""
     fetch_time = fetched_at or datetime.now(ZoneInfo("Asia/Taipei"))
-    issued_at, source_updated_at = _forecast_release_timestamps(payload, fetch_time)
+    issued_at, source_updated_at = _forecast_release_timestamps(payload)
 
     catalog = locations or DEFAULT_CWA_LOCATIONS
     expected_geocodes = {location.geocode for location in catalog.values()}

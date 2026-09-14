@@ -80,7 +80,7 @@ def test_parquet_io_manager_rejects_non_json_objects(tmp_path: Path) -> None:
 
 
 def test_parquet_io_manager_roundtrip_cwa_forecast_release(tmp_path: Path) -> None:
-    """Canonical CWA forecast releases must persist as JSON artifacts after Timescale upsert."""
+    """CWA 預報版本寫入 Timescale 後必須可作為 JSON artifact 往返。"""
     from datetime import datetime
 
     from tests.helpers import forecast_release, township_forecast

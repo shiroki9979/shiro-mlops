@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - 讓 `make compose-up` 以根目錄 `.env` 做 Compose 插值，把 `CWA_API_KEY` 注入 Dagster／API 容器，避免空授權碼導致 CWA 入庫 401。
-- 解析實際 CWA OpenData 鄉鎮預報 JSON：缺少 `IssueTime`／`Update` 時改用擷取時間，並對齊縣市 `Geocode` 與中文氣象欄位。
+- 拒絕缺少或無法解析 `IssueTime`／`Update` 的 CWA 預報回應，避免以擷取時間偽造版本而破壞冪等與 stale 判定。
 - 修正 Timescale schema 初始化把 SQL 註解裡的分號當成語句分隔，導致既有 volume 建不出 `raw_cwa_forecast_release`。
 - 讓 Dagster `ParquetIOManager` 能把 CWA 預報 dataclass 序列化成 JSON artifact，避免入庫成功後仍因無法寫出資產而失敗。
 - 拒絕 Data Explorer audit 非陣列 missing-identifier payload；keyset cursor 改以 naive UTC 比對，避免 SQLite 重複回傳當前列；並補齊電力列表空結果／非法查詢／分頁與預報 `issued_at` 契約測試。
