@@ -89,13 +89,14 @@ describe('Data Explorer routes', () => {
     expect(screen.queryByRole('link', { name: 'CWA 觀測批次審計' })).not.toBeInTheDocument()
   })
 
-  it('keeps Data Explorer navigation visible when health is unavailable in development', async () => {
+  it('hides Data Explorer navigation when health is unavailable', async () => {
     server.use(http.get('*/health', () => HttpResponse.error()))
     renderPath('/')
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: '營運資料檢視器' })).toBeInTheDocument()
+      expect(screen.getByText('即時預測總覽')).toBeInTheDocument()
     })
-    expect(screen.getByRole('link', { name: '逐時用電負載' })).toHaveAttribute('href', '/data/power/load')
+    expect(screen.queryByRole('link', { name: '營運資料檢視器' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '逐時用電負載' })).not.toBeInTheDocument()
   })
 
   it.each([
