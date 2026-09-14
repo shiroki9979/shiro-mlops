@@ -146,7 +146,7 @@ def resolve_weather(
     start_time: datetime | str | pd.Timestamp,
     horizon_hours: int,
     as_of: datetime | str | pd.Timestamp | None = None,
-    geocode: str = "63000050",
+    geocode: str = "63000000",
     station_id: str = "466920",
     fields: tuple[str, ...] = DEFAULT_RESOLUTION_FIELDS,
 ) -> WeatherResolution:

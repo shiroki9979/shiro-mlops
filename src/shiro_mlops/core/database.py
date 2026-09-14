@@ -58,6 +58,21 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
     return create_engine(db_uri, **engine_kwargs)
 
 
+def _strip_line_comments(sql: str) -> str:
+    """Remove full-line `--` comments so statement splitting ignores comment text."""
+    return "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+
+
+def split_sql_statements(ddl: str) -> list[str]:
+    """Split a DDL script into executable statements, ignoring comment-only fragments."""
+    statements: list[str] = []
+    for chunk in _strip_line_comments(ddl).split(";"):
+        cleaned = chunk.strip()
+        if cleaned:
+            statements.append(cleaned)
+    return statements
+
+
 def _execute_sql_statements(engine: Engine, statements: list[str]) -> None:
     """Execute a list of SQL statements with leading/trailing whitespace stripped."""
     with engine.connect() as conn:
@@ -120,12 +135,7 @@ def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
         List of SQLite CREATE TABLE statement strings.
     """
     statements: list[str] = []
-    for chunk in ddl.split(";"):
-        cleaned = "\n".join(
-            line for line in chunk.splitlines() if not line.strip().startswith("--")
-        ).strip()
-        if not cleaned:
-            continue
+    for cleaned in split_sql_statements(ddl):
         if not re.match(r"^\s*CREATE\s+TABLE", cleaned, re.IGNORECASE):
             continue
         # Apply PostgreSQL to SQLite dialect conversions
@@ -178,7 +188,7 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
 
     # PostgreSQL / TimescaleDB
     ddl = get_timescale_init_ddl()
-    _execute_sql_statements(db_engine, ddl.split(";"))
+    _execute_sql_statements(db_engine, split_sql_statements(ddl))
     _isolate_legacy_cwa_weather(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
@@ -199,5 +209,5 @@ def init_db(engine: Engine | None = None, sql_path: Path | None = None) -> None:
         return
 
     ddl = get_timescale_init_ddl(sql_path=sql_path)
-    _execute_sql_statements(db_engine, ddl.split(";"))
+    _execute_sql_statements(db_engine, split_sql_statements(ddl))
     logger.info("Database initialization completed successfully.")

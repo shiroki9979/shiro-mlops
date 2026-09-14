@@ -137,7 +137,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     ],
     filters: [
       { key: 'dataset_id', label: '資料集', placeholder: 'F-D0047-089' },
-      { key: 'geocode', label: 'Geocode', placeholder: '63000050' },
+      { key: 'geocode', label: 'Geocode', placeholder: '63000000' },
       { key: 'issued_at', label: '發布時間' },
       { key: 'source_updated_at', label: '來源更新時間' },
       { key: 'all_vintages', label: '全部版本', placeholder: 'true' },

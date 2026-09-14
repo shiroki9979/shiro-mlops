@@ -19,7 +19,7 @@ SELECT create_hypertable(
 );
 
 -- 2. Legacy CWA weather records. These rows lack trustworthy StationId provenance
--- and are retained for audit only; canonical consumers use station observations below.
+-- and are retained for audit only. Canonical consumers use station observations below.
 CREATE TABLE IF NOT EXISTS legacy_cwa_weather (
     time TIMESTAMPTZ NOT NULL,
     location VARCHAR(64) NOT NULL,

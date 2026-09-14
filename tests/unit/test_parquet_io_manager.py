@@ -79,6 +79,35 @@ def test_parquet_io_manager_rejects_non_json_objects(tmp_path: Path) -> None:
         manager.handle_output(context, object())
 
 
+def test_parquet_io_manager_roundtrip_cwa_forecast_release(tmp_path: Path) -> None:
+    """Canonical CWA forecast releases must persist as JSON artifacts after Timescale upsert."""
+    from datetime import datetime
+
+    from tests.helpers import forecast_release, township_forecast
+
+    manager = get_parquet_io_manager(
+        environment="local",
+        s3_bucket="unused",
+        data_dir=tmp_path,
+    )
+    release = forecast_release(
+        datetime(2026, 8, 20, 11, 40),
+        (township_forecast(datetime(2026, 8, 20, 12), 31.0),),
+        raw_payload={"success": "true"},
+    )
+    context = build_output_context(asset_key=AssetKey(["raw_cwa_township_forecast"]))
+
+    manager.handle_output(context, [release])
+
+    loaded = manager.load_input(
+        build_input_context(asset_key=AssetKey(["raw_cwa_township_forecast"]))
+    )
+    assert loaded[0]["dataset_id"] == "F-D0047-089"
+    assert loaded[0]["status"] == "complete"
+    assert loaded[0]["forecasts"][0]["temperature_c"] == 31.0
+    assert loaded[0]["raw_payload"] == {"success": "true"}
+
+
 def test_parquet_io_manager_does_not_create_s3_virtual_directories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -51,9 +51,11 @@ def test_cwa_api_key_is_available_to_runtime_services() -> None:
     """Verify the CWA API key placeholder and Compose interpolation are wired safely."""
     env_example = Path(".env.example").read_text(encoding="utf-8")
     compose_content = Path("docker/docker-compose.yml").read_text(encoding="utf-8")
+    makefile = Path("Makefile").read_text(encoding="utf-8")
 
     assert "CWA_API_KEY=" in env_example
     assert "CWA_API_KEY: ${CWA_API_KEY:-}" in compose_content
+    assert "docker compose --env-file .env -f docker/docker-compose.yml up -d" in makefile
 
 
 def test_settings_timescaledb_env_override(monkeypatch):
@@ -117,6 +119,9 @@ def test_docker_init_sql_file_exists_and_matches():
 
     sql_content = sql_path.read_text(encoding="utf-8")
     assert "raw_taipower_load" in sql_content
+    assert "raw_cwa_forecast_release" in sql_content
+    assert "raw_cwa_township_forecast" in sql_content
+    assert "raw_cwa_observation_batch" in sql_content
     assert "legacy_cwa_weather" in sql_content
     assert "raw_taipower_supply_demand_snapshot" in sql_content
     assert "raw_taipower_regional_supply_demand_snapshot" in sql_content
@@ -145,6 +150,28 @@ def test_init_db_executes_ddl():
 
     assert mock_conn.execute.called
     assert mock_conn.commit.called
+
+
+def test_init_db_executes_create_table_after_comment_with_semicolon(tmp_path):
+    """A semicolon inside a SQL line comment must not abort schema init or skip the next table."""
+    custom_ddl = """
+    -- retained for audit only; canonical consumers use station observations below.
+    CREATE TABLE IF NOT EXISTS raw_cwa_forecast_release (
+        dataset_id TEXT NOT NULL,
+        issued_at TIMESTAMP NOT NULL,
+        PRIMARY KEY (dataset_id, issued_at)
+    );
+    """
+    custom_sql_file = tmp_path / "comment_semicolon.sql"
+    custom_sql_file.write_text(custom_ddl, encoding="utf-8")
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'comment_semicolon.db'}")
+    try:
+        init_db(engine=engine, sql_path=custom_sql_file)
+
+        assert "raw_cwa_forecast_release" in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
 
 
 def test_init_db_with_sqlite_custom_ddl(tmp_path):
