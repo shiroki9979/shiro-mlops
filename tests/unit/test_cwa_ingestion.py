@@ -3,6 +3,7 @@
 from datetime import datetime
 
 import pandas as pd
+import pytest
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.data.cwa_client import (
@@ -150,8 +151,8 @@ def test_parse_forecast_release_preserves_vintage_and_typed_elements() -> None:
     assert point.valid_to == point.valid_from
 
 
-def test_parse_forecast_release_accepts_live_opendata_json() -> None:
-    """F-D0047-089/091 omit IssueTime/Update and use county Geocodes plus Chinese elements."""
+def test_parse_forecast_release_rejects_live_opendata_json_without_source_vintage() -> None:
+    """來源未提供版本時間時，不得以擷取時間偽造預報版本。"""
     payload = {
         "success": "true",
         "records": {
@@ -200,19 +201,26 @@ def test_parse_forecast_release_accepts_live_opendata_json() -> None:
         },
     }
 
-    release = parse_forecast_release(
-        payload,
-        dataset_id="F-D0047-089",
-        fetched_at=datetime(2026, 8, 20, 11, 40),
-    )
+    with pytest.raises(ValueError, match="missing or invalid IssueTime/Update"):
+        parse_forecast_release(
+            payload,
+            dataset_id="F-D0047-089",
+            fetched_at=datetime(2026, 8, 20, 11, 40),
+        )
 
-    assert release.issued_at == pd.Timestamp("2026-08-20 11:40:00")
-    assert release.source_updated_at == pd.Timestamp("2026-08-20 11:40:00")
-    assert release.status == "incomplete"
-    point = next(point for point in release.forecasts if point.geocode == "63000000")
-    assert point.temperature_c == 31.0
-    assert point.relative_humidity_pct == 70.0
-    assert point.wind_direction == "偏東風"
+
+def test_parse_forecast_release_rejects_invalid_source_vintage() -> None:
+    """來源存在但無法解析的版本時間必須被拒絕。"""
+    payload = {
+        "records": {
+            "IssueTime": "not-a-timestamp",
+            "Update": "also-not-a-timestamp",
+            "locations": [],
+        }
+    }
+
+    with pytest.raises(ValueError, match="missing or invalid IssueTime/Update"):
+        parse_forecast_release(payload, dataset_id="F-D0047-089")
 
 
 def test_parse_forecast_release_reads_dataset_info_vintage() -> None:

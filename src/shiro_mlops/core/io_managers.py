@@ -18,7 +18,7 @@ _JSON_ARTIFACT_HEADER = b"SHIRO-JSON-V1\n"
 
 
 def _json_default(obj: Any) -> Any:
-    """Convert domain objects into JSON-safe values for Dagster artifacts."""
+    """將領域物件轉換為 Dagster artifact 可保存的 JSON 值。"""
     if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)
     if isinstance(obj, pd.Timestamp):

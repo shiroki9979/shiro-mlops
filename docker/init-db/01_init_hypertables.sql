@@ -18,8 +18,8 @@ SELECT create_hypertable(
     migrate_data => TRUE
 );
 
--- 2. Legacy CWA weather records. These rows lack trustworthy StationId provenance
--- and are retained for audit only. Canonical consumers use station observations below.
+-- 2. 舊版 CWA 氣象資料。這些列缺乏可信的 StationId provenance，
+-- 僅為稽核保留；canonical 消費端使用下方的測站觀測資料。
 CREATE TABLE IF NOT EXISTS legacy_cwa_weather (
     time TIMESTAMPTZ NOT NULL,
     location VARCHAR(64) NOT NULL,

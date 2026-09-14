@@ -153,9 +153,9 @@ def test_init_db_executes_ddl():
 
 
 def test_init_db_executes_create_table_after_comment_with_semicolon(tmp_path):
-    """A semicolon inside a SQL line comment must not abort schema init or skip the next table."""
+    """SQL 單行註解中的分號不得中斷 schema 初始化或略過下一張表。"""
     custom_ddl = """
-    -- retained for audit only; canonical consumers use station observations below.
+    -- 僅為稽核保留；canonical 消費端使用下方的測站觀測資料。
     CREATE TABLE IF NOT EXISTS raw_cwa_forecast_release (
         dataset_id TEXT NOT NULL,
         issued_at TIMESTAMP NOT NULL,
