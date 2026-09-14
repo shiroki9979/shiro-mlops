@@ -2,7 +2,8 @@
 
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +15,19 @@ from shiro_mlops.core.config import settings
 
 _PARQUET_MAGIC = b"PAR1"
 _JSON_ARTIFACT_HEADER = b"SHIRO-JSON-V1\n"
+
+
+def _json_default(obj: Any) -> Any:
+    """Convert domain objects into JSON-safe values for Dagster artifacts."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return asdict(obj)
+    if isinstance(obj, pd.Timestamp):
+        return None if pd.isna(obj) else obj.isoformat()
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class ParquetIOManager(UPathIOManager):
@@ -37,7 +51,9 @@ class ParquetIOManager(UPathIOManager):
                 obj.to_parquet(f, index=False)
         else:
             try:
-                payload = json.dumps(obj, ensure_ascii=False, allow_nan=False).encode("utf-8")
+                payload = json.dumps(
+                    obj, ensure_ascii=False, allow_nan=False, default=_json_default
+                ).encode("utf-8")
             except (TypeError, ValueError) as error:
                 raise TypeError("Non-DataFrame artifacts must be JSON-serializable") from error
             with path.open("wb") as f:

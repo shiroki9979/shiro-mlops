@@ -24,7 +24,7 @@
 
 ## 2. 啟動所有服務
 
-先在專案根目錄準備本機環境變數，並填入 `CWA_API_KEY`；`.env` 已被 Git 忽略：
+先在專案根目錄準備本機環境變數，並填入 `CWA_API_KEY`；`.env` 已被 Git 忽略。啟動時必須讓 Compose 讀到這個檔案，否則 CWA 入庫會因空授權碼回 401：
 
 ```bash
 cp .env.example .env
@@ -40,7 +40,7 @@ make compose-up
 或使用原生 docker compose 指令：
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
+docker compose --env-file .env -f docker/docker-compose.yml up -d
 ```
 
 ---

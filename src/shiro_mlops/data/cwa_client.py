@@ -28,9 +28,9 @@ class CWALocation:
 
 
 DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
-    "Taipei": CWALocation("Taipei", "466920", "63000050"),
-    "Taichung": CWALocation("Taichung", "467490", "66000050"),
-    "Kaohsiung": CWALocation("Kaohsiung", "467441", "64000040"),
+    "Taipei": CWALocation("Taipei", "466920", "63000000"),
+    "Taichung": CWALocation("Taichung", "467490", "66000000"),
+    "Kaohsiung": CWALocation("Kaohsiung", "467441", "64000000"),
 }
 
 CWAIngestionStatus = Literal["complete", "incomplete"]
@@ -270,15 +270,91 @@ def _forecast_locations(payload: Any) -> list[dict[str, Any]]:
     return result
 
 
+_FORECAST_VALUE_KEYS = (
+    "value",
+    "Value",
+    "description",
+    "Temperature",
+    "DewPoint",
+    "DewPointTemperature",
+    "ApparentTemperature",
+    "RelativeHumidity",
+    "ProbabilityOfPrecipitation",
+    "WindSpeed",
+    "WindDirection",
+)
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """Return a dict payload fragment, otherwise an empty mapping."""
+    return value if isinstance(value, dict) else {}
+
+
+def _first_present(*values: Any) -> Any:
+    """Return the first non-empty CWA field candidate."""
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _forecast_value(value: Any) -> Any:
     """Extract the value field from a forecast element value object."""
     if isinstance(value, list):
         value = value[0] if value else None
     if isinstance(value, dict):
-        for key in ("value", "Value", "description"):
+        for key in _FORECAST_VALUE_KEYS:
             if key in value:
                 return value[key]
+        for nested in value.values():
+            if nested not in (None, ""):
+                return nested
     return value
+
+
+def _forecast_release_timestamps(
+    payload: Any, fetch_time: datetime
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Read IssueTime/Update, or fall back to fetch time when OpenData omits them."""
+    records = _as_mapping(payload.get("records") if isinstance(payload, dict) else None)
+    dataset_info = _as_mapping(records.get("datasetInfo") or records.get("DatasetInfo"))
+    containers = records.get("Locations") or records.get("locations") or []
+    first_container = _as_mapping(
+        containers[0] if isinstance(containers, list) and containers else None
+    )
+    payload_map = _as_mapping(payload)
+    issued_at = _forecast_timestamp(
+        _first_present(
+            records.get("IssueTime"),
+            records.get("issueTime"),
+            dataset_info.get("IssueTime"),
+            dataset_info.get("issueTime"),
+            first_container.get("IssueTime"),
+            first_container.get("issueTime"),
+            payload_map.get("IssueTime"),
+            payload_map.get("issueTime"),
+        )
+    )
+    source_updated_at = _forecast_timestamp(
+        _first_present(
+            records.get("Update"),
+            records.get("update"),
+            dataset_info.get("Update"),
+            dataset_info.get("update"),
+            first_container.get("Update"),
+            first_container.get("update"),
+            payload_map.get("Update"),
+            payload_map.get("update"),
+        )
+    )
+    fallback = _forecast_timestamp(fetch_time)
+    if issued_at is None:
+        issued_at = fallback
+    if source_updated_at is None:
+        source_updated_at = issued_at or fallback
+    if issued_at is None or source_updated_at is None:
+        raise ValueError("CWA forecast response is missing or invalid IssueTime/Update")
+    return issued_at, source_updated_at
 
 
 def _forecast_element_rows(
@@ -342,32 +418,27 @@ def parse_forecast_release(
     locations: dict[str, CWALocation] | None = None,
 ) -> CWAForecastRelease:
     """Parse a versioned CWA township forecast response."""
-    records = payload.get("records", {}) if isinstance(payload, dict) else {}
-    issued_at = _forecast_timestamp(
-        records.get("IssueTime")
-        or records.get("issueTime")
-        or (payload.get("IssueTime") if isinstance(payload, dict) else None)
-    )
-    source_updated_at = _forecast_timestamp(
-        records.get("Update")
-        or records.get("update")
-        or (payload.get("Update") if isinstance(payload, dict) else None)
-    )
     fetch_time = fetched_at or datetime.now(ZoneInfo("Asia/Taipei"))
-    if issued_at is None or source_updated_at is None:
-        raise ValueError("CWA forecast response is missing or invalid IssueTime/Update")
+    issued_at, source_updated_at = _forecast_release_timestamps(payload, fetch_time)
 
     catalog = locations or DEFAULT_CWA_LOCATIONS
     expected_geocodes = {location.geocode for location in catalog.values()}
     forecasts: list[CWATownshipForecast] = []
     seen_geocodes: set[str] = set()
     aliases = {
-        "temperature_c": {"T", "Temperature", "AirTemperature"},
-        "dew_point_c": {"Td", "DewPoint", "DewPointTemperature"},
-        "apparent_temperature_c": {"AT", "ApparentTemperature"},
-        "relative_humidity_pct": {"RH", "RelativeHumidity"},
-        "probability_of_precipitation_pct": {"PoP6h", "PoP12h", "PoP24h", "PoP"},
-        "wind_speed_m_s": {"WS", "WindSpeed"},
+        "temperature_c": {"T", "Temperature", "AirTemperature", "溫度", "平均溫度"},
+        "dew_point_c": {"Td", "DewPoint", "DewPointTemperature", "露點溫度", "平均露點溫度"},
+        "apparent_temperature_c": {"AT", "ApparentTemperature", "體感溫度", "最高體感溫度"},
+        "relative_humidity_pct": {"RH", "RelativeHumidity", "相對濕度", "平均相對濕度"},
+        "probability_of_precipitation_pct": {
+            "PoP6h",
+            "PoP12h",
+            "PoP24h",
+            "PoP",
+            "3小時降雨機率",
+            "12小時降雨機率",
+        },
+        "wind_speed_m_s": {"WS", "WindSpeed", "風速"},
     }
     for location in _forecast_locations(payload):
         geocode = str(location.get("geocode") or location.get("Geocode") or "").strip()
@@ -396,7 +467,7 @@ def parse_forecast_release(
                         values, aliases["probability_of_precipitation_pct"]
                     ),
                     wind_speed_m_s=_forecast_numeric(values, aliases["wind_speed_m_s"]),
-                    wind_direction=_forecast_text(values, {"WD", "WindDirection"}),
+                    wind_direction=_forecast_text(values, {"WD", "WindDirection", "風向"}),
                 )
             )
     forecasts.sort(key=lambda row: (row.geocode, row.valid_from, row.valid_to))

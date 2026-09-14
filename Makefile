@@ -48,7 +48,7 @@ format:
 	uv run ruff check --fix .
 
 compose-up:
-	docker compose -f docker/docker-compose.yml up -d
+	docker compose --env-file .env -f docker/docker-compose.yml up -d
 
 compose-down:
 	docker compose -f docker/docker-compose.yml down

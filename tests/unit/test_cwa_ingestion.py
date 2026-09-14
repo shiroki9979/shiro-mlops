@@ -41,9 +41,11 @@ def _observation_payload() -> dict:
 
 def test_default_cwa_location_catalog_uses_stable_source_ids() -> None:
     assert DEFAULT_CWA_LOCATIONS["Taipei"].station_id == "466920"
+    assert DEFAULT_CWA_LOCATIONS["Taipei"].geocode == "63000000"
     assert DEFAULT_CWA_LOCATIONS["Taichung"].station_id == "467490"
+    assert DEFAULT_CWA_LOCATIONS["Taichung"].geocode == "66000000"
     assert DEFAULT_CWA_LOCATIONS["Kaohsiung"].station_id == "467441"
-    assert DEFAULT_CWA_LOCATIONS["Kaohsiung"].geocode == "64000040"
+    assert DEFAULT_CWA_LOCATIONS["Kaohsiung"].geocode == "64000000"
 
 
 def test_location_allowlist_can_be_overridden_as_one_mapping() -> None:
@@ -95,7 +97,7 @@ def test_parse_forecast_release_preserves_vintage_and_typed_elements() -> None:
                 {
                     "location": [
                         {
-                            "geocode": "63000050",
+                            "geocode": "63000000",
                             "locationName": "臺北市",
                             "weatherElement": [
                                 {
@@ -139,13 +141,99 @@ def test_parse_forecast_release_preserves_vintage_and_typed_elements() -> None:
     assert release.issued_at == pd.Timestamp("2026-08-20 11:00:00")
     assert release.source_updated_at == pd.Timestamp("2026-08-20 11:20:00")
     assert release.status == "incomplete"
-    assert release.missing_geocodes == ("64000040", "66000050")
+    assert release.missing_geocodes == ("64000000", "66000000")
     assert release.raw_payload == payload
     point = next(point for point in release.forecasts if point.valid_from.hour == 12)
-    assert point.geocode == "63000050"
+    assert point.geocode == "63000000"
     assert point.temperature_c == 31.0
     assert point.relative_humidity_pct == 70.0
     assert point.valid_to == point.valid_from
+
+
+def test_parse_forecast_release_accepts_live_opendata_json() -> None:
+    """F-D0047-089/091 omit IssueTime/Update and use county Geocodes plus Chinese elements."""
+    payload = {
+        "success": "true",
+        "records": {
+            "Locations": [
+                {
+                    "DatasetDescription": "臺灣各縣市鄉鎮未來3天天氣預報",
+                    "LocationsName": "台灣",
+                    "Dataid": "D0047-089",
+                    "Location": [
+                        {
+                            "LocationName": "臺北市",
+                            "Geocode": "63000000",
+                            "WeatherElement": [
+                                {
+                                    "ElementName": "溫度",
+                                    "Time": [
+                                        {
+                                            "DataTime": "2026-08-20T12:00:00+08:00",
+                                            "ElementValue": [{"Temperature": "31"}],
+                                        }
+                                    ],
+                                },
+                                {
+                                    "ElementName": "相對濕度",
+                                    "Time": [
+                                        {
+                                            "DataTime": "2026-08-20T12:00:00+08:00",
+                                            "ElementValue": [{"RelativeHumidity": "70"}],
+                                        }
+                                    ],
+                                },
+                                {
+                                    "ElementName": "風向",
+                                    "Time": [
+                                        {
+                                            "DataTime": "2026-08-20T12:00:00+08:00",
+                                            "ElementValue": [{"WindDirection": "偏東風"}],
+                                        }
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    release = parse_forecast_release(
+        payload,
+        dataset_id="F-D0047-089",
+        fetched_at=datetime(2026, 8, 20, 11, 40),
+    )
+
+    assert release.issued_at == pd.Timestamp("2026-08-20 11:40:00")
+    assert release.source_updated_at == pd.Timestamp("2026-08-20 11:40:00")
+    assert release.status == "incomplete"
+    point = next(point for point in release.forecasts if point.geocode == "63000000")
+    assert point.temperature_c == 31.0
+    assert point.relative_humidity_pct == 70.0
+    assert point.wind_direction == "偏東風"
+
+
+def test_parse_forecast_release_reads_dataset_info_vintage() -> None:
+    payload = {
+        "records": {
+            "datasetInfo": {
+                "issueTime": "2026-08-20T11:00:00+08:00",
+                "update": "2026-08-20T11:20:00+08:00",
+            },
+            "Locations": [],
+        }
+    }
+
+    release = parse_forecast_release(
+        payload,
+        dataset_id="F-D0047-089",
+        fetched_at=datetime(2026, 8, 20, 11, 40),
+    )
+
+    assert release.issued_at == pd.Timestamp("2026-08-20 11:00:00")
+    assert release.source_updated_at == pd.Timestamp("2026-08-20 11:20:00")
 
 
 def test_parse_forecast_release_uses_interval_boundaries() -> None:
@@ -157,7 +245,7 @@ def test_parse_forecast_release_uses_interval_boundaries() -> None:
                 {
                     "location": [
                         {
-                            "geocode": "63000050",
+                            "geocode": "63000000",
                             "weatherElement": [
                                 {
                                     "elementName": "T",
@@ -194,7 +282,7 @@ def test_parse_forecast_release_marks_a_geocode_missing_when_all_its_times_are_i
                 {
                     "location": [
                         {
-                            "geocode": "63000050",
+                            "geocode": "63000000",
                             "weatherElement": [
                                 {
                                     "elementName": "T",
@@ -215,7 +303,7 @@ def test_parse_forecast_release_marks_a_geocode_missing_when_all_its_times_are_i
 
     release = parse_forecast_release(payload, dataset_id="F-D0047-089")
 
-    assert "63000050" in release.missing_geocodes
+    assert "63000000" in release.missing_geocodes
 
 
 def test_repository_persists_forecast_vintages_without_overwriting(
@@ -229,7 +317,7 @@ def test_repository_persists_forecast_vintages_without_overwriting(
                 {
                     "location": [
                         {
-                            "geocode": "63000050",
+                            "geocode": "63000000",
                             "weatherElement": [
                                 {
                                     "elementName": "T",
@@ -255,7 +343,7 @@ def test_repository_persists_forecast_vintages_without_overwriting(
 
     assert test_repo.upsert_cwa_forecast_release(first) == 1
     assert test_repo.upsert_cwa_forecast_release(corrected) == 1
-    rows = test_repo.fetch_cwa_forecast_rows(geocode="63000050")
+    rows = test_repo.fetch_cwa_forecast_rows(geocode="63000000")
 
     assert len(rows) == 2
     assert set(rows["source_updated_at"].dt.hour) == {11}
