@@ -4,10 +4,13 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlparse
+from xml.etree.ElementTree import Element
 from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
+from defusedxml import ElementTree
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
@@ -34,6 +37,11 @@ DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
 }
 
 CWAIngestionStatus = Literal["complete", "incomplete"]
+
+_CWA_FORECAST_FILE_API = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
+_CWA_FORECAST_FILE_API_HOST = "opendata.cwa.gov.tw"
+_CWA_FORECAST_FILE_HOST = "cwaopendata.s3.ap-northeast-1.amazonaws.com"
+_CWA_FORECAST_FILE_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -405,6 +413,7 @@ def parse_forecast_release(
     dataset_id: str,
     fetched_at: datetime | None = None,
     locations: dict[str, CWALocation] | None = None,
+    raw_payload: Any | None = None,
 ) -> CWAForecastRelease:
     """Parse a versioned CWA township forecast response."""
     fetch_time = fetched_at or datetime.now(ZoneInfo("Asia/Taipei"))
@@ -468,9 +477,44 @@ def parse_forecast_release(
         fetched_at=fetch_time,
         status="complete" if not missing_geocodes else "incomplete",
         missing_geocodes=missing_geocodes,
-        raw_payload=payload,
+        raw_payload=payload if raw_payload is None else raw_payload,
         forecasts=tuple(forecasts),
     )
+
+
+def _xml_tag_name(tag: str) -> str:
+    """Remove an XML namespace from a CWA element name."""
+    return tag.rsplit("}", maxsplit=1)[-1]
+
+
+def _xml_value(element: Element) -> Any:
+    """Convert one CWA XML element into the JSON-like shape used by the parser."""
+    children = list(element)
+    if not children:
+        return (element.text or "").strip()
+
+    value: dict[str, Any] = {}
+    for child in children:
+        name = _xml_tag_name(child.tag)
+        child_value = _xml_value(child)
+        existing = value.get(name)
+        if existing is None:
+            value[name] = child_value
+        elif isinstance(existing, list):
+            existing.append(child_value)
+        else:
+            value[name] = [existing, child_value]
+    return value
+
+
+def _parse_forecast_file_payload(payload: str) -> dict[str, Any]:
+    """Adapt CWA's versioned XML file into the canonical forecast parser input."""
+    root = ElementTree.fromstring(payload)
+    document = _xml_value(root)
+    dataset = document.get("Dataset") if isinstance(document, dict) else None
+    if not isinstance(dataset, dict):
+        raise ValueError("CWA forecast file is missing Dataset")
+    return {"records": dataset}
 
 
 def _parse_cwa_observations_payload(data: Any, fallback_location: str = "Taipei") -> pd.DataFrame:
@@ -560,8 +604,8 @@ class CWAClient:
         self.api_key = api_key
         self.obs_url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0001-001"
         self.forecast_urls = {
-            "F-D0047-089": "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-089",
-            "F-D0047-091": "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-091",
+            "F-D0047-089": f"{_CWA_FORECAST_FILE_API}/F-D0047-089",
+            "F-D0047-091": f"{_CWA_FORECAST_FILE_API}/F-D0047-091",
         }
         self.forecast_url = self.forecast_urls["F-D0047-089"]
 
@@ -580,8 +624,14 @@ class CWAClient:
         """Fetch and parse one versioned township forecast dataset."""
         if dataset_id not in self.forecast_urls:
             raise ValueError(f"Unsupported CWA forecast dataset: {dataset_id}")
-        payload = self._fetch_json(self.forecast_urls[dataset_id])
-        return parse_forecast_release(payload, dataset_id=dataset_id, locations=locations)
+        raw_payload = self._fetch_forecast_file(self.forecast_urls[dataset_id])
+        payload = _parse_forecast_file_payload(raw_payload)
+        return parse_forecast_release(
+            payload,
+            dataset_id=dataset_id,
+            locations=locations,
+            raw_payload=raw_payload,
+        )
 
     def _fetch_json(self, url: str) -> Any:
         """Fetch one CWA source payload through the canonical ingestion boundary."""
@@ -590,3 +640,54 @@ class CWAClient:
             if hasattr(response, "raise_for_status"):
                 response.raise_for_status()
             return json.loads(response.text)
+
+    def _fetch_forecast_file(self, url: str) -> str:
+        """Fetch a versioned CWA forecast file without forwarding credentials to storage."""
+        file_api_url = self._validated_forecast_file_api_url(url)
+        with httpx.Client(timeout=_CWA_FORECAST_FILE_TIMEOUT_SECONDS) as client:
+            redirect = client.get(
+                file_api_url, params={"Authorization": self.api_key}, follow_redirects=False
+            )
+            if redirect.status_code != 302:
+                raise ValueError(
+                    f"CWA forecast file request expected HTTP 302, got {redirect.status_code}"
+                )
+            location = redirect.headers.get("location")
+            if location is None:
+                raise ValueError("CWA forecast file response is missing a download location")
+            file_url = self._validated_forecast_file_url(location)
+            response = client.get(file_url)
+            response.raise_for_status()
+            return response.text
+
+    @staticmethod
+    def _validated_forecast_file_api_url(url: str) -> str:
+        """Require the authorized CWA API origin before sending the membership key."""
+        target = urlparse(url)
+        if (
+            target.scheme != "https"
+            or target.hostname != _CWA_FORECAST_FILE_API_HOST
+            or target.port not in (None, 443)
+            or target.username is not None
+            or target.password is not None
+            or target.query
+            or target.fragment
+        ):
+            raise ValueError("CWA forecast file API URL is not an approved HTTPS target")
+        return url
+
+    @staticmethod
+    def _validated_forecast_file_url(location: str) -> str:
+        """Allow CWA's known HTTPS storage target and reject credential-forwarding redirects."""
+        target = urlparse(location)
+        if (
+            target.scheme != "https"
+            or target.hostname != _CWA_FORECAST_FILE_HOST
+            or target.port not in (None, 443)
+            or target.username is not None
+            or target.password is not None
+            or target.query
+            or target.fragment
+        ):
+            raise ValueError("CWA forecast file download location is not an approved HTTPS target")
+        return location

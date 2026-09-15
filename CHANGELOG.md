@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 改由 CWA 原始 XML 預報檔取得 `IssueTime`／`Update`，並限制無憑證下載 redirect 的 HTTPS 儲存目標，避免 flattened REST 回應缺少版本時間而使 forecast ingestion 永久重試。
 - 讓 `make compose-up` 以根目錄 `.env` 做 Compose 插值，把 `CWA_API_KEY` 注入 Dagster／API 容器，避免空授權碼導致 CWA 入庫 401。
 - 拒絕缺少或無法解析 `IssueTime`／`Update` 的 CWA 預報回應，避免以擷取時間偽造版本而破壞冪等與 stale 判定。
 - 修正 Timescale schema 初始化把 SQL 註解裡的分號當成語句分隔，導致既有 volume 建不出 `raw_cwa_forecast_release`。
