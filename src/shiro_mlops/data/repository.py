@@ -53,8 +53,6 @@ def _taiwan_instant_to_utc(value: datetime | pd.Timestamp | None) -> datetime | 
 
 def _serialize_raw_payload(payload: Any) -> str:
     """Serialize a source payload for JSONB or SQLite TEXT storage."""
-    if isinstance(payload, str):
-        return payload
     return json.dumps(payload, ensure_ascii=False)
 
 
