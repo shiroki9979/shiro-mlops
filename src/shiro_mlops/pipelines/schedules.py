@@ -9,6 +9,7 @@ from dagster import (
     RunRequest,
     ScheduleDefinition,
     ScheduleEvaluationContext,
+    SkipReason,
     define_asset_job,
     schedule,
 )
@@ -30,6 +31,10 @@ CWA_INGESTION_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
 CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
 CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
 CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
+HISTORICAL_LOAD_DEFERMENT_REASON = (
+    "Historical hourly Taipower load source is unavailable; "
+    "training and drift schedules are deferred."
+)
 
 # 1. Daily Training and Evaluation Job
 daily_training_job = define_asset_job(
@@ -42,11 +47,16 @@ daily_training_job = define_asset_job(
     description="Run ingestion, feature engineering, model training, and drift evaluation",
 )
 
-daily_training_schedule = ScheduleDefinition(
+
+@schedule(
     job=daily_training_job,
     cron_schedule="0 16 * * *",  # 16:00 UTC (00:00 Taipei time)
     description="Daily retrain schedule at midnight Taipei time",
 )
+def daily_training_schedule(_: ScheduleEvaluationContext) -> SkipReason:
+    """Defer training until a historical hourly load source is available."""
+    return SkipReason(HISTORICAL_LOAD_DEFERMENT_REASON)
+
 
 # 2. Hourly Drift and Monitoring Job
 hourly_drift_job = define_asset_job(
@@ -55,11 +65,15 @@ hourly_drift_job = define_asset_job(
     description="Check latest actual load against previous forecasts",
 )
 
-hourly_drift_schedule = ScheduleDefinition(
+
+@schedule(
     job=hourly_drift_job,
     cron_schedule="0 * * * *",  # Every hour
     description="Hourly drift evaluation schedule",
 )
+def hourly_drift_schedule(_: ScheduleEvaluationContext) -> SkipReason:
+    """Defer drift evaluation until actual historical load can be ingested."""
+    return SkipReason(HISTORICAL_LOAD_DEFERMENT_REASON)
 
 
 cwa_observation_job = define_asset_job(
