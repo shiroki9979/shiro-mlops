@@ -42,9 +42,8 @@ def test_raw_regional_snapshot_materializes_multi_region_idempotently(
 ) -> None:
     """mock 區域 CSV 後 materialize 應寫入四區，重跑同 slot 仍維持四列。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_regional_supply_demand.httpx.Client",
             return_value=_mock_httpx_response(),
@@ -116,9 +115,8 @@ def test_regional_http_failure_does_not_write(
 ) -> None:
     """HTTP 失敗時 asset 必須失敗且不得寫入區域快照。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_regional_supply_demand.httpx.Client",
             return_value=_mock_httpx_response(status_error=True),
@@ -139,10 +137,10 @@ def test_regional_parse_failure_does_not_write(
 ) -> None:
     """無有效區域列時 asset 必須失敗且不得寫入。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
     bad_csv = "時間,區域,發電(萬瓩),用電(萬瓩)\n,,,\n"
 
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_regional_supply_demand.httpx.Client",
             return_value=_mock_httpx_response(bad_csv),
