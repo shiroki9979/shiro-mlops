@@ -52,6 +52,7 @@ from shiro_mlops.pipelines.feature_pipeline import (
     fetch_feature_source_data,
     transform_feature_source_data,
 )
+from shiro_mlops.pipelines.readiness import require_training_load_readiness
 
 
 def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
@@ -276,10 +277,14 @@ def raw_taipower_unit_generation_snapshot(
     deps=[raw_taipower_load],
 )
 def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
-    """Asset: repository-only load source, so training never reads snapshot tables."""
-    load = _get_time_series_repo(context).fetch_load_range(location=DEFAULT_LOCATION)
-    if load.empty:
-        raise RuntimeError("No derived hourly actual load available for training")
+    """Asset: repository-only load source, so training never reads snapshot tables.
+
+    Fails before any feature or model work when the minimum accumulation is unmet.
+    """
+    repository = _get_time_series_repo(context)
+    readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
+    context.log.info(readiness.reason)
+    load = repository.fetch_load_range(location=DEFAULT_LOCATION)
     return load.rename(columns={"time": "datetime"})
 
 
@@ -385,14 +390,19 @@ def drift_monitoring_report(
     context: AssetExecutionContext,
     trained_forecaster_model: dict,
     engineered_features: pd.DataFrame,
+    taipower_load_feature_source: pd.DataFrame,
 ) -> dict:
-    """Asset: Calculate summary metrics and generate drift report metadata."""
+    """Asset: Summarize the latest model metrics beside the newest persisted actual load."""
     metrics = trained_forecaster_model.get("metrics", {})
+    latest_actual = taipower_load_feature_source.sort_values("datetime").iloc[-1]
     report = {
         "status": "HEALTHY" if metrics.get("mape", 0.0) < 10.0 else "WARNING",
         "metrics": metrics,
         "feature_count": engineered_features.shape[1],
         "sample_count": engineered_features.shape[0],
+        "actual_load_hours": len(taipower_load_feature_source),
+        "latest_actual_load_time": pd.Timestamp(latest_actual["datetime"]).isoformat(),
+        "latest_actual_load_mw": float(latest_actual[LOAD_MW_COL]),
     }
     context.log.info(f"Drift monitoring status: {report['status']}")
     return report

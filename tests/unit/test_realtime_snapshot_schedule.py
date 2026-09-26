@@ -9,9 +9,7 @@ from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.schedules import (
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
     daily_training_job,
-    daily_training_schedule,
     hourly_drift_job,
-    hourly_drift_schedule,
     taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
@@ -66,19 +64,3 @@ def test_realtime_schedule_cron_and_shared_tick_config() -> None:
         for asset_name in TAIPOWER_REALTIME_SNAPSHOT_ASSETS
     }
     assert observed_values == {"2026-09-05T17:30:00"}
-
-
-def test_load_dependent_schedules_are_deferred_without_a_historical_source() -> None:
-    """訓練與 drift 不得重試無法取得的歷史逐時負載來源。"""
-    context = build_schedule_context(
-        scheduled_execution_time=datetime(2026, 9, 17, 8, 0, tzinfo=ZoneInfo("Asia/Taipei"))
-    )
-
-    for deferred_schedule in (daily_training_schedule, hourly_drift_schedule):
-        execution = deferred_schedule.evaluate_tick(context)
-
-        assert execution.run_requests == []
-        assert execution.skip_message == (
-            "Historical hourly Taipower load source is unavailable; "
-            "training and drift schedules are deferred."
-        )

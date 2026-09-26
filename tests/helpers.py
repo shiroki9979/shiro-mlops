@@ -7,6 +7,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.cwa_client import (
@@ -146,3 +148,33 @@ def canonical_observation_batch(frame: pd.DataFrame) -> CWAObservationBatch:
         raw_payload={"fixture": "canonical_observation_batch"},
         observations=tuple(observations),
     )
+
+
+def derived_hourly_load(hours: int, last_hour: datetime) -> pd.DataFrame:
+    """建立連續且以 HH:00 標記的推算逐時負載，最後一列落在 ``last_hour``。"""
+    times = pd.date_range(end=last_hour, periods=hours, freq="h")
+    return pd.DataFrame({"datetime": times, "load_mw": [30000.0 + i for i in range(hours)]})
+
+
+def create_legacy_load_table(engine: Engine) -> None:
+    """模擬 d015046 時期資料庫：舊表沒有 source 欄，升級後舊列 source 為 NULL。"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE raw_taipower_load (
+                    time TIMESTAMP NOT NULL,
+                    location VARCHAR(64) NOT NULL,
+                    load_mw DOUBLE PRECISION NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (time, location)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, location, load_mw) "
+                "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
+            )
+        )

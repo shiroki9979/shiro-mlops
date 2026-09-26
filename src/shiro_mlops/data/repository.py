@@ -25,7 +25,10 @@ from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
     CWAObservationBatch,
 )
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    HourlyLoadAccumulation,
+)
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -598,6 +601,34 @@ class TimeSeriesRepository:
 
         df["time"] = utc_to_taiwan_datetime(df["time"])
         return df
+
+    def summarize_hourly_load_accumulation(
+        self, location: str = DEFAULT_LOCATION
+    ) -> HourlyLoadAccumulation:
+        """Count derived hourly observations and legacy rows without loading the series."""
+        query = text(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN source = :derived THEN 1 ELSE 0 END), 0) AS valid_hours,
+                COALESCE(SUM(CASE WHEN source IS NULL THEN 1 ELSE 0 END), 0) AS legacy_rows,
+                MAX(CASE WHEN source = :derived THEN time END) AS latest_time
+            FROM raw_taipower_load
+            WHERE location = :location
+            """
+        )
+        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "location": location}
+        with self.engine.connect() as conn:
+            row = conn.execute(query, params).one()
+
+        latest_hour = None
+        if row.latest_time is not None:
+            latest = utc_to_taiwan_datetime(pd.Series([row.latest_time])).iloc[0]
+            latest_hour = latest.to_pydatetime()
+        return HourlyLoadAccumulation(
+            valid_hours=int(row.valid_hours),
+            legacy_rows=int(row.legacy_rows),
+            latest_hour=latest_hour,
+        )
 
     def fetch_weather_range(
         self,

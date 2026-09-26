@@ -331,6 +331,8 @@ def test_full_dagster_mlops_pipeline_materialization(
     ):
         raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": repository}))
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    # fixture 只有 48 小時；降低訓練最低累積門檻以驗證完整鏈路。
+    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
     repo = TimeSeriesRepository(engine=sqlite_engine)
     feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
 
@@ -372,6 +374,9 @@ def test_full_dagster_mlops_pipeline_materialization(
     assert "status" in report
     assert report["status"] in {"HEALTHY", "WARNING"}
     assert report["feature_count"] > 0
+    assert report["actual_load_hours"] == len(taipower_raw_df)
+    assert report["latest_actual_load_time"] == "2026-08-21T23:00:00"
+    assert report["latest_actual_load_mw"] == 29100.0
 
 
 def test_publish_parquet_feature_local_and_s3(tmp_path):

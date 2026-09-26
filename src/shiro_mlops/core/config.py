@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     # Nationwide hourly actual load derived from regional snapshots (ADR-0008)
     HOURLY_LOAD_MIN_SAMPLES: PositiveInt = 4
     HOURLY_LOAD_RECOMPUTE_HOURS: PositiveInt = 3
+    # 推算序列無法回補，只能自累積起往後取得；未滿 28 日（672 小時）不得訓練（ADR-0008）。
+    TRAINING_MIN_LOAD_HOURS: PositiveInt = 672
 
     # API Serving
     API_HOST: str = "0.0.0.0"
