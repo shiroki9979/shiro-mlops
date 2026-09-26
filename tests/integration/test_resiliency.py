@@ -232,6 +232,33 @@ def test_cwa_http_500_exhausts_retries_fails_run_and_keeps_existing_data(
     pd.testing.assert_frame_equal(forecasts_after, forecasts_before)
 
 
+def test_second_cwa_product_failure_keeps_forecast_versions_unchanged(
+    test_repo: TimeSeriesRepository,
+    dagster_instance,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_repo.upsert_cwa_forecast_release(_stale_forecast_release())
+    before = test_repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE)
+    new_release = _forecast_release(FRESH_REQUEST_TIME, 32.0)
+
+    def fetch_release(self, dataset_id: str, locations: object) -> CWAForecastRelease:
+        if dataset_id == "F-D0047-089":
+            return new_release
+        request = httpx.Request("GET", "https://opendata.cwa.gov.tw/failed-product")
+        raise httpx.HTTPStatusError(
+            "CWA returned HTTP 500",
+            request=request,
+            response=httpx.Response(500, request=request),
+        )
+
+    monkeypatch.setattr(CWAClient, "fetch_forecast_release", fetch_release)
+
+    result = _execute_without_retry_delay(cwa_forecast_job, test_repo, dagster_instance)
+
+    assert not result.success
+    pd.testing.assert_frame_equal(test_repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE), before)
+
+
 # --- Serving: degraded weather keeps the service up ------------------------------------------
 
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.constants import (
@@ -375,6 +375,14 @@ class TimeSeriesRepository:
 
     def upsert_cwa_forecast_release(self, release: CWAForecastRelease) -> int:
         """Persist one CWA forecast vintage and all typed township rows atomically."""
+        return self.upsert_cwa_forecast_releases([release])
+
+    def upsert_cwa_forecast_releases(self, releases: list[CWAForecastRelease]) -> int:
+        """Persist all products from one forecast ingestion run in one transaction."""
+        with self.engine.begin() as conn:
+            return sum(self._upsert_cwa_forecast_release(conn, release) for release in releases)
+
+    def _upsert_cwa_forecast_release(self, conn: Connection, release: CWAForecastRelease) -> int:
         header = {
             "dataset_id": release.dataset_id,
             "issued_at": _taiwan_instant_to_utc(release.issued_at),
@@ -445,10 +453,9 @@ class TimeSeriesRepository:
                 wind_direction = EXCLUDED.wind_direction
             """
         )
-        with self.engine.begin() as conn:
-            conn.execute(header_stmt, header)
-            if child_records:
-                conn.execute(child_stmt, child_records)
+        conn.execute(header_stmt, header)
+        if child_records:
+            conn.execute(child_stmt, child_records)
         return len(child_records)
 
     def fetch_cwa_forecast_rows(

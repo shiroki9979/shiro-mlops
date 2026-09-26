@@ -29,7 +29,11 @@ from shiro_mlops.pipelines.assets import (
     taipower_load_feature_source,
     trained_forecaster_model,
 )
-from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
+from shiro_mlops.pipelines.feature_pipeline import (
+    FallbackFeatureSources,
+    build_feature_query_window,
+    fetch_feature_source_data,
+)
 from tests.helpers import canonical_observation_batch
 
 
@@ -71,6 +75,28 @@ def test_engineered_features_extracts_db_and_materializes_feast_parquet(
 
     w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
     assert {"datetime", "location", "temperature", "relative_humidity"}.issubset(w_df.columns)
+
+
+def test_feature_source_data_excludes_other_load_provenance(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+) -> None:
+    derived = taipower_raw_df.iloc[:3].copy()
+    test_repo.upsert_taipower_load(derived)
+    other = derived.iloc[[1]].copy()
+    other["datetime"] = other["datetime"] + pd.Timedelta(minutes=30)
+    other["load_mw"] = 99999.0
+    test_repo.upsert_taipower_load(other, source="other_source")
+    test_repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
+    window = build_feature_query_window(derived, location="Taipei")
+
+    source_data = fetch_feature_source_data(
+        test_repo, FallbackFeatureSources(derived, cwa_obs_df), window
+    )
+
+    assert len(source_data.load) == 3
+    assert 99999.0 not in source_data.load["load_mw"].tolist()
 
 
 def test_engineered_features_multi_location_isolation_and_export(

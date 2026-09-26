@@ -67,7 +67,7 @@ def test_canonical_cwa_forecast_asset_persists_both_products(
         result = raw_cwa_township_forecast(context)
 
     assert result == releases
-    assert repository.upsert_cwa_forecast_release.call_count == 2
+    repository.upsert_cwa_forecast_releases.assert_called_once_with(releases)
 
 
 def test_taipower_load_feature_source_fails_without_derived_load(
@@ -105,6 +105,23 @@ def test_taipower_load_feature_source_returns_load_once_minimum_accumulation_is_
 
     assert len(load) == 672
     assert load["datetime"].max() == pd.Timestamp(LAST_LOAD_HOUR)
+
+
+def test_training_load_source_excludes_other_provenance(
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", 2)
+    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
+    test_repo.upsert_taipower_load(
+        pd.DataFrame([{"datetime": "2026-09-26 11:00", "load_mw": 99999.0}]),
+        source="other_source",
+    )
+
+    with build_asset_context(resources={"time_series_repo": test_repo}) as context:
+        load = taipower_load_feature_source(context)
+
+    assert len(load) == 2
+    assert 99999.0 not in load["load_mw"].tolist()
 
 
 def test_dagster_materialize_ingestion_and_feature_pipeline(

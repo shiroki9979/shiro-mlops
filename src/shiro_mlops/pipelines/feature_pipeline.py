@@ -19,6 +19,7 @@ from shiro_mlops.core.constants import (
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.transformers import build_feature_pipeline
 
@@ -140,6 +141,7 @@ def fetch_feature_source_data(
             start_time=window.fetch_start_time,
             end_time=window.end_time,
             location=window.location,
+            source=REGIONAL_SNAPSHOT_SUM_SOURCE,
         )
         persisted_weather = repository.fetch_weather_range(
             start_time=window.fetch_start_time,

@@ -54,6 +54,11 @@ def floor_to_hour(moment: datetime) -> datetime:
     return moment.replace(minute=0, second=0, microsecond=0)
 
 
+def is_stale_load_anchor(anchor: datetime, evaluated_at: datetime, max_lag_hours: int) -> bool:
+    """Whether the newest derived load hour exceeds the allowed age."""
+    return evaluated_at - anchor > timedelta(hours=max_lag_hours)
+
+
 def recent_completed_hours(now: datetime, hours: int) -> HourWindow:
     """Return the most recent ``hours`` whole hours that ended at or before ``now``."""
     if hours < 1:

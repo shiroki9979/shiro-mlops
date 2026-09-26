@@ -1,12 +1,13 @@
 """Unit tests for TimescaleDB configuration, DDL initialization, and database helpers."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.core.database import (
@@ -141,16 +142,18 @@ def test_get_timescale_engine(tmp_path):
     engine.dispose()
 
 
-def test_init_db_executes_ddl():
-    """Verify init_db executes DDL statements on the provided engine."""
-    mock_conn = MagicMock()
-    mock_engine = MagicMock(spec=Engine)
-    mock_engine.connect.return_value.__enter__.return_value = mock_conn
+def test_init_db_executes_ddl(tmp_path):
+    """Verify init_db creates the load table and its provenance column."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'initialized.db'}")
+    try:
+        init_db(engine)
 
-    init_db(mock_engine)
-
-    assert mock_conn.execute.called
-    assert mock_conn.commit.called
+        assert "raw_taipower_load" in inspect(engine).get_table_names()
+        assert "source" in {
+            column["name"] for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+    finally:
+        engine.dispose()
 
 
 def test_init_db_executes_create_table_after_comment_with_semicolon(tmp_path):
@@ -325,6 +328,23 @@ def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
                 text("SELECT load_mw, source FROM raw_taipower_load")
             ).fetchall()
         assert rows == [(26500.0, None)]
+    finally:
+        engine.dispose()
+
+
+def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -> None:
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'inspection_failure.db'}")
+    try:
+        with (
+            patch(
+                "shiro_mlops.core.database.inspect",
+                side_effect=[inspect(engine), NoInspectionAvailable("inspection unavailable")],
+            ),
+            pytest.raises(RuntimeError, match="Cannot inspect raw_taipower_load schema"),
+        ):
+            ensure_timescale_hypertables(engine)
     finally:
         engine.dispose()
 

@@ -128,8 +128,10 @@ def _add_taipower_load_source_column(engine: Engine) -> None:
     """
     try:
         columns = {column["name"] for column in inspect(engine).get_columns("raw_taipower_load")}
-    except NoInspectionAvailable:
-        return
+    except NoInspectionAvailable as error:
+        raise RuntimeError(
+            "Cannot inspect raw_taipower_load schema for source migration"
+        ) from error
     if "source" in columns:
         return
     with engine.begin() as connection:

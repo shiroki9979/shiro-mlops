@@ -159,10 +159,10 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
     missing: dict[str, tuple[str, ...]] = {}
     for dataset_id in ("F-D0047-089", "F-D0047-091"):
         release = client.fetch_forecast_release(dataset_id, locations=settings.cwa_locations)
-        repository.upsert_cwa_forecast_release(release)
         releases.append(release)
         if release.status != "complete":
             missing[dataset_id] = release.missing_geocodes
+    repository.upsert_cwa_forecast_releases(releases)
     if missing:
         details = "; ".join(
             f"{dataset}: {', '.join(values)}" for dataset, values in missing.items()
@@ -287,7 +287,9 @@ def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame
     repository = _get_time_series_repo(context)
     readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
     context.log.info(readiness.reason)
-    load = repository.fetch_load_range(location=DEFAULT_LOCATION)
+    load = repository.fetch_load_range(
+        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+    )
     return load.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
 
 

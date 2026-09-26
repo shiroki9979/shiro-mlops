@@ -26,6 +26,7 @@ from dagster._core.scheduler.instigation import InstigatorType
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.data.hourly_actual_load import is_stale_load_anchor
 from shiro_mlops.pipelines.readiness import LoadAccumulationSource, check_training_load_readiness
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
@@ -245,7 +246,7 @@ def _check_load_freshness(latest_hour: datetime | None, now: datetime) -> CheckR
     max_lag = timedelta(hours=settings.LOAD_ANCHOR_MAX_LAG_HOURS)
     lag = now - latest_hour
     detail = f"latest derived hour {latest_hour.isoformat()} lags {now.isoformat()} by {lag}"
-    if lag > max_lag:
+    if is_stale_load_anchor(latest_hour, now, settings.LOAD_ANCHOR_MAX_LAG_HOURS):
         return CheckResult(
             "load freshness",
             CheckStatus.FAIL,

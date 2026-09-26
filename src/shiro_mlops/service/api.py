@@ -22,7 +22,10 @@ from shiro_mlops.core.constants import (
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    is_stale_load_anchor,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import WeatherResolution, resolve_weather
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
@@ -163,7 +166,7 @@ def _load_anchor(history: pd.DataFrame) -> pd.Timestamp:
 def _ensure_fresh_load_anchor(anchor: pd.Timestamp, request_time: pd.Timestamp) -> None:
     """Refuse rather than degrade: actual load has no substitute as the recursion origin."""
     max_lag_hours = settings.LOAD_ANCHOR_MAX_LAG_HOURS
-    if request_time - anchor > pd.Timedelta(hours=max_lag_hours):
+    if is_stale_load_anchor(anchor, request_time, max_lag_hours):
         raise StaleLoadAnchorError(
             f"Stale load anchor: latest actual load at {anchor.isoformat()} lags request time "
             f"{request_time.isoformat()} by more than {max_lag_hours} hours."
