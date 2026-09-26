@@ -254,7 +254,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
    - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
-   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。selection 僅含 `taipower_load_feature_source` 與 `drift_monitoring_report`，模型與特徵取自最近一次訓練的 I/O Manager 產物。
+   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。selection 僅含 `drift_monitoring_report`：該資產以有界查詢直接讀取 `raw_taipower_load` 的有效逐時觀測數與最新一列（僅 `source = 'regional_snapshot_sum'`），不重跑會讀取整段歷史的 `taipower_load_feature_source`；模型與特徵取自最近一次訓練的 I/O Manager 產物。手動執行時同樣套用 §3.1 最低累積，未達時以 Dagster `Failure` 失敗。
    - **觸發條件**：沿用 §3.1 最低累積，且 `trained_forecaster_model` 已有 materialization；任一條件未滿足時以 `SkipReason` 揭露原因。
 3. **`taipower_supply_demand_snapshot_job`**：
    - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。

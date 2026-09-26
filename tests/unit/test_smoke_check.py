@@ -82,7 +82,7 @@ def test_training_job_selecting_snapshot_or_derivation_assets_fails() -> None:
         jobs=[
             define_asset_job("daily_training_job", selection=AssetSelection.all()),
             define_asset_job(
-                "hourly_drift_job", selection=AssetSelection.assets("drift_monitoring_report")
+                "hourly_drift_job", selection=AssetSelection.assets("taipower_load_feature_source")
             ),
         ],
     )
@@ -94,7 +94,7 @@ def test_training_job_selecting_snapshot_or_derivation_assets_fails() -> None:
         "raw_taipower_regional_supply_demand_snapshot" in results["job daily_training_job"].detail
     )
     assert results["job hourly_drift_job"].status is CheckStatus.FAIL
-    assert "taipower_load_feature_source" in results["job hourly_drift_job"].detail
+    assert "missing drift_monitoring_report" in results["job hourly_drift_job"].detail
 
 
 def test_cold_start_reports_waiting_readiness_without_failing(

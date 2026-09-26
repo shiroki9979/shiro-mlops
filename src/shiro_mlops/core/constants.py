@@ -1,6 +1,8 @@
 """System-wide constants and column names."""
 
 DATETIME_COL = "datetime"
+# Persisted time-series tables name their Taiwan-local instant column ``time``.
+STORAGE_TIME_COL = "time"
 LOAD_MW_COL = "load_mw"
 TEMPERATURE_COL = "temperature"
 RELATIVE_HUMIDITY_COL = "relative_humidity"

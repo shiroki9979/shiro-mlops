@@ -18,6 +18,7 @@ from shiro_mlops.core.constants import (
     DEFAULT_LOCATION,
     MAX_HORIZON_HOURS,
     RELATIVE_HUMIDITY_COL,
+    STORAGE_TIME_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
@@ -149,8 +150,8 @@ def _load_history(repository: TimeSeriesRepository) -> pd.DataFrame:
     )
     if history.empty:
         return history
-    if DATETIME_COL not in history.columns and "time" in history.columns:
-        history = history.rename(columns={"time": DATETIME_COL})
+    if DATETIME_COL not in history.columns and STORAGE_TIME_COL in history.columns:
+        history = history.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
     return history
 
 

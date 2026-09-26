@@ -53,7 +53,9 @@ TRAINING_ASSETS = (
     TRAINED_MODEL_ASSET,
     DRIFT_REPORT_ASSET,
 )
-DRIFT_ASSETS = (LOAD_FEATURE_SOURCE_ASSET, DRIFT_REPORT_ASSET)
+# drift 每小時只需最新一列與有效時數，由報告資產以有界查詢讀取；
+# 重跑 LOAD_FEATURE_SOURCE_ASSET 會隨累積時數讀取整段歷史。
+DRIFT_ASSETS = (DRIFT_REPORT_ASSET,)
 NO_TRAINED_MODEL_REASON = (
     f"No {TRAINED_MODEL_ASSET} materialization yet; "
     "hourly drift waits for the first successful daily_training_job run."

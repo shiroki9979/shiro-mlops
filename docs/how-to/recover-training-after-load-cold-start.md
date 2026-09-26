@@ -62,7 +62,7 @@ docker compose -f docker/docker-compose.yml exec dagster-webserver \
 [PASS] schedule taipower_supply_demand_snapshot_schedule: ... running
 ...（其餘五個排程皆為 PASS）
 [PASS] job daily_training_job: reads raw_taipower_load via taipower_load_feature_source
-[PASS] job hourly_drift_job: reads raw_taipower_load via taipower_load_feature_source
+[PASS] job hourly_drift_job: reads raw_taipower_load via drift_monitoring_report
 [WAIT] load accumulation: Insufficient hourly actual load for training: 130 valid hourly observations; 672 required (TRAINING_MIN_LOAD_HOURS). 542 more hours needed (at least 22.6 days of accumulation).
 [PASS] load freshness: latest derived hour 2026-10-01T13:00:00 lags 2026-10-01T14:20:00 by 1:20:00
 [WAIT] tick daily_training_schedule: would skip: Insufficient hourly actual load ...

@@ -20,7 +20,6 @@ from tests.helpers import derived_hourly_load, selected_asset_names
 
 TICK = datetime(2026, 9, 27, 0, 0, tzinfo=ZoneInfo("Asia/Taipei"))
 LAST_HOUR = datetime(2026, 9, 26, 23, 0)
-LOAD_FEATURE_SOURCE = "taipower_load_feature_source"
 # 由區域快照推算的資產；訓練與 drift 只能讀它寫入的資料表，不能執行它。
 DERIVATION_ASSET = "raw_taipower_load"
 
@@ -38,11 +37,15 @@ def _tick(schedule, repository: TimeSeriesRepository, instance):
 def test_load_consumers_read_persisted_load_without_snapshots_or_external_apis(job) -> None:
     selected = selected_asset_names(job)
 
-    assert LOAD_FEATURE_SOURCE in selected
     assert "drift_monitoring_report" in selected
     assert selected.isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
     assert selected.isdisjoint(CWA_INGESTION_ASSETS)
     assert DERIVATION_ASSET not in selected
+
+
+def test_hourly_drift_job_reruns_only_the_report() -> None:
+    """drift 每小時執行且只需最新一列與有效時數，不得重跑讀取完整歷史的負載來源。"""
+    assert selected_asset_names(hourly_drift_job) == {"drift_monitoring_report"}
 
 
 def test_training_job_runs_features_model_and_report() -> None:

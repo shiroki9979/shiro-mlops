@@ -29,12 +29,17 @@ from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.pipelines.readiness import LoadAccumulationSource, check_training_load_readiness
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
+    DRIFT_REPORT_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
     LOAD_FEATURE_SOURCE_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
 
-LOAD_CONSUMER_JOBS = ("daily_training_job", "hourly_drift_job")
+# 各 job 經由哪個資產讀取 raw_taipower_load 資料表。
+LOAD_CONSUMER_JOBS = {
+    "daily_training_job": LOAD_FEATURE_SOURCE_ASSET,
+    "hourly_drift_job": DRIFT_REPORT_ASSET,
+}
 READINESS_SCHEDULES = ("daily_training_schedule", "hourly_drift_schedule")
 # 訓練與 drift 只能讀 raw_taipower_load 資料表；執行下列資產即代表會讀快照表或呼叫外部 API。
 FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
@@ -108,7 +113,10 @@ def check_schedule_configuration(defs: Definitions, running: frozenset[str]) -> 
 
 def check_load_consumer_boundaries(defs: Definitions) -> list[CheckResult]:
     """Training and drift jobs read persisted load only, never snapshots or external APIs."""
-    return [_check_load_consumer(defs, job_name) for job_name in LOAD_CONSUMER_JOBS]
+    return [
+        _check_load_consumer(defs, job_name, load_reader)
+        for job_name, load_reader in LOAD_CONSUMER_JOBS.items()
+    ]
 
 
 def check_downstream_readiness(
@@ -207,7 +215,7 @@ def _check_schedule(
     return CheckResult(check_name, CheckStatus.PASS, f"{summary}, running")
 
 
-def _check_load_consumer(defs: Definitions, job_name: str) -> CheckResult:
+def _check_load_consumer(defs: Definitions, job_name: str, load_reader: str) -> CheckResult:
     check_name = f"job {job_name}"
     try:
         job = defs.resolve_job_def(job_name)
@@ -215,16 +223,14 @@ def _check_load_consumer(defs: Definitions, job_name: str) -> CheckResult:
         return CheckResult(check_name, CheckStatus.FAIL, f"cannot resolve job: {_summarize(error)}")
     selected = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     problems = []
-    if LOAD_FEATURE_SOURCE_ASSET not in selected:
-        problems.append(f"missing {LOAD_FEATURE_SOURCE_ASSET}")
+    if load_reader not in selected:
+        problems.append(f"missing {load_reader}")
     leaked = sorted(selected & FORBIDDEN_IN_LOAD_CONSUMERS)
     if leaked:
         problems.append(f"must not execute {', '.join(leaked)}")
     if problems:
         return CheckResult(check_name, CheckStatus.FAIL, "; ".join(problems))
-    return CheckResult(
-        check_name, CheckStatus.PASS, f"reads raw_taipower_load via {LOAD_FEATURE_SOURCE_ASSET}"
-    )
+    return CheckResult(check_name, CheckStatus.PASS, f"reads raw_taipower_load via {load_reader}")
 
 
 def _check_load_freshness(latest_hour: datetime | None, now: datetime) -> CheckResult:

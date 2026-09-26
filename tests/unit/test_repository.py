@@ -288,6 +288,19 @@ def test_fetch_load_range_by_source_excludes_legacy_rows(legacy_upgraded_engine:
     assert derived["time"].max() == pd.Timestamp("2026-08-21 01:00")
 
 
+def test_fetch_latest_load_returns_newest_derived_row_only(legacy_upgraded_engine: Engine):
+    """逐時 drift 只需最新一列；較新的舊列不得被當成最新實際負載。"""
+    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
+    repository.upsert_taipower_load(derived_hourly_load(3, datetime(2026, 8, 21, 1, 0)))
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
+
+    latest = repository.fetch_latest_load(location="Taipei", source=REGIONAL_SNAPSHOT_SUM_SOURCE)
+
+    assert len(latest) == 1
+    assert latest.iloc[0]["time"] == pd.Timestamp("2026-08-21 01:00")
+    assert latest.iloc[0]["load_mw"] == 30002.0
+
+
 def test_fetch_load_range_filters_and_sorting(repository: TimeSeriesRepository):
     """Verify fetch_load_range filters by date range and location with ascending sort."""
     df = pd.DataFrame(

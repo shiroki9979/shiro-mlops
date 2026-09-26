@@ -210,6 +210,11 @@ def test_training_then_hourly_drift_jobs_read_latest_persisted_actual_load(
         )
     next_hour = taipower_raw_df["datetime"].max() + pd.Timedelta(hours=1)
     test_repo.upsert_taipower_load(derived_hourly_load(1, next_hour.to_pydatetime()))
+
+    def refuse_full_history(*_: object, **__: object) -> None:
+        raise AssertionError("Hourly drift must not read the full load history")
+
+    monkeypatch.setattr(test_repo, "fetch_load_range", refuse_full_history)
     drift = job_defs.resolve_job_def("hourly_drift_job").execute_in_process(
         instance=dagster_instance
     )

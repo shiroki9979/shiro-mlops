@@ -597,7 +597,28 @@ class TimeSeriesRepository:
             WHERE {where_clause}
             ORDER BY time ASC, location ASC
         """
+        return self._read_load_frame(query, params)
 
+    def fetch_latest_load(
+        self,
+        location: str = DEFAULT_LOCATION,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+    ) -> pd.DataFrame:
+        """Fetch only the newest load row of one source, or an empty frame.
+
+        Hourly consumers need the latest actual value, not the series, so the
+        query stays bounded as the accumulated history grows.
+        """
+        query = """
+            SELECT time, location, load_mw, created_at
+            FROM raw_taipower_load
+            WHERE location = :location AND source = :source
+            ORDER BY time DESC
+            LIMIT 1
+        """
+        return self._read_load_frame(query, {"location": location, "source": source})
+
+    def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
         with self.engine.connect() as conn:
             df = pd.read_sql_query(text(query), con=conn, params=params)
 
