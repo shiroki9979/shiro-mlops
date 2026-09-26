@@ -566,6 +566,7 @@ class TimeSeriesRepository:
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
         location: str | None = None,
+        source: str | None = None,
     ) -> pd.DataFrame:
         """Fetch historical Taipower load records filtered by time range and location.
 
@@ -577,6 +578,9 @@ class TimeSeriesRepository:
             End of time filter range (inclusive).
         location : str | None
             Optional location filter.
+        source : str | None
+            Optional derivation provenance filter. Rows with NULL source never match,
+            so consumers that must not mix load bases pass the derived source.
 
         Returns
         -------
@@ -584,13 +588,37 @@ class TimeSeriesRepository:
             Sorted DataFrame of power load records.
         """
         where_clause, params = _build_time_location_filter(start_time, end_time, location)
+        if source is not None:
+            where_clause += " AND source = :source"
+            params["source"] = source
         query = f"""
             SELECT time, location, load_mw, created_at
             FROM raw_taipower_load
             WHERE {where_clause}
             ORDER BY time ASC, location ASC
         """
+        return self._read_load_frame(query, params)
 
+    def fetch_latest_load(
+        self,
+        location: str = DEFAULT_LOCATION,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+    ) -> pd.DataFrame:
+        """Fetch only the newest load row of one source, or an empty frame.
+
+        Hourly consumers need the latest actual value, not the series, so the
+        query stays bounded as the accumulated history grows.
+        """
+        query = """
+            SELECT time, location, load_mw, created_at
+            FROM raw_taipower_load
+            WHERE location = :location AND source = :source
+            ORDER BY time DESC
+            LIMIT 1
+        """
+        return self._read_load_frame(query, {"location": location, "source": source})
+
+    def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
         with self.engine.connect() as conn:
             df = pd.read_sql_query(text(query), con=conn, params=params)
 

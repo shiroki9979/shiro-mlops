@@ -14,10 +14,13 @@ from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hy
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
+from tests.helpers import create_legacy_load_table
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 SQLITE_TEST_SCHEMA = SQLITE_DEFAULT_SCHEMA
+# 以一日門檻取代 672 小時預設，讓排程與 smoke check 測試不需建立 28 日資料。
+TEST_MIN_LOAD_HOURS = 24
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +41,13 @@ def mock_mlflow_offline_backend(
 
 
 @pytest.fixture
+def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Lower the training accumulation threshold and return the value in effect."""
+    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", TEST_MIN_LOAD_HOURS)
+    return TEST_MIN_LOAD_HOURS
+
+
+@pytest.fixture
 def dagster_instance(tmp_path: Path) -> Generator:
     """Create an isolated, temporary DagsterInstance for test materializations."""
     from dagster import DagsterInstance
@@ -53,6 +63,16 @@ def sqlite_engine(tmp_path_factory: pytest.TempPathFactory) -> Generator[Engine,
     """Create an isolated SQLite engine with canonical test schema derived from production DDL."""
     db_file = tmp_path_factory.mktemp("db") / "test_repo.db"
     engine = create_engine(f"sqlite:///{db_file}")
+    ensure_timescale_hypertables(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def legacy_upgraded_engine(tmp_path: Path) -> Generator[Engine, None, None]:
+    """An upgraded d015046-era database: one legacy row whose source is NULL."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_upgraded.db'}")
+    create_legacy_load_table(engine)
     ensure_timescale_hypertables(engine)
     yield engine
     engine.dispose()

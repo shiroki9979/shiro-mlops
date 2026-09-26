@@ -29,12 +29,17 @@ from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.pipelines.readiness import LoadAccumulationSource, check_training_load_readiness
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
+    DRIFT_REPORT_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
     LOAD_FEATURE_SOURCE_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
 
-LOAD_CONSUMER_JOBS = ("daily_training_job", "hourly_drift_job")
+# 各 job 經由哪個資產讀取 raw_taipower_load 資料表。
+LOAD_CONSUMER_JOBS = {
+    "daily_training_job": LOAD_FEATURE_SOURCE_ASSET,
+    "hourly_drift_job": DRIFT_REPORT_ASSET,
+}
 READINESS_SCHEDULES = ("daily_training_schedule", "hourly_drift_schedule")
 # 訓練與 drift 只能讀 raw_taipower_load 資料表；執行下列資產即代表會讀快照表或呼叫外部 API。
 FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
@@ -83,17 +88,22 @@ class CheckResult:
     detail: str
 
 
-def run_smoke_check(
-    defs: Definitions,
-    repository: LoadAccumulationSource,
-    instance: DagsterInstance,
-    now: datetime,
-) -> list[CheckResult]:
+@dataclass(frozen=True)
+class Deployment:
+    """One deployment under check: its code, Dagster instance, and load store at ``now``."""
+
+    defs: Definitions
+    repository: LoadAccumulationSource
+    instance: DagsterInstance
+    now: datetime
+
+
+def run_smoke_check(deployment: Deployment) -> list[CheckResult]:
     """Run every check against one deployment: code, Dagster instance, and store."""
     return [
-        *check_schedule_configuration(defs, running_schedule_names(instance)),
-        *check_load_consumer_boundaries(defs),
-        *check_downstream_readiness(defs, repository, instance, now),
+        *check_schedule_configuration(deployment.defs, running_schedule_names(deployment.instance)),
+        *check_load_consumer_boundaries(deployment.defs),
+        *check_downstream_readiness(deployment),
     ]
 
 
@@ -108,18 +118,18 @@ def check_schedule_configuration(defs: Definitions, running: frozenset[str]) -> 
 
 def check_load_consumer_boundaries(defs: Definitions) -> list[CheckResult]:
     """Training and drift jobs read persisted load only, never snapshots or external APIs."""
-    return [_check_load_consumer(defs, job_name) for job_name in LOAD_CONSUMER_JOBS]
+    return [
+        _check_load_consumer(defs, job_name, load_reader)
+        for job_name, load_reader in LOAD_CONSUMER_JOBS.items()
+    ]
 
 
-def check_downstream_readiness(
-    defs: Definitions,
-    repository: LoadAccumulationSource,
-    instance: DagsterInstance,
-    now: datetime,
-) -> list[CheckResult]:
+def check_downstream_readiness(deployment: Deployment) -> list[CheckResult]:
     """Report load accumulation, its freshness, and what the next training/drift ticks do."""
     try:
-        readiness = check_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
+        readiness = check_training_load_readiness(
+            deployment.repository, settings.TRAINING_MIN_LOAD_HOURS
+        )
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
         return [
@@ -132,8 +142,8 @@ def check_downstream_readiness(
             CheckStatus.PASS if readiness.ready else CheckStatus.WAIT,
             readiness.reason,
         ),
-        _check_load_freshness(readiness.latest_hour, now),
-        *(_check_tick(defs, name, repository, instance, now) for name in READINESS_SCHEDULES),
+        _check_load_freshness(readiness.latest_hour, deployment.now),
+        *(_check_tick(deployment, name) for name in READINESS_SCHEDULES),
     ]
 
 
@@ -177,7 +187,8 @@ def main(argv: list[str] | None = None) -> int:
 
     now = datetime.now(tz=ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
     with DagsterInstance.get() as instance:
-        results = run_smoke_check(defs, TimeSeriesRepository(auto_init=False), instance, now)
+        deployment = Deployment(defs, TimeSeriesRepository(auto_init=False), instance, now)
+        results = run_smoke_check(deployment)
     print(format_report(results))
     return exit_code(results, require_ready=args.require_ready)
 
@@ -207,7 +218,7 @@ def _check_schedule(
     return CheckResult(check_name, CheckStatus.PASS, f"{summary}, running")
 
 
-def _check_load_consumer(defs: Definitions, job_name: str) -> CheckResult:
+def _check_load_consumer(defs: Definitions, job_name: str, load_reader: str) -> CheckResult:
     check_name = f"job {job_name}"
     try:
         job = defs.resolve_job_def(job_name)
@@ -215,16 +226,14 @@ def _check_load_consumer(defs: Definitions, job_name: str) -> CheckResult:
         return CheckResult(check_name, CheckStatus.FAIL, f"cannot resolve job: {_summarize(error)}")
     selected = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     problems = []
-    if LOAD_FEATURE_SOURCE_ASSET not in selected:
-        problems.append(f"missing {LOAD_FEATURE_SOURCE_ASSET}")
+    if load_reader not in selected:
+        problems.append(f"missing {load_reader}")
     leaked = sorted(selected & FORBIDDEN_IN_LOAD_CONSUMERS)
     if leaked:
         problems.append(f"must not execute {', '.join(leaked)}")
     if problems:
         return CheckResult(check_name, CheckStatus.FAIL, "; ".join(problems))
-    return CheckResult(
-        check_name, CheckStatus.PASS, f"reads raw_taipower_load via {LOAD_FEATURE_SOURCE_ASSET}"
-    )
+    return CheckResult(check_name, CheckStatus.PASS, f"reads raw_taipower_load via {load_reader}")
 
 
 def _check_load_freshness(latest_hour: datetime | None, now: datetime) -> CheckResult:
@@ -245,22 +254,16 @@ def _check_load_freshness(latest_hour: datetime | None, now: datetime) -> CheckR
     return CheckResult("load freshness", CheckStatus.PASS, detail)
 
 
-def _check_tick(
-    defs: Definitions,
-    schedule_name: str,
-    repository: LoadAccumulationSource,
-    instance: DagsterInstance,
-    now: datetime,
-) -> CheckResult:
+def _check_tick(deployment: Deployment, schedule_name: str) -> CheckResult:
     """Evaluate the deployed schedule function exactly as the daemon would at ``now``."""
     check_name = f"tick {schedule_name}"
     context = build_schedule_context(
-        instance=instance,
-        scheduled_execution_time=now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
-        resources={"time_series_repo": repository},
+        instance=deployment.instance,
+        scheduled_execution_time=deployment.now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
+        resources={"time_series_repo": deployment.repository},
     )
     try:
-        execution = defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
+        execution = deployment.defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         return CheckResult(
             check_name, CheckStatus.FAIL, f"tick evaluation failed: {_summarize(error)}"

@@ -24,6 +24,15 @@
 - **邊界修訂**：區域快照可作為本推算的輸入，但仍不得直接作為模型特徵；全台供需快照與機組快照維持原邊界。
 - **最低累積**：有效逐時觀測少於 28 日（672 小時，設定值）時不得訓練。
 
+### Implementation Refinements
+
+實作期間（[Issue #60](https://github.com/shiroki9979/shiro-mlops/issues/60)、[Issue #62](https://github.com/shiroki9979/shiro-mlops/issues/62)）細化的契約：
+
+- **既有資料庫升級**：新建資料庫的 `raw_taipower_load.source` 為 NOT NULL；既有資料庫升級時只補上 nullable `source`，不改寫既有列，以 NULL 標示 d015046 時期舊列。操作人員依 [d015046 舊列清除指南](../how-to/remove-legacy-d015046-load-rows.md) 審閱並刪除舊列後，再將欄位設為 NOT NULL。
+- **舊列存在時的行為**：只要仍有 `source IS NULL` 的列，訓練就緒即判定為未就緒（排程略過、手動執行失敗）；serving 與 drift 只讀 `source = 'regional_snapshot_sum'` 的列，舊列不得成為遞迴起點或歷史輸入。
+- **drift 觸發**：`hourly_drift_schedule` 除最低累積外，另需 `trained_forecaster_model` 已有 materialization；drift 只以有界查詢讀取有效時數與最新一列，不重讀整段歷史。
+- **CWA 預報 stale 判定**：serving 以請求時間作為 `as_of`，只採用請求當下已發布且已更新的預報版本，並以請求時間判定最新發布是否超過七小時。
+
 ### Rationale & Alternatives Considered
 
 - **選定方案：區域快照四區加總後取小時平均**。來源為官方且帶來源時間，已在排程累積；平均值對單一取樣抖動與偶發漏抓較穩健。
@@ -46,4 +55,4 @@
 
 - 推算測試必須覆蓋：四區不齊或 `source_time` 不一致的樣本被排除、重複 `source_time` 只計一次、樣本數低於門檻的小時不產出、未結束小時不產出、重算冪等。
 - 訓練與 drift 資產不得讀取任何快照表；只能經由 `raw_taipower_load` 取得負載。
-- 啟用推算前須確認並清除 `raw_taipower_load` 中 d015046 時期的資料列，避免不同口徑混用。
+- 啟用推算前須確認並清除 `raw_taipower_load` 中 d015046 時期的資料列，避免不同口徑混用；清除前訓練維持未就緒，serving 與 drift 以 `source` 篩選忽略舊列。

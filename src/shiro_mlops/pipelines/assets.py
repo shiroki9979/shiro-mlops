@@ -15,9 +15,11 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
+    DATETIME_COL,
     DEFAULT_EXPERIMENT_NAME,
     DEFAULT_LOCATION,
     LOAD_MW_COL,
+    STORAGE_TIME_COL,
 )
 from shiro_mlops.data.cwa_client import (
     CWAClient,
@@ -25,6 +27,7 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
 )
 from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
     derive_hourly_actual_load,
     recent_completed_hours,
     resolve_evaluation_time,
@@ -285,7 +288,7 @@ def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame
     readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
     context.log.info(readiness.reason)
     load = repository.fetch_load_range(location=DEFAULT_LOCATION)
-    return load.rename(columns={"time": "datetime"})
+    return load.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
 
 
 @multi_asset(
@@ -385,23 +388,33 @@ def trained_forecaster_model(
 @asset(
     group_name="monitoring",
     description="Evaluate model drift and generate monitoring reports",
+    required_resource_keys={"time_series_repo"},
+    deps=[raw_taipower_load],
 )
 def drift_monitoring_report(
     context: AssetExecutionContext,
     trained_forecaster_model: dict,
     engineered_features: pd.DataFrame,
-    taipower_load_feature_source: pd.DataFrame,
 ) -> dict:
-    """Asset: Summarize the latest model metrics beside the newest persisted actual load."""
+    """Asset: Summarize the latest model metrics beside the newest persisted actual load.
+
+    Runs hourly, so it reads the valid-hour count and newest row through bounded
+    queries instead of the full series; the readiness gate also keeps manual runs
+    from reporting while legacy rows or too few hours remain.
+    """
+    repository = _get_time_series_repo(context)
+    readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
+    latest_actual = repository.fetch_latest_load(
+        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+    ).iloc[-1]
     metrics = trained_forecaster_model.get("metrics", {})
-    latest_actual = taipower_load_feature_source.sort_values("datetime").iloc[-1]
     report = {
         "status": "HEALTHY" if metrics.get("mape", 0.0) < 10.0 else "WARNING",
         "metrics": metrics,
         "feature_count": engineered_features.shape[1],
         "sample_count": engineered_features.shape[0],
-        "actual_load_hours": len(taipower_load_feature_source),
-        "latest_actual_load_time": pd.Timestamp(latest_actual["datetime"]).isoformat(),
+        "actual_load_hours": readiness.valid_hours,
+        "latest_actual_load_time": pd.Timestamp(latest_actual[STORAGE_TIME_COL]).isoformat(),
         "latest_actual_load_mw": float(latest_actual[LOAD_MW_COL]),
     }
     context.log.info(f"Drift monitoring status: {report['status']}")

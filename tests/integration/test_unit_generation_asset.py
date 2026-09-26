@@ -48,9 +48,8 @@ def test_raw_unit_generation_snapshot_materializes_multi_unit_idempotently(
 ) -> None:
     """mock 機組 JSON 後 materialize 應寫入多機組，重跑同 slot 仍維持列數。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_unit_generation.httpx.Client",
             return_value=_mock_httpx_response(),
@@ -121,9 +120,8 @@ def test_unit_generation_http_failure_does_not_write(
 ) -> None:
     """HTTP 失敗時 asset 必須失敗且不得寫入機組快照。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_unit_generation.httpx.Client",
             return_value=_mock_httpx_response(status_error=True),
@@ -144,10 +142,10 @@ def test_unit_generation_parse_failure_does_not_write(
 ) -> None:
     """無有效機組列時 asset 必須失敗且不得寫入。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
     bad_payload = {"DateTime": "2026-09-05T17:30:00", "aaData": []}
 
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_unit_generation.httpx.Client",
             return_value=_mock_httpx_response(bad_payload),

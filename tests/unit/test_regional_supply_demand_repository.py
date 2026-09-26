@@ -1,6 +1,7 @@
 """Unit tests for regional supply-demand snapshot repository persistence."""
 
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.engine import Engine
@@ -155,3 +156,25 @@ def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
         (datetime(2026, 9, 5, 17, 0), "北部"),
         (datetime(2026, 9, 5, 17, 0), "東部"),
     ]
+
+
+def test_fetch_by_source_time_rejects_rows_without_observed_at() -> None:
+    """觀測 slot 不可由查詢窗口起點代填；缺值代表資料毀損，須附上下文明確失敗。"""
+    engine = MagicMock(spec=Engine)
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value.mappings.return_value.all.return_value = [
+        {
+            "observed_at": None,
+            "region": "北部",
+            "source_time": datetime(2026, 9, 5, 9, 0),
+            "generation_wan_kw": 1155.4,
+            "load_wan_kw": 1091.7,
+            "raw_payload": "{}",
+        }
+    ]
+    repository = TaipowerRegionalSupplyDemandRepository(engine=engine, auto_init=False)
+
+    with pytest.raises(ValueError, match="region '北部' has no observed_at"):
+        repository.fetch_by_source_time(
+            start_time=datetime(2026, 9, 5, 17, 0), end_time=datetime(2026, 9, 5, 18, 0)
+        )

@@ -193,14 +193,14 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 
 - **路徑**：`GET /ready`
 - **語意**：模型已載入、負載起點未過舊，且正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足、或負載起點過舊時回傳 HTTP 503，並列出未就緒原因。
-- **負載起點過舊**：最新 `raw_taipower_load.time` 早於請求時間超過 `LOAD_ANCHOR_MAX_LAG_HOURS`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
+- **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過 `LOAD_ANCHOR_MAX_LAG_HOURS`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
 
 ### 2.3 隨需動態視界負載預報
 
 - **路徑**：`POST /predict`
 - **相容性欄位**：`location` 暫時保留但只接受 `Taipei`，並標示為待移除；模型仍預測全臺負載，不宣稱支援區域負載模型。
-- **資料來源**：只讀 canonical TimescaleDB tables。最新可用預報發布超過七小時即視為 stale，依序退回臺北站前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
+- **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回臺北站前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
 - **狀態欄位**：`status` 表示請求成功（固定為 `success`）；`mode` 表示預報品質（`normal` 或 `degraded`），兩者不得混用。
 - **來源追溯**：每個預測點的 `weather_sources` 必須逐一揭露各氣象欄位的來源，以及可用的預報發布／更新時間；同一時點允許不同欄位來自不同產品或降級來源。
 - **請求 Body**：
@@ -254,7 +254,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
    - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
-   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。selection 僅含 `taipower_load_feature_source` 與 `drift_monitoring_report`，模型與特徵取自最近一次訓練的 I/O Manager 產物。
+   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。selection 僅含 `drift_monitoring_report`：該資產以有界查詢直接讀取 `raw_taipower_load` 的有效逐時觀測數與最新一列（僅 `source = 'regional_snapshot_sum'`），不重跑會讀取整段歷史的 `taipower_load_feature_source`；模型與特徵取自最近一次訓練的 I/O Manager 產物。手動執行時同樣套用 §3.1 最低累積，未達時以 Dagster `Failure` 失敗。
    - **觸發條件**：沿用 §3.1 最低累積，且 `trained_forecaster_model` 已有 materialization；任一條件未滿足時以 `SkipReason` 揭露原因。
 3. **`taipower_supply_demand_snapshot_job`**：
    - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。

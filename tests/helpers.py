@@ -7,10 +7,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from dagster import load_assets_from_modules
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_local_to_utc
 from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
@@ -30,6 +31,7 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
+from shiro_mlops.pipelines import assets as assets_module
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -178,3 +180,22 @@ def create_legacy_load_table(engine: Engine) -> None:
                 "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
             )
         )
+
+
+def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
+    """以 d015046 時期的寫法（不帶 source）插入一列；需先完成 schema 升級使 source 可為 NULL。"""
+    utc_time = pd.Timestamp(taiwan_local_to_utc(pd.Series([taiwan_time])).iloc[0])
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, location, load_mw) "
+                "VALUES (:time, 'Taipei', :load_mw)"
+            ),
+            {"time": utc_time.to_pydatetime(), "load_mw": load_mw},
+        )
+
+
+def selected_asset_names(job) -> set[str]:
+    """以正式資產模組解析 job selection，讓各測試對同一份資產圖斷言。"""
+    assets = load_assets_from_modules([assets_module])
+    return {key.to_user_string() for key in job.selection.resolve(assets)}

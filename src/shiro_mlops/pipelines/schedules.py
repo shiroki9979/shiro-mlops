@@ -15,6 +15,7 @@ from dagster import (
     define_asset_job,
     schedule,
 )
+from dagster_shared.check import CheckError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
@@ -52,7 +53,9 @@ TRAINING_ASSETS = (
     TRAINED_MODEL_ASSET,
     DRIFT_REPORT_ASSET,
 )
-DRIFT_ASSETS = (LOAD_FEATURE_SOURCE_ASSET, DRIFT_REPORT_ASSET)
+# drift 每小時只需最新一列與有效時數，由報告資產以有界查詢讀取；
+# 重跑 LOAD_FEATURE_SOURCE_ASSET 會隨累積時數讀取整段歷史。
+DRIFT_ASSETS = (DRIFT_REPORT_ASSET,)
 NO_TRAINED_MODEL_REASON = (
     f"No {TRAINED_MODEL_ASSET} materialization yet; "
     "hourly drift waits for the first successful daily_training_job run."
@@ -112,9 +115,22 @@ def _load_readiness(context: ScheduleEvaluationContext) -> TrainingLoadReadiness
 
 def _tick_run_key(context: ScheduleEvaluationContext) -> str | None:
     """同一 tick 重複評估時以 run_key 去重，避免重跑訓練或 drift。"""
-    if context.scheduled_execution_time is None:
+    tick = _scheduled_tick(context)
+    if tick is None:
         return None
-    return _to_taiwan_local(context.scheduled_execution_time).isoformat(timespec="seconds")
+    return _to_taiwan_local(tick).isoformat(timespec="seconds")
+
+
+def _scheduled_tick(context: ScheduleEvaluationContext) -> datetime | None:
+    """Return the tick time, or None for a manual evaluation built without one.
+
+    Dagster raises CheckError on access instead of returning None when no tick was
+    set, so a plain ``is None`` check never runs.
+    """
+    try:
+        return context.scheduled_execution_time
+    except CheckError:
+        return None
 
 
 cwa_observation_job = define_asset_job(
@@ -211,8 +227,13 @@ hourly_actual_load_job = define_asset_job(
     execution_timezone=TAIWAN_TZ,
 )
 def hourly_actual_load_schedule(context: ScheduleEvaluationContext) -> RunRequest:
-    """每小時以 tick 時間重算最近已結束的小時，使重跑同一 tick 得到相同窗口。"""
-    evaluated_at = _to_taiwan_local(context.scheduled_execution_time).isoformat(timespec="seconds")
+    """每小時以 tick 時間重算最近已結束的小時，使重跑同一 tick 得到相同窗口。
+
+    無 tick 的手動評估不去重，也不帶 evaluated_at，由 run 以執行當下決定窗口。
+    """
+    evaluated_at = _tick_run_key(context)
+    if evaluated_at is None:
+        return RunRequest()
     return RunRequest(
         run_key=evaluated_at,
         run_config={"ops": {HOURLY_ACTUAL_LOAD_ASSET: {"config": {"evaluated_at": evaluated_at}}}},
