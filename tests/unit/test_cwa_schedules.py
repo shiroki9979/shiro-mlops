@@ -3,7 +3,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dagster import build_schedule_context
+from dagster import Backoff, build_schedule_context
 
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_RETRY_POLICY,
@@ -21,15 +21,19 @@ def test_cwa_schedules_are_staggered_and_timezone_aware() -> None:
     assert cwa_forecast_schedule.execution_timezone == "Asia/Taipei"
 
 
-def test_cwa_jobs_use_bounded_retry_policy() -> None:
-    assert CWA_INGESTION_RETRY_POLICY.max_retries == 2
-    assert CWA_INGESTION_RETRY_POLICY.delay == 10
+def test_cwa_jobs_use_bounded_exponential_retry_policy() -> None:
+    """SPEC §3.4–3.5: three retries backing off exponentially from thirty seconds."""
+    assert CWA_INGESTION_RETRY_POLICY.max_retries == 3
+    assert CWA_INGESTION_RETRY_POLICY.delay == 30
+    assert CWA_INGESTION_RETRY_POLICY.backoff == Backoff.EXPONENTIAL
     assert cwa_observation_job.name == "cwa_observation_ingestion_job"
     assert cwa_forecast_job.name == "cwa_forecast_ingestion_job"
+    for job in (cwa_observation_job, cwa_forecast_job):
+        assert job.op_retry_policy == CWA_INGESTION_RETRY_POLICY
 
 
 def test_cwa_schedules_continue_to_request_independent_runs() -> None:
-    """暫緩台電歷史負載不得停用 canonical CWA ingestion。"""
+    """CWA ingestion 不受台電逐時負載累積狀態影響，須持續請求獨立 run。"""
     context = build_schedule_context(
         scheduled_execution_time=datetime(2026, 9, 17, 8, 10, tzinfo=ZoneInfo("Asia/Taipei"))
     )

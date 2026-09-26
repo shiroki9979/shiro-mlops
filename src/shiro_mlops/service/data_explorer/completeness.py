@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
@@ -17,8 +18,12 @@ from shiro_mlops.service.data_explorer.values import floor_ten_minutes, to_taiwa
 
 def hourly_gaps(db: ExplorerDb, window: TimeWindow, location: str | None) -> list[str]:
     """Return expected hourly slots missing from the persisted load series."""
-    clauses = ["time >= :start_time", "time <= :end_time"]
-    params: dict[str, Any] = {"start_time": window.as_utc()[0], "end_time": window.as_utc()[1]}
+    clauses = ["time >= :start_time", "time <= :end_time", "source = :source"]
+    params: dict[str, Any] = {
+        "start_time": window.as_utc()[0],
+        "end_time": window.as_utc()[1],
+        "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+    }
     if location:
         clauses.append("location = :location")
         params["location"] = location

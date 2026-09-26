@@ -44,9 +44,8 @@ def test_raw_taipower_supply_demand_snapshot_materializes_to_repository(
 ) -> None:
     """mock 台電回應後 materialize 應以觀測 slot 冪等 upsert 並可讀回。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_supply_demand.httpx.Client",
             return_value=_mock_httpx_response(),
@@ -124,9 +123,8 @@ def test_supply_demand_http_failure_does_not_write(
 ) -> None:
     """HTTP 失敗時 asset 必須失敗且不得寫入快照。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_supply_demand.httpx.Client",
             return_value=_mock_httpx_response(status_error=True),
@@ -147,10 +145,10 @@ def test_supply_demand_parse_failure_does_not_write(
 ) -> None:
     """核心欄位缺失時 asset 必須失敗且不得寫入快照。"""
     observed_slot = datetime(2026, 9, 5, 17, 30)
-    context = build_asset_context(resources={"time_series_repo": test_repo})
     bad_payload = {"records": [{"curr_load": "3000"}]}
 
     with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
         patch(
             "shiro_mlops.data.taipower_supply_demand.httpx.Client",
             return_value=_mock_httpx_response(bad_payload),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.service.data_explorer.completeness import hourly_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.pagination import apply_cursor
@@ -24,10 +25,11 @@ class HourlyLoadReader(DatasetReader):
         limit: int,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         location = query.filters.get("location")
-        clauses = ["time >= :start_time", "time <= :end_time"]
+        clauses = ["time >= :start_time", "time <= :end_time", "source = :source"]
         sql_params: dict[str, Any] = {
             "start_time": query.window.as_utc()[0],
             "end_time": query.window.as_utc()[1],
+            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
         }
         if location:
             clauses.append("location = :location")

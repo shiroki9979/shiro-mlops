@@ -1,12 +1,13 @@
 """Unit tests for TimescaleDB configuration, DDL initialization, and database helpers."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.core.database import (
@@ -17,6 +18,7 @@ from shiro_mlops.core.database import (
     get_timescale_init_ddl,
     init_db,
 )
+from tests.helpers import create_legacy_load_table
 
 
 def test_settings_timescaledb_defaults():
@@ -140,16 +142,18 @@ def test_get_timescale_engine(tmp_path):
     engine.dispose()
 
 
-def test_init_db_executes_ddl():
-    """Verify init_db executes DDL statements on the provided engine."""
-    mock_conn = MagicMock()
-    mock_engine = MagicMock(spec=Engine)
-    mock_engine.connect.return_value.__enter__.return_value = mock_conn
+def test_init_db_executes_ddl(tmp_path):
+    """Verify init_db creates the load table and its provenance column."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'initialized.db'}")
+    try:
+        init_db(engine)
 
-    init_db(mock_engine)
-
-    assert mock_conn.execute.called
-    assert mock_conn.commit.called
+        assert "raw_taipower_load" in inspect(engine).get_table_names()
+        assert "source" in {
+            column["name"] for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+    finally:
+        engine.dispose()
 
 
 def test_init_db_executes_create_table_after_comment_with_semicolon(tmp_path):
@@ -224,8 +228,8 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         with engine.connect() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO raw_taipower_load (time, location, load_mw) "
-                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
+                    "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
+                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0, 'regional_snapshot_sum')"
                 )
             )
             conn.commit()
@@ -282,6 +286,65 @@ def test_ensure_timescale_hypertables_moves_old_weather_rows_to_legacy_storage(t
         with engine.connect() as connection:
             rows = connection.execute(text("SELECT location FROM legacy_cwa_weather")).fetchall()
         assert rows == [("Unknown",)]
+    finally:
+        engine.dispose()
+
+
+def test_fresh_schema_requires_taipower_load_source(tmp_path) -> None:
+    """新建資料庫的 raw_taipower_load 每列都必須標記推算來源。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_load.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        columns = {
+            column["name"]: column for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+        assert columns["source"]["nullable"] is False
+    finally:
+        engine.dispose()
+
+
+def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
+    tmp_path,
+) -> None:
+    """既有資料庫升級後保留舊列，且舊列 source 為 NULL 以供操作人員辨識 d015046 時期資料。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_load.db'}")
+    try:
+        create_legacy_load_table(engine)
+
+        ensure_timescale_hypertables(engine)
+        ensure_timescale_hypertables(engine)
+
+        column_names = {
+            column["name"] for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+        assert "source" in column_names
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT load_mw, source FROM raw_taipower_load")
+            ).fetchall()
+        assert rows == [(26500.0, None)]
+    finally:
+        engine.dispose()
+
+
+def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -> None:
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'inspection_failure.db'}")
+    try:
+        with (
+            patch(
+                "shiro_mlops.core.database.inspect",
+                side_effect=[inspect(engine), NoInspectionAvailable("inspection unavailable")],
+            ),
+            pytest.raises(RuntimeError, match="Cannot inspect raw_taipower_load schema"),
+        ):
+            ensure_timescale_hypertables(engine)
     finally:
         engine.dispose()
 

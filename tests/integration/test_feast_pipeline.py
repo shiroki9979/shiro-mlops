@@ -26,10 +26,14 @@ from shiro_mlops.pipelines.assets import (
     drift_monitoring_report,
     engineered_feature_set,
     raw_cwa_station_observation,
-    raw_taipower_load_data,
+    taipower_load_feature_source,
     trained_forecaster_model,
 )
-from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
+from shiro_mlops.pipelines.feature_pipeline import (
+    FallbackFeatureSources,
+    build_feature_query_window,
+    fetch_feature_source_data,
+)
 from tests.helpers import canonical_observation_batch
 
 
@@ -71,6 +75,28 @@ def test_engineered_features_extracts_db_and_materializes_feast_parquet(
 
     w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
     assert {"datetime", "location", "temperature", "relative_humidity"}.issubset(w_df.columns)
+
+
+def test_feature_source_data_excludes_other_load_provenance(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+) -> None:
+    derived = taipower_raw_df.iloc[:3].copy()
+    test_repo.upsert_taipower_load(derived)
+    other = derived.iloc[[1]].copy()
+    other["datetime"] = other["datetime"] + pd.Timedelta(minutes=30)
+    other["load_mw"] = 99999.0
+    test_repo.upsert_taipower_load(other, source="other_source")
+    test_repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
+    window = build_feature_query_window(derived, location="Taipei")
+
+    source_data = fetch_feature_source_data(
+        test_repo, FallbackFeatureSources(derived, cwa_obs_df), window
+    )
+
+    assert len(source_data.load) == 3
+    assert 99999.0 not in source_data.load["load_mw"].tolist()
 
 
 def test_engineered_features_multi_location_isolation_and_export(
@@ -331,14 +357,14 @@ def test_full_dagster_mlops_pipeline_materialization(
     ):
         raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": repository}))
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    # fixture 只有 48 小時；降低訓練最低累積門檻以驗證完整鏈路。
+    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
     repo = TimeSeriesRepository(engine=sqlite_engine)
     feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
 
+    repo.upsert_taipower_load(taipower_raw_df)
+
     with (
-        patch(
-            "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
-            return_value=taipower_raw_df,
-        ),
         patch(
             "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
             return_value=observation_batch,
@@ -351,7 +377,7 @@ def test_full_dagster_mlops_pipeline_materialization(
 
         res = materialize(
             assets=[
-                raw_taipower_load_data,
+                taipower_load_feature_source,
                 cwa_observation_feature_source,
                 engineered_feature_set,
                 trained_forecaster_model,
@@ -374,6 +400,9 @@ def test_full_dagster_mlops_pipeline_materialization(
     assert "status" in report
     assert report["status"] in {"HEALTHY", "WARNING"}
     assert report["feature_count"] > 0
+    assert report["actual_load_hours"] == len(taipower_raw_df)
+    assert report["latest_actual_load_time"] == "2026-08-21T23:00:00"
+    assert report["latest_actual_load_mw"] == 29100.0
 
 
 def test_publish_parquet_feature_local_and_s3(tmp_path):

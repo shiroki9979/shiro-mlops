@@ -1,6 +1,7 @@
 """Unit tests for regional supply-demand snapshot repository persistence."""
 
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.engine import Engine
@@ -126,3 +127,54 @@ def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
     object.__setattr__(invalid_snapshot, "region", "未知區域")
     with pytest.raises(ValueError, match="region"):
         repo.upsert([invalid_snapshot])
+
+
+def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """推算逐時負載以來源時間 [start, end) 讀取快照，不受觀測 slot 影響。"""
+    for observed_at in (
+        datetime(2026, 9, 5, 16, 50),
+        datetime(2026, 9, 5, 17, 0),
+        datetime(2026, 9, 5, 18, 0),
+    ):
+        csv_text = (
+            "時間,區域,發電(萬瓩),用電(萬瓩)\n"
+            f"{observed_at:%Y%m%dT%H%M%S},北部,1155.4,1091.7\n"
+            f"{observed_at:%Y%m%dT%H%M%S},東部,12.8,38.5\n"
+        )
+        test_repo.upsert_regional_supply_demand_snapshots(
+            parse_regional_supply_demand_csv(csv_text, observed_at=observed_at)
+        )
+
+    fetched = test_repo.fetch_regional_supply_demand_snapshots_by_source_time(
+        start_time=datetime(2026, 9, 5, 17, 0),
+        end_time=datetime(2026, 9, 5, 18, 0),
+    )
+
+    assert [(item.source_time, item.region) for item in fetched] == [
+        (datetime(2026, 9, 5, 17, 0), "北部"),
+        (datetime(2026, 9, 5, 17, 0), "東部"),
+    ]
+
+
+def test_fetch_by_source_time_rejects_rows_without_observed_at() -> None:
+    """觀測 slot 不可由查詢窗口起點代填；缺值代表資料毀損，須附上下文明確失敗。"""
+    engine = MagicMock(spec=Engine)
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value.mappings.return_value.all.return_value = [
+        {
+            "observed_at": None,
+            "region": "北部",
+            "source_time": datetime(2026, 9, 5, 9, 0),
+            "generation_wan_kw": 1155.4,
+            "load_wan_kw": 1091.7,
+            "raw_payload": "{}",
+        }
+    ]
+    repository = TaipowerRegionalSupplyDemandRepository(engine=engine, auto_init=False)
+
+    with pytest.raises(ValueError, match="region '北部' has no observed_at"):
+        repository.fetch_by_source_time(
+            start_time=datetime(2026, 9, 5, 17, 0), end_time=datetime(2026, 9, 5, 18, 0)
+        )

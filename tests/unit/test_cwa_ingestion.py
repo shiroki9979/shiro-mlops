@@ -2,11 +2,13 @@
 
 import json
 import secrets
+from dataclasses import replace
 from datetime import datetime
 
 import pandas as pd
 import pytest
 from defusedxml.common import DefusedXmlException
+from sqlalchemy.exc import IntegrityError
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.data.cwa_client import (
@@ -544,6 +546,29 @@ def test_repository_persists_forecast_vintages_without_overwriting(
     assert len(rows) == 2
     assert set(rows["source_updated_at"].dt.hour) == {11}
     assert len(set(rows["source_updated_at"])) == 2
+
+
+def test_forecast_product_write_failure_rolls_back_entire_batch(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    issued_at = pd.Timestamp("2026-08-20 11:00")
+    first = CWAForecastRelease(
+        dataset_id="F-D0047-089",
+        issued_at=issued_at,
+        source_updated_at=issued_at,
+        fetched_at=issued_at.to_pydatetime(),
+        status="complete",
+        missing_geocodes=(),
+        raw_payload={},
+        forecasts=(),
+    )
+    invalid_second = replace(first, dataset_id="F-D0047-091", status=None)
+
+    with pytest.raises(IntegrityError):
+        test_repo.upsert_cwa_forecast_releases([first, invalid_second])
+
+    headers = pd.read_sql_query("SELECT * FROM raw_cwa_forecast_release", test_repo.engine)
+    assert headers.empty
 
 
 def test_repository_json_encodes_xml_forecast_raw_payload(

@@ -1,24 +1,38 @@
 """Dagster Software-Defined Assets for Taipower load forecasting MLOps pipeline."""
 
-from collections.abc import Callable
-
 import mlflow
 import pandas as pd
-from dagster import AssetExecutionContext, AssetOut, Config, Output, asset, multi_asset
+from dagster import (
+    AssetExecutionContext,
+    AssetOut,
+    Backoff,
+    Config,
+    Output,
+    RetryPolicy,
+    asset,
+    multi_asset,
+)
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
+    DATETIME_COL,
     DEFAULT_EXPERIMENT_NAME,
     DEFAULT_LOCATION,
     LOAD_MW_COL,
+    STORAGE_TIME_COL,
 )
 from shiro_mlops.data.cwa_client import (
     CWAClient,
     CWAForecastRelease,
     CWAObservationBatch,
 )
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    derive_hourly_actual_load,
+    recent_completed_hours,
+    resolve_evaluation_time,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.data.taipower_client import TaipowerClient
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandClient,
     TaipowerRegionalSupplyDemandSnapshot,
@@ -41,6 +55,7 @@ from shiro_mlops.pipelines.feature_pipeline import (
     fetch_feature_source_data,
     transform_feature_source_data,
 )
+from shiro_mlops.pipelines.readiness import require_training_load_readiness
 
 
 def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
@@ -54,21 +69,20 @@ class SnapshotObservationConfig(Config):
     observed_at: str | None = None
 
 
-def _persist_ingested_data(
-    context: AssetExecutionContext,
-    df: pd.DataFrame,
-    persist: Callable[[pd.DataFrame], int],
-    data_name: str,
-) -> None:
-    """Persist an ingestion asset while preserving the test-environment fallback policy."""
-    try:
-        upserted = persist(df)
-        context.log.info(f"Persisted {upserted} {data_name} records to TimescaleDB.")
-    except Exception as error:
-        if settings.ENVIRONMENT == "test":
-            context.log.warning(f"Database persistence skipped in test environment: {error}")
-        else:
-            raise
+class HourlyActualLoadConfig(Config):
+    """提供選用的排程 tick，讓重算窗口不受 run 實際啟動延遲影響。"""
+
+    evaluated_at: str | None = None
+
+
+# 區域快照是全台逐時實際負載的唯一來源且無法回補，故重試比其他即時快照更久；
+# Dagster 指數退避等待 (2^n - 1) × delay，即 10、30、70 秒，約 110 秒內結束，
+# 仍早於下一個 10 分鐘 slot。
+TAIPOWER_REGIONAL_SNAPSHOT_RETRY_POLICY = RetryPolicy(
+    max_retries=3,
+    delay=10,
+    backoff=Backoff.EXPONENTIAL,
+)
 
 
 def compute_engineered_feature_outputs(
@@ -86,24 +100,6 @@ def compute_engineered_feature_outputs(
     features_df = transform_feature_source_data(source_data, window=query_window)
     feast_frames = build_feast_feature_frames(features_df, source_data.weather)
     return features_df, feast_frames.taipower, feast_frames.weather
-
-
-@asset(
-    group_name="ingestion",
-    description="Fetch raw hourly load data from Taipower Open Data",
-    required_resource_keys={"time_series_repo"},
-)
-def raw_taipower_load_data(context: AssetExecutionContext) -> pd.DataFrame:
-    """Asset: Raw Taipower load data."""
-    client = TaipowerClient(base_url=settings.TAIPOWER_API_URL)
-    df = client.fetch_load_data()
-    context.log.info(f"Fetched {len(df)} Taipower load records.")
-
-    _persist_ingested_data(
-        context, df, _get_time_series_repo(context).upsert_taipower_load, "Taipower load"
-    )
-
-    return df
 
 
 @asset(
@@ -163,10 +159,10 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
     missing: dict[str, tuple[str, ...]] = {}
     for dataset_id in ("F-D0047-089", "F-D0047-091"):
         release = client.fetch_forecast_release(dataset_id, locations=settings.cwa_locations)
-        repository.upsert_cwa_forecast_release(release)
         releases.append(release)
         if release.status != "complete":
             missing[dataset_id] = release.missing_geocodes
+    repository.upsert_cwa_forecast_releases(releases)
     if missing:
         details = "; ".join(
             f"{dataset}: {', '.join(values)}" for dataset, values in missing.items()
@@ -200,6 +196,7 @@ def raw_taipower_supply_demand_snapshot(
     group_name="ingestion",
     description="Fetch current Taipower regional supply-demand snapshots",
     required_resource_keys={"time_series_repo"},
+    retry_policy=TAIPOWER_REGIONAL_SNAPSHOT_RETRY_POLICY,
 )
 def raw_taipower_regional_supply_demand_snapshot(
     context: AssetExecutionContext,
@@ -217,6 +214,42 @@ def raw_taipower_regional_supply_demand_snapshot(
     )
     _get_time_series_repo(context).upsert_regional_supply_demand_snapshots(snapshots)
     return snapshots
+
+
+@asset(
+    group_name="ingestion",
+    description="Derive nationwide hourly actual load from regional supply-demand snapshots",
+    required_resource_keys={"time_series_repo"},
+    deps=[raw_taipower_regional_supply_demand_snapshot],
+)
+def raw_taipower_load(
+    context: AssetExecutionContext,
+    config: HourlyActualLoadConfig,
+) -> pd.DataFrame:
+    """Asset: recompute recent completed hours from stored snapshots and upsert them."""
+    window = recent_completed_hours(
+        resolve_evaluation_time(config.evaluated_at),
+        hours=settings.HOURLY_LOAD_RECOMPUTE_HOURS,
+    )
+    repository = _get_time_series_repo(context)
+    snapshots = repository.fetch_regional_supply_demand_snapshots_by_source_time(
+        window.start, window.end
+    )
+    hourly_load = derive_hourly_actual_load(
+        snapshots,
+        completed_before=window.end,
+        min_samples=settings.HOURLY_LOAD_MIN_SAMPLES,
+    )
+    upserted = repository.upsert_taipower_load(hourly_load)
+    context.log.info(
+        "Derived %s of %s hours in [%s, %s) from %s regional snapshots",
+        upserted,
+        settings.HOURLY_LOAD_RECOMPUTE_HOURS,
+        window.start.isoformat(),
+        window.end.isoformat(),
+        len(snapshots),
+    )
+    return hourly_load
 
 
 @asset(
@@ -240,6 +273,26 @@ def raw_taipower_unit_generation_snapshot(
     return snapshots
 
 
+@asset(
+    group_name="features",
+    description="Read derived nationwide hourly actual load for training features",
+    required_resource_keys={"time_series_repo"},
+    deps=[raw_taipower_load],
+)
+def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
+    """Asset: repository-only load source, so training never reads snapshot tables.
+
+    Fails before any feature or model work when the minimum accumulation is unmet.
+    """
+    repository = _get_time_series_repo(context)
+    readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
+    context.log.info(readiness.reason)
+    load = repository.fetch_load_range(
+        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+    )
+    return load.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
+
+
 @multi_asset(
     outs={
         "engineered_features": AssetOut(
@@ -261,12 +314,12 @@ def raw_taipower_unit_generation_snapshot(
 )
 def engineered_feature_set(
     context: AssetExecutionContext,
-    raw_taipower_load_data: pd.DataFrame,
+    taipower_load_feature_source: pd.DataFrame,
     cwa_observation_feature_source: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build training features and Feast frames; I/O Manager selects local or S3 publication."""
     fallbacks = FallbackFeatureSources(
-        load=raw_taipower_load_data,
+        load=taipower_load_feature_source,
         weather=cwa_observation_feature_source,
     )
     features_df, taipower_features, weather_features = compute_engineered_feature_outputs(
@@ -337,19 +390,34 @@ def trained_forecaster_model(
 @asset(
     group_name="monitoring",
     description="Evaluate model drift and generate monitoring reports",
+    required_resource_keys={"time_series_repo"},
+    deps=[raw_taipower_load],
 )
 def drift_monitoring_report(
     context: AssetExecutionContext,
     trained_forecaster_model: dict,
     engineered_features: pd.DataFrame,
 ) -> dict:
-    """Asset: Calculate summary metrics and generate drift report metadata."""
+    """Asset: Summarize the latest model metrics beside the newest persisted actual load.
+
+    Runs hourly, so it reads the valid-hour count and newest row through bounded
+    queries instead of the full series; the readiness gate also keeps manual runs
+    from reporting while legacy rows or too few hours remain.
+    """
+    repository = _get_time_series_repo(context)
+    readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
+    latest_actual = repository.fetch_latest_load(
+        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+    ).iloc[-1]
     metrics = trained_forecaster_model.get("metrics", {})
     report = {
         "status": "HEALTHY" if metrics.get("mape", 0.0) < 10.0 else "WARNING",
         "metrics": metrics,
         "feature_count": engineered_features.shape[1],
         "sample_count": engineered_features.shape[0],
+        "actual_load_hours": readiness.valid_hours,
+        "latest_actual_load_time": pd.Timestamp(latest_actual[STORAGE_TIME_COL]).isoformat(),
+        "latest_actual_load_mw": float(latest_actual[LOAD_MW_COL]),
     }
     context.log.info(f"Drift monitoring status: {report['status']}")
     return report

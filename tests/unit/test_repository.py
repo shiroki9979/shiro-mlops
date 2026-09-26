@@ -7,9 +7,10 @@ import pandas as pd
 import pytest
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.transformers import merge_weather_features
-from tests.helpers import canonical_observation_batch
+from tests.helpers import canonical_observation_batch, derived_hourly_load, insert_legacy_load_row
 
 
 @pytest.fixture
@@ -131,6 +132,22 @@ def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepos
     assert len(fetched_df) == 2
     row_00 = fetched_df[fetched_df["time"] == pd.Timestamp("2026-08-20 00:00:00")].iloc[0]
     assert row_00["load_mw"] == pytest.approx(26800.0)
+
+
+def test_upsert_taipower_load_marks_regional_snapshot_source(
+    repository: TimeSeriesRepository,
+) -> None:
+    """推算值寫入時標記來源，覆寫同一小時也一併更新來源。"""
+    load_df = pd.DataFrame([{"datetime": "2026-09-26 13:00:00", "load_mw": 30550.0}])
+
+    repository.upsert_taipower_load(load_df)
+    repository.upsert_taipower_load(load_df.assign(load_mw=30600.0))
+
+    with repository.engine.connect() as conn:
+        rows = pd.read_sql_query("SELECT location, load_mw, source FROM raw_taipower_load", conn)
+    assert rows.to_dict("records") == [
+        {"location": "Taipei", "load_mw": 30600.0, "source": "regional_snapshot_sum"}
+    ]
 
 
 def test_upsert_cwa_weather_insert_and_fetch(
@@ -257,6 +274,31 @@ def test_upsert_empty_dataframe(repository: TimeSeriesRepository):
     assert repository.upsert_taipower_load(empty_df) == 0
     with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
         repository.upsert_cwa_weather(empty_df)
+
+
+def test_fetch_load_range_by_source_excludes_legacy_rows(legacy_upgraded_engine: Engine):
+    """ADR-0008：指定推算來源時，source 為 NULL 的 d015046 舊列不得混入序列。"""
+    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
+    repository.upsert_taipower_load(derived_hourly_load(2, datetime(2026, 8, 21, 1, 0)))
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
+
+    derived = repository.fetch_load_range(location="Taipei", source=REGIONAL_SNAPSHOT_SUM_SOURCE)
+
+    assert list(derived["load_mw"]) == [30000.0, 30001.0]
+    assert derived["time"].max() == pd.Timestamp("2026-08-21 01:00")
+
+
+def test_fetch_latest_load_returns_newest_derived_row_only(legacy_upgraded_engine: Engine):
+    """逐時 drift 只需最新一列；較新的舊列不得被當成最新實際負載。"""
+    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
+    repository.upsert_taipower_load(derived_hourly_load(3, datetime(2026, 8, 21, 1, 0)))
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
+
+    latest = repository.fetch_latest_load(location="Taipei", source=REGIONAL_SNAPSHOT_SUM_SOURCE)
+
+    assert len(latest) == 1
+    assert latest.iloc[0]["time"] == pd.Timestamp("2026-08-21 01:00")
+    assert latest.iloc[0]["load_mw"] == 30002.0
 
 
 def test_fetch_load_range_filters_and_sorting(repository: TimeSeriesRepository):
