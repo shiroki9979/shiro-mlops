@@ -224,8 +224,8 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         with engine.connect() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO raw_taipower_load (time, location, load_mw) "
-                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
+                    "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
+                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0, 'regional_snapshot_sum')"
                 )
             )
             conn.commit()
@@ -282,6 +282,67 @@ def test_ensure_timescale_hypertables_moves_old_weather_rows_to_legacy_storage(t
         with engine.connect() as connection:
             rows = connection.execute(text("SELECT location FROM legacy_cwa_weather")).fetchall()
         assert rows == [("Unknown",)]
+    finally:
+        engine.dispose()
+
+
+def test_fresh_schema_requires_taipower_load_source(tmp_path) -> None:
+    """新建資料庫的 raw_taipower_load 每列都必須標記推算來源。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_load.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        columns = {
+            column["name"]: column for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+        assert columns["source"]["nullable"] is False
+    finally:
+        engine.dispose()
+
+
+def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
+    tmp_path,
+) -> None:
+    """既有資料庫升級後保留舊列，且舊列 source 為 NULL 以供操作人員辨識 d015046 時期資料。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_load.db'}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE raw_taipower_load (
+                        time TIMESTAMP NOT NULL,
+                        location VARCHAR(64) NOT NULL,
+                        load_mw DOUBLE PRECISION NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (time, location)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO raw_taipower_load (time, location, load_mw) "
+                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
+                )
+            )
+
+        ensure_timescale_hypertables(engine)
+        ensure_timescale_hypertables(engine)
+
+        column_names = {
+            column["name"] for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+        assert "source" in column_names
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT load_mw, source FROM raw_taipower_load")
+            ).fetchall()
+        assert rows == [(26500.0, None)]
     finally:
         engine.dispose()
 

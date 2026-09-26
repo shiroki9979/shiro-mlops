@@ -133,6 +133,22 @@ def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepos
     assert row_00["load_mw"] == pytest.approx(26800.0)
 
 
+def test_upsert_taipower_load_marks_regional_snapshot_source(
+    repository: TimeSeriesRepository,
+) -> None:
+    """推算值寫入時標記來源，覆寫同一小時也一併更新來源。"""
+    load_df = pd.DataFrame([{"datetime": "2026-09-26 13:00:00", "load_mw": 30550.0}])
+
+    repository.upsert_taipower_load(load_df)
+    repository.upsert_taipower_load(load_df.assign(load_mw=30600.0))
+
+    with repository.engine.connect() as conn:
+        rows = pd.read_sql_query("SELECT location, load_mw, source FROM raw_taipower_load", conn)
+    assert rows.to_dict("records") == [
+        {"location": "Taipei", "load_mw": 30600.0, "source": "regional_snapshot_sum"}
+    ]
+
+
 def test_upsert_cwa_weather_insert_and_fetch(
     repository: TimeSeriesRepository, cwa_obs_df: pd.DataFrame, cwa_observation_batch
 ):

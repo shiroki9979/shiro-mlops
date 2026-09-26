@@ -118,6 +118,28 @@ def _isolate_legacy_cwa_weather(engine: Engine) -> None:
         connection.execute(text("DROP TABLE raw_cwa_weather"))
 
 
+def _add_taipower_load_source_column(engine: Engine) -> None:
+    """Add the derivation provenance column to load tables created before ADR-0008.
+
+    The column stays nullable on upgraded databases: NULL identifies d015046-era
+    rows so operators can review and remove them before NOT NULL is enforced
+    (docs/how-to/remove-legacy-d015046-load-rows.md). Existing rows are never
+    rewritten here because relabelling them would mix incompatible load semantics.
+    """
+    try:
+        columns = {column["name"] for column in inspect(engine).get_columns("raw_taipower_load")}
+    except NoInspectionAvailable:
+        return
+    if "source" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE raw_taipower_load ADD COLUMN source VARCHAR(32)"))
+    logger.warning(
+        "Added nullable raw_taipower_load.source; rows with NULL source predate the "
+        "regional snapshot derivation and must be removed by an operator."
+    )
+
+
 def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
     """Convert TimescaleDB/PostgreSQL DDL script into executable SQLite DDL statements.
 
@@ -184,12 +206,14 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
         statements = convert_timescale_ddl_to_sqlite(get_timescale_init_ddl())
         _execute_sql_statements(db_engine, statements)
         _isolate_legacy_cwa_weather(db_engine)
+        _add_taipower_load_source_column(db_engine)
         return
 
     # PostgreSQL / TimescaleDB
     ddl = get_timescale_init_ddl()
     _execute_sql_statements(db_engine, split_sql_statements(ddl))
     _isolate_legacy_cwa_weather(db_engine)
+    _add_taipower_load_source_column(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
 

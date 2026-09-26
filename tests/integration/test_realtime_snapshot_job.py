@@ -33,7 +33,7 @@ class FailureScenario(StrEnum):
     """測試來源擷取失敗情境。"""
 
     NONE = "none"
-    REGIONAL_ONCE = "regional_once"
+    UNIT_ONCE = "unit_once"
     UNIT_ALWAYS = "unit_always"
 
 
@@ -134,18 +134,15 @@ class MockHTTPXRouter:
 
         if "d006019" in url_str:
             self.reg_call_count += 1
-            if self.failure_scenario == FailureScenario.REGIONAL_ONCE and self.reg_call_count == 1:
-                resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-                    "Reg 500 error", request=MagicMock(), response=MagicMock(status_code=500)
-                )
-            else:
-                resp.raise_for_status.return_value = None
-                resp.text = self.fixtures.reg_csv
+            resp.raise_for_status.return_value = None
+            resp.text = self.fixtures.reg_csv
             return resp
 
         if "d006001" in url_str:
             self.unit_call_count += 1
-            if self.failure_scenario == FailureScenario.UNIT_ALWAYS:
+            if self.failure_scenario == FailureScenario.UNIT_ALWAYS or (
+                self.failure_scenario == FailureScenario.UNIT_ONCE and self.unit_call_count == 1
+            ):
                 resp.raise_for_status.side_effect = httpx.HTTPStatusError(
                     "Unit 500 error", request=MagicMock(), response=MagicMock(status_code=500)
                 )
@@ -251,17 +248,17 @@ def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
     slot = OBSERVED_SLOT
     run_req, router, job_def = _build_failure_case(
         test_repo,
-        FailureScenario.REGIONAL_ONCE,
+        FailureScenario.UNIT_ONCE,
     )
 
     with patch("httpx.Client", return_value=router):
         res = job_def.execute_in_process(run_config=run_req.run_config)
 
     assert res.success
-    # 驗證區域來源確實觸發了重試（共呼叫 2 次）
-    assert router.reg_call_count == 2
+    # 驗證機組來源確實依 job 重試政策重試（共呼叫 2 次）
+    assert router.unit_call_count == 2
     assert router.sd_call_count == 1
-    assert router.unit_call_count == 1
+    assert router.reg_call_count == 1
 
     assert test_repo.fetch_supply_demand_snapshot(slot) is not None
     assert len(test_repo.fetch_regional_supply_demand_snapshots(slot)) == 4

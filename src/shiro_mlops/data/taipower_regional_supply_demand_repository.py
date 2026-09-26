@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
@@ -108,15 +109,8 @@ class TaipowerRegionalSupplyDemandRepository:
     def fetch(self, observed_at: datetime) -> list[TaipowerRegionalSupplyDemandSnapshot]:
         """Fetch regional snapshots for a Taiwan-local observation slot."""
         query = text(
-            """
-            SELECT
-                observed_at,
-                region,
-                source_time,
-                generation_wan_kw,
-                load_wan_kw,
-                raw_payload
-            FROM raw_taipower_regional_supply_demand_snapshot
+            f"""
+            {_SELECT_SNAPSHOT_COLUMNS}
             WHERE observed_at = :observed_at
             """
         )
@@ -129,26 +123,57 @@ class TaipowerRegionalSupplyDemandRepository:
         region_order = {
             region: index for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS)
         }
-        snapshots: list[TaipowerRegionalSupplyDemandSnapshot] = []
-        for row in rows:
-            raw_payload = deserialize_raw_payload(row["raw_payload"])
-            snapshots.append(
-                TaipowerRegionalSupplyDemandSnapshot(
-                    observed_at=utc_instant_to_taiwan(row["observed_at"]) or observed_at,
-                    region=str(row["region"]),
-                    source_time=resolve_snapshot_source_time(
-                        row["source_time"], row["observed_at"], observed_at
-                    ),
-                    generation_wan_kw=(
-                        None
-                        if row["generation_wan_kw"] is None
-                        else float(row["generation_wan_kw"])
-                    ),
-                    load_wan_kw=float(row["load_wan_kw"]),
-                    raw_payload=raw_payload,
-                )
-            )
-
+        snapshots = [_row_to_snapshot(row, observed_at) for row in rows]
         unknown_rank = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
         snapshots.sort(key=lambda item: region_order.get(item.region, unknown_rank))
         return snapshots
+
+    def fetch_by_source_time(
+        self, start_time: datetime, end_time: datetime
+    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
+        """Fetch snapshots whose Taiwan-local source_time is in [start_time, end_time)."""
+        query = text(
+            f"""
+            {_SELECT_SNAPSHOT_COLUMNS}
+            WHERE source_time >= :start_time AND source_time < :end_time
+            ORDER BY source_time ASC, observed_at ASC, region ASC
+            """
+        )
+        params = {
+            "start_time": taiwan_instant_to_utc(start_time),
+            "end_time": taiwan_instant_to_utc(end_time),
+        }
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
+        return [_row_to_snapshot(row, start_time) for row in rows]
+
+
+_SELECT_SNAPSHOT_COLUMNS = """
+    SELECT
+        observed_at,
+        region,
+        source_time,
+        generation_wan_kw,
+        load_wan_kw,
+        raw_payload
+    FROM raw_taipower_regional_supply_demand_snapshot
+"""
+
+
+def _row_to_snapshot(
+    row: Any, default_observed_at: datetime
+) -> TaipowerRegionalSupplyDemandSnapshot:
+    """Map a database row back to a Taiwan-local typed snapshot."""
+    return TaipowerRegionalSupplyDemandSnapshot(
+        observed_at=utc_instant_to_taiwan(row["observed_at"]) or default_observed_at,
+        region=str(row["region"]),
+        source_time=resolve_snapshot_source_time(
+            row["source_time"], row["observed_at"], default_observed_at
+        ),
+        generation_wan_kw=(
+            None if row["generation_wan_kw"] is None else float(row["generation_wan_kw"])
+        ),
+        load_wan_kw=float(row["load_wan_kw"]),
+        raw_payload=deserialize_raw_payload(row["raw_payload"]),
+    )
