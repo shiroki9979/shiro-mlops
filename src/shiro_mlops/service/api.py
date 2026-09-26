@@ -1,7 +1,7 @@
 """FastAPI dynamic on-demand load forecasting service."""
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
 import pandas as pd
@@ -19,6 +19,7 @@ from shiro_mlops.core.constants import (
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import WeatherResolution, resolve_weather
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
@@ -31,9 +32,19 @@ class ModelStore:
     forecaster: LightGBMRecursiveForecaster | None = None
 
 
+def _taiwan_now() -> pd.Timestamp:
+    """Return the current instant as Taiwan-local naive time, matching persisted load time."""
+    return pd.Timestamp.now(tz=TAIWAN_TZ).tz_localize(None)
+
+
 model_store = ModelStore()
 repository_store: TimeSeriesRepository | None = None
+request_clock: Callable[[], pd.Timestamp] = _taiwan_now
 logger = logging.getLogger(__name__)
+
+
+class StaleLoadAnchorError(RuntimeError):
+    """The latest actual load is too old to anchor a recursive forecast."""
 
 
 @asynccontextmanager
@@ -132,16 +143,30 @@ def _load_history(repository: TimeSeriesRepository) -> pd.DataFrame:
     return history
 
 
+def _ensure_fresh_load_anchor(history: pd.DataFrame, request_time: pd.Timestamp) -> None:
+    """Refuse rather than degrade: actual load has no substitute as the recursion origin."""
+    anchor = pd.Timestamp(history[DATETIME_COL].max())
+    max_lag_hours = settings.LOAD_ANCHOR_MAX_LAG_HOURS
+    if request_time - anchor > pd.Timedelta(hours=max_lag_hours):
+        raise StaleLoadAnchorError(
+            f"Stale load anchor: latest actual load at {anchor.isoformat()} lags request time "
+            f"{request_time.isoformat()} by more than {max_lag_hours} hours."
+        )
+
+
 def _resolve_prediction_weather(
-    repository: TimeSeriesRepository, history: pd.DataFrame, horizon_hours: int
+    repository: TimeSeriesRepository,
+    history: pd.DataFrame,
+    horizon_hours: int,
+    request_time: pd.Timestamp,
 ) -> WeatherResolution:
-    """Resolve future weather from canonical storage for a prediction request."""
+    """Resolve future weather from canonical storage as it was known at request time."""
     last_time = pd.Timestamp(history[DATETIME_COL].max())
     return resolve_weather(
         repository,
         start_time=last_time + pd.Timedelta(hours=1),
         horizon_hours=horizon_hours,
-        as_of=last_time,
+        as_of=request_time,
     )
 
 
@@ -154,11 +179,13 @@ def readiness_check() -> ReadyResponse:
         )
         return JSONResponse(status_code=503, content=response.model_dump())
     try:
+        request_time = request_clock()
         repository = _get_repository()
         history = _load_history(repository)
         if history.empty:
             raise RuntimeError("No persisted Taipei load history is available.")
-        weather = _resolve_prediction_weather(repository, history, 168)
+        _ensure_fresh_load_anchor(history, request_time)
+        weather = _resolve_prediction_weather(repository, history, 168, request_time)
         if weather.mode == "unavailable":
             raise RuntimeError(weather.reason or "Weather coverage is unavailable.")
         return ReadyResponse(
@@ -181,13 +208,17 @@ def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
         raise HTTPException(status_code=400, detail="Only Taipei is supported in this model phase.")
 
     try:
+        request_time = request_clock()
         repository = _get_repository()
         history_df = _load_history(repository)
         if history_df.empty:
             raise HTTPException(
                 status_code=503, detail="No persisted Taipei load history available."
             )
-        weather = _resolve_prediction_weather(repository, history_df, request.horizon_hours)
+        _ensure_fresh_load_anchor(history_df, request_time)
+        weather = _resolve_prediction_weather(
+            repository, history_df, request.horizon_hours, request_time
+        )
         if weather.mode == "unavailable" or weather.dataframe.empty:
             raise HTTPException(
                 status_code=503, detail=weather.reason or "Weather coverage unavailable."
@@ -218,6 +249,8 @@ def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
         )
     except HTTPException:
         raise
+    except StaleLoadAnchorError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     except SQLAlchemyError as error:
         raise HTTPException(status_code=503, detail=f"Persistence unavailable: {error}") from error
     except Exception as e:
