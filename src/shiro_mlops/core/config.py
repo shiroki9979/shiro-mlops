@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 if TYPE_CHECKING:
@@ -59,9 +60,6 @@ class Settings(BaseSettings):
     # External APIs
     CWA_API_KEY: str = ""
     CWA_LOCATION_ALLOWLIST: str = ""
-    TAIPOWER_API_URL: str = (
-        "https://data.taipower.com.tw/opendata/apply/file/d015046/台灣電力公司_過去電力供需資訊.csv"
-    )
     TAIPOWER_SUPPLY_DEMAND_API_URL: str = (
         "https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json"
     )
@@ -71,6 +69,10 @@ class Settings(BaseSettings):
     TAIPOWER_UNIT_GENERATION_API_URL: str = (
         "https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json"
     )
+
+    # Nationwide hourly actual load derived from regional snapshots (ADR-0008)
+    HOURLY_LOAD_MIN_SAMPLES: PositiveInt = 4
+    HOURLY_LOAD_RECOMPUTE_HOURS: PositiveInt = 3
 
     # API Serving
     API_HOST: str = "0.0.0.0"

@@ -26,7 +26,7 @@ from shiro_mlops.pipelines.assets import (
     drift_monitoring_report,
     engineered_feature_set,
     raw_cwa_station_observation,
-    raw_taipower_load_data,
+    taipower_load_feature_source,
     trained_forecaster_model,
 )
 from shiro_mlops.pipelines.feature_pipeline import FallbackFeatureSources
@@ -334,11 +334,9 @@ def test_full_dagster_mlops_pipeline_materialization(
     repo = TimeSeriesRepository(engine=sqlite_engine)
     feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
 
+    repo.upsert_taipower_load(taipower_raw_df)
+
     with (
-        patch(
-            "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
-            return_value=taipower_raw_df,
-        ),
         patch(
             "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
             return_value=observation_batch,
@@ -351,7 +349,7 @@ def test_full_dagster_mlops_pipeline_materialization(
 
         res = materialize(
             assets=[
-                raw_taipower_load_data,
+                taipower_load_feature_source,
                 cwa_observation_feature_source,
                 engineered_feature_set,
                 trained_forecaster_model,

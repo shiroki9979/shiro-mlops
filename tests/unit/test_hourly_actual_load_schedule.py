@@ -1,0 +1,82 @@
+"""Contract tests for the hourly actual-load job, schedule, and snapshot retry policies."""
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from dagster import Backoff, RetryPolicy, build_schedule_context, load_assets_from_modules
+
+from shiro_mlops.core.config import Settings
+from shiro_mlops.pipelines import assets as assets_module
+from shiro_mlops.pipelines.schedules import (
+    daily_training_job,
+    hourly_actual_load_job,
+    hourly_actual_load_schedule,
+    hourly_drift_job,
+    taipower_supply_demand_snapshot_job,
+)
+
+HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
+
+
+def _all_assets():
+    return load_assets_from_modules([assets_module])
+
+
+def _selected(job) -> set[str]:
+    return {key.to_user_string() for key in job.selection.resolve(_all_assets())}
+
+
+def test_hourly_load_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.HOURLY_LOAD_MIN_SAMPLES == 4
+    assert settings.HOURLY_LOAD_RECOMPUTE_HOURS == 3
+    assert not hasattr(settings, "TAIPOWER_API_URL")
+
+
+def test_hourly_actual_load_job_selects_only_derivation_asset() -> None:
+    assert hourly_actual_load_job.name == "hourly_actual_load_job"
+    assert _selected(hourly_actual_load_job) == {HOURLY_ACTUAL_LOAD_ASSET}
+
+
+def test_training_and_drift_jobs_do_not_run_the_snapshot_derivation() -> None:
+    """訓練與 drift 不得讀取快照表，因此也不得包含由快照推算的資產。"""
+    assert HOURLY_ACTUAL_LOAD_ASSET not in _selected(daily_training_job)
+    assert HOURLY_ACTUAL_LOAD_ASSET not in _selected(hourly_drift_job)
+
+
+def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> None:
+    assert hourly_actual_load_schedule.cron_schedule == "5 * * * *"
+    assert hourly_actual_load_schedule.execution_timezone == "Asia/Taipei"
+
+    context = build_schedule_context(
+        scheduled_execution_time=datetime(2026, 9, 26, 14, 5, tzinfo=ZoneInfo("Asia/Taipei"))
+    )
+    execution = hourly_actual_load_schedule.evaluate_tick(context)
+
+    assert execution.run_requests is not None
+    request = execution.run_requests[0]
+    assert request.run_key == "2026-09-26T14:05:00"
+    assert request.run_config == {
+        "ops": {HOURLY_ACTUAL_LOAD_ASSET: {"config": {"evaluated_at": "2026-09-26T14:05:00"}}}
+    }
+
+
+def test_regional_snapshot_retries_with_exponential_backoff_while_others_keep_job_policy() -> None:
+    """區域快照為逐時負載唯一來源，重試較久；全台與機組快照沿用原本 job 政策。"""
+    regional = assets_module.raw_taipower_regional_supply_demand_snapshot.op.retry_policy
+
+    assert regional is not None
+    assert (regional.max_retries, regional.delay, regional.backoff) == (
+        3,
+        10,
+        Backoff.EXPONENTIAL,
+    )
+    for asset_def in (
+        assets_module.raw_taipower_supply_demand_snapshot,
+        assets_module.raw_taipower_unit_generation_snapshot,
+    ):
+        assert asset_def.op.retry_policy is None
+    assert taipower_supply_demand_snapshot_job.op_retry_policy == RetryPolicy(
+        max_retries=2, delay=10
+    )

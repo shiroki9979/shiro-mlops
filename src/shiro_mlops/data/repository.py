@@ -25,6 +25,7 @@ from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
     CWAObservationBatch,
 )
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -191,10 +192,12 @@ class TimeSeriesRepository:
         self,
         df: pd.DataFrame,
         default_location: str = DEFAULT_LOCATION,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
     ) -> int:
         """Upsert Taipower electricity load records into raw_taipower_load table.
 
-        Handles composite primary key conflict on (time, location) by updating load_mw.
+        Handles composite primary key conflict on (time, location) by updating load_mw
+        and source, so a recomputed hour always carries its current provenance.
 
         Parameters
         ----------
@@ -202,6 +205,8 @@ class TimeSeriesRepository:
             DataFrame containing 'datetime' (or 'time') and 'load_mw' columns.
         default_location : str
             Fallback location identifier when 'location' column is missing or null.
+        source : str
+            Derivation provenance stored on every row.
 
         Returns
         -------
@@ -224,16 +229,18 @@ class TimeSeriesRepository:
                 ),
                 "location": str(row[LOCATION_COL]),
                 "load_mw": float(row[LOAD_MW_COL]),
+                "source": source,
             }
             for _, row in work_df.iterrows()
         ]
 
         upsert_stmt = text(
             """
-            INSERT INTO raw_taipower_load (time, location, load_mw)
-            VALUES (:time, :location, :load_mw)
+            INSERT INTO raw_taipower_load (time, location, load_mw, source)
+            VALUES (:time, :location, :load_mw, :source)
             ON CONFLICT (time, location) DO UPDATE SET
-                load_mw = EXCLUDED.load_mw
+                load_mw = EXCLUDED.load_mw,
+                source = EXCLUDED.source
             """
         )
 
@@ -672,6 +679,12 @@ class TimeSeriesRepository:
     ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
         """Fetch regional snapshots for a Taiwan-local observation slot."""
         return self.regional_supply_demand_repo.fetch(observed_at)
+
+    def fetch_regional_supply_demand_snapshots_by_source_time(
+        self, start_time: datetime, end_time: datetime
+    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
+        """Fetch regional snapshots whose Taiwan-local source_time is in [start, end)."""
+        return self.regional_supply_demand_repo.fetch_by_source_time(start_time, end_time)
 
     def upsert_unit_generation_snapshots(
         self, snapshots: list[TaipowerUnitGenerationSnapshot]
