@@ -11,7 +11,6 @@ from sqlalchemy.engine import Engine
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.data.repository_utils import (
     deserialize_raw_payload,
-    resolve_snapshot_source_time,
     serialize_raw_payload,
     taiwan_instant_to_utc,
     utc_instant_to_taiwan,
@@ -123,7 +122,7 @@ class TaipowerRegionalSupplyDemandRepository:
         region_order = {
             region: index for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS)
         }
-        snapshots = [_row_to_snapshot(row, observed_at) for row in rows]
+        snapshots = [_row_to_snapshot(row) for row in rows]
         unknown_rank = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
         snapshots.sort(key=lambda item: region_order.get(item.region, unknown_rank))
         return snapshots
@@ -146,7 +145,7 @@ class TaipowerRegionalSupplyDemandRepository:
 
         with self.engine.connect() as conn:
             rows = conn.execute(query, params).mappings().all()
-        return [_row_to_snapshot(row, start_time) for row in rows]
+        return [_row_to_snapshot(row) for row in rows]
 
 
 _SELECT_SNAPSHOT_COLUMNS = """
@@ -161,19 +160,30 @@ _SELECT_SNAPSHOT_COLUMNS = """
 """
 
 
-def _row_to_snapshot(
-    row: Any, default_observed_at: datetime
-) -> TaipowerRegionalSupplyDemandSnapshot:
-    """Map a database row back to a Taiwan-local typed snapshot."""
+def _row_to_snapshot(row: Any) -> TaipowerRegionalSupplyDemandSnapshot:
+    """Map a database row back to a Taiwan-local typed snapshot.
+
+    Both timestamps are NOT NULL in the schema; a missing one means corrupted
+    storage, and substituting a query bound would silently mislabel the sample.
+    """
     return TaipowerRegionalSupplyDemandSnapshot(
-        observed_at=utc_instant_to_taiwan(row["observed_at"]) or default_observed_at,
+        observed_at=_required_instant(row, "observed_at"),
         region=str(row["region"]),
-        source_time=resolve_snapshot_source_time(
-            row["source_time"], row["observed_at"], default_observed_at
-        ),
+        source_time=_required_instant(row, "source_time"),
         generation_wan_kw=(
             None if row["generation_wan_kw"] is None else float(row["generation_wan_kw"])
         ),
         load_wan_kw=float(row["load_wan_kw"]),
         raw_payload=deserialize_raw_payload(row["raw_payload"]),
     )
+
+
+def _required_instant(row: Any, column: str) -> datetime:
+    value = utc_instant_to_taiwan(row[column])
+    if value is None:
+        raise ValueError(
+            f"raw_taipower_regional_supply_demand_snapshot row for region {row['region']!r} "
+            f"has no {column} (observed_at={row['observed_at']!r}, "
+            f"source_time={row['source_time']!r})"
+        )
+    return value
