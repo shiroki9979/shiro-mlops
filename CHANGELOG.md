@@ -39,6 +39,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 隔離缺乏可信 StationId provenance 的舊版 CWA 氣象資料，並禁止 legacy 寫入混入 canonical 觀測資料。
 - 修正 point-in-time 預報版本選取、風向插值與訓練氣象缺口處理，避免未來資料洩漏及固定值回填。
 
+## [feat/hourly-load-resiliency] (Unreleased)
+
+- 建立日期：2026-09-26
+- 最後更新：2026-09-26
+
+### Added
+
+- 新增由台電區域供需快照推算的全台逐時實際負載與每小時 `hourly_actual_load_job`，取代已失效的 d015046 歷史來源；只往前累積、不回補歷史（#59，ADR-0008）。
+- 新增負載起點過舊防護：最新推算負載落後請求時間超過 `LOAD_ANCHOR_MAX_LAG_HOURS` 時，`/ready` 與 `/predict` 回傳 HTTP 503（#62）。
+- 新增 `make smoke-check` 排程與下游就緒檢查，以及 d015046 舊列清除與冷啟動恢復操作指南（#59、#60）。
+
+### Changed
+
+- 恢復每日訓練與每小時 drift 排程；有效逐時負載少於 `TRAINING_MIN_LOAD_HOURS`（預設 672）時拒絕訓練，drift 改以有界查詢讀取最新實際負載（#60）。
+- CWA 觀測與預報擷取、台電區域快照改為指數退避重試（#59、#62）。
+- 天氣預報 staleness 判定改以請求時間為 `as_of`，serving 只使用推算口徑的逐時負載（#62）。
+
+### Removed
+
+- 移除 d015046 擷取路徑：`raw_taipower_load_data` 資產、`TaipowerClient` 與 `TAIPOWER_API_URL` 設定（#59）。
+
+### Fixed
+
+- 確保 CWA 兩種預報產品同批次入庫，避免第二種產品失敗後留下不完整的新版本（#62）。
+- 訓練與特徵來源僅讀取推算口徑的逐時負載；資料庫升級無法檢查 schema 時明確回報失敗（#59、#60）。
+- Data Explorer 逐時負載列表、缺口與狀態忽略尚未清除的 d015046 舊列，維持推算資料口徑（#59）。
+
 ## [0.3.0] - 2026-09-06
 
 ### Added
@@ -97,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 建立 AWS Terraform 基礎設施配置（S3、ECR、App Runner、IAM OIDC）。
 
 [Unreleased]: https://github.com/shiroki9979/shiro-mlops/compare/v0.3.0...HEAD
+[feat/hourly-load-resiliency]: https://github.com/shiroki9979/shiro-mlops/compare/dev...feat/hourly-load-resiliency
 [0.3.0]: https://github.com/shiroki9979/shiro-mlops/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.2.0
 [0.1.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.1.0

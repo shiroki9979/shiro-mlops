@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.constants import (
@@ -24,6 +24,10 @@ from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
     CWAObservationBatch,
+)
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    HourlyLoadAccumulation,
 )
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
@@ -191,10 +195,12 @@ class TimeSeriesRepository:
         self,
         df: pd.DataFrame,
         default_location: str = DEFAULT_LOCATION,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
     ) -> int:
         """Upsert Taipower electricity load records into raw_taipower_load table.
 
-        Handles composite primary key conflict on (time, location) by updating load_mw.
+        Handles composite primary key conflict on (time, location) by updating load_mw
+        and source, so a recomputed hour always carries its current provenance.
 
         Parameters
         ----------
@@ -202,6 +208,8 @@ class TimeSeriesRepository:
             DataFrame containing 'datetime' (or 'time') and 'load_mw' columns.
         default_location : str
             Fallback location identifier when 'location' column is missing or null.
+        source : str
+            Derivation provenance stored on every row.
 
         Returns
         -------
@@ -224,16 +232,18 @@ class TimeSeriesRepository:
                 ),
                 "location": str(row[LOCATION_COL]),
                 "load_mw": float(row[LOAD_MW_COL]),
+                "source": source,
             }
             for _, row in work_df.iterrows()
         ]
 
         upsert_stmt = text(
             """
-            INSERT INTO raw_taipower_load (time, location, load_mw)
-            VALUES (:time, :location, :load_mw)
+            INSERT INTO raw_taipower_load (time, location, load_mw, source)
+            VALUES (:time, :location, :load_mw, :source)
             ON CONFLICT (time, location) DO UPDATE SET
-                load_mw = EXCLUDED.load_mw
+                load_mw = EXCLUDED.load_mw,
+                source = EXCLUDED.source
             """
         )
 
@@ -365,6 +375,14 @@ class TimeSeriesRepository:
 
     def upsert_cwa_forecast_release(self, release: CWAForecastRelease) -> int:
         """Persist one CWA forecast vintage and all typed township rows atomically."""
+        return self.upsert_cwa_forecast_releases([release])
+
+    def upsert_cwa_forecast_releases(self, releases: list[CWAForecastRelease]) -> int:
+        """Persist all products from one forecast ingestion run in one transaction."""
+        with self.engine.begin() as conn:
+            return sum(self._upsert_cwa_forecast_release(conn, release) for release in releases)
+
+    def _upsert_cwa_forecast_release(self, conn: Connection, release: CWAForecastRelease) -> int:
         header = {
             "dataset_id": release.dataset_id,
             "issued_at": _taiwan_instant_to_utc(release.issued_at),
@@ -435,10 +453,9 @@ class TimeSeriesRepository:
                 wind_direction = EXCLUDED.wind_direction
             """
         )
-        with self.engine.begin() as conn:
-            conn.execute(header_stmt, header)
-            if child_records:
-                conn.execute(child_stmt, child_records)
+        conn.execute(header_stmt, header)
+        if child_records:
+            conn.execute(child_stmt, child_records)
         return len(child_records)
 
     def fetch_cwa_forecast_rows(
@@ -556,6 +573,7 @@ class TimeSeriesRepository:
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
         location: str | None = None,
+        source: str | None = None,
     ) -> pd.DataFrame:
         """Fetch historical Taipower load records filtered by time range and location.
 
@@ -567,6 +585,9 @@ class TimeSeriesRepository:
             End of time filter range (inclusive).
         location : str | None
             Optional location filter.
+        source : str | None
+            Optional derivation provenance filter. Rows with NULL source never match,
+            so consumers that must not mix load bases pass the derived source.
 
         Returns
         -------
@@ -574,13 +595,37 @@ class TimeSeriesRepository:
             Sorted DataFrame of power load records.
         """
         where_clause, params = _build_time_location_filter(start_time, end_time, location)
+        if source is not None:
+            where_clause += " AND source = :source"
+            params["source"] = source
         query = f"""
             SELECT time, location, load_mw, created_at
             FROM raw_taipower_load
             WHERE {where_clause}
             ORDER BY time ASC, location ASC
         """
+        return self._read_load_frame(query, params)
 
+    def fetch_latest_load(
+        self,
+        location: str = DEFAULT_LOCATION,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+    ) -> pd.DataFrame:
+        """Fetch only the newest load row of one source, or an empty frame.
+
+        Hourly consumers need the latest actual value, not the series, so the
+        query stays bounded as the accumulated history grows.
+        """
+        query = """
+            SELECT time, location, load_mw, created_at
+            FROM raw_taipower_load
+            WHERE location = :location AND source = :source
+            ORDER BY time DESC
+            LIMIT 1
+        """
+        return self._read_load_frame(query, {"location": location, "source": source})
+
+    def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
         with self.engine.connect() as conn:
             df = pd.read_sql_query(text(query), con=conn, params=params)
 
@@ -591,6 +636,34 @@ class TimeSeriesRepository:
 
         df["time"] = utc_to_taiwan_datetime(df["time"])
         return df
+
+    def summarize_hourly_load_accumulation(
+        self, location: str = DEFAULT_LOCATION
+    ) -> HourlyLoadAccumulation:
+        """Count derived hourly observations and legacy rows without loading the series."""
+        query = text(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN source = :derived THEN 1 ELSE 0 END), 0) AS valid_hours,
+                COALESCE(SUM(CASE WHEN source IS NULL THEN 1 ELSE 0 END), 0) AS legacy_rows,
+                MAX(CASE WHEN source = :derived THEN time END) AS latest_time
+            FROM raw_taipower_load
+            WHERE location = :location
+            """
+        )
+        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "location": location}
+        with self.engine.connect() as conn:
+            row = conn.execute(query, params).one()
+
+        latest_hour = None
+        if row.latest_time is not None:
+            latest = utc_to_taiwan_datetime(pd.Series([row.latest_time])).iloc[0]
+            latest_hour = latest.to_pydatetime()
+        return HourlyLoadAccumulation(
+            valid_hours=int(row.valid_hours),
+            legacy_rows=int(row.legacy_rows),
+            latest_hour=latest_hour,
+        )
 
     def fetch_weather_range(
         self,
@@ -672,6 +745,12 @@ class TimeSeriesRepository:
     ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
         """Fetch regional snapshots for a Taiwan-local observation slot."""
         return self.regional_supply_demand_repo.fetch(observed_at)
+
+    def fetch_regional_supply_demand_snapshots_by_source_time(
+        self, start_time: datetime, end_time: datetime
+    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
+        """Fetch regional snapshots whose Taiwan-local source_time is in [start, end)."""
+        return self.regional_supply_demand_repo.fetch_by_source_time(start_time, end_time)
 
     def upsert_unit_generation_snapshots(
         self, snapshots: list[TaipowerUnitGenerationSnapshot]

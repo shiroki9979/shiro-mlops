@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.feature_pipeline import (
     FallbackFeatureSources,
@@ -57,6 +58,7 @@ def test_fetch_feature_source_data_uses_bounded_window_and_normalizes_storage_co
         start_time=window.fetch_start_time,
         end_time=window.end_time,
         location=window.location,
+        source=REGIONAL_SNAPSHOT_SUM_SOURCE,
     )
     repository.fetch_weather_range.assert_called_once_with(
         start_time=window.fetch_start_time,

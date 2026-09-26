@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-09
+- 最後更新：2026-09-26
 - 專案版本：`0.3.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
@@ -13,10 +13,11 @@
 | 里程碑 | 目標 | 主要模組 | 驗證標準 |
 | :--- | :--- | :--- | :--- |
 | **M1: 視覺化儀表板** | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 (已完成) |
-| **M2: API 穩健度與降級快取** | 建立本地快取與自動重試，落實降級預報模式 | `src/shiro_mlops/data/` | 斷網條件下仍能產出標記 `DEGRADED` 之預測 |
+| **M2: 上游中斷韌性與降級預報** | CWA 擷取指數退避重試，serving 依常模降級並拒絕過舊負載起點 | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/service/` | CWA 擷取中斷時以 `mode: "degraded"` 產出預報；負載起點過舊時回傳 HTTP 503 |
 | **M3: 多測站與行事曆特徵** | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
 | **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
 | **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 (已完成) |
+| **M6: 全台逐時實際負載重建** | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
 
 ---
 
@@ -39,17 +40,19 @@
 
 ---
 
-### Milestone 2: 資料客戶端穩健度與降級快取 (API Resiliency)
+### Milestone 2: 上游中斷韌性與降級預報 (Upstream Resiliency)
 
-#### [TICKET-201] 實作 Taipower 與 CWA 本地 Parquet 快取與重試
+> 依 [ADR-0007](adr/0007-isolate-cwa-access-behind-scheduled-ingestion.md)，serving 只讀 TimescaleDB，不為 data clients 新增本地快取；台電負載來源移至 M6。
 
-- **目標**：當外部 API 斷線或連線超時時，自動切換讀取本地最新快照。
+#### [TICKET-201] CWA 擷取韌性與負載起點過舊防護 ([GitHub #62](https://github.com/shiroki9979/shiro-mlops/issues/62))
+
+- **目標**：上游擷取中斷時，serving 依常模降級並明確揭露；負載起點過舊時拒絕預報。
 - **功能範圍**：
-  1. `TaipowerClient` 與 `CWAClient` 加入本地 Parquet 快取機制。
-  2. 加入指數退避重試（Exponential Backoff）。
-  3. 當氣象資料無法更新時，自動啟用常模補值並於 API 回應標記 `status: "degraded"`。
+  1. CWA 觀測與預報 ingestion jobs 改為 `max_retries=3, delay=30` 指數退避重試。
+  2. 新增負載起點過舊判斷（`LOAD_ANCHOR_MAX_LAG_HOURS`，預設 3 小時），`/ready` 與 `/predict` 回傳 HTTP 503。
+  3. 維持 `status: "success"` 與 `mode: "normal" | "degraded"` 分離語意。
 - **完成標準 (DoD)**：
-  - 新增 `tests/integration/test_resiliency.py`，模擬外部 API 500 錯誤時，仍能正確回傳降級預報。
+  - 新增 `tests/integration/test_resiliency.py`，離線涵蓋 CWA HTTP 500、預報過期降級、替代資料皆缺、負載起點過舊與 serving 不建立 `CWAClient` 五個情境。
 
 ---
 
@@ -149,3 +152,19 @@
 
 - **目標**：在 Data Explorer 完整可用後移除實際未查詢 Feast 的誤標快照路徑。
 - **完成標準 (DoD)**：舊 Feature Store Snapshot、`/features/latest`、相關 schema、mock、文件與測試已移除，Monitoring 只保留新 Data Source Status。
+
+---
+
+### Milestone 6: 全台逐時實際負載重建 (Hourly Actual Load Recovery)
+
+> 依 [ADR-0008](adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)，放棄尋找可回補的官方歷史來源（[GitHub #58](https://github.com/shiroki9979/shiro-mlops/issues/58) not planned）；此里程碑為 M3 MAPE 驗收的前置條件。
+
+#### [TICKET-601] 由區域快照推算全台逐時實際負載 ([GitHub #59](https://github.com/shiroki9979/shiro-mlops/issues/59))
+
+- **目標**：以區域供需快照四區加總的小時平均取代已失效的 d015046，恢復 `raw_taipower_load`。
+- **完成標準 (DoD)**：`hourly_actual_load_job` 冪等產出符合有效樣本與 4／6 完整度門檻的逐時值；區域快照改為指數退避重試；d015046 路徑與舊資料列已移除；推算規則離線測試通過。
+
+#### [TICKET-602] 恢復排程式訓練與 drift ([GitHub #60](https://github.com/shiroki9979/shiro-mlops/issues/60))
+
+- **目標**：負載入庫恢復後，每日訓練與每小時 drift 回到可操作驗證狀態。
+- **完成標準 (DoD)**：排程不再固定暫停；有效逐時觀測少於 672 小時時訓練明確拒絕；container smoke check 與操作文件完成。

@@ -53,6 +53,9 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
         [{"datetime": pd.Timestamp("2026-08-20 12:00"), "load_mw": 30000.0, "location": "Taipei"}]
     )
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
+    monkeypatch.setattr(
+        "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-20 13:00")
+    )
     model_store.forecaster = MagicMock()
     weather = WeatherResolution(
         dataframe=pd.DataFrame({"datetime": [pd.Timestamp("2026-08-20 13:00")]}),
@@ -110,6 +113,9 @@ def test_api_predict_dynamic_horizon(
         geocode="63000050",
     ).rename(columns={"temperature": "temperature_c", "relative_humidity": "relative_humidity_pct"})
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
+    monkeypatch.setattr(
+        "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-22 00:00")
+    )
 
     client = TestClient(app)
     payload = {"horizon_hours": 12, "location": "Taipei"}

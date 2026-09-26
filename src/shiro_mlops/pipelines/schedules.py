@@ -4,7 +4,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from dagster import (
+    AssetKey,
     AssetSelection,
+    Backoff,
     RetryPolicy,
     RunRequest,
     ScheduleDefinition,
@@ -13,9 +15,12 @@ from dagster import (
     define_asset_job,
     schedule,
 )
+from dagster_shared.check import CheckError
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.taipower_supply_demand import floor_to_ten_minutes
+from shiro_mlops.pipelines.readiness import TrainingLoadReadiness, check_training_load_readiness
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -27,24 +32,40 @@ TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
 # 含首次嘗試最多重試 2 次，每次間隔 10 秒。
 TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
 
-CWA_INGESTION_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
+# CWA 排程每小時一次，較長的指數退避可跨越短暫上游 5xx；Dagster 依序等待 30／90／210 秒，
+# 用盡後仍遠早於下一個整點 slot。
+CWA_INGESTION_RETRY_POLICY = RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL)
 CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
 CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
 CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
-HISTORICAL_LOAD_DEFERMENT_REASON = (
-    "Historical hourly Taipower load source is unavailable; "
-    "training and drift schedules are deferred."
+HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
+# 只讀 raw_taipower_load 資料表的負載來源；推算資產本身讀區域快照表，不得進入訓練或 drift。
+LOAD_FEATURE_SOURCE_ASSET = "taipower_load_feature_source"
+TRAINED_MODEL_ASSET = "trained_forecaster_model"
+DRIFT_REPORT_ASSET = "drift_monitoring_report"
+# 明列而非以 all() 扣除，新增的擷取資產才不會被默默帶進訓練並呼叫外部 API。
+TRAINING_ASSETS = (
+    LOAD_FEATURE_SOURCE_ASSET,
+    "cwa_observation_feature_source",
+    "engineered_features",
+    "taipower_features",
+    "weather_features",
+    TRAINED_MODEL_ASSET,
+    DRIFT_REPORT_ASSET,
+)
+# drift 每小時只需最新一列與有效時數，由報告資產以有界查詢讀取；
+# 重跑 LOAD_FEATURE_SOURCE_ASSET 會隨累積時數讀取整段歷史。
+DRIFT_ASSETS = (DRIFT_REPORT_ASSET,)
+NO_TRAINED_MODEL_REASON = (
+    f"No {TRAINED_MODEL_ASSET} materialization yet; "
+    "hourly drift waits for the first successful daily_training_job run."
 )
 
 # 1. Daily Training and Evaluation Job
 daily_training_job = define_asset_job(
     name="daily_training_job",
-    selection=(
-        AssetSelection.all()
-        - AssetSelection.assets(*TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
-        - AssetSelection.assets(*CWA_INGESTION_ASSETS)
-    ),
-    description="Run ingestion, feature engineering, model training, and drift evaluation",
+    selection=AssetSelection.assets(*TRAINING_ASSETS),
+    description="Read persisted load and weather, engineer features, train, and report drift",
 )
 
 
@@ -52,17 +73,21 @@ daily_training_job = define_asset_job(
     job=daily_training_job,
     cron_schedule="0 16 * * *",  # 16:00 UTC (00:00 Taipei time)
     description="Daily retrain schedule at midnight Taipei time",
+    required_resource_keys={"time_series_repo"},
 )
-def daily_training_schedule(_: ScheduleEvaluationContext) -> SkipReason:
-    """Defer training until a historical hourly load source is available."""
-    return SkipReason(HISTORICAL_LOAD_DEFERMENT_REASON)
+def daily_training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Train only after the minimum hourly-load accumulation; otherwise disclose the gap."""
+    readiness = _load_readiness(context)
+    if not readiness.ready:
+        return SkipReason(readiness.reason)
+    return RunRequest(run_key=_tick_run_key(context))
 
 
 # 2. Hourly Drift and Monitoring Job
 hourly_drift_job = define_asset_job(
     name="hourly_drift_job",
-    selection=AssetSelection.assets("raw_taipower_load_data", "drift_monitoring_report"),
-    description="Check latest actual load against previous forecasts",
+    selection=AssetSelection.assets(*DRIFT_ASSETS),
+    description="Compare the newest persisted actual load with the latest trained model",
 )
 
 
@@ -70,10 +95,42 @@ hourly_drift_job = define_asset_job(
     job=hourly_drift_job,
     cron_schedule="0 * * * *",  # Every hour
     description="Hourly drift evaluation schedule",
+    required_resource_keys={"time_series_repo"},
 )
-def hourly_drift_schedule(_: ScheduleEvaluationContext) -> SkipReason:
-    """Defer drift evaluation until actual historical load can be ingested."""
-    return SkipReason(HISTORICAL_LOAD_DEFERMENT_REASON)
+def hourly_drift_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Evaluate drift once load is sufficient and a trained model artifact exists."""
+    readiness = _load_readiness(context)
+    if not readiness.ready:
+        return SkipReason(readiness.reason)
+    if context.instance.get_latest_materialization_event(AssetKey(TRAINED_MODEL_ASSET)) is None:
+        return SkipReason(NO_TRAINED_MODEL_REASON)
+    return RunRequest(run_key=_tick_run_key(context))
+
+
+def _load_readiness(context: ScheduleEvaluationContext) -> TrainingLoadReadiness:
+    return check_training_load_readiness(
+        context.resources.time_series_repo, settings.TRAINING_MIN_LOAD_HOURS
+    )
+
+
+def _tick_run_key(context: ScheduleEvaluationContext) -> str | None:
+    """同一 tick 重複評估時以 run_key 去重，避免重跑訓練或 drift。"""
+    tick = _scheduled_tick(context)
+    if tick is None:
+        return None
+    return _to_taiwan_local(tick).isoformat(timespec="seconds")
+
+
+def _scheduled_tick(context: ScheduleEvaluationContext) -> datetime | None:
+    """Return the tick time, or None for a manual evaluation built without one.
+
+    Dagster raises CheckError on access instead of returning None when no tick was
+    set, so a plain ``is None`` check never runs.
+    """
+    try:
+        return context.scheduled_execution_time
+    except CheckError:
+        return None
 
 
 cwa_observation_job = define_asset_job(
@@ -122,12 +179,16 @@ def build_taipower_supply_demand_snapshot_job(
 taipower_supply_demand_snapshot_job = build_taipower_supply_demand_snapshot_job()
 
 
+def _to_taiwan_local(scheduled_execution_time: datetime) -> datetime:
+    """將排程 tick 轉為無時區的台灣本地時間。"""
+    if scheduled_execution_time.tzinfo is None:
+        return scheduled_execution_time
+    return scheduled_execution_time.astimezone(ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
+
+
 def _taiwan_tick_iso(scheduled_execution_time: datetime) -> str:
     """將排程 tick 正規化為台灣本地時間的十分快照觀測 slot。"""
-    if scheduled_execution_time.tzinfo is None:
-        local_tick = scheduled_execution_time
-    else:
-        local_tick = scheduled_execution_time.astimezone(ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
+    local_tick = _to_taiwan_local(scheduled_execution_time)
     return floor_to_ten_minutes(local_tick).isoformat(timespec="seconds")
 
 
@@ -148,4 +209,32 @@ def taipower_supply_demand_snapshot_schedule(
     return RunRequest(
         run_key=observed_at,
         run_config={"ops": ops_config},
+    )
+
+
+# 4. 全台逐時實際負載推算（只讀區域快照資料表，不呼叫台電外部 API）
+hourly_actual_load_job = define_asset_job(
+    name="hourly_actual_load_job",
+    selection=AssetSelection.assets(HOURLY_ACTUAL_LOAD_ASSET),
+    description="Derive nationwide hourly actual load from stored regional snapshots",
+)
+
+
+@schedule(
+    job=hourly_actual_load_job,
+    # 第 5 分鐘觸發，讓整點前最後一個 10 分鐘快照及其重試有時間入庫。
+    cron_schedule="5 * * * *",
+    execution_timezone=TAIWAN_TZ,
+)
+def hourly_actual_load_schedule(context: ScheduleEvaluationContext) -> RunRequest:
+    """每小時以 tick 時間重算最近已結束的小時，使重跑同一 tick 得到相同窗口。
+
+    無 tick 的手動評估不去重，也不帶 evaluated_at，由 run 以執行當下決定窗口。
+    """
+    evaluated_at = _tick_run_key(context)
+    if evaluated_at is None:
+        return RunRequest()
+    return RunRequest(
+        run_key=evaluated_at,
+        run_config={"ops": {HOURLY_ACTUAL_LOAD_ASSET: {"config": {"evaluated_at": evaluated_at}}}},
     )

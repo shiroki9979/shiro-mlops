@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 if TYPE_CHECKING:
@@ -59,9 +60,6 @@ class Settings(BaseSettings):
     # External APIs
     CWA_API_KEY: str = ""
     CWA_LOCATION_ALLOWLIST: str = ""
-    TAIPOWER_API_URL: str = (
-        "https://data.taipower.com.tw/opendata/apply/file/d015046/台灣電力公司_過去電力供需資訊.csv"
-    )
     TAIPOWER_SUPPLY_DEMAND_API_URL: str = (
         "https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json"
     )
@@ -72,10 +70,18 @@ class Settings(BaseSettings):
         "https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json"
     )
 
+    # Nationwide hourly actual load derived from regional snapshots (ADR-0008)
+    HOURLY_LOAD_MIN_SAMPLES: PositiveInt = 4
+    HOURLY_LOAD_RECOMPUTE_HOURS: PositiveInt = 3
+    # 推算序列無法回補，只能自累積起往後取得；未滿 28 日（672 小時）不得訓練（ADR-0008）。
+    TRAINING_MIN_LOAD_HOURS: PositiveInt = 672
+
     # API Serving
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     DATA_EXPLORER_ENABLED: bool = False
+    # 遞迴預報起點沒有替代來源；實際負載落後請求時間超過此時數即拒絕預報而非降級。
+    LOAD_ANCHOR_MAX_LAG_HOURS: PositiveInt = 3
 
     # TimescaleDB / Operational Time-Series Store
     TIMESCALE_HOST: str = "localhost"

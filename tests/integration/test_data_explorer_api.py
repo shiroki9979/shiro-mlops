@@ -7,15 +7,19 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
+from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
 from tests.helpers import (
     TAIWAN,
+    create_legacy_load_table,
     forecast_release,
+    insert_legacy_load_row,
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
@@ -123,6 +127,38 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     assert "load_mw" in body["items"][0]
     assert "raw_payload" not in body["items"][0]
     assert all(item["datetime"].endswith("+08:00") for item in body["items"])
+
+
+def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'upgraded_load.db'}")
+    try:
+        create_legacy_load_table(engine)
+        ensure_timescale_hypertables(engine)
+        repo = TimeSeriesRepository(engine=engine, auto_init=False)
+        current_hour = _now().replace(minute=0)
+        derived_hour = current_hour - timedelta(hours=3)
+        _upsert_hours(repo, [derived_hour])
+        insert_legacy_load_row(engine, current_hour, 99999.0)
+        monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
+        monkeypatch.setattr("shiro_mlops.service.api.repository_store", repo)
+
+        with TestClient(app) as client:
+            window = {"start": rfc3339(derived_hour), "end": rfc3339(current_hour)}
+            page = client.get("/data/power/load", params=window)
+            status = client.get("/data/status")
+
+        assert page.status_code == 200
+        assert [item["datetime"] for item in page.json()["items"]] == [rfc3339(derived_hour)]
+        assert rfc3339(current_hour) in page.json()["missing_slots"]
+        load_status = next(
+            item for item in status.json()["datasets"] if item["id"] == "hourly_load"
+        )
+        assert load_status["latest_source_at"] == rfc3339(derived_hour)
+        assert load_status["freshness"] == "warning"
+    finally:
+        engine.dispose()
 
 
 def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:

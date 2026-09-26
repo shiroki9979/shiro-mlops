@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-15
+- 最後更新：2026-09-26
 - 專案版本：`0.3.0`
 
 ---
@@ -10,7 +10,11 @@
 
 ### 1.1 台電用電負載實體 (Taipower Load Schema)
 
-- **資料來源**：台電開放資料（CSV/API）
+- **資料來源**：由 `raw_taipower_regional_supply_demand_snapshot` 推算之全台逐時實際負載（[ADR-0008](adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)）；不使用每日尖峰負載、全台供需快照或機組淨發電量。
+- **推算契約**：
+  - **有效樣本**：以區域快照 `source_time` 識別；同一 `source_time` 重複擷取只計一次；北、中、南、東四區皆存在時才有效，四區 `load_wan_kw` 加總乘以 10 轉為 MW。
+  - **逐時聚合**：`datetime` 為小時起點（台灣本地時間），`load_mw` 為 `[datetime, datetime + 1h)` 內有效樣本平均；有效樣本數低於 `HOURLY_LOAD_MIN_SAMPLES`（預設 `4`，每小時最多 6）時該小時缺值，不內插；未結束的小時不產出。
+  - **可取得範圍**：只自開始累積區域快照時往後取得，不回補歷史。
 - **欄位契約**：
 
 | 欄位名稱 | 型態 | 單位/範例 | 說明 |
@@ -55,7 +59,10 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
      - `time` (TIMESTAMPTZ, NOT NULL)
      - `location` (VARCHAR(64), NOT NULL)
      - `load_mw` (DOUBLE PRECISION, NOT NULL)
+     - `source` (VARCHAR(32), NOT NULL)：推算來源；目前唯一值為 `regional_snapshot_sum`。
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
+     - `location` 固定為相容性值 `Taipei`，語意為全台負載。
+     - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。既有資料庫升級時只補上可為 `NULL` 的 `source`，不改寫或刪除任何列；`source IS NULL` 即 d015046 時期資料列。清除與補上 `NOT NULL` 由操作人員依[移除 d015046 時期舊負載資料列](how-to/remove-legacy-d015046-load-rows.md)執行後，才開啟 `hourly_actual_load_schedule`。
      - **Constraint**: `PRIMARY KEY (time, location)`
      - **Hypertable**: `create_hypertable('raw_taipower_load', 'time')`
   2. `raw_cwa_observation_batch`:
@@ -99,7 +106,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
      - 永久保留歷史快照，不設定資料保留政策。
   7. `raw_taipower_regional_supply_demand_snapshot`:
      - **資料來源**：台電官方開放資料端點 `https://service.taipower.com.tw/data/opendata/apply/file/d006019/001.csv`（政府資料開放平臺資料集「今日區域別用電情況」）。
-     - 保存北、中、南、東四區的區域發電量與區域用電負載成對快照，與全台 `raw_taipower_supply_demand_snapshot` 及 `raw_taipower_load` 分離，且不得成為既有訓練特徵的輸入。
+     - 保存北、中、南、東四區的區域發電量與區域用電負載成對快照，與全台 `raw_taipower_supply_demand_snapshot` 及 `raw_taipower_load` 分離，且不得直接成為訓練特徵的輸入；唯一例外為 §1.1 全台逐時實際負載推算。
      - `observed_at` (TIMESTAMPTZ, NOT NULL)：Dagster 排程觸發的快照觀測時間。
      - `region` (VARCHAR(16), NOT NULL)：來源區域名稱，正規化後為 `北部`／`中部`／`南部`／`東部`。
      - **Constraint**: `PRIMARY KEY (observed_at, region)`；同一排程 tick 重跑時更新同一區域快照。
@@ -185,14 +192,16 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 ### 2.2 就緒狀態檢查
 
 - **路徑**：`GET /ready`
-- **語意**：模型已載入，且正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足時回傳 HTTP 503，並列出未就緒原因。
+- **語意**：模型已載入、負載起點未過舊，且正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足、或負載起點過舊時回傳 HTTP 503，並列出未就緒原因。
+- **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過 `LOAD_ANCHOR_MAX_LAG_HOURS`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
 
 ### 2.3 隨需動態視界負載預報
 
 - **路徑**：`POST /predict`
 - **相容性欄位**：`location` 暫時保留但只接受 `Taipei`，並標示為待移除；模型仍預測全臺負載，不宣稱支援區域負載模型。
-- **資料來源**：只讀 canonical TimescaleDB tables。最新可用預報發布超過七小時即視為 stale，依序退回臺北站前日同小時觀測、同月份同小時歷史平均並回傳 `status: "degraded"`；替代資料皆不存在時回傳 HTTP 503。
+- **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回臺北站前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
+- **狀態欄位**：`status` 表示請求成功（固定為 `success`）；`mode` 表示預報品質（`normal` 或 `degraded`），兩者不得混用。
 - **來源追溯**：每個預測點的 `weather_sources` 必須逐一揭露各氣象欄位的來源，以及可用的預報發布／更新時間；同一時點允許不同欄位來自不同產品或降級來源。
 - **請求 Body**：
 
@@ -210,6 +219,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
     "status": "success",
     "horizon_hours": 24,
     "location": "Taipei",
+    "mode": "normal",
     "predictions": [
       {
         "datetime": "2026-08-22 00:00:00",
@@ -239,31 +249,38 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 
 1. **`daily_training_job`**：
    - **排程**：`0 16 * * *`（每日台灣時間 00:00 執行）
-   - **管線鏈路**：`raw_taipower_load_data` + `raw_weather_obs_data` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`
+   - **管線鏈路**：`raw_taipower_load`（由 `hourly_actual_load_job` 維護，經 `taipower_load_feature_source` 讀取）+ `cwa_observation_feature_source` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`；selection 明列上述資產，不含任何快照、推算或 CWA ingestion 資產。
+   - **最低累積**：`raw_taipower_load` 有效逐時觀測少於 `TRAINING_MIN_LOAD_HOURS`（預設 `672`，即 28 日）時，訓練必須明確失敗或略過並揭露原因，不得以不足資料產出模型。有效逐時觀測指 `source = 'regional_snapshot_sum'` 的列；存在 `source IS NULL` 的舊列時視為未就緒。排程 tick 以 `SkipReason` 揭露差距；手動執行時 `taipower_load_feature_source` 以 Dagster `Failure` 失敗並附 `valid_hours`／`required_hours` metadata。
    - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
-   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。
+   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。selection 僅含 `drift_monitoring_report`：該資產以有界查詢直接讀取 `raw_taipower_load` 的有效逐時觀測數與最新一列（僅 `source = 'regional_snapshot_sum'`），不重跑會讀取整段歷史的 `taipower_load_feature_source`；模型與特徵取自最近一次訓練的 I/O Manager 產物。手動執行時同樣套用 §3.1 最低累積，未達時以 Dagster `Failure` 失敗。
+   - **觸發條件**：沿用 §3.1 最低累積，且 `trained_forecaster_model` 已有 materialization；任一條件未滿足時以 `SkipReason` 揭露原因。
 3. **`taipower_supply_demand_snapshot_job`**：
-   - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。
-   - **管線鏈路**：`raw_taipower_supply_demand_snapshot`、`raw_taipower_regional_supply_demand_snapshot` 與 `raw_taipower_unit_generation_snapshot` 資產擷取台電當前全台供需、各區域供需與各機組即時淨發電量並 upsert 至 TimescaleDB；三者皆不得進入 `daily_training_job` 或 `hourly_drift_job`。
+   - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。
+   - **管線鏈路**：`raw_taipower_supply_demand_snapshot`、`raw_taipower_regional_supply_demand_snapshot` 與 `raw_taipower_unit_generation_snapshot` 資產擷取台電當前全台供需、各區域供需與各機組即時淨發電量並 upsert 至 TimescaleDB；三者皆不得進入 `daily_training_job` 或 `hourly_drift_job`；區域快照僅能經由 `hourly_actual_load_job` 推算後間接供訓練使用。
    - **冪等性**：排程觸發以 tick 時間作為 `observed_at`；手動 materialize 則以實際抓取起始時間向下取整至 10 分鐘。全台快照以 `observed_at` 為鍵；區域快照以 `(observed_at, region)` 為鍵；機組快照以 `(observed_at, unit_type, unit_name)` 為鍵。相同 slot 重跑時皆更新同一快照。
    - **資料完整度與失敗政策**：
      - 全台：`curr_load` 與 `curr_util_rate` 為必填欄位；缺少、無法解析，或 HTTP／重試最終失敗時，asset 必須失敗且不得寫入快照。預估尖峰、昨日尖峰與實際最高供電能力資料組可缺少，對應 typed 欄位保存為 `NULL`，完整來源回應仍保存於 `raw_payload`。
      - 區域：來源列缺少核心 `時間`、`區域` 或 `用電(萬瓩)`、或無法解析時，略過該列且不寫入該區域快照；`發電(萬瓩)` 可缺少並保存為 `NULL`。HTTP／重試最終失敗，或成功回應中無任何有效區域列時，asset 必須失敗且不得寫入。
      - 機組：來源列缺少 `機組類型` 或 `機組名稱` 時略過該列；`淨發電量(MW)` 為 `0.0` 時仍寫入；`N/A`／`-` 的發電量、裝置容量或容量比保存為 `NULL`；備註空白保存為 `NULL`。HTTP／重試最終失敗，或成功回應中無任何有效機組列時，asset 必須失敗且不得寫入。
 4. **CWA 逐時測站觀測擷取工作**：
-   - **排程**：`10 * * * *`（`Asia/Taipei`）；失敗時在同一 run 內最多重試兩次，每次間隔十秒。
+   - **排程**：`10 * * * *`（`Asia/Taipei`）；失敗時在同一 run 內最多重試三次，以三十秒起算指數退避（Dagster 依序等待 30／90／210 秒，約 5.5 分鐘內結束）；重試用盡時 run 必須失敗且不得改動既有資料。
    - **故障邊界**：使用獨立 job 與 schedule，不與台電即時快照、模型訓練或 drift 工作共用成敗狀態。
 5. **CWA 鄉鎮預報版本擷取工作**：
-   - **排程**：`40 * * * *`（`Asia/Taipei`）；每小時檢查 `F-D0047-089` 與 `F-D0047-091`，以 `(dataset_id, IssueTime, Update)` 去重；失敗時在同一 run 內最多重試兩次，每次間隔十秒。
+   - **排程**：`40 * * * *`（`Asia/Taipei`）；每小時檢查 `F-D0047-089` 與 `F-D0047-091`，以 `(dataset_id, IssueTime, Update)` 去重；失敗時在同一 run 內最多重試三次，以三十秒起算指數退避；重試用盡時 run 必須失敗且不得改動既有預報版本。
    - **故障邊界**：使用獨立 job 與 schedule，不因觀測擷取或其他管線失敗而跳過當次預報版本。
-6. **CWA 消費邊界**：
+6. **`hourly_actual_load_job`**：
+   - **排程**：`5 * * * *`（`Asia/Taipei`）。
+   - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 §1.1 推算最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，以 `(time, location)` upsert 至 `raw_taipower_load`；不呼叫任何台電外部 API。
+   - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
+7. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。
    - 既有模型在本階段只使用臺北站 `466920` 及其 `TownCode` 對應預報；臺中與高雄資料先完成入庫，三站加權仍由 TICKET-301 處理。
-7. **本機冷啟動**：
-   - 空資料庫啟動後，由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
+8. **本機冷啟動**：
+   - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達 §3 訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
    - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
+   - 操作人員以 `python -m shiro_mlops.pipelines.smoke_check`（`make smoke-check`）在 Dagster 容器內檢查排程註冊與啟用狀態、訓練與 drift 的 selection 邊界、累積進度與新鮮度，以及兩個排程下一次 tick 的結果；此檢查唯讀，不啟動 run。操作步驟見 [冷啟動恢復指南](how-to/recover-training-after-load-cold-start.md)。
 
 ---
 
@@ -282,6 +299,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 ### 4.2 資料與呈現邊界
 
 - **領域資料集**：以逐時用電負載、全台供需、區域供需、機組發電、CWA 測站觀測與 CWA 鄉鎮預報六個 canonical typed datasets 為主要檢視單位。
+- **逐時負載檢視口徑**：列表、缺口與狀態僅讀取 `source = 'regional_snapshot_sum'` 的推算列；升級期間尚未清除的 d015046 舊列不得出現在 canonical 檢視或影響新鮮度與完整度。
 - **Ingestion audit**：納入 CWA 觀測批次與預報版本兩個 audit datasets，顯示狀態、擷取時間與缺少的測站或行政區；不回傳完整 `raw_payload`。
 - **排除資料**：v1 不顯示完整 `raw_payload`、`legacy_cwa_weather` 歸檔與 Feast derived features。
 - **呈現模型**：以領域資料集名稱、領域欄位、單位與專屬篩選條件組織介面；不將實體資料表名與任意資料庫 schema 當作使用者介面。
