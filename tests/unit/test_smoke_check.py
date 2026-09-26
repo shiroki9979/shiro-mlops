@@ -15,6 +15,7 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import all_assets, defs
 from shiro_mlops.pipelines.smoke_check import (
     CheckStatus,
+    Deployment,
     check_downstream_readiness,
     check_load_consumer_boundaries,
     check_schedule_configuration,
@@ -102,7 +103,7 @@ def test_cold_start_reports_waiting_readiness_without_failing(
 ) -> None:
     test_repo.upsert_taipower_load(derived_hourly_load(10, datetime(2026, 9, 26, 23, 0)))
 
-    results = check_downstream_readiness(defs, test_repo, dagster_instance, now=NOW)
+    results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
     statuses = _statuses(results)
     assert statuses == {
@@ -123,7 +124,7 @@ def test_recovered_stack_reports_both_ticks_triggering(
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 23, 0)))
     dagster_instance.report_runless_asset_event(AssetMaterialization("trained_forecaster_model"))
 
-    results = check_downstream_readiness(defs, test_repo, dagster_instance, now=NOW)
+    results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
     assert {result.status for result in results} == {CheckStatus.PASS}
     assert exit_code(results, require_ready=True) == 0
@@ -135,7 +136,7 @@ def test_stalled_accumulation_fails(
     """最新推算小時落後超過 LOAD_ANCHOR_MAX_LAG_HOURS 表示擷取或推算排程停擺。"""
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 20, 0)))
 
-    results = check_downstream_readiness(defs, test_repo, dagster_instance, now=NOW)
+    results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
     assert _statuses(results)["load freshness"] is CheckStatus.FAIL
     assert exit_code(results, require_ready=False) == 1
@@ -146,7 +147,9 @@ def test_unreachable_store_fails_instead_of_raising(dagster_instance) -> None:
         def summarize_hourly_load_accumulation(self, location: str):
             raise ConnectionError("TimescaleDB unreachable")
 
-    results = check_downstream_readiness(defs, UnreachableRepository(), dagster_instance, now=NOW)
+    results = check_downstream_readiness(
+        Deployment(defs, UnreachableRepository(), dagster_instance, NOW)
+    )
 
     assert {result.status for result in results} == {CheckStatus.FAIL}
     assert "TimescaleDB unreachable" in results[0].detail
@@ -159,7 +162,7 @@ def test_fresh_instance_has_no_running_schedules(dagster_instance: DagsterInstan
 def test_full_run_on_fresh_deployment_flags_stopped_schedules_and_waiting_readiness(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    results = run_smoke_check(defs, test_repo, dagster_instance, now=NOW)
+    results = run_smoke_check(Deployment(defs, test_repo, dagster_instance, NOW))
 
     report = format_report(results)
 

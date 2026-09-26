@@ -88,17 +88,22 @@ class CheckResult:
     detail: str
 
 
-def run_smoke_check(
-    defs: Definitions,
-    repository: LoadAccumulationSource,
-    instance: DagsterInstance,
-    now: datetime,
-) -> list[CheckResult]:
+@dataclass(frozen=True)
+class Deployment:
+    """One deployment under check: its code, Dagster instance, and load store at ``now``."""
+
+    defs: Definitions
+    repository: LoadAccumulationSource
+    instance: DagsterInstance
+    now: datetime
+
+
+def run_smoke_check(deployment: Deployment) -> list[CheckResult]:
     """Run every check against one deployment: code, Dagster instance, and store."""
     return [
-        *check_schedule_configuration(defs, running_schedule_names(instance)),
-        *check_load_consumer_boundaries(defs),
-        *check_downstream_readiness(defs, repository, instance, now),
+        *check_schedule_configuration(deployment.defs, running_schedule_names(deployment.instance)),
+        *check_load_consumer_boundaries(deployment.defs),
+        *check_downstream_readiness(deployment),
     ]
 
 
@@ -119,15 +124,12 @@ def check_load_consumer_boundaries(defs: Definitions) -> list[CheckResult]:
     ]
 
 
-def check_downstream_readiness(
-    defs: Definitions,
-    repository: LoadAccumulationSource,
-    instance: DagsterInstance,
-    now: datetime,
-) -> list[CheckResult]:
+def check_downstream_readiness(deployment: Deployment) -> list[CheckResult]:
     """Report load accumulation, its freshness, and what the next training/drift ticks do."""
     try:
-        readiness = check_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
+        readiness = check_training_load_readiness(
+            deployment.repository, settings.TRAINING_MIN_LOAD_HOURS
+        )
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
         return [
@@ -140,8 +142,8 @@ def check_downstream_readiness(
             CheckStatus.PASS if readiness.ready else CheckStatus.WAIT,
             readiness.reason,
         ),
-        _check_load_freshness(readiness.latest_hour, now),
-        *(_check_tick(defs, name, repository, instance, now) for name in READINESS_SCHEDULES),
+        _check_load_freshness(readiness.latest_hour, deployment.now),
+        *(_check_tick(deployment, name) for name in READINESS_SCHEDULES),
     ]
 
 
@@ -185,7 +187,8 @@ def main(argv: list[str] | None = None) -> int:
 
     now = datetime.now(tz=ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
     with DagsterInstance.get() as instance:
-        results = run_smoke_check(defs, TimeSeriesRepository(auto_init=False), instance, now)
+        deployment = Deployment(defs, TimeSeriesRepository(auto_init=False), instance, now)
+        results = run_smoke_check(deployment)
     print(format_report(results))
     return exit_code(results, require_ready=args.require_ready)
 
@@ -251,22 +254,16 @@ def _check_load_freshness(latest_hour: datetime | None, now: datetime) -> CheckR
     return CheckResult("load freshness", CheckStatus.PASS, detail)
 
 
-def _check_tick(
-    defs: Definitions,
-    schedule_name: str,
-    repository: LoadAccumulationSource,
-    instance: DagsterInstance,
-    now: datetime,
-) -> CheckResult:
+def _check_tick(deployment: Deployment, schedule_name: str) -> CheckResult:
     """Evaluate the deployed schedule function exactly as the daemon would at ``now``."""
     check_name = f"tick {schedule_name}"
     context = build_schedule_context(
-        instance=instance,
-        scheduled_execution_time=now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
-        resources={"time_series_repo": repository},
+        instance=deployment.instance,
+        scheduled_execution_time=deployment.now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
+        resources={"time_series_repo": deployment.repository},
     )
     try:
-        execution = defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
+        execution = deployment.defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         return CheckResult(
             check_name, CheckStatus.FAIL, f"tick evaluation failed: {_summarize(error)}"
