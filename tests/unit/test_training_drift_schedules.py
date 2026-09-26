@@ -87,6 +87,20 @@ def test_daily_training_triggers_once_accumulation_is_sufficient(
     assert len(execution.run_requests) == 1
 
 
+def test_daily_training_without_tick_time_requests_an_undeduplicated_run(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+) -> None:
+    """手動評估（無 tick 時間）不得崩潰；沒有 tick 可供 run_key 去重。"""
+    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
+    context = build_schedule_context(
+        instance=dagster_instance, resources={"time_series_repo": test_repo}
+    )
+
+    execution = daily_training_schedule.evaluate_tick(context)
+
+    assert [request.run_key for request in execution.run_requests] == [None]
+
+
 def test_hourly_drift_skips_until_a_model_has_been_trained(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:

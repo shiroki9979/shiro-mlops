@@ -54,6 +54,16 @@ def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> 
     }
 
 
+def test_hourly_actual_load_schedule_without_tick_time_lets_the_run_use_current_time() -> None:
+    """手動評估（無 tick 時間）不得崩潰；run 不去重，重算窗口改以執行當下為準。"""
+    execution = hourly_actual_load_schedule.evaluate_tick(build_schedule_context())
+
+    assert execution.run_requests is not None
+    request = execution.run_requests[0]
+    assert request.run_key is None
+    assert request.run_config == {}
+
+
 def test_regional_snapshot_retries_with_exponential_backoff_while_others_keep_job_policy() -> None:
     """區域快照為逐時負載唯一來源，重試較久；全台與機組快照沿用原本 job 政策。"""
     regional = assets_module.raw_taipower_regional_supply_demand_snapshot.op.retry_policy
