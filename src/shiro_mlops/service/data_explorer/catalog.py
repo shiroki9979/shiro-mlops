@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.service.data_explorer.completeness import (
     audit_missing_identifiers,
     hourly_gaps,
@@ -104,7 +105,8 @@ class DatasetStatusCatalog:
     def _hourly_load(self, as_of: datetime) -> DatasetStatus:
         latest = self.db.fetch_one(
             "SELECT time AS source_at, created_at AS ingested_at FROM raw_taipower_load "
-            "ORDER BY time DESC LIMIT 1"
+            "WHERE source = :source ORDER BY time DESC LIMIT 1",
+            {"source": REGIONAL_SNAPSHOT_SUM_SOURCE},
         )
         window = TimeWindow(as_of - timedelta(hours=24), as_of)
         missing = hourly_gaps(self.db, window, None) if latest else []

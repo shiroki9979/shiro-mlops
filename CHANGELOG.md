@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 確保 CWA 兩種預報產品同批次入庫，避免第二種產品失敗後留下不完整的新版本（#62）。
 - 訓練與特徵來源僅讀取推算口徑的逐時負載；資料庫升級無法檢查 schema 時明確回報失敗（#59、#60）。
+- Data Explorer 逐時負載列表、缺口與狀態忽略尚未清除的 d015046 舊列，維持推算資料口徑（#59）。
 
 ## [0.3.0] - 2026-09-06
 
