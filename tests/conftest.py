@@ -18,6 +18,8 @@ from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 SQLITE_TEST_SCHEMA = SQLITE_DEFAULT_SCHEMA
+# 以一日門檻取代 672 小時預設，讓排程與 smoke check 測試不需建立 28 日資料。
+TEST_MIN_LOAD_HOURS = 24
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +37,13 @@ def mock_mlflow_offline_backend(
     monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.setenv("DAGSTER_HOME", str(dagster_dir))
     yield uri
+
+
+@pytest.fixture
+def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Lower the training accumulation threshold and return the value in effect."""
+    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", TEST_MIN_LOAD_HOURS)
+    return TEST_MIN_LOAD_HOURS
 
 
 @pytest.fixture

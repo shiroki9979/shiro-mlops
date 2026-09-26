@@ -2,7 +2,6 @@
 
 from datetime import datetime
 
-import pytest
 from dagster import (
     AssetMaterialization,
     AssetSelection,
@@ -12,7 +11,6 @@ from dagster import (
     define_asset_job,
 )
 
-from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import all_assets, defs
 from shiro_mlops.pipelines.smoke_check import (
@@ -33,12 +31,6 @@ ALL_SCHEDULES = frozenset(schedule.name for schedule in defs.schedules)
 
 def _statuses(results) -> dict[str, CheckStatus]:
     return {result.name: result.status for result in results}
-
-
-@pytest.fixture
-def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", 24)
-    return 24
 
 
 def test_registered_and_running_schedules_pass() -> None:

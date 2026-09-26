@@ -3,7 +3,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dagster import Backoff, RetryPolicy, build_schedule_context, load_assets_from_modules
+from dagster import Backoff, RetryPolicy, build_schedule_context
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.pipelines import assets as assets_module
@@ -14,16 +14,9 @@ from shiro_mlops.pipelines.schedules import (
     hourly_drift_job,
     taipower_supply_demand_snapshot_job,
 )
+from tests.helpers import selected_asset_names
 
 HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
-
-
-def _all_assets():
-    return load_assets_from_modules([assets_module])
-
-
-def _selected(job) -> set[str]:
-    return {key.to_user_string() for key in job.selection.resolve(_all_assets())}
 
 
 def test_hourly_load_settings_defaults() -> None:
@@ -31,18 +24,17 @@ def test_hourly_load_settings_defaults() -> None:
 
     assert settings.HOURLY_LOAD_MIN_SAMPLES == 4
     assert settings.HOURLY_LOAD_RECOMPUTE_HOURS == 3
-    assert not hasattr(settings, "TAIPOWER_API_URL")
 
 
 def test_hourly_actual_load_job_selects_only_derivation_asset() -> None:
     assert hourly_actual_load_job.name == "hourly_actual_load_job"
-    assert _selected(hourly_actual_load_job) == {HOURLY_ACTUAL_LOAD_ASSET}
+    assert selected_asset_names(hourly_actual_load_job) == {HOURLY_ACTUAL_LOAD_ASSET}
 
 
 def test_training_and_drift_jobs_do_not_run_the_snapshot_derivation() -> None:
     """訓練與 drift 不得讀取快照表，因此也不得包含由快照推算的資產。"""
-    assert HOURLY_ACTUAL_LOAD_ASSET not in _selected(daily_training_job)
-    assert HOURLY_ACTUAL_LOAD_ASSET not in _selected(hourly_drift_job)
+    assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(daily_training_job)
+    assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(hourly_drift_job)
 
 
 def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> None:

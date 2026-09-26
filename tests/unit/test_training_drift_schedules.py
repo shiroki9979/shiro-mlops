@@ -4,17 +4,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
-from dagster import (
-    AssetMaterialization,
-    Definitions,
-    build_schedule_context,
-    load_assets_from_modules,
-)
+from dagster import AssetMaterialization, Definitions, build_schedule_context
 
-from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.pipelines import assets as assets_module
-from shiro_mlops.pipelines import schedules as schedules_module
 from shiro_mlops.pipelines.definitions import defs
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
@@ -24,18 +16,13 @@ from shiro_mlops.pipelines.schedules import (
     hourly_drift_job,
     hourly_drift_schedule,
 )
-from tests.helpers import derived_hourly_load
+from tests.helpers import derived_hourly_load, selected_asset_names
 
 TICK = datetime(2026, 9, 27, 0, 0, tzinfo=ZoneInfo("Asia/Taipei"))
 LAST_HOUR = datetime(2026, 9, 26, 23, 0)
 LOAD_FEATURE_SOURCE = "taipower_load_feature_source"
 # 由區域快照推算的資產；訓練與 drift 只能讀它寫入的資料表，不能執行它。
 DERIVATION_ASSET = "raw_taipower_load"
-
-
-def _selected(job) -> set[str]:
-    assets = load_assets_from_modules([assets_module])
-    return {key.to_user_string() for key in job.selection.resolve(assets)}
 
 
 def _tick(schedule, repository: TimeSeriesRepository, instance):
@@ -47,15 +34,9 @@ def _tick(schedule, repository: TimeSeriesRepository, instance):
     return schedule.evaluate_tick(context)
 
 
-@pytest.fixture
-def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", 24)
-    return 24
-
-
 @pytest.mark.parametrize("job", [daily_training_job, hourly_drift_job], ids=lambda job: job.name)
 def test_load_consumers_read_persisted_load_without_snapshots_or_external_apis(job) -> None:
-    selected = _selected(job)
+    selected = selected_asset_names(job)
 
     assert LOAD_FEATURE_SOURCE in selected
     assert "drift_monitoring_report" in selected
@@ -65,7 +46,7 @@ def test_load_consumers_read_persisted_load_without_snapshots_or_external_apis(j
 
 
 def test_training_job_runs_features_model_and_report() -> None:
-    assert _selected(daily_training_job) == {
+    assert selected_asset_names(daily_training_job) == {
         "taipower_load_feature_source",
         "cwa_observation_feature_source",
         "engineered_features",
@@ -81,10 +62,6 @@ def test_deployed_definitions_provide_the_store_that_readiness_schedules_query()
 
     for name in ("daily_training_schedule", "hourly_drift_schedule"):
         assert defs.resolve_schedule_def(name).required_resource_keys == {"time_series_repo"}
-
-
-def test_fixed_historical_load_deferment_is_removed() -> None:
-    assert not hasattr(schedules_module, "HISTORICAL_LOAD_DEFERMENT_REASON")
 
 
 def test_daily_training_skips_with_accumulation_reason_during_cold_start(

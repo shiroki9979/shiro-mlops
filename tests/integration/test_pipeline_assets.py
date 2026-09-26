@@ -44,9 +44,8 @@ def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
         lambda *args, **kwargs: batch,
     )
     repository = MagicMock(spec=TimeSeriesRepository)
-    context = build_asset_context(resources={"time_series_repo": repository})
-
-    result = raw_cwa_station_observation(context)
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        result = raw_cwa_station_observation(context)
 
     assert result is batch
     repository.upsert_cwa_observation_batch.assert_called_once_with(batch)
@@ -64,9 +63,8 @@ def test_canonical_cwa_forecast_asset_persists_both_products(
         lambda self, dataset_id, locations: releases[0 if dataset_id.endswith("089") else 1],
     )
     repository = MagicMock(spec=TimeSeriesRepository)
-    context = build_asset_context(resources={"time_series_repo": repository})
-
-    result = raw_cwa_township_forecast(context)
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        result = raw_cwa_township_forecast(context)
 
     assert result == releases
     assert repository.upsert_cwa_forecast_release.call_count == 2
@@ -76,9 +74,10 @@ def test_taipower_load_feature_source_fails_without_derived_load(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """尚無推算負載時訓練特徵來源必須明確失敗，不得改抓外部來源。"""
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
-    with pytest.raises(Failure, match="0 valid hourly observations"):
+    with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
+        pytest.raises(Failure, match="0 valid hourly observations"),
+    ):
         taipower_load_feature_source(context)
 
 
@@ -87,9 +86,10 @@ def test_taipower_load_feature_source_refuses_training_below_minimum_accumulatio
 ) -> None:
     """預設 TRAINING_MIN_LOAD_HOURS=672：差一小時也不得進入訓練，並揭露差距。"""
     test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_LOAD_HOUR))
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
-    with pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error:
+    with (
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
+        pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error,
+    ):
         taipower_load_feature_source(context)
 
     assert error.value.metadata["valid_hours"].value == 671
@@ -100,9 +100,8 @@ def test_taipower_load_feature_source_returns_load_once_minimum_accumulation_is_
     test_repo: TimeSeriesRepository,
 ) -> None:
     test_repo.upsert_taipower_load(derived_hourly_load(672, LAST_LOAD_HOUR))
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
-    load = taipower_load_feature_source(context)
+    with build_asset_context(resources={"time_series_repo": test_repo}) as context:
+        load = taipower_load_feature_source(context)
 
     assert len(load) == 672
     assert load["datetime"].max() == pd.Timestamp(LAST_LOAD_HOUR)
@@ -140,11 +139,14 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         raw_payload={},
     )
     test_repo.upsert_taipower_load(taipower_raw_df)
-    with patch(
-        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-        return_value=observation_batch,
+    with (
+        patch(
+            "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+            return_value=observation_batch,
+        ),
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
     ):
-        raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": test_repo}))
+        raw_cwa_station_observation(context)
     with patch(
         "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
         return_value=observation_batch,

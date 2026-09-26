@@ -17,6 +17,7 @@ from shiro_mlops.core.database import (
     get_timescale_init_ddl,
     init_db,
 )
+from tests.helpers import create_legacy_load_table
 
 
 def test_settings_timescaledb_defaults():
@@ -310,26 +311,7 @@ def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
 
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy_load.db'}")
     try:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                    CREATE TABLE raw_taipower_load (
-                        time TIMESTAMP NOT NULL,
-                        location VARCHAR(64) NOT NULL,
-                        load_mw DOUBLE PRECISION NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (time, location)
-                    )
-                    """
-                )
-            )
-            connection.execute(
-                text(
-                    "INSERT INTO raw_taipower_load (time, location, load_mw) "
-                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
-                )
-            )
+        create_legacy_load_table(engine)
 
         ensure_timescale_hypertables(engine)
         ensure_timescale_hypertables(engine)
