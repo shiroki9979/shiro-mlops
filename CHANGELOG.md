@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 新增可追溯的 CWA 觀測與預報版本本機資料服務，供訓練與推論讀取 canonical TimescaleDB 資料（#30）。
 - 新增唯讀營運資料檢視器（Data Explorer）：六個 typed datasets、CWA ingestion audits、共用狀態契約與 cursor 分頁，並在 Monitoring 顯示 Data Source Status（#40–#49）。
 - 側邊欄在 Data Explorer 啟用時列出六個 typed datasets 與 CWA audits nested routes。
+- 新增由台電區域供需快照推算的全台逐時實際負載與每小時 `hourly_actual_load_job`，取代已失效的 d015046 歷史來源；只往前累積、不回補歷史（#59，ADR-0008）。
+- 新增負載起點過舊防護：最新推算負載落後請求時間超過 `LOAD_ANCHOR_MAX_LAG_HOURS` 時，`/ready` 與 `/predict` 回傳 HTTP 503（#62）。
+- 新增 `make smoke-check` 排程與下游就緒檢查，以及 d015046 舊列清除與冷啟動恢復操作指南（#59、#60）。
 
 ### Changed
 
@@ -21,10 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 將全台／區域供需與機組發電列表遷移至 typed query readers，保留 MW 轉換、完整度與 nullable 欄位契約（#54）。
 - 將 Data Explorer 狀態彙總抽成 focused collaborators，並移除單體 `DataExplorerStore`（#55）。
 - 簡化 Data Explorer 電力與預報 reader 的查詢、映射與測試資料 seam，讓列表契約可獨立維護與驗證。
+- 恢復每日訓練與每小時 drift 排程；有效逐時負載少於 `TRAINING_MIN_LOAD_HOURS`（預設 672）時拒絕訓練，drift 改以有界查詢讀取最新實際負載（#60）。
+- CWA 觀測與預報擷取、台電區域快照改為指數退避重試（#59、#62）。
+- 天氣預報 staleness 判定改以請求時間為 `as_of`，serving 只使用推算口徑的逐時負載（#62）。
 
 ### Removed
 
 - 移除誤標為 Feast 的 Monitoring Feature Store Snapshot 與 `GET /features/latest` 過渡端點（#50）。
+- 移除 d015046 擷取路徑：`raw_taipower_load_data` 資產、`TaipowerClient` 與 `TAIPOWER_API_URL` 設定（#59）。
 
 ### Fixed
 
