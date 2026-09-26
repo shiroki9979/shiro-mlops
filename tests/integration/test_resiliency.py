@@ -26,6 +26,7 @@ from shiro_mlops.pipelines.schedules import (
     cwa_observation_job,
 )
 from shiro_mlops.service.api import app, model_store
+from tests.helpers import insert_legacy_load_row
 
 # taipower_sample.json 的最後一筆實際負載即為遞迴預報起點。
 LOAD_ANCHOR = pd.Timestamp("2026-08-21 23:00")
@@ -301,6 +302,32 @@ def test_stale_load_anchor_refuses_predict_and_ready(
     assert ready_body["status"] == "not_ready"
     assert ready_body["mode"] is None
     assert "stale load anchor" in ready_body["reason"].lower()
+
+
+def test_newer_legacy_rows_never_anchor_serving(
+    legacy_upgraded_engine,
+    taipower_raw_df: pd.DataFrame,
+    fitted_forecaster: LightGBMRecursiveForecaster,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0008：較新的 d015046 舊列不得讓過舊的推算負載看似新鮮而混用口徑。"""
+    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
+    repository.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    insert_legacy_load_row(
+        legacy_upgraded_engine, STALE_REQUEST_TIME.floor("h").to_pydatetime(), load_mw=26500.0
+    )
+    monkeypatch.setattr(model_store, "forecaster", fitted_forecaster)
+    monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
+    _request_at(monkeypatch, STALE_REQUEST_TIME)
+
+    predict_response = _predict()
+    ready_response = _ready()
+
+    assert predict_response.status_code == 503
+    detail = predict_response.json()["detail"]
+    assert f"Stale load anchor: latest actual load at {LOAD_ANCHOR.isoformat()}" in detail
+    assert ready_response.status_code == 503
+    assert "stale load anchor" in ready_response.json()["reason"].lower()
 
 
 def test_load_anchor_lag_threshold_is_configurable(

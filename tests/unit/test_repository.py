@@ -7,9 +7,10 @@ import pandas as pd
 import pytest
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.transformers import merge_weather_features
-from tests.helpers import canonical_observation_batch
+from tests.helpers import canonical_observation_batch, derived_hourly_load, insert_legacy_load_row
 
 
 @pytest.fixture
@@ -273,6 +274,18 @@ def test_upsert_empty_dataframe(repository: TimeSeriesRepository):
     assert repository.upsert_taipower_load(empty_df) == 0
     with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
         repository.upsert_cwa_weather(empty_df)
+
+
+def test_fetch_load_range_by_source_excludes_legacy_rows(legacy_upgraded_engine: Engine):
+    """ADR-0008：指定推算來源時，source 為 NULL 的 d015046 舊列不得混入序列。"""
+    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
+    repository.upsert_taipower_load(derived_hourly_load(2, datetime(2026, 8, 21, 1, 0)))
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
+
+    derived = repository.fetch_load_range(location="Taipei", source=REGIONAL_SNAPSHOT_SUM_SOURCE)
+
+    assert list(derived["load_mw"]) == [30000.0, 30001.0]
+    assert derived["time"].max() == pd.Timestamp("2026-08-21 01:00")
 
 
 def test_fetch_load_range_filters_and_sorting(repository: TimeSeriesRepository):

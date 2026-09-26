@@ -14,6 +14,7 @@ from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hy
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
+from tests.helpers import create_legacy_load_table
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -62,6 +63,16 @@ def sqlite_engine(tmp_path_factory: pytest.TempPathFactory) -> Generator[Engine,
     """Create an isolated SQLite engine with canonical test schema derived from production DDL."""
     db_file = tmp_path_factory.mktemp("db") / "test_repo.db"
     engine = create_engine(f"sqlite:///{db_file}")
+    ensure_timescale_hypertables(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def legacy_upgraded_engine(tmp_path: Path) -> Generator[Engine, None, None]:
+    """An upgraded d015046-era database: one legacy row whose source is NULL."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_upgraded.db'}")
+    create_legacy_load_table(engine)
     ensure_timescale_hypertables(engine)
     yield engine
     engine.dispose()

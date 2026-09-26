@@ -566,6 +566,7 @@ class TimeSeriesRepository:
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
         location: str | None = None,
+        source: str | None = None,
     ) -> pd.DataFrame:
         """Fetch historical Taipower load records filtered by time range and location.
 
@@ -577,6 +578,9 @@ class TimeSeriesRepository:
             End of time filter range (inclusive).
         location : str | None
             Optional location filter.
+        source : str | None
+            Optional derivation provenance filter. Rows with NULL source never match,
+            so consumers that must not mix load bases pass the derived source.
 
         Returns
         -------
@@ -584,6 +588,9 @@ class TimeSeriesRepository:
             Sorted DataFrame of power load records.
         """
         where_clause, params = _build_time_location_filter(start_time, end_time, location)
+        if source is not None:
+            where_clause += " AND source = :source"
+            params["source"] = source
         query = f"""
             SELECT time, location, load_mw, created_at
             FROM raw_taipower_load
