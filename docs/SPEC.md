@@ -249,12 +249,13 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 
 1. **`daily_training_job`**：
    - **排程**：`0 16 * * *`（每日台灣時間 00:00 執行）
-   - **管線鏈路**：`raw_taipower_load`（由 `hourly_actual_load_job` 維護）+ `raw_weather_obs_data` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`
-   - **最低累積**：`raw_taipower_load` 有效逐時觀測少於 `TRAINING_MIN_LOAD_HOURS`（預設 `672`，即 28 日）時，訓練必須明確失敗或略過並揭露原因，不得以不足資料產出模型。
+   - **管線鏈路**：`raw_taipower_load`（由 `hourly_actual_load_job` 維護，經 `taipower_load_feature_source` 讀取）+ `cwa_observation_feature_source` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`；selection 明列上述資產，不含任何快照、推算或 CWA ingestion 資產。
+   - **最低累積**：`raw_taipower_load` 有效逐時觀測少於 `TRAINING_MIN_LOAD_HOURS`（預設 `672`，即 28 日）時，訓練必須明確失敗或略過並揭露原因，不得以不足資料產出模型。有效逐時觀測指 `source = 'regional_snapshot_sum'` 的列；存在 `source IS NULL` 的舊列時視為未就緒。排程 tick 以 `SkipReason` 揭露差距；手動執行時 `taipower_load_feature_source` 以 Dagster `Failure` 失敗並附 `valid_hours`／`required_hours` metadata。
    - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
-   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。
+   - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。selection 僅含 `taipower_load_feature_source` 與 `drift_monitoring_report`，模型與特徵取自最近一次訓練的 I/O Manager 產物。
+   - **觸發條件**：沿用 §3.1 最低累積，且 `trained_forecaster_model` 已有 materialization；任一條件未滿足時以 `SkipReason` 揭露原因。
 3. **`taipower_supply_demand_snapshot_job`**：
    - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。
    - **管線鏈路**：`raw_taipower_supply_demand_snapshot`、`raw_taipower_regional_supply_demand_snapshot` 與 `raw_taipower_unit_generation_snapshot` 資產擷取台電當前全台供需、各區域供需與各機組即時淨發電量並 upsert 至 TimescaleDB；三者皆不得進入 `daily_training_job` 或 `hourly_drift_job`；區域快照僅能經由 `hourly_actual_load_job` 推算後間接供訓練使用。
@@ -279,6 +280,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 8. **本機冷啟動**：
    - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達 §3 訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
    - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
+   - 操作人員以 `python -m shiro_mlops.pipelines.smoke_check`（`make smoke-check`）在 Dagster 容器內檢查排程註冊與啟用狀態、訓練與 drift 的 selection 邊界、累積進度與新鮮度，以及兩個排程下一次 tick 的結果；此檢查唯讀，不啟動 run。操作步驟見 [冷啟動恢復指南](how-to/recover-training-after-load-cold-start.md)。
 
 ---
 

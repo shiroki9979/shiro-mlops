@@ -29,6 +29,19 @@ _REQUIRED_REGIONS = frozenset(REGIONAL_SUPPLY_DEMAND_REGIONS)
 
 
 @dataclass(frozen=True)
+class HourlyLoadAccumulation:
+    """Persisted derived-load inventory used to gate training.
+
+    ``legacy_rows`` counts d015046-era rows whose NULL source marks a different
+    measurement basis; ``latest_hour`` is the newest derived hour start.
+    """
+
+    valid_hours: int
+    legacy_rows: int
+    latest_hour: datetime | None
+
+
+@dataclass(frozen=True)
 class HourWindow:
     """Half-open Taiwan-local window ``[start, end)`` aligned to whole hours."""
 

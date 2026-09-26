@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from dagster import (
+    AssetKey,
     AssetSelection,
     Backoff,
     RetryPolicy,
@@ -15,8 +16,10 @@ from dagster import (
     schedule,
 )
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.taipower_supply_demand import floor_to_ten_minutes
+from shiro_mlops.pipelines.readiness import TrainingLoadReadiness, check_training_load_readiness
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -35,22 +38,31 @@ CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
 CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
 CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
 HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
-HISTORICAL_LOAD_DEFERMENT_REASON = (
-    "Historical hourly Taipower load source is unavailable; "
-    "training and drift schedules are deferred."
+# 只讀 raw_taipower_load 資料表的負載來源；推算資產本身讀區域快照表，不得進入訓練或 drift。
+LOAD_FEATURE_SOURCE_ASSET = "taipower_load_feature_source"
+TRAINED_MODEL_ASSET = "trained_forecaster_model"
+DRIFT_REPORT_ASSET = "drift_monitoring_report"
+# 明列而非以 all() 扣除，新增的擷取資產才不會被默默帶進訓練並呼叫外部 API。
+TRAINING_ASSETS = (
+    LOAD_FEATURE_SOURCE_ASSET,
+    "cwa_observation_feature_source",
+    "engineered_features",
+    "taipower_features",
+    "weather_features",
+    TRAINED_MODEL_ASSET,
+    DRIFT_REPORT_ASSET,
+)
+DRIFT_ASSETS = (LOAD_FEATURE_SOURCE_ASSET, DRIFT_REPORT_ASSET)
+NO_TRAINED_MODEL_REASON = (
+    f"No {TRAINED_MODEL_ASSET} materialization yet; "
+    "hourly drift waits for the first successful daily_training_job run."
 )
 
 # 1. Daily Training and Evaluation Job
 daily_training_job = define_asset_job(
     name="daily_training_job",
-    selection=(
-        AssetSelection.all()
-        - AssetSelection.assets(*TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
-        - AssetSelection.assets(*CWA_INGESTION_ASSETS)
-        # 推算資產讀取區域快照表；訓練只能經由 raw_taipower_load 資料表取得負載。
-        - AssetSelection.assets(HOURLY_ACTUAL_LOAD_ASSET)
-    ),
-    description="Run ingestion, feature engineering, model training, and drift evaluation",
+    selection=AssetSelection.assets(*TRAINING_ASSETS),
+    description="Read persisted load and weather, engineer features, train, and report drift",
 )
 
 
@@ -58,17 +70,21 @@ daily_training_job = define_asset_job(
     job=daily_training_job,
     cron_schedule="0 16 * * *",  # 16:00 UTC (00:00 Taipei time)
     description="Daily retrain schedule at midnight Taipei time",
+    required_resource_keys={"time_series_repo"},
 )
-def daily_training_schedule(_: ScheduleEvaluationContext) -> SkipReason:
-    """Defer training until a historical hourly load source is available."""
-    return SkipReason(HISTORICAL_LOAD_DEFERMENT_REASON)
+def daily_training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Train only after the minimum hourly-load accumulation; otherwise disclose the gap."""
+    readiness = _load_readiness(context)
+    if not readiness.ready:
+        return SkipReason(readiness.reason)
+    return RunRequest(run_key=_tick_run_key(context))
 
 
 # 2. Hourly Drift and Monitoring Job
 hourly_drift_job = define_asset_job(
     name="hourly_drift_job",
-    selection=AssetSelection.assets("drift_monitoring_report"),
-    description="Check latest actual load against previous forecasts",
+    selection=AssetSelection.assets(*DRIFT_ASSETS),
+    description="Compare the newest persisted actual load with the latest trained model",
 )
 
 
@@ -76,10 +92,29 @@ hourly_drift_job = define_asset_job(
     job=hourly_drift_job,
     cron_schedule="0 * * * *",  # Every hour
     description="Hourly drift evaluation schedule",
+    required_resource_keys={"time_series_repo"},
 )
-def hourly_drift_schedule(_: ScheduleEvaluationContext) -> SkipReason:
-    """Defer drift evaluation until actual historical load can be ingested."""
-    return SkipReason(HISTORICAL_LOAD_DEFERMENT_REASON)
+def hourly_drift_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Evaluate drift once load is sufficient and a trained model artifact exists."""
+    readiness = _load_readiness(context)
+    if not readiness.ready:
+        return SkipReason(readiness.reason)
+    if context.instance.get_latest_materialization_event(AssetKey(TRAINED_MODEL_ASSET)) is None:
+        return SkipReason(NO_TRAINED_MODEL_REASON)
+    return RunRequest(run_key=_tick_run_key(context))
+
+
+def _load_readiness(context: ScheduleEvaluationContext) -> TrainingLoadReadiness:
+    return check_training_load_readiness(
+        context.resources.time_series_repo, settings.TRAINING_MIN_LOAD_HOURS
+    )
+
+
+def _tick_run_key(context: ScheduleEvaluationContext) -> str | None:
+    """同一 tick 重複評估時以 run_key 去重，避免重跑訓練或 drift。"""
+    if context.scheduled_execution_time is None:
+        return None
+    return _to_taiwan_local(context.scheduled_execution_time).isoformat(timespec="seconds")
 
 
 cwa_observation_job = define_asset_job(
