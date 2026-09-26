@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from dagster import Definitions, RetryPolicy, define_asset_job
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from shiro_mlops.core.config import Settings, settings
 from shiro_mlops.data.cwa_client import (
@@ -342,6 +343,12 @@ def test_load_anchor_lag_threshold_is_configurable(
 
 def test_load_anchor_lag_threshold_defaults_to_three_hours() -> None:
     assert Settings(_env_file=None).LOAD_ANCHOR_MAX_LAG_HOURS == 3
+
+
+def test_load_anchor_lag_threshold_rejects_non_positive_hours() -> None:
+    """零或負值會讓每個起點都過舊，服務將無聲地永久拒絕預報。"""
+    with pytest.raises(ValidationError, match="LOAD_ANCHOR_MAX_LAG_HOURS"):
+        Settings(_env_file=None, LOAD_ANCHOR_MAX_LAG_HOURS=0)
 
 
 # --- Serving never crosses the CWA ingestion boundary ---------------------------------------
