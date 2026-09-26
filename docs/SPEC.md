@@ -62,7 +62,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
      - `source` (VARCHAR(32), NOT NULL)：推算來源；目前唯一值為 `regional_snapshot_sum`。
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
      - `location` 固定為相容性值 `Taipei`，語意為全台負載。
-     - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。
+     - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。既有資料庫升級時只補上可為 `NULL` 的 `source`，不改寫或刪除任何列；`source IS NULL` 即 d015046 時期資料列。清除與補上 `NOT NULL` 由操作人員依[移除 d015046 時期舊負載資料列](how-to/remove-legacy-d015046-load-rows.md)執行後，才開啟 `hourly_actual_load_schedule`。
      - **Constraint**: `PRIMARY KEY (time, location)`
      - **Hypertable**: `create_hypertable('raw_taipower_load', 'time')`
   2. `raw_cwa_observation_batch`:
@@ -256,7 +256,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
    - **排程**：`0 * * * *`（每小時整點執行）
    - **管線鏈路**：獲取最新小時實際值，評估前次預測之 MAPE 與資料漂移程度。
 3. **`taipower_supply_demand_snapshot_job`**：
-   - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（約 70 秒內結束）。
+   - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。
    - **管線鏈路**：`raw_taipower_supply_demand_snapshot`、`raw_taipower_regional_supply_demand_snapshot` 與 `raw_taipower_unit_generation_snapshot` 資產擷取台電當前全台供需、各區域供需與各機組即時淨發電量並 upsert 至 TimescaleDB；三者皆不得進入 `daily_training_job` 或 `hourly_drift_job`；區域快照僅能經由 `hourly_actual_load_job` 推算後間接供訓練使用。
    - **冪等性**：排程觸發以 tick 時間作為 `observed_at`；手動 materialize 則以實際抓取起始時間向下取整至 10 分鐘。全台快照以 `observed_at` 為鍵；區域快照以 `(observed_at, region)` 為鍵；機組快照以 `(observed_at, unit_type, unit_name)` 為鍵。相同 slot 重跑時皆更新同一快照。
    - **資料完整度與失敗政策**：
@@ -272,7 +272,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 6. **`hourly_actual_load_job`**：
    - **排程**：`5 * * * *`（`Asia/Taipei`）。
    - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 §1.1 推算最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，以 `(time, location)` upsert 至 `raw_taipower_load`；不呼叫任何台電外部 API。
-   - **冪等性**：重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
+   - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
 7. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。
    - 既有模型在本階段只使用臺北站 `466920` 及其 `TownCode` 對應預報；臺中與高雄資料先完成入庫，三站加權仍由 TICKET-301 處理。
