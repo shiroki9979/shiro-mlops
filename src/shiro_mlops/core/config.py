@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     DATA_EXPLORER_ENABLED: bool = False
+    # 遞迴預報起點沒有替代來源；實際負載落後請求時間超過此時數即拒絕預報而非降級。
+    LOAD_ANCHOR_MAX_LAG_HOURS: int = 3
 
     # TimescaleDB / Operational Time-Series Store
     TIMESCALE_HOST: str = "localhost"

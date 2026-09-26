@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from dagster import (
     AssetSelection,
+    Backoff,
     RetryPolicy,
     RunRequest,
     ScheduleDefinition,
@@ -27,7 +28,9 @@ TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
 # 含首次嘗試最多重試 2 次，每次間隔 10 秒。
 TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
 
-CWA_INGESTION_RETRY_POLICY = RetryPolicy(max_retries=2, delay=10)
+# CWA 排程每小時一次，較長的指數退避可跨越短暫上游 5xx；Dagster 依序等待 30／90／210 秒，
+# 用盡後仍遠早於下一個整點 slot。
+CWA_INGESTION_RETRY_POLICY = RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL)
 CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
 CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
 CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
