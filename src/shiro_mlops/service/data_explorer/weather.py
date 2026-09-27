@@ -136,13 +136,14 @@ class ObservationReader(DatasetReader):
     """List persisted CWA station observations newest first."""
 
     dataset = "cwa_observations"
+    raw_pagination = True
 
-    def fetch_page(
+    def fetch_rows(
         self,
         query: ExplorerQuery,
         cursor: dict[str, Any] | None,
         limit: int,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> list[dict[str, Any]]:
         station_id = query.filters.get("station_id")
         clauses = ["observed_at >= :start_time", "observed_at <= :end_time"]
         sql_params: dict[str, Any] = {
@@ -152,7 +153,13 @@ class ObservationReader(DatasetReader):
         if station_id:
             clauses.append("station_id = :station_id")
             sql_params["station_id"] = station_id
-        where, cursor_params = apply_cursor(clauses, cursor, ("observed_at", "station_id"))
+        sort = DATASET_SPECS[self.dataset]["sort"]
+        where, cursor_params = apply_cursor(
+            clauses,
+            cursor,
+            sort,
+            dialect_name=getattr(getattr(self.db.engine, "dialect", None), "name", None),
+        )
         sql_params.update(cursor_params)
         sql = f"""
             SELECT observed_at, station_id, station_name, town_code, temperature_c,
@@ -160,12 +167,17 @@ class ObservationReader(DatasetReader):
                    wind_speed_m_s, wind_direction_deg, created_at
             FROM raw_cwa_station_observation
             WHERE {where}
-            ORDER BY observed_at DESC, station_id DESC
+            ORDER BY {sort_order(sort)}
             LIMIT :limit
         """
         sql_params["limit"] = limit
+        return self.db.fetch(sql, sql_params)
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         items = []
-        for row in self.db.fetch(sql, sql_params):
+        for row in rows:
             items.append(
                 {
                     "observed_at": format_taiwan_time(to_taiwan(row["observed_at"])),
@@ -181,7 +193,7 @@ class ObservationReader(DatasetReader):
                     "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
                 }
             )
-        return items, observation_gaps(self.db, query.window, station_id)
+        return items, observation_gaps(self.db, query.window, query.filters.get("station_id"))
 
 
 class ForecastReader(DatasetReader):
