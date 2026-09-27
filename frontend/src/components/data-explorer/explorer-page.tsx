@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import { useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { ExplorerDetail } from './explorer-detail'
@@ -9,6 +10,7 @@ import { ExplorerStatus } from './explorer-status'
 import { useExplorerSearch } from './use-explorer-search'
 
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
+  const queryClient = useQueryClient()
   const { start, end, filterValues, params, updateSearch } = useExplorerSearch(dataset)
   const statusQuery = useDatasetStatus()
   const listQuery = useDatasetList(dataset.apiPath, params)
@@ -58,7 +60,13 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         canRestart={Boolean(params.cursor)}
         onSelect={setSelected}
         onNextPage={(cursor) => updateSearch({ cursor })}
-        onRestart={() => updateSearch({ cursor: undefined })}
+        onRestart={() => {
+          queryClient.removeQueries({
+            queryKey: ['data-explorer', dataset.apiPath, { ...params, cursor: undefined }],
+            exact: true,
+          })
+          updateSearch({ cursor: undefined })
+        }}
       />
       <ExplorerDetail selected={selected} onClose={() => setSelected(null)} />
     </div>
