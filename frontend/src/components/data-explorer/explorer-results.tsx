@@ -24,12 +24,21 @@ interface ExplorerResultsProps {
   onRestart: () => void
 }
 
+const CURSOR_REJECTED_STATUS = 400
+
+function errorStatus(error: unknown): unknown {
+  return typeof error === 'object' && error !== null && 'status' in error
+    ? error.status
+    : undefined
+}
+
+function isCursorRejected(error: unknown): boolean {
+  return errorStatus(error) === CURSOR_REJECTED_STATUS
+}
+
 function listErrorMessage(error: unknown): string {
-  if (typeof error !== 'object' || error === null || !('status' in error)) {
-    return '查詢失敗，請稍後再試。'
-  }
-  const status = error.status
-  if (status === 400) return '分頁游標無效或已與目前篩選條件不相容。'
+  const status = errorStatus(error)
+  if (status === CURSOR_REJECTED_STATUS) return '分頁游標無效或已與目前篩選條件不相容。'
   if (status === 422) return '篩選條件無效，請確認時間範圍與欄位格式。'
   if (status === 503) return '資料庫目前無法連線，請稍後再試。'
   return '查詢失敗，請稍後再試。'
@@ -54,7 +63,7 @@ export function ExplorerResults({
         ) : isError ? (
           <div>
             <p className="text-xs text-rose-300">{listErrorMessage(error)}</p>
-            {canRestart && typeof error === 'object' && error !== null && 'status' in error && error.status === 400 && (
+            {canRestart && isCursorRejected(error) && (
               <Button className="mt-4" variant="outline" onClick={onRestart}>回到第一頁</Button>
             )}
           </div>
