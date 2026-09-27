@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
-from shiro_mlops.service.data_explorer.cursor import CursorError
+from shiro_mlops.service.data_explorer.cursor import CursorError, decode_cursor_filters
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError, ExplorerQueryError
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
@@ -53,7 +53,10 @@ def _query_params(request: Request) -> dict[str, Any]:
 def _run_list(request: Request, reader_cls: type[DatasetReader]) -> ListEnvelope:
     _ensure_enabled()
     try:
-        return reader_cls(_engine(request)).list(_query_params(request))
+        params = _query_params(request)
+        if params.get("cursor"):
+            decode_cursor_filters(params["cursor"], dataset=reader_cls.dataset)
+        return reader_cls(_engine(request)).list(params)
     except CursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ExplorerQueryError as exc:

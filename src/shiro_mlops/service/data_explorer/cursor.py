@@ -6,7 +6,7 @@ import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import Any
 
-CURSOR_VERSION = 1
+CURSOR_VERSION = 2
 
 
 class CursorError(ValueError):

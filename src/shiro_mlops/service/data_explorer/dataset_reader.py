@@ -7,9 +7,10 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from shiro_mlops.service.data_explorer.cursor import decode_cursor_filters
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
-from shiro_mlops.service.data_explorer.pagination import paginate_list
+from shiro_mlops.service.data_explorer.pagination import paginate_list, paginate_raw_list
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 
@@ -18,13 +19,18 @@ class DatasetReader:
     """Typed-query adapter reused by migrated Data Explorer dataset readers."""
 
     dataset: str
+    raw_pagination = False
 
     def __init__(self, engine: Engine) -> None:
         self.db = ExplorerDb(engine)
 
     def list(self, params: dict[str, Any]) -> ListEnvelope:
+        if params.get("cursor"):
+            decode_cursor_filters(str(params["cursor"]), dataset=self.dataset)
         query = self.build_query(params)
         try:
+            if self.raw_pagination:
+                return paginate_raw_list(query, self.fetch_rows, self.project_page)
             return paginate_list(query, self.fetch_page)
         except SQLAlchemyError as exc:
             raise DatabaseUnavailableError(str(exc)) from exc
@@ -37,5 +43,15 @@ class DatasetReader:
         query: ExplorerQuery,
         cursor: dict[str, Any] | None,
         limit: int,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        raise NotImplementedError
+
+    def fetch_rows(
+        self, query: ExplorerQuery, cursor: dict[str, Any] | None, limit: int
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
         raise NotImplementedError

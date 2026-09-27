@@ -9,7 +9,8 @@ from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
-from shiro_mlops.service.data_explorer.timefmt import to_naive_sql_utc
+from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_naive_sql_utc
+from shiro_mlops.service.data_explorer.values import to_taiwan
 
 CURSOR_TIME_COLS = {
     "time",
@@ -26,6 +27,52 @@ PageFetcher = Callable[
     [ExplorerQuery, dict[str, Any] | None, int],
     tuple[list[dict[str, Any]], list[str]],
 ]
+RowFetcher = Callable[[ExplorerQuery, dict[str, Any] | None, int], list[dict[str, Any]]]
+PageProjector = Callable[
+    [ExplorerQuery, list[dict[str, Any]]], tuple[list[dict[str, Any]], list[str]]
+]
+
+
+def paginate_raw_list(
+    query: ExplorerQuery, fetch_rows: RowFetcher, project_page: PageProjector
+) -> ListEnvelope:
+    """Take the cursor from the last visible database row before display projection."""
+    sort = DATASET_SPECS[query.dataset]["sort"]
+    rows = fetch_rows(query, query.cursor_key(), query.limit + 1)
+    visible = rows[: query.limit]
+    has_more = len(rows) > query.limit
+    next_cursor = (
+        encode_cursor(
+            dataset=query.dataset,
+            filters=query.filters,
+            key=raw_cursor_key(visible[-1], sort),
+        )
+        if has_more and visible
+        else None
+    )
+    items, missing = project_page(query, visible)
+    if len(items) != len(visible):
+        raise ValueError("Page projection changed row count")
+    return ListEnvelope(
+        items=items, next_cursor=next_cursor, has_more=has_more, missing_slots=missing
+    )
+
+
+def raw_cursor_key(row: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
+    """Serialize full-precision sort values without using display timestamps."""
+    return {
+        column: (
+            format_taiwan_time(to_taiwan(row[column]), timespec="microseconds")
+            if column in CURSOR_TIME_COLS or column.endswith("_at")
+            else row[column]
+        )
+        for column in columns
+    }
+
+
+def sort_order(columns: tuple[str, ...]) -> str:
+    """Build newest-first ordering from the same trusted key declaration."""
+    return ", ".join(f"{column} DESC" for column in columns)
 
 
 def paginate_list(query: ExplorerQuery, fetch_page: PageFetcher) -> ListEnvelope:
