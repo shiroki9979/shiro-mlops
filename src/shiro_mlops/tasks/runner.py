@@ -10,8 +10,9 @@ Taiwan-local naive time.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import cached_property
 
 import pandas as pd
 
@@ -34,7 +35,6 @@ from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
-    HistoryCoverage,
     InputRequirements,
     PredictionData,
     TaskModel,
@@ -234,13 +234,10 @@ def check_task_ready(
     """Whether a loaded model, a fresh load anchor, and full-horizon weather are all available."""
     if model is None:
         return Readiness(ready=False, reason=MODEL_NOT_LOADED_REASON)
-    request = _ServingRequest.of(task, runtime, as_of, MAX_HORIZON_HOURS)
-    if request.requirements.weather is WeatherInput.OBSERVED:
-        request = replace(request, horizon_hours=1)
+    request = _readiness_request(task, runtime, as_of)
     try:
         data, weather = _prepare_prediction(request)
-        if request.requirements.weather is WeatherInput.OBSERVED:
-            weather = request.weather_path.align(model.predict(data), weather)
+        weather = request.weather_path.probe(model, data, weather)
     except TaskUnavailableError as error:
         return Readiness(ready=False, reason=str(error))
     return Readiness(ready=True, mode=weather.mode)
@@ -264,7 +261,7 @@ def predict_task(
     ``ObservedInputsIncompleteError`` (all ``TaskUnavailableError``) instead of
     degrading where no substitute exists.
     """
-    request = _ServingRequest.of(task, runtime, as_of, horizon_hours)
+    request = _ServingRequest(task, runtime, as_of, horizon_hours)
     data, weather = _prepare_prediction(request)
     predictions = model.predict(data)
     weather = request.weather_path.align(predictions, weather)
@@ -285,14 +282,10 @@ class _ServingRequest:
     runtime: TaskRuntime
     as_of: datetime
     horizon_hours: int | None
-    requirements: InputRequirements
 
-    @classmethod
-    def of(
-        cls, task: TaskDefinition, runtime: TaskRuntime, as_of: datetime, horizon_hours: int | None
-    ) -> _ServingRequest:
-        requirements = get_task_type(task.task_type).requirements(task.params)
-        return cls(task, runtime, as_of, horizon_hours, requirements)
+    @cached_property
+    def requirements(self) -> InputRequirements:
+        return get_task_type(self.task.task_type).requirements(self.task.params)
 
     @property
     def repository(self) -> TimeSeriesRepository:
@@ -305,10 +298,24 @@ class _ServingRequest:
 
 @dataclass(frozen=True)
 class _WeatherPath:
-    """How one weather input is read before predicting and matched to prediction rows after."""
+    """How one weather input is read before predicting and matched to prediction rows after.
+
+    Readiness asks for ``readiness_horizon_hours`` and passes the prepared inputs
+    through ``probe``, which raises ``TaskUnavailableError`` when they cannot serve.
+    """
 
     read: Callable[[_ServingRequest, pd.Timestamp, pd.Timestamp], WeatherResolution]
     align: Callable[[pd.DataFrame, WeatherResolution], WeatherResolution]
+    readiness_horizon_hours: int
+    probe: Callable[[TaskModel, PredictionData, WeatherResolution], WeatherResolution]
+
+
+def _readiness_request(
+    task: TaskDefinition, runtime: TaskRuntime, as_of: datetime
+) -> _ServingRequest:
+    requirements = get_task_type(task.task_type).requirements(task.params)
+    horizon_hours = _WEATHER_PATHS[requirements.weather].readiness_horizon_hours
+    return _ServingRequest(task, runtime, as_of, horizon_hours)
 
 
 def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeatherResolution]:
@@ -317,7 +324,7 @@ def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, Weath
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
     history = _fetch_target(task, request.repository, start=history_start, end=anchor)
     if requirements.history_coverage is not None:
-        _require_history_coverage(task, history, anchor, requirements.history_coverage)
+        _require_history_coverage(request, history, anchor)
     weather = request.weather_path.read(request, history_start, anchor)
     data = PredictionData(
         anchor=anchor,
@@ -343,15 +350,16 @@ def _fresh_load_anchor(
 
 
 def _require_history_coverage(
-    task: TaskDefinition, history: pd.DataFrame, anchor: pd.Timestamp, coverage: HistoryCoverage
+    request: _ServingRequest, history: pd.DataFrame, anchor: pd.Timestamp
 ) -> None:
     """Refuse rather than let the task type fail: missing past load has no substitute."""
+    coverage = request.requirements.history_coverage
     window_start = anchor - timedelta(hours=coverage.window_hours)
     times = pd.to_datetime(history.loc[history[LOAD_MW_COL].notna(), DATETIME_COL])
     valid_hours = times[(times > window_start) & (times <= anchor)].nunique()
     if valid_hours < coverage.min_valid_hours:
         raise InsufficientLoadHistoryError(
-            f"Only {valid_hours} {task.subject} load hours in the {coverage.window_hours}-hour "
+            f"Only {valid_hours} {request.task.subject} load hours in the {coverage.window_hours}-hour "
             f"window ending at anchor {anchor.isoformat()}; {coverage.min_valid_hours} required."
         )
 
@@ -436,11 +444,33 @@ def _forecast_weather_as_delivered(
     return weather
 
 
+def _forecast_weather_covers_horizon(
+    _model: TaskModel, _data: PredictionData, weather: WeatherResolution
+) -> WeatherResolution:
+    """Resolving the full horizon already proved forecast coverage; predicting adds nothing."""
+    return weather
+
+
+def _observed_window_scores(
+    model: TaskModel, data: PredictionData, weather: WeatherResolution
+) -> WeatherResolution:
+    """Observed gaps only show once the task type builds its window, so score the latest hour."""
+    return _observed_weather_at(model.predict(data), weather)
+
+
 _WEATHER_PATHS = {
     WeatherInput.FORECAST: _WeatherPath(
-        read=_resolve_future_weather, align=_forecast_weather_as_delivered
+        read=_resolve_future_weather,
+        align=_forecast_weather_as_delivered,
+        readiness_horizon_hours=MAX_HORIZON_HOURS,
+        probe=_forecast_weather_covers_horizon,
     ),
-    WeatherInput.OBSERVED: _WeatherPath(read=_observed_weather_until, align=_observed_weather_at),
+    WeatherInput.OBSERVED: _WeatherPath(
+        read=_observed_weather_until,
+        align=_observed_weather_at,
+        readiness_horizon_hours=1,
+        probe=_observed_window_scores,
+    ),
 }
 
 

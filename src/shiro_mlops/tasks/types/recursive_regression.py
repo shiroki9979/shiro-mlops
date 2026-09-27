@@ -33,22 +33,19 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
     split_at_validation,
 )
-from shiro_mlops.tasks.types.lightgbm_params import LightGBMParams
-from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
+from shiro_mlops.tasks.types.lightgbm_common import (
+    LIGHTGBM_BASE_PARAMS,
+    LightGBMParams,
+    NativeBoosterFiles,
+)
+from shiro_mlops.tasks.types.metadata import ModelFormat
 
 TASK_TYPE_NAME = "recursive_regression"
 PREDICTION_COL = f"predicted_{LOAD_MW_COL}"
-MODEL_FILE = "model.txt"
-MODEL_FORMAT = ModelFormat(TASK_TYPE_NAME, version=1)
+MODEL_FILES = NativeBoosterFiles(ModelFormat(TASK_TYPE_NAME, version=1))
 HEALTH_METRIC = "mape"
 NON_FEATURE_COLUMNS = frozenset({DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL})
-FIXED_LIGHTGBM_PARAMS = {
-    "objective": "regression",
-    "metric": "rmse",
-    "boosting_type": "gbdt",
-    "random_state": 42,
-    "verbose": -1,
-}
+FIXED_LIGHTGBM_PARAMS = {**LIGHTGBM_BASE_PARAMS, "objective": "regression", "metric": "rmse"}
 
 
 class RecursiveRegressionParams(BaseModel):
@@ -101,8 +98,7 @@ class RecursiveRegression:
         """Engineer features, fit on rows before the split, and evaluate one step ahead after it."""
         features = _training_features(params, data)
         training_rows, validation_rows = split_at_validation(features, data.validation_start)
-        weather_columns = [column for column in data.weather.columns if column != DATETIME_COL]
-        model = RecursiveRegressionModel.fit(params, training_rows, weather_columns)
+        model = RecursiveRegressionModel.fit(params, training_rows, data.weather_columns)
         return Trained(model=model, metrics=model.evaluate(validation_rows))
 
     def load(self, directory: Path) -> RecursiveRegressionModel:
@@ -198,21 +194,19 @@ class RecursiveRegressionModel:
         return float(self.booster.predict(row[self.feature_names])[0])
 
     def save(self, directory: Path) -> None:
-        directory.mkdir(parents=True, exist_ok=True)
-        self.booster.save_model(str(directory / MODEL_FILE))
         metadata = {
             "lags": self.lags,
             "rolling_windows": self.rolling_windows,
             "feature_names": self.feature_names,
             "weather_columns": self.weather_columns,
         }
-        write_metadata(directory, MODEL_FORMAT, metadata)
+        MODEL_FILES.save(directory, self.booster, metadata)
 
     @classmethod
     def load(cls, directory: Path) -> RecursiveRegressionModel:
-        metadata = read_metadata(directory, MODEL_FORMAT)
+        booster, metadata = MODEL_FILES.load(directory)
         return cls(
-            lgb.Booster(model_file=str(directory / MODEL_FILE)),
+            booster,
             lags=metadata["lags"],
             rolling_windows=metadata["rolling_windows"],
             feature_names=metadata["feature_names"],

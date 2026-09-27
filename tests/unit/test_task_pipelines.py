@@ -55,17 +55,20 @@ def _selected(definitions: Definitions, job_name: str) -> set[str]:
     return {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
 
 
-@pytest.mark.parametrize("task_id", sorted(deployed_tasks()))
-def test_every_deployed_task_gets_features_model_and_monitoring_assets(task_id: str) -> None:
-    names = TaskPipelineNames(task_id)
+def test_every_deployed_task_gets_features_model_and_monitoring_assets() -> None:
     graph = defs.resolve_asset_graph()
 
-    assert {names.features, names.model, names.monitoring} <= {
-        key.to_user_string() for key in graph.get_all_asset_keys()
-    }
-    assert names.features == f"{task_id}__features"
-    assert names.model == f"{task_id}__model"
-    assert names.monitoring == f"{task_id}__monitoring"
+    assert {
+        "dynamic_horizon_forecast__features",
+        "dynamic_horizon_forecast__model",
+        "dynamic_horizon_forecast__monitoring",
+        "high_load_alert__features",
+        "high_load_alert__model",
+        "high_load_alert__monitoring",
+        "load_pattern_anomaly__features",
+        "load_pattern_anomaly__model",
+        "load_pattern_anomaly__monitoring",
+    } <= {key.to_user_string() for key in graph.get_all_asset_keys()}
 
 
 @pytest.mark.parametrize("task_id", sorted(deployed_tasks()))
@@ -97,17 +100,17 @@ def test_adding_a_task_definition_generates_its_assets_and_schedules(
     extra = pipelines[EXTRA_TASK]
 
     assert _asset_names(extra.assets) == {
-        f"{EXTRA_TASK}__features",
-        f"{EXTRA_TASK}__model",
-        f"{EXTRA_TASK}__monitoring",
+        "evening_peak_forecast__features",
+        "evening_peak_forecast__model",
+        "evening_peak_forecast__monitoring",
     }
     assert {schedule.name: schedule.cron_schedule for schedule in extra.schedules} == {
-        f"{EXTRA_TASK}__training_schedule": "30 18 * * *",
-        f"{EXTRA_TASK}__monitoring_schedule": "0 * * * *",
+        "evening_peak_forecast__training_schedule": "30 18 * * *",
+        "evening_peak_forecast__monitoring_schedule": "0 * * * *",
     }
     assert {job.name for job in extra.jobs} == {
-        f"{EXTRA_TASK}__training_job",
-        f"{EXTRA_TASK}__monitoring_job",
+        "evening_peak_forecast__training_job",
+        "evening_peak_forecast__monitoring_job",
     }
 
 
@@ -137,9 +140,9 @@ def test_feast_export_hangs_only_off_the_dynamic_horizon_forecast(
         definitions, TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).training_job
     )
     assert _selected(definitions, TaskPipelineNames(EXTRA_TASK).training_job) == {
-        f"{EXTRA_TASK}__features",
-        f"{EXTRA_TASK}__model",
-        f"{EXTRA_TASK}__monitoring",
+        "evening_peak_forecast__features",
+        "evening_peak_forecast__model",
+        "evening_peak_forecast__monitoring",
     }
 
 

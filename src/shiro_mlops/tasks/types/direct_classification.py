@@ -36,12 +36,15 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
     split_at_validation,
 )
-from shiro_mlops.tasks.types.lightgbm_params import LightGBMParams
-from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
+from shiro_mlops.tasks.types.lightgbm_common import (
+    LIGHTGBM_BASE_PARAMS,
+    LightGBMParams,
+    NativeBoosterFiles,
+)
+from shiro_mlops.tasks.types.metadata import ModelFormat
 
 TASK_TYPE_NAME = "direct_classification"
-MODEL_FILE = "model.txt"
-MODEL_FORMAT = ModelFormat(TASK_TYPE_NAME, version=1)
+MODEL_FILES = NativeBoosterFiles(ModelFormat(TASK_TYPE_NAME, version=1))
 ANCHOR_COL = "anchor"
 ANCHOR_LOAD_COL = f"anchor_{LOAD_MW_COL}"
 LEAD_HOURS_COL = "lead_hours"
@@ -54,12 +57,7 @@ MAX_LEAD_HOURS = MAX_HORIZON_HOURS
 ALERT_PROBABILITY = 0.5
 METRIC_NAMES = ("precision", "recall", "f1")
 NON_FEATURE_COLUMNS = frozenset({ANCHOR_COL, DATETIME_COL, LOAD_MW_COL, LABEL_COL})
-FIXED_LIGHTGBM_PARAMS = {
-    "objective": "binary",
-    "boosting_type": "gbdt",
-    "random_state": 42,
-    "verbose": -1,
-}
+FIXED_LIGHTGBM_PARAMS = {**LIGHTGBM_BASE_PARAMS, "objective": "binary"}
 
 
 class HighLoadThresholdParams(BaseModel):
@@ -134,8 +132,7 @@ class DirectClassification:
         fitting_rows, validation_rows = split_at_validation(
             training_rows(params, data), data.validation_start
         )
-        weather_columns = [column for column in data.weather.columns if column != DATETIME_COL]
-        model = DirectClassificationModel.fit(params, fitting_rows, weather_columns)
+        model = DirectClassificationModel.fit(params, fitting_rows, data.weather_columns)
         return Trained(model=model, metrics=model.evaluate(validation_rows))
 
     def load(self, directory: Path) -> DirectClassificationModel:
@@ -240,21 +237,19 @@ class DirectClassificationModel:
         return pd.Series(self.booster.predict(rows[self.feature_names]), index=rows.index)
 
     def save(self, directory: Path) -> None:
-        directory.mkdir(parents=True, exist_ok=True)
-        self.booster.save_model(str(directory / MODEL_FILE))
         metadata = {
             "params": self.params.model_dump(),
             "max_lead_hours": MAX_LEAD_HOURS,
             "feature_names": self.feature_names,
             "weather_columns": self.weather_columns,
         }
-        write_metadata(directory, MODEL_FORMAT, metadata)
+        MODEL_FILES.save(directory, self.booster, metadata)
 
     @classmethod
     def load(cls, directory: Path) -> DirectClassificationModel:
-        metadata = read_metadata(directory, MODEL_FORMAT)
+        booster, metadata = MODEL_FILES.load(directory)
         return cls(
-            lgb.Booster(model_file=str(directory / MODEL_FILE)),
+            booster,
             params=DirectClassificationParams.model_validate(metadata["params"]),
             feature_names=metadata["feature_names"],
             weather_columns=metadata["weather_columns"],

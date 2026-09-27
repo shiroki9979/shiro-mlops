@@ -11,10 +11,12 @@ import pandas as pd
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
+    HOURS_PER_DAY,
     LOAD_MW_COL,
     LOCATION_COL,
     NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
+    SATURDAY,
     SUBJECT_COL,
     TEMPERATURE_COL,
 )
@@ -62,9 +64,9 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
 
     result["hour"] = result[DATETIME_COL].dt.hour
     result["dayofweek"] = result[DATETIME_COL].dt.dayofweek
-    result["is_weekend"] = (result["dayofweek"] >= 5).astype(int)
-    result["hour_sin"] = np.sin(2 * np.pi * result["hour"] / 24.0)
-    result["hour_cos"] = np.cos(2 * np.pi * result["hour"] / 24.0)
+    result["is_weekend"] = (result["dayofweek"] >= SATURDAY).astype(int)
+    result["hour_sin"] = np.sin(2 * np.pi * result["hour"] / HOURS_PER_DAY)
+    result["hour_cos"] = np.cos(2 * np.pi * result["hour"] / HOURS_PER_DAY)
 
     by_subject = result.groupby(LOCATION_COL)[LOAD_MW_COL]
     for lag in TAIPOWER_EXPORT_LAG_HOURS:

@@ -59,6 +59,11 @@ class TrainingData:
     # 共用時間切分點：target 時間 >= 此值者為驗證列，各任務類型不得自行切分。
     validation_start: pd.Timestamp
 
+    @property
+    def weather_columns(self) -> list[str]:
+        """The task's weather fields: every weather column except the time key."""
+        return [column for column in self.weather.columns if column != DATETIME_COL]
+
 
 @dataclass(frozen=True)
 class PredictionData:

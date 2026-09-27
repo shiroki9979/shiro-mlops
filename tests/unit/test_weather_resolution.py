@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from shiro_mlops.core.config import Settings, settings
-from shiro_mlops.data.cwa_client import CWALocation
+from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import resolve_weather
 from tests.helpers import forecast_release, township_forecast
@@ -169,7 +169,7 @@ def test_resolver_uses_configured_taipei_forecast_and_observation_sources(
 
     result = resolve_weather(
         repository,
-        reference_point=settings.weather_reference_point("Taipei"),
+        reference_point=resolve_cwa_location(settings.cwa_locations, "Taipei"),
         start_time=datetime(2026, 8, 20, 12),
         horizon_hours=1,
         as_of=datetime(2026, 8, 20, 11),
@@ -312,8 +312,8 @@ def test_weather_reference_point_resolves_alias_from_ingestion_catalog() -> None
         CWA_LOCATION_ALLOWLIST='{"Hualien": {"station_id": "466990", "geocode": "10015000"}}'
     )
 
-    assert settings.weather_reference_point("Hualien") == CWALocation(
+    assert resolve_cwa_location(settings.cwa_locations, "Hualien") == CWALocation(
         "Hualien", "466990", "10015000"
     )
     with pytest.raises(ValueError, match="not in the CWA ingestion catalog"):
-        settings.weather_reference_point("Taipei")
+        resolve_cwa_location(settings.cwa_locations, "Taipei")
