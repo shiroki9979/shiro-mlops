@@ -375,9 +375,9 @@ def test_full_dagster_mlops_pipeline_materialization(
     assert report["status"] in {"HEALTHY", "WARNING"}
     assert "max_mape=10.0" in report["health_reason"]
     assert report["training_rows"] == len(taipower_raw_df)
-    assert report["actual_load_hours"] == len(taipower_raw_df)
-    assert report["latest_actual_load_time"] == "2026-08-21T23:00:00"
-    assert report["latest_actual_load_mw"] == 29100.0
+    assert report["target_hours"] == len(taipower_raw_df)
+    assert report["latest_target_time"] == "2026-08-21T23:00:00"
+    assert report["latest_target_value"] == 29100.0
 
 
 def test_publish_parquet_feature_local_and_s3(tmp_path):
