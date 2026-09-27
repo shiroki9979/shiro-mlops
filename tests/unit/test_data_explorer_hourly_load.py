@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -11,6 +13,84 @@ from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
 from tests.helpers import TAIWAN, rfc3339
+
+
+def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
+    sqlite_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        lambda: datetime(2026, 9, 20, 13, 15),
+    )
+    rows = [
+        ("2026-09-20 04:00:00.900002+00:00", "Taipei", 4.0),
+        ("2026-09-20 04:00:00.900002", "Taichung", 3.0),
+        ("2026-09-20 04:00:00.900001+00:00", "Taipei", 2.0),
+        ("2026-09-20 02:00:00.100000+00:00", "Taipei", 1.0),
+    ]
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
+                "VALUES (:time, :location, :load_mw, 'regional_snapshot_sum')"
+            ),
+            [
+                {"time": time, "location": location, "load_mw": load}
+                for time, location, load in rows
+            ],
+        )
+    reader = HourlyLoadReader(sqlite_engine)
+    params = {
+        "start": "2026-09-20T10:00:00+08:00",
+        "end": "2026-09-20T12:00:01+08:00",
+        "limit": 1,
+    }
+
+    pages = []
+    cursor = None
+    while True:
+        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
+        pages.append(page)
+        if not page.has_more:
+            break
+        assert page.next_cursor is not None
+        cursor = page.next_cursor
+
+    assert [page.items[0]["load_mw"] for page in pages] == [4.0, 3.0, 2.0, 1.0]
+    assert [page.items[0]["datetime"] for page in pages[:3]] == ["2026-09-20T12:00:00+08:00"] * 3
+    assert [page.has_more for page in pages] == [True, True, True, False]
+    assert all(page.missing_slots == ["2026-09-20T11:00:00+08:00"] for page in pages)
+    assert reader.list({**params, "location": "Kaohsiung"}).items == []
+    assert [item["load_mw"] for item in reader.list({**params, "location": "Taipei"}).items] == [
+        4.0,
+    ]
+
+
+def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
+    legacy_upgraded_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        lambda: datetime(2026, 9, 20, 13, 15),
+    )
+    with legacy_upgraded_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, location, load_mw, source) VALUES "
+                "('2026-09-20 02:00:00', 'Taipei', 10, 'regional_snapshot_sum'), "
+                "('2026-09-20 03:00:00', 'Taipei', 11, NULL), "
+                "('2026-09-20 04:00:00', 'Taipei', 12, 'regional_snapshot_sum')"
+            )
+        )
+    page = HourlyLoadReader(legacy_upgraded_engine).list(
+        {
+            "start": "2026-09-20T10:00:00+08:00",
+            "end": "2026-09-20T12:00:00+08:00",
+        }
+    )
+
+    assert [item["load_mw"] for item in page.items] == [12.0, 10.0]
+    assert page.missing_slots == ["2026-09-20T11:00:00+08:00"]
 
 
 def _upsert_hours(

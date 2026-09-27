@@ -1,0 +1,116 @@
+"""Opt-in TimescaleDB pagination acceptance for load and station observations."""
+
+import os
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+
+from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
+from shiro_mlops.service.data_explorer.weather import ObservationReader
+
+
+@pytest.fixture
+def timescaledb_engine():
+    uri = os.getenv("TIMESCALE_INTEGRATION_URI")
+    if not uri:
+        pytest.skip("Set TIMESCALE_INTEGRATION_URI for isolated TimescaleDB acceptance")
+    engine = create_engine(uri)
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(
+                text("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
+            ).scalar_one_or_none()
+        yield engine
+    finally:
+        engine.dispose()
+
+
+def _all_pages(reader, params: dict) -> list:
+    pages = []
+    cursor = None
+    while True:
+        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
+        pages.append(page)
+        if not page.has_more:
+            return pages
+        assert page.next_cursor is not None
+        cursor = page.next_cursor
+
+
+def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
+    timescaledb_engine: Engine,
+) -> None:
+    suffix = uuid4().hex[:8]
+    locations = (f"b-{suffix}", f"a-{suffix}")
+    stations = (f"b{suffix}", f"a{suffix}")
+    rows = [
+        datetime(2040, 9, 20, 4, 0, 0, 900002, UTC),
+        datetime(2040, 9, 20, 4, 0, 0, 900001, UTC),
+        datetime(2040, 9, 20, 2, 0, 0, 100000, UTC),
+    ]
+    load_rows = [
+        (rows[0], locations[0], 4.0),
+        (rows[0], locations[1], 3.0),
+        (rows[1], locations[1], 2.0),
+        (rows[2], locations[1], 1.0),
+    ]
+    observation_rows = [
+        (rows[0], stations[0], 4.0),
+        (rows[0], stations[1], 3.0),
+        (rows[1], stations[1], 2.0),
+        (rows[2], stations[1], 1.0),
+    ]
+    try:
+        with timescaledb_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
+                    "VALUES (:time, :location, :load_mw, 'regional_snapshot_sum')"
+                ),
+                [
+                    {"time": time, "location": location, "load_mw": load}
+                    for time, location, load in load_rows
+                ],
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO raw_cwa_station_observation "
+                    "(observed_at, station_id, temperature_c) "
+                    "VALUES (:observed_at, :station_id, :temperature_c)"
+                ),
+                [
+                    {"observed_at": observed, "station_id": station, "temperature_c": temp}
+                    for observed, station, temp in observation_rows
+                ],
+            )
+        params = {
+            "start": "2040-09-20T10:00:00+08:00",
+            "end": "2040-09-20T12:00:01+08:00",
+            "limit": 1,
+        }
+        load_pages = _all_pages(HourlyLoadReader(timescaledb_engine), params)
+        observation_pages = _all_pages(ObservationReader(timescaledb_engine), params)
+
+        assert [page.items[0]["load_mw"] for page in load_pages] == [4.0, 3.0, 2.0, 1.0]
+        assert [page.items[0]["temperature_c"] for page in observation_pages] == [
+            4.0,
+            3.0,
+            2.0,
+            1.0,
+        ]
+        for pages in (load_pages, observation_pages):
+            assert [page.has_more for page in pages] == [True, True, True, False]
+            assert all(page.missing_slots == pages[0].missing_slots for page in pages)
+    finally:
+        with timescaledb_engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM raw_cwa_station_observation WHERE station_id IN (:a, :b)"),
+                {"a": stations[0], "b": stations[1]},
+            )
+            conn.execute(
+                text("DELETE FROM raw_taipower_load WHERE location IN (:a, :b)"),
+                {"a": locations[0], "b": locations[1]},
+            )

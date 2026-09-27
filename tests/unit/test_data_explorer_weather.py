@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
@@ -12,6 +14,7 @@ from shiro_mlops.data.cwa_client import (
     CWATownshipForecast,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.weather import (
     ForecastAuditReader,
@@ -20,6 +23,61 @@ from shiro_mlops.service.data_explorer.weather import (
     ObservationReader,
 )
 from tests.helpers import TAIWAN, rfc3339
+
+
+def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
+    sqlite_engine: Engine,
+) -> None:
+    rows = [
+        ("2026-09-20 04:00:00.900002+00:00", "467490", 4.0),
+        ("2026-09-20 04:00:00.900002", "466920", 3.0),
+        ("2026-09-20 04:00:00.900001+00:00", "466920", 2.0),
+        ("2026-09-20 02:00:00.100000+00:00", "466920", 1.0),
+    ]
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO raw_cwa_station_observation "
+                "(observed_at, station_id, station_name, town_code, temperature_c) "
+                "VALUES (:observed_at, :station_id, :station_id, '63000050', :temperature_c)"
+            ),
+            [
+                {"observed_at": observed, "station_id": station, "temperature_c": temperature}
+                for observed, station, temperature in rows
+            ],
+        )
+    reader = ObservationReader(sqlite_engine)
+    params = {
+        "start": "2026-09-20T10:00:00+08:00",
+        "end": "2026-09-20T12:00:01+08:00",
+        "limit": 1,
+    }
+
+    pages = []
+    cursor = None
+    while True:
+        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
+        pages.append(page)
+        if not page.has_more:
+            break
+        assert page.next_cursor is not None
+        cursor = page.next_cursor
+
+    assert [page.items[0]["temperature_c"] for page in pages] == [4.0, 3.0, 2.0, 1.0]
+    assert [page.items[0]["observed_at"] for page in pages[:3]] == ["2026-09-20T12:00:00+08:00"] * 3
+    assert [page.has_more for page in pages] == [True, True, True, False]
+    assert all(page.missing_slots == pages[0].missing_slots for page in pages)
+    station = reader.list({**params, "station_id": "466920", "limit": 2})
+    assert [item["temperature_c"] for item in station.items] == [3.0, 2.0]
+    assert "2026-09-20T11:00:00+08:00:466920" in station.missing_slots
+    with pytest.raises(CursorError, match="filter"):
+        reader.list({**params, "station_id": "466920", "cursor": pages[0].next_cursor})
+    assert (
+        reader.list({**params, "cursor": pages[0].next_cursor, "limit": 2}).items[0][
+            "temperature_c"
+        ]
+        == 3.0
+    )
 
 
 def test_observation_and_audit_readers_keep_station_and_missing_id_filters(

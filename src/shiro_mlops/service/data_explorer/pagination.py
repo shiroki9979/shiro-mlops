@@ -122,9 +122,18 @@ def apply_cursor(
 
 
 def _cursor_operand(value: str, column: str, dialect_name: str | None) -> str:
-    """SQLite 時間字串格式不一，keyset 比較前需正規化以維持排序語意。"""
+    """Normalize SQLite UTC timestamps before keyset comparison."""
     is_time = column in CURSOR_TIME_COLS or column.endswith("_at")
-    return f"datetime({value})" if dialect_name == "sqlite" and is_time else value
+    return sqlite_time_key(value) if dialect_name == "sqlite" and is_time else value
+
+
+def sqlite_time_key(value: str) -> str:
+    """Compare UTC strings at six-digit precision across aware and naive SQLite rows."""
+    return (
+        f"(strftime('%Y-%m-%d %H:%M:%S', {value}) || '.' || "
+        f"substr((CASE WHEN substr({value}, 20, 1) = '.' "
+        f"THEN substr({value}, 21, 6) ELSE '' END) || '000000', 1, 6))"
+    )
 
 
 def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
