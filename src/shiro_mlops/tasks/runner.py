@@ -10,7 +10,7 @@ Taiwan-local naive time.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
 
@@ -285,7 +285,7 @@ class _ServingRequest:
 
     @cached_property
     def requirements(self) -> InputRequirements:
-        return get_task_type(self.task.task_type).requirements(self.task.params)
+        return _requirements_of(self.task)
 
     @property
     def repository(self) -> TimeSeriesRepository:
@@ -310,11 +310,16 @@ class _WeatherPath:
     probe: Callable[[TaskModel, PredictionData, WeatherResolution], WeatherResolution]
 
 
+def _requirements_of(task: TaskDefinition) -> InputRequirements:
+    return get_task_type(task.task_type).requirements(task.params)
+
+
 def _readiness_request(
     task: TaskDefinition, runtime: TaskRuntime, as_of: datetime
 ) -> _ServingRequest:
-    request = _ServingRequest(task, runtime, as_of, horizon_hours=None)
-    return replace(request, horizon_hours=request.weather_path.readiness_horizon_hours)
+    """A request for the horizon readiness must prove, fixed before the request exists."""
+    weather = _requirements_of(task).weather
+    return _ServingRequest(task, runtime, as_of, _WEATHER_PATHS[weather].readiness_horizon_hours)
 
 
 def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeatherResolution]:
