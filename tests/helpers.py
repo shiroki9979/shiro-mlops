@@ -255,10 +255,12 @@ def hourly_load_with_weather(hours: int, last_hour: datetime) -> tuple[pd.DataFr
     return load, weather
 
 
-def override_task_policies(monkeypatch, **updates: object) -> TaskDefinition:
+def override_task_policies(
+    monkeypatch, task_id: str = DYNAMIC_HORIZON_FORECAST, **updates: object
+) -> TaskDefinition:
     """以測試值取代已部署任務的 [policies]，測試結束後由 monkeypatch 還原。"""
     tasks = deployed_tasks()
-    task = tasks[DYNAMIC_HORIZON_FORECAST]
+    task = tasks[task_id]
     updated = replace(task, policies=task.policies.model_copy(update=updates))
-    monkeypatch.setitem(tasks, DYNAMIC_HORIZON_FORECAST, updated)
+    monkeypatch.setitem(tasks, task_id, updated)
     return updated
