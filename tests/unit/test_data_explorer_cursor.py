@@ -1,5 +1,8 @@
 """Opaque keyset cursor encoding stays filter-bound and versioned."""
 
+import json
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+
 import pytest
 
 from shiro_mlops.service.data_explorer.cursor import (
@@ -17,6 +20,7 @@ def test_cursor_round_trip_preserves_sort_key() -> None:
     token = encode_cursor(dataset="hourly_load", filters=filters, key=key)
 
     assert "=" not in token
+    assert json.loads(urlsafe_b64decode(token + "=" * (-len(token) % 4)))["v"] == 2
     assert decode_cursor(token, dataset="hourly_load", filters=filters) == key
 
 
@@ -42,3 +46,7 @@ def test_cursor_rejects_invalid_or_incompatible_payload() -> None:
     )
     with pytest.raises(CursorError, match="dataset"):
         decode_cursor(token, dataset="national_supply_demand", filters={})
+
+    legacy = urlsafe_b64encode(b'{"v":1,"ds":"hourly_load","f":{},"k":{}}').decode()
+    with pytest.raises(CursorError, match="version"):
+        decode_cursor(legacy, dataset="hourly_load", filters={})

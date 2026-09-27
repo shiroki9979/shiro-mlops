@@ -53,7 +53,9 @@ def _query_params(request: Request) -> dict[str, Any]:
 def _run_list(request: Request, reader_cls: type[DatasetReader]) -> ListEnvelope:
     _ensure_enabled()
     try:
-        return reader_cls(_engine(request)).list(_query_params(request))
+        params = _query_params(request)
+        reader_cls.validate_cursor_request(params)
+        return reader_cls(_engine(request)).list(params)
     except CursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ExplorerQueryError as exc:

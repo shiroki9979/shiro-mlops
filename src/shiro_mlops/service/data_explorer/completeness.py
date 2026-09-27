@@ -16,17 +16,14 @@ from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEM
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
-from shiro_mlops.service.data_explorer.values import floor_ten_minutes, to_taiwan
+from shiro_mlops.service.data_explorer.values import to_taiwan
 
 
 def hourly_gaps(db: ExplorerDb, window: TimeWindow, subject: str | None) -> list[str]:
     """Return expected hourly slots missing from the persisted load series."""
-    clauses = ["time >= :start_time", "time <= :end_time", "source = :source"]
-    params: dict[str, Any] = {
-        "start_time": window.as_utc()[0],
-        "end_time": window.as_utc()[1],
-        "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
-    }
+    clauses, params = db.time_window("time", window)
+    clauses.append("source = :source")
+    params["source"] = REGIONAL_SNAPSHOT_SUM_SOURCE
     if subject:
         clauses.append("subject = :subject")
         params["subject"] = subject
@@ -49,10 +46,11 @@ def observation_gaps(db: ExplorerDb, window: TimeWindow, station_id: str | None)
     """Return expected hourly observation slots missing from allowlisted stations."""
     allowlist = list(settings.cwa_locations.values())
     station_ids = [station_id] if station_id else [item.station_id for item in allowlist]
+    clauses, params = db.time_window("observed_at", window)
     rows = db.fetch(
         "SELECT observed_at, station_id FROM raw_cwa_station_observation "
-        "WHERE observed_at >= :start_time AND observed_at <= :end_time",
-        {"start_time": window.as_utc()[0], "end_time": window.as_utc()[1]},
+        f"WHERE {' AND '.join(clauses)}",
+        params,
     )
     present = {
         (
@@ -61,7 +59,7 @@ def observation_gaps(db: ExplorerDb, window: TimeWindow, station_id: str | None)
         )
         for row in rows
     }
-    start = window.start.replace(minute=0, second=0, microsecond=0)
+    start = pd.Timestamp(window.start).ceil("h")
     expected_hours = pd.date_range(start, window.end, freq="h")
     missing = []
     for hour in expected_hours:
@@ -73,13 +71,14 @@ def observation_gaps(db: ExplorerDb, window: TimeWindow, station_id: str | None)
 
 def ten_minute_gaps(db: ExplorerDb, window: TimeWindow) -> list[str]:
     """Return expected 10-minute slots missing from national supply-demand snapshots."""
+    clauses, params = db.time_window("observed_at", window)
     rows = db.fetch(
         "SELECT DISTINCT observed_at FROM raw_taipower_supply_demand_snapshot "
-        "WHERE observed_at >= :start_time AND observed_at <= :end_time",
-        {"start_time": window.as_utc()[0], "end_time": window.as_utc()[1]},
+        f"WHERE {' AND '.join(clauses)}",
+        params,
     )
     present = {to_taiwan(row["observed_at"]) for row in rows}
-    start = floor_ten_minutes(window.start)
+    start = pd.Timestamp(window.start).ceil("10min")
     expected = pd.date_range(start, window.end, freq="10min")
     return [
         format_taiwan_time(ts.to_pydatetime())
@@ -90,10 +89,11 @@ def ten_minute_gaps(db: ExplorerDb, window: TimeWindow) -> list[str]:
 
 def regional_slot_map(db: ExplorerDb, window: TimeWindow) -> dict[datetime, set[str]]:
     """Group persisted regional snapshots by observation slot."""
+    clauses, params = db.time_window("observed_at", window)
     rows = db.fetch(
         "SELECT observed_at, region FROM raw_taipower_regional_supply_demand_snapshot "
-        "WHERE observed_at >= :start_time AND observed_at <= :end_time",
-        {"start_time": window.as_utc()[0], "end_time": window.as_utc()[1]},
+        f"WHERE {' AND '.join(clauses)}",
+        params,
     )
     grouped: dict[datetime, set[str]] = {}
     for row in rows:

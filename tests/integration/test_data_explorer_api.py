@@ -1,5 +1,6 @@
 """Data Explorer HTTP contracts against a real SQLite repository."""
 
+import importlib
 import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
@@ -16,6 +17,7 @@ from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
 from shiro_mlops.service.data_explorer.cursor import encode_cursor
+from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from tests.helpers import (
     TAIWAN,
     create_legacy_load_table,
@@ -80,6 +82,109 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     """過渡快照端點不得再作為營運資料來源。"""
     client, _ = explorer_client
     assert client.get("/features/latest").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/data/power/load",
+        "/data/power/supply-demand",
+        "/data/power/regional",
+        "/data/power/units",
+        "/data/weather/observations",
+        "/data/weather/forecasts",
+        "/data/audits/cwa-observations",
+        "/data/audits/cwa-forecasts",
+    ],
+)
+def test_all_lists_reject_v1_cursor_before_database_access(
+    explorer_client, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    client, _ = explorer_client
+    legacy = urlsafe_b64encode(b'{"v":1,"ds":"hourly_load","f":{},"k":{}}').decode().rstrip("=")
+
+    def unavailable(_request):
+        raise SQLAlchemyError("database unavailable")
+
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(router_module, "_engine", unavailable)
+
+    response = client.get(path, params={"cursor": legacy})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Incompatible cursor version"
+
+
+def test_malformed_v2_cursor_precedes_database_failure(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    cursor = encode_cursor(
+        dataset="hourly_load", filters=filters, key={"time": 123, "subject": "nationwide"}
+    )
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get("/data/power/load", params={**window, "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
+
+
+def test_forecast_cursor_filter_mismatch_precedes_database_failure(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("cwa_forecasts", {**window, "geocode": "A"}).filters
+    cursor = encode_cursor(
+        dataset="cwa_forecasts",
+        filters=filters,
+        key={
+            "valid_from": "2026-08-01T12:00:00+08:00",
+            "issued_at": "2026-08-01T00:00:00+08:00",
+            "source_updated_at": "2026-08-01T00:00:00+08:00",
+            "dataset_id": "F-EDGE",
+            "geocode": "A",
+            "valid_to": "2026-08-01T13:00:00+08:00",
+        },
+    )
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get(
+        "/data/weather/forecasts", params={**window, "geocode": "B", "cursor": cursor}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cursor filter mismatch"
+
+
+@pytest.mark.parametrize("subject", [["nationwide"], {"name": "nationwide"}])
+def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, subject) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    cursor = encode_cursor(
+        dataset="hourly_load",
+        filters=filters,
+        key={"time": "2026-08-01T12:00:00+08:00", "subject": subject},
+    )
+
+    response = client.get("/data/power/load", params={**window, "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
 
 
 @pytest.mark.parametrize("field", ["issued_at", "source_updated_at"])
@@ -228,7 +333,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     invalid_window_cursor = encode_cursor(
         dataset="hourly_load",
         filters={"start": "not-a-time", "end": rfc3339(latest), "dataset": "hourly_load"},
-        key={"time": rfc3339(latest), "location": "Taipei"},
+        key={"time": rfc3339(latest), "subject": "nationwide"},
     )
     assert (
         client.get("/data/power/load", params={"cursor": invalid_window_cursor}).status_code == 400
@@ -313,6 +418,7 @@ def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
     repo.engine = BrokenEngine()
     assert client.get("/data/status").status_code == 503
     assert client.get("/data/power/load").status_code == 503
+    assert client.get("/data/weather/forecasts").status_code == 503
 
 
 def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_client) -> None:

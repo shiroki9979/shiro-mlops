@@ -427,7 +427,8 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 ### 4.3 導覽與查詢行為
 
 - **頂層導覽**：Data Explorer 使用獨立 `/data` 路由；`/monitoring` 專注於健康與新鮮度摘要，並可連結至對應資料集的篩選結果。
-- **排序與分頁**：查詢預設以最新資料優先，採 server-side cursor pagination；每頁預設 50 筆、上限 200 筆，不提供無界全表載入。
+- **排序與分頁**：八個列表以各資料集固定的完整複合鍵降冪排序，使用 v2 server-side keyset cursor；排序、翻頁比較與 cursor 均保留原始微秒精度。每頁預設 50 筆、上限 200 筆，不提供無界全表載入。
+- **時間窗口**：列表與完整度查詢共用精確閉區間 `[start, end]`；兩端點納入、窗口外一微秒排除，`start = end` 合法。cursor 固定第一次解析的窗口，頁面顯示時間維持既有整秒格式。
 - **歷史可達性**：使用者可透過有界時間範圍與 cursor 逐頁檢視所有保留中的歷史資料。
 - **時間呈現**：API 回傳帶 `+08:00` offset 的 RFC 3339 timestamp；介面明示時區為 `Asia/Taipei`。
 - **功率單位**：介面以 MW 為主要顯示單位；對於以萬瓩儲存的全台與區域供需 typed values，在明細或 tooltip 同時顯示儲存值，並依 `1 萬瓩 = 10 MW` 轉換。
@@ -464,7 +465,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **Data Explorer 首頁**：`/data` 顯示全部 datasets 的最新來源時間、最新入庫時間、freshness、completeness 與明細連結。
 - **狀態 API**：`GET /data/status` 是 Monitoring、Data Explorer 首頁與各資料頁的共用狀態來源。Typed list endpoints 不重複計算狀態，並共用含 `items`、`next_cursor` 與 `has_more` 的 pagination envelope。
 - **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
-- **Cursor 契約**：cursor 為 opaque、stateless 且與當前 filters 綁定的 keyset cursor，含最後一筆排序鍵與契約版本，不設時間期限。更改 filters、契約版本不相容或 cursor 格式無效時回傳 HTTP 400。
+- **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示「回到第一頁」；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。
 - **開啟條件**：v1 不建立應用層登入與 RBAC。Data Explorer 路由與 API 僅在 local environment 或明確啟用功能旗標時可用；非本機存取必須由內網或 reverse proxy 限制，並使用 same-origin CORS，不得依賴現有 `CORS *` 對外暴露。
 - **顯示範圍**：v1 只提供狀態、資料表、篩選、typed detail drawer 與當頁 CSV 匯出；不提供趨勢圖或可設定維度的分析視覺化。
 - **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。
