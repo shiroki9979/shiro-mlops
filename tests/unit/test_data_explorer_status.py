@@ -2,11 +2,30 @@
 
 from datetime import datetime
 
+import pytest
+
+from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.status import (
     DatasetFreshness,
     derive_overall,
     evaluate_freshness,
 )
+from tests.helpers import derived_hourly_load
+
+
+@pytest.mark.parametrize("minute", [0, 15])
+def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
+    test_repo: TimeSeriesRepository, minute: int
+) -> None:
+    test_repo.upsert_taipower_load(derived_hourly_load(24, datetime(2026, 9, 20, 11)))
+
+    status = DatasetStatusCatalog(test_repo.engine).status(datetime(2026, 9, 20, 12, minute))
+    load = next(dataset for dataset in status.datasets if dataset.id == "hourly_load")
+
+    assert load.completeness == "complete"
+    assert load.missing_slot_count == 0
+    assert load.missing_identifiers == []
 
 
 def test_freshness_uses_dataset_cadence_and_two_missed_cycles() -> None:

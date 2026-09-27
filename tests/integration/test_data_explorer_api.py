@@ -139,9 +139,10 @@ def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
         ensure_timescale_hypertables(engine)
         repo = TimeSeriesRepository(engine=engine, auto_init=False)
         current_hour = _now().replace(minute=0)
+        legacy_hour = current_hour - timedelta(hours=1)
         derived_hour = current_hour - timedelta(hours=3)
         _upsert_hours(repo, [derived_hour])
-        insert_legacy_load_row(engine, current_hour, 99999.0)
+        insert_legacy_load_row(engine, legacy_hour, 99999.0)
         monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
         monkeypatch.setattr("shiro_mlops.service.api.repository_store", repo)
 
@@ -152,7 +153,8 @@ def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
 
         assert page.status_code == 200
         assert [item["datetime"] for item in page.json()["items"]] == [rfc3339(derived_hour)]
-        assert rfc3339(current_hour) in page.json()["missing_slots"]
+        assert rfc3339(legacy_hour) in page.json()["missing_slots"]
+        assert rfc3339(current_hour) not in page.json()["missing_slots"]
         load_status = next(
             item for item in status.json()["datasets"] if item["id"] == "hourly_load"
         )

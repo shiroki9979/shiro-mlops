@@ -8,7 +8,6 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
@@ -104,6 +103,30 @@ def _build_time_location_filter(
         params["location"] = str(location)
 
     return " AND ".join(clauses), params
+
+
+def _forecast_window_filter(boundary: str, include_adjacent_points: bool) -> str:
+    """Keep interpolation endpoints from the same location and forecast vintage."""
+    column, operator, aggregate, adjacent_operator = (
+        ("valid_to", ">=", "MAX", "<")
+        if boundary == "valid_start"
+        else ("valid_from", "<=", "MIN", ">")
+    )
+    within_window = f"{column} {operator} :{boundary}"
+    if not include_adjacent_points:
+        return within_window
+    return f"""({within_window} OR (
+        forecast.valid_from = forecast.valid_to AND forecast.valid_from = (
+            SELECT {aggregate}(neighbor.valid_from)
+            FROM raw_cwa_township_forecast AS neighbor
+            WHERE neighbor.dataset_id = forecast.dataset_id
+              AND neighbor.geocode = forecast.geocode
+              AND neighbor.issued_at = forecast.issued_at
+              AND neighbor.source_updated_at = forecast.source_updated_at
+              AND neighbor.valid_from = neighbor.valid_to
+              AND neighbor.valid_from {adjacent_operator} :{boundary}
+        )
+    ))"""
 
 
 def _forecast_version_key(row: pd.Series) -> tuple[str, pd.Timestamp, pd.Timestamp]:
@@ -459,6 +482,7 @@ class TimeSeriesRepository:
         source_updated_before: datetime | str | None = None,
         valid_start: datetime | str | None = None,
         valid_end: datetime | str | None = None,
+        include_adjacent_points: bool = False,
     ) -> pd.DataFrame:
         """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
         clauses = ["1=1"]
@@ -480,19 +504,19 @@ class TimeSeriesRepository:
                 pd.Timestamp(source_updated_before).to_pydatetime()
             )
         if valid_start is not None:
-            clauses.append("valid_to >= :valid_start")
+            clauses.append(_forecast_window_filter("valid_start", include_adjacent_points))
             params["valid_start"] = _taiwan_instant_to_utc(
                 pd.Timestamp(valid_start).to_pydatetime()
             )
         if valid_end is not None:
-            clauses.append("valid_from <= :valid_end")
+            clauses.append(_forecast_window_filter("valid_end", include_adjacent_points))
             params["valid_end"] = _taiwan_instant_to_utc(pd.Timestamp(valid_end).to_pydatetime())
         query = f"""
             SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
                    location_name, temperature_c, dew_point_c, apparent_temperature_c,
                    relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
                    wind_direction, created_at
-            FROM raw_cwa_township_forecast
+            FROM raw_cwa_township_forecast AS forecast
             WHERE {" AND ".join(clauses)}
             ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
                      issued_at DESC, source_updated_at DESC
@@ -681,14 +705,11 @@ class TimeSeriesRepository:
         """
         locations = settings.cwa_locations
         station_by_alias = {value.alias: value.station_id for value in locations.values()}
-        try:
-            canonical = self.fetch_cwa_station_observations(
-                start_time=start_time,
-                end_time=end_time,
-                station_id=station_by_alias.get(location) if location else None,
-            )
-        except SQLAlchemyError:
-            canonical = pd.DataFrame()
+        canonical = self.fetch_cwa_station_observations(
+            start_time=start_time,
+            end_time=end_time,
+            station_id=station_by_alias.get(location) if location else None,
+        )
         result = canonical.rename(
             columns={
                 "observed_at": "time",

@@ -1,5 +1,7 @@
 """Time-series feature engineering and transformation functions."""
 
+from datetime import timedelta
+
 import numpy as np
 import pandas as pd
 
@@ -14,12 +16,7 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
-
-def _fill_weather_series(series: pd.Series, *, strict: bool, default: float) -> pd.Series:
-    """Fill weather values without future leakage in strict training mode."""
-    if strict:
-        return series.ffill(limit=2)
-    return series.ffill().bfill().fillna(default)
+MAX_WEATHER_AGE = timedelta(hours=2)
 
 
 def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL) -> pd.DataFrame:
@@ -122,36 +119,46 @@ def merge_weather_features(
     join_keys = [datetime_col, location_col] if both_have_location else [datetime_col]
     clean_weather = weather_df[weather_cols].drop_duplicates(subset=join_keys, keep="last")
 
+    if strict_weather:
+        return _merge_recent_weather(load_df, clean_weather, join_keys)
+
     merged = pd.merge(load_df, clean_weather, on=join_keys, how="left")
 
-    # Forward fill weather values; strict training mode disables future-looking fill.
-    if TEMPERATURE_COL in merged.columns:
+    for column, default in ((TEMPERATURE_COL, 25.0), (RELATIVE_HUMIDITY_COL, 70.0)):
+        if column not in merged.columns:
+            continue
         if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[TEMPERATURE_COL] = merged.groupby(location_col)[TEMPERATURE_COL].transform(
-                lambda series: _fill_weather_series(series, strict=strict_weather, default=25.0)
+            merged[column] = merged.groupby(location_col)[column].transform(
+                lambda series, default=default: series.ffill().bfill().fillna(default)
             )
         else:
-            merged[TEMPERATURE_COL] = (
-                merged[TEMPERATURE_COL].ffill(limit=2)
-                if strict_weather
-                else merged[TEMPERATURE_COL].ffill().bfill().fillna(25.0)
-            )
-
-    if RELATIVE_HUMIDITY_COL in merged.columns:
-        if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[RELATIVE_HUMIDITY_COL] = merged.groupby(location_col)[
-                RELATIVE_HUMIDITY_COL
-            ].transform(
-                lambda series: _fill_weather_series(series, strict=strict_weather, default=70.0)
-            )
-        else:
-            merged[RELATIVE_HUMIDITY_COL] = (
-                merged[RELATIVE_HUMIDITY_COL].ffill(limit=2)
-                if strict_weather
-                else merged[RELATIVE_HUMIDITY_COL].ffill().bfill().fillna(70.0)
-            )
+            merged[column] = merged[column].ffill().bfill().fillna(default)
 
     return merged
+
+
+def _merge_recent_weather(
+    load: pd.DataFrame, weather: pd.DataFrame, join_keys: list[str]
+) -> pd.DataFrame:
+    """Match each field to a past observation within two hours, even across load gaps."""
+    result = load.copy()
+    datetime_col = join_keys[0]
+    ordered_load = load[join_keys].sort_values(datetime_col)
+    for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL):
+        if column not in weather.columns:
+            result[column] = np.nan
+            continue
+        observations = weather[join_keys + [column]].dropna(subset=[column])
+        matched = pd.merge_asof(
+            ordered_load,
+            observations.sort_values(datetime_col),
+            on=datetime_col,
+            by=join_keys[1:] or None,
+            direction="backward",
+            tolerance=MAX_WEATHER_AGE,
+        )
+        result[column] = pd.Series(matched[column].to_numpy(), index=ordered_load.index)
+    return result
 
 
 def build_feature_pipeline(
