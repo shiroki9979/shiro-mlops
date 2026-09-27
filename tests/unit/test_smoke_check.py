@@ -52,18 +52,22 @@ def test_stopped_schedule_fails_with_instruction() -> None:
 
 
 def test_schedule_cron_drift_and_missing_registration_fail() -> None:
-    job = define_asset_job("daily_training_job", selection=AssetSelection.all())
+    job = define_asset_job("dynamic_horizon_forecast__training_job", selection=AssetSelection.all())
     drifted = Definitions(
         assets=all_assets,
         jobs=[job],
         schedules=[
-            ScheduleDefinition(name="daily_training_schedule", job=job, cron_schedule="0 0 * * *")
+            ScheduleDefinition(
+                name="dynamic_horizon_forecast__training_schedule",
+                job=job,
+                cron_schedule="0 16 * * *",
+            )
         ],
     )
 
     statuses = _statuses(check_schedule_configuration(drifted, running=ALL_SCHEDULES))
 
-    assert statuses["schedule daily_training_schedule"] is CheckStatus.FAIL
+    assert statuses["schedule dynamic_horizon_forecast__training_schedule"] is CheckStatus.FAIL
     assert statuses["schedule hourly_actual_load_schedule"] is CheckStatus.FAIL
 
 
@@ -71,8 +75,8 @@ def test_load_consumer_boundaries_pass_for_registered_jobs() -> None:
     results = check_load_consumer_boundaries(defs)
 
     assert _statuses(results) == {
-        "job daily_training_job": CheckStatus.PASS,
-        "job hourly_drift_job": CheckStatus.PASS,
+        "job dynamic_horizon_forecast__training_job": CheckStatus.PASS,
+        "job dynamic_horizon_forecast__monitoring_job": CheckStatus.PASS,
     }
 
 
@@ -81,21 +85,28 @@ def test_training_job_selecting_snapshot_or_derivation_assets_fails() -> None:
         assets=all_assets,
         resources=defs.resources,
         jobs=[
-            define_asset_job("daily_training_job", selection=AssetSelection.all()),
             define_asset_job(
-                "hourly_drift_job", selection=AssetSelection.assets("taipower_load_feature_source")
+                "dynamic_horizon_forecast__training_job", selection=AssetSelection.all()
+            ),
+            define_asset_job(
+                "dynamic_horizon_forecast__monitoring_job",
+                selection=AssetSelection.assets("dynamic_horizon_forecast__features"),
             ),
         ],
     )
 
     results = {result.name: result for result in check_load_consumer_boundaries(leaky)}
 
-    assert results["job daily_training_job"].status is CheckStatus.FAIL
+    assert results["job dynamic_horizon_forecast__training_job"].status is CheckStatus.FAIL
     assert (
-        "raw_taipower_regional_supply_demand_snapshot" in results["job daily_training_job"].detail
+        "raw_taipower_regional_supply_demand_snapshot"
+        in results["job dynamic_horizon_forecast__training_job"].detail
     )
-    assert results["job hourly_drift_job"].status is CheckStatus.FAIL
-    assert "missing drift_monitoring_report" in results["job hourly_drift_job"].detail
+    assert results["job dynamic_horizon_forecast__monitoring_job"].status is CheckStatus.FAIL
+    assert (
+        "missing dynamic_horizon_forecast__monitoring"
+        in results["job dynamic_horizon_forecast__monitoring_job"].detail
+    )
 
 
 def test_cold_start_reports_waiting_readiness_without_failing(
@@ -107,12 +118,14 @@ def test_cold_start_reports_waiting_readiness_without_failing(
 
     statuses = _statuses(results)
     assert statuses == {
-        "load accumulation": CheckStatus.WAIT,
-        "load freshness": CheckStatus.PASS,
-        "tick daily_training_schedule": CheckStatus.WAIT,
-        "tick hourly_drift_schedule": CheckStatus.WAIT,
+        "dynamic_horizon_forecast load accumulation": CheckStatus.WAIT,
+        "dynamic_horizon_forecast load freshness": CheckStatus.PASS,
+        "tick dynamic_horizon_forecast__training_schedule": CheckStatus.WAIT,
+        "tick dynamic_horizon_forecast__monitoring_schedule": CheckStatus.WAIT,
     }
-    accumulation = next(result for result in results if result.name == "load accumulation")
+    accumulation = next(
+        result for result in results if result.name == "dynamic_horizon_forecast load accumulation"
+    )
     assert "10 valid hourly observations; 24 required" in accumulation.detail
     assert exit_code(results, require_ready=False) == 0
     assert exit_code(results, require_ready=True) == 1
@@ -122,7 +135,9 @@ def test_recovered_stack_reports_both_ticks_triggering(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 23, 0)))
-    dagster_instance.report_runless_asset_event(AssetMaterialization("trained_forecaster_model"))
+    dagster_instance.report_runless_asset_event(
+        AssetMaterialization("dynamic_horizon_forecast__model")
+    )
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
@@ -138,7 +153,7 @@ def test_stalled_accumulation_fails(
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
-    assert _statuses(results)["load freshness"] is CheckStatus.FAIL
+    assert _statuses(results)["dynamic_horizon_forecast load freshness"] is CheckStatus.FAIL
     assert exit_code(results, require_ready=False) == 1
 
 
@@ -166,8 +181,8 @@ def test_full_run_on_fresh_deployment_flags_stopped_schedules_and_waiting_readin
 
     report = format_report(results)
 
-    assert "[FAIL] schedule daily_training_schedule" in report
-    assert "[PASS] job daily_training_job" in report
-    assert "[WAIT] load accumulation" in report
+    assert "[FAIL] schedule dynamic_horizon_forecast__training_schedule" in report
+    assert "[PASS] job dynamic_horizon_forecast__training_job" in report
+    assert "[WAIT] dynamic_horizon_forecast load accumulation" in report
     assert report.splitlines()[-1] == "Summary: 2 pass, 4 wait, 6 fail"
     assert exit_code(results, require_ready=False) == 1

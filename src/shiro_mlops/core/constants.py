@@ -16,4 +16,3 @@ MAX_HORIZON_HOURS = 168  # 1 week, the longest horizon the API accepts and /read
 
 # Model defaults
 DEFAULT_MODEL_NAME = "taipower_lightgbm_forecaster"
-DEFAULT_EXPERIMENT_NAME = "taipower_load_forecasting"

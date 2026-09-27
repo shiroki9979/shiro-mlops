@@ -1,4 +1,4 @@
-"""Container smoke check: schedule configuration and training/drift readiness.
+"""Container smoke check: schedule configuration and per-task training/monitoring readiness.
 
 Run inside the Dagster container so the loaded code, DAGSTER_HOME instance, and
 TimescaleDB connection are the deployed ones::
@@ -29,22 +29,15 @@ from shiro_mlops.data.hourly_actual_load import is_stale_load_anchor
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
-    DRIFT_REPORT_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
-    LOAD_FEATURE_SOURCE_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
 from shiro_mlops.tasks.definition import TaskDefinition
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.deployed import deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
 
-# 各 job 經由哪個資產讀取 raw_taipower_load 資料表。
-LOAD_CONSUMER_JOBS = {
-    "daily_training_job": LOAD_FEATURE_SOURCE_ASSET,
-    "hourly_drift_job": DRIFT_REPORT_ASSET,
-}
-READINESS_SCHEDULES = ("daily_training_schedule", "hourly_drift_schedule")
-# 訓練與 drift 只能讀 raw_taipower_load 資料表；執行下列資產即代表會讀快照表或呼叫外部 API。
+# 任務的訓練與監控只能讀 raw_taipower_load 資料表；執行下列資產即代表會讀快照表或呼叫外部 API。
 FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
     (*TAIPOWER_REALTIME_SNAPSHOT_ASSETS, *CWA_INGESTION_ASSETS, HOURLY_ACTUAL_LOAD_ASSET)
 )
@@ -59,6 +52,7 @@ class ExpectedSchedule:
     execution_timezone: str | None
 
 
+# 擷取排程的固定契約；任務排程的期望值由任務設定推導（見 expected_schedules）。
 EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
     "taipower_supply_demand_snapshot_schedule": ExpectedSchedule(
         "taipower_supply_demand_snapshot_job", "*/10 * * * *", TAIWAN_TZ
@@ -72,9 +66,6 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
     "cwa_forecast_ingestion_job_schedule": ExpectedSchedule(
         "cwa_forecast_ingestion_job", "40 * * * *", TAIWAN_TZ
     ),
-    # 16:00 UTC 即台灣時間 00:00。
-    "daily_training_schedule": ExpectedSchedule("daily_training_job", "0 16 * * *", None),
-    "hourly_drift_schedule": ExpectedSchedule("hourly_drift_job", "0 * * * *", None),
 }
 
 
@@ -110,42 +101,43 @@ def run_smoke_check(deployment: Deployment) -> list[CheckResult]:
     ]
 
 
+def expected_schedules() -> dict[str, ExpectedSchedule]:
+    """Ingestion schedules from SPEC §3 plus each deployed task's two schedules."""
+    expected = dict(EXPECTED_SCHEDULES)
+    for task in deployed_tasks().values():
+        names = TaskPipelineNames(task.task_id)
+        expected[names.training_schedule] = ExpectedSchedule(
+            names.training_job, task.schedule.training, TAIWAN_TZ
+        )
+        expected[names.monitoring_schedule] = ExpectedSchedule(
+            names.monitoring_job, task.schedule.monitoring, TAIWAN_TZ
+        )
+    return expected
+
+
 def check_schedule_configuration(defs: Definitions, running: frozenset[str]) -> list[CheckResult]:
-    """Each SPEC schedule is registered with its job, cron, and timezone, and is running."""
+    """Each expected schedule is registered with its job, cron, and timezone, and is running."""
     registered = {schedule.name: schedule for schedule in defs.schedules or ()}
     return [
         _check_schedule(name, expected, registered.get(name), running)
-        for name, expected in EXPECTED_SCHEDULES.items()
+        for name, expected in expected_schedules().items()
     ]
 
 
 def check_load_consumer_boundaries(defs: Definitions) -> list[CheckResult]:
-    """Training and drift jobs read persisted load only, never snapshots or external APIs."""
+    """Task training and monitoring jobs read persisted load only, never snapshots or APIs."""
     return [
         _check_load_consumer(defs, job_name, load_reader)
-        for job_name, load_reader in LOAD_CONSUMER_JOBS.items()
+        for job_name, load_reader in _load_consumer_jobs().items()
     ]
 
 
 def check_downstream_readiness(deployment: Deployment) -> list[CheckResult]:
-    """Report load accumulation, its freshness, and what the next training/drift ticks do."""
-    task = deployed_task(DYNAMIC_HORIZON_FORECAST)
-    try:
-        readiness = check_training_readiness(task, TaskRuntime(repository=deployment.repository))
-    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
-        detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
-        return [
-            CheckResult(name, CheckStatus.FAIL, detail)
-            for name in ("load accumulation", "load freshness", *_tick_check_names())
-        ]
+    """Per task: load accumulation, its freshness, and what the next two ticks do."""
     return [
-        CheckResult(
-            "load accumulation",
-            CheckStatus.PASS if readiness.ready else CheckStatus.WAIT,
-            readiness.reason,
-        ),
-        _check_load_freshness(task, readiness.latest_hour, deployment.now),
-        *(_check_tick(deployment, name) for name in READINESS_SCHEDULES),
+        result
+        for task in deployed_tasks().values()
+        for result in _check_task_readiness(deployment, task)
     ]
 
 
@@ -180,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-ready",
         action="store_true",
-        help="Also fail while training or drift readiness is still waiting.",
+        help="Also fail while task training or monitoring readiness is still waiting.",
     )
     args = parser.parse_args(argv)
 
@@ -237,13 +229,51 @@ def _check_load_consumer(defs: Definitions, job_name: str, load_reader: str) -> 
     return CheckResult(check_name, CheckStatus.PASS, f"reads raw_taipower_load via {load_reader}")
 
 
+def _load_consumer_jobs() -> dict[str, str]:
+    """Which asset of each task job reads the raw_taipower_load table."""
+    jobs: dict[str, str] = {}
+    for task_id in deployed_tasks():
+        names = TaskPipelineNames(task_id)
+        jobs[names.training_job] = names.features
+        jobs[names.monitoring_job] = names.monitoring
+    return jobs
+
+
+def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[CheckResult]:
+    names = TaskPipelineNames(task.task_id)
+    accumulation, freshness = _readiness_check_names(task)
+    ticks = (names.training_schedule, names.monitoring_schedule)
+    try:
+        readiness = check_training_readiness(task, TaskRuntime(repository=deployment.repository))
+    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
+        detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
+        return [
+            CheckResult(name, CheckStatus.FAIL, detail)
+            for name in (accumulation, freshness, *(f"tick {tick}" for tick in ticks))
+        ]
+    return [
+        CheckResult(
+            accumulation,
+            CheckStatus.PASS if readiness.ready else CheckStatus.WAIT,
+            readiness.reason,
+        ),
+        _check_load_freshness(task, readiness.latest_hour, deployment.now),
+        *(_check_tick(deployment, tick) for tick in ticks),
+    ]
+
+
+def _readiness_check_names(task: TaskDefinition) -> tuple[str, str]:
+    return f"{task.task_id} load accumulation", f"{task.task_id} load freshness"
+
+
 def _check_load_freshness(
     task: TaskDefinition, latest_hour: datetime | None, now: datetime
 ) -> CheckResult:
     """A stale newest hour means snapshot capture or hourly derivation stopped accumulating."""
+    _, check_name = _readiness_check_names(task)
     if latest_hour is None:
         return CheckResult(
-            "load freshness", CheckStatus.WAIT, "no derived hourly actual load persisted yet"
+            check_name, CheckStatus.WAIT, "no derived hourly actual load persisted yet"
         )
     max_lag_hours = task.policies.stale_anchor_max_lag_hours
     max_lag = timedelta(hours=max_lag_hours)
@@ -251,11 +281,11 @@ def _check_load_freshness(
     detail = f"latest derived hour {latest_hour.isoformat()} lags {now.isoformat()} by {lag}"
     if is_stale_load_anchor(latest_hour, now, max_lag_hours):
         return CheckResult(
-            "load freshness",
+            check_name,
             CheckStatus.FAIL,
             f"{detail} (> {max_lag}); accumulation has stalled",
         )
-    return CheckResult("load freshness", CheckStatus.PASS, detail)
+    return CheckResult(check_name, CheckStatus.PASS, detail)
 
 
 def _check_tick(deployment: Deployment, schedule_name: str) -> CheckResult:
@@ -281,10 +311,6 @@ def _summarize(error: Exception) -> str:
     """Keep one report line per check; driver errors append multi-line hints."""
     lines = str(error).strip().splitlines()
     return f"{type(error).__name__}: {lines[0] if lines else ''}"
-
-
-def _tick_check_names() -> tuple[str, ...]:
-    return tuple(f"tick {name}" for name in READINESS_SCHEDULES)
 
 
 if __name__ == "__main__":
