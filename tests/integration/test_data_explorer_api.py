@@ -345,6 +345,7 @@ def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
     repo.engine = BrokenEngine()
     assert client.get("/data/status").status_code == 503
     assert client.get("/data/power/load").status_code == 503
+    assert client.get("/data/weather/forecasts").status_code == 503
 
 
 def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_client) -> None:
