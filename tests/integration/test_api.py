@@ -373,12 +373,7 @@ def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() 
     }
     schemas = app.openapi()["components"]["schemas"]
 
-    task_response = next(
-        schema
-        for name, schema in schemas.items()
-        if name.endswith("TaskPredictionResponse")
-        and schema["properties"]["task_type"].get("const") == "recursive_regression"
-    )
+    task_response = schemas["DynamicHorizonForecastTaskPredictionResponse"]
     item_ref = task_response["properties"]["predictions"]["items"]["$ref"]
     task_item = schemas[item_ref.rsplit("/", 1)[-1]]
 
@@ -386,6 +381,7 @@ def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() 
     assert set(schemas["PredictionItem"]["required"]) == expected_fields
     assert set(task_item["properties"]) == expected_fields
     assert set(task_item["required"]) == expected_fields
+    assert task_item["properties"] == schemas["PredictionItem"]["properties"]
 
 
 def _fitted_high_load_alert(
