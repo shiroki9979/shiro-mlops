@@ -25,7 +25,7 @@
 - **預測對象與氣象代表點分離**：全台逐時實際負載的預測對象識別碼遷移為 `nationwide`；氣象代表點引用擷取目錄中的測站與鄉鎮預報區。
 - **擷取範圍獨立於任務**：資料來源與氣象代表點目錄維持獨立設定，任務只能引用；引用不存在的項目於啟動時失敗。
 - **Dagster**：以資產工廠為每個任務產生 `{task_id}__*` 資產（特徵、模型、監控）與排程；擷取資產以資料來源為中心，跨任務共用。每個任務擁有獨立的 MLflow experiment、registered model 與模型目錄。
-- **Serving**：新增 `POST /tasks/{task_id}/predict`，回應 schema 依任務類型而定。`/predict` 保留為動態視界預報任務的別名，其 `location` 請求欄位標示為 deprecated，回應增加 `subject`。
+- **Serving**：新增 `POST /tasks/{task_id}/predict`，回應 schema 依任務類型而定，附帶天氣的 item 其天氣欄位跟隨任務設定 `weather.fields`。`/predict` 保留為動態視界預報任務的別名，其 `location` 請求欄位標示為 deprecated，回應增加 `subject`。
 - **驗證實作**：以三個任務驗證抽象，各自只變動一個主要維度：
   - 動態視界預報（既有）：遞迴回歸，LightGBM。
   - 高負載預警：直接策略分類，`LGBMClassifier`；高負載門檻為預警當下之前 28 日的 P90。

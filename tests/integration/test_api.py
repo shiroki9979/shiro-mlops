@@ -362,9 +362,16 @@ def test_startup_loads_each_task_model_independently(
     assert alias_predict.status_code == 503
 
 
-def test_openapi_describes_task_predictions_with_the_task_type_item_schema() -> None:
+def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
+    """#68：/predict 契約不變，且動態視界預報任務的 item 與 /predict 的 PredictionItem 一致。"""
+    expected_fields = {
+        "datetime",
+        "predicted_load_mw",
+        "temperature",
+        "relative_humidity",
+        "weather_sources",
+    }
     schemas = app.openapi()["components"]["schemas"]
-    item_properties = schemas["PredictionItem"]["properties"]
 
     task_response = next(
         schema
@@ -375,8 +382,10 @@ def test_openapi_describes_task_predictions_with_the_task_type_item_schema() -> 
     item_ref = task_response["properties"]["predictions"]["items"]["$ref"]
     task_item = schemas[item_ref.rsplit("/", 1)[-1]]
 
-    assert task_item["properties"] == item_properties
-    assert set(task_item["required"]) == set(schemas["PredictionItem"]["required"])
+    assert set(schemas["PredictionItem"]["properties"]) == expected_fields
+    assert set(schemas["PredictionItem"]["required"]) == expected_fields
+    assert set(task_item["properties"]) == expected_fields
+    assert set(task_item["required"]) == expected_fields
 
 
 def _fitted_high_load_alert(

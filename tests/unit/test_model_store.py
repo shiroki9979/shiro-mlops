@@ -1,5 +1,6 @@
 """Per-task model directories: atomic replacement and no legacy joblib loading."""
 
+import ctypes
 import errno
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -65,15 +66,26 @@ def test_failed_save_keeps_the_previous_model(root: Path) -> None:
     assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
 
 
+def _stub_renameat2(monkeypatch: pytest.MonkeyPatch, renameat2) -> None:
+    """Replace the C library lookup, the only OS boundary the atomic exchange crosses."""
+    monkeypatch.setattr(
+        ctypes, "CDLL", lambda *_args, **_kwargs: SimpleNamespace(renameat2=renameat2)
+    )
+
+
+def _failing_renameat2(error: int):
+    def renameat2(*_args: object) -> int:
+        ctypes.set_errno(error)
+        return -1
+
+    return renameat2
+
+
 def test_failed_atomic_exchange_keeps_the_previous_model(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     save_model(root, "sample_task", _RecordingModel("v1"))
-
-    def fail_exchange(_staging: Path, _target: Path) -> None:
-        raise OSError(errno.EIO, "Input/output error")
-
-    monkeypatch.setattr(model_store, "_exchange_directories", fail_exchange)
+    _stub_renameat2(monkeypatch, _failing_renameat2(errno.EIO))
 
     with pytest.raises(OSError, match="Input/output error"):
         save_model(root, "sample_task", _RecordingModel("v2"))
@@ -88,11 +100,7 @@ def test_resaving_without_atomic_exchange_support_still_replaces_the_model(
 ) -> None:
     """非 Linux 核心或不支援 RENAME_EXCHANGE 的檔案系統仍須能重新訓練。"""
     save_model(root, "sample_task", _RecordingModel("v1"))
-
-    def exchange_unsupported(_staging: Path, _target: Path) -> None:
-        raise OSError(unsupported, "exchange unsupported")
-
-    monkeypatch.setattr(model_store, "_exchange_directories", exchange_unsupported)
+    _stub_renameat2(monkeypatch, _failing_renameat2(unsupported))
 
     save_model(root, "sample_task", _RecordingModel("v2"))
 
@@ -100,23 +108,40 @@ def test_resaving_without_atomic_exchange_support_still_replaces_the_model(
     assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
 
 
+def test_resaving_without_renameat2_clears_a_model_left_by_an_interrupted_swap(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """程序於兩次 rename 之間中止時遺留的舊模型，於下次替換時清除。"""
+    save_model(root, "sample_task", _RecordingModel("v2"))
+    leftover = root / ".sample_task.previous"
+    leftover.mkdir()
+    (leftover / "version.txt").write_text("v1", encoding="utf-8")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: SimpleNamespace())
+
+    save_model(root, "sample_task", _RecordingModel("v3"))
+
+    assert (root / "sample_task" / "version.txt").read_text(encoding="utf-8") == "v3"
+    assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
+
+
 def test_reader_waits_for_model_replacement(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """寫入端持有排他鎖期間（此處暫停於交換嘗試中），讀取端須等待並讀到新模型。"""
     save_model(root, "sample_task", _RecordingModel("v1"))
-    swapped = Event()
+    swapping = Event()
     resume = Event()
     reading = Event()
-    install = model_store._install
 
-    def pause_after_install(staging: Path, target: Path) -> None:
-        install(staging, target)
-        swapped.set()
+    def pause_then_report_unsupported(*_args: object) -> int:
+        swapping.set()
         assert resume.wait(3)
+        ctypes.set_errno(errno.ENOSYS)
+        return -1
 
     def read_model() -> _RecordingModel | None:
         reading.set()
         return load_model(root, SimpleNamespace(task_id="sample_task", task_type="recording"))
 
-    monkeypatch.setattr(model_store, "_install", pause_after_install)
+    _stub_renameat2(monkeypatch, pause_then_report_unsupported)
     monkeypatch.setattr(
         model_store,
         "get_task_type",
@@ -129,7 +154,7 @@ def test_reader_waits_for_model_replacement(root: Path, monkeypatch: pytest.Monk
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         writer = executor.submit(save_model, root, "sample_task", _RecordingModel("v2"))
-        assert swapped.wait(3)
+        assert swapping.wait(3)
         reader = executor.submit(read_model)
         try:
             assert reading.wait(3)

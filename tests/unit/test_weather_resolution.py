@@ -307,7 +307,7 @@ def test_resolver_reads_forecasts_and_observations_of_the_weather_reference_poin
     assert result.dataframe.loc[0, "temperature"] == 31.0
 
 
-def test_weather_reference_point_resolves_alias_from_ingestion_catalog() -> None:
+def test_ingestion_catalog_from_settings_resolves_weather_reference_point_alias() -> None:
     settings = Settings(
         CWA_LOCATION_ALLOWLIST='{"Hualien": {"station_id": "466990", "geocode": "10015000"}}'
     )

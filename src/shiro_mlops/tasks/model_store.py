@@ -62,8 +62,14 @@ def _exchange_directories(staging: Path, target: Path) -> None:
 
 
 def _swap_by_renames(staging: Path, target: Path) -> None:
-    """Emulate the exchange with renames; readers wait on the lock, so only a crash sees the gap."""
-    previous = staging.with_name(f"{staging.name}.previous")
+    """Emulate the exchange with renames; readers wait on the lock, so only a crash sees the gap.
+
+    A crash between the renames leaves the task without a model until its next
+    training; the old directory it strands is cleared by that next swap.
+    """
+    previous = target.with_name(f".{target.name}.previous")
+    if previous.exists():
+        shutil.rmtree(previous)
     target.rename(previous)
     try:
         staging.rename(target)

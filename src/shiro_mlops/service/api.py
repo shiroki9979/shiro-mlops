@@ -4,9 +4,10 @@ import logging
 import operator
 from collections.abc import AsyncGenerator, Callable, Iterable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import cache, reduce
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -155,22 +156,36 @@ class PredictionRequest(BaseModel):
     )
 
 
-def _prediction_item(task: TaskDefinition, name: str) -> type[BaseModel]:
+@dataclass(frozen=True)
+class _ItemSchema:
+    """What shapes one task's prediction item; hashable, so each schema is built once."""
+
+    task_type: str
+    weather_fields: tuple[str, ...]
+
+    @classmethod
+    def of(cls, task: TaskDefinition) -> Self:
+        return cls(task.task_type, task.weather.fields)
+
+
+@cache
+def _prediction_item(schema: _ItemSchema, name: str) -> type[BaseModel]:
     """The task type's item, plus the task's own weather fields when the item echoes weather."""
-    item = get_task_type(task.task_type).prediction_item
+    item = get_task_type(schema.task_type).prediction_item
     if not issubclass(item, WeatherEchoingItem):
         return item
-    weather_fields = {field: (float, ...) for field in task.weather.fields}
+    weather_fields = {field: (float, ...) for field in schema.weather_fields}
     return create_model(
         name,
         __base__=item,
+        __doc__=item.__doc__,
         **weather_fields,
         weather_sources=(dict[str, dict[str, str]], ...),
     )
 
 
 # /predict 的 item 即動態視界預報任務的 item，名稱沿用既有 OpenAPI 契約。
-PredictionItem = _prediction_item(_served_task(), "PredictionItem")
+PredictionItem = _prediction_item(_ItemSchema.of(_served_task()), "PredictionItem")
 
 
 class PredictionResponse(BaseModel):
@@ -191,24 +206,26 @@ class TaskPredictionEnvelope(BaseModel):
 
 
 @cache
-def _task_prediction_response(task_id: str) -> type[TaskPredictionEnvelope]:
-    """Response model of one task: its task type's item with the task's weather fields.
-
-    Task definitions are fixed per process, so the model is built once per task id.
-    """
-    task = deployed_task(task_id)
+def _task_prediction_response(task_id: str, schema: _ItemSchema) -> type[TaskPredictionEnvelope]:
+    """Response model of one task, told apart from the others by its ``task_id`` constant."""
     name = "".join(part.title() for part in task_id.split("_"))
     return create_model(
         f"{name}TaskPredictionResponse",
         __base__=TaskPredictionEnvelope,
-        task_type=(Literal[task.task_type], ...),
-        predictions=(list[_prediction_item(task, f"{name}PredictionItem")], ...),
+        __doc__=f"Prediction of task {task_id}; items follow its task type and weather fields.",
+        task_id=(Literal[task_id], ...),
+        task_type=(Literal[schema.task_type], ...),
+        predictions=(list[_prediction_item(schema, f"{name}PredictionItem")], ...),
     )
+
+
+def _response_model(task: TaskDefinition) -> type[TaskPredictionEnvelope]:
+    return _task_prediction_response(task.task_id, _ItemSchema.of(task))
 
 
 # 僅供 OpenAPI 描述；各任務的回應模型建構時即已驗證，端點不再以聯集重驗。
 TaskPredictionResponse = reduce(
-    operator.or_, (_task_prediction_response(task_id) for task_id in sorted(deployed_tasks()))
+    operator.or_, (_response_model(task) for _, task in sorted(deployed_tasks().items()))
 )
 
 
@@ -266,7 +283,7 @@ def predict_for_task(task_id: str, request: TaskPredictionRequest) -> TaskPredic
     """Predict with one task; the prediction item schema depends on the task."""
     task = _deployed_task_or_404(task_id)
     outcome = _predict(task, horizon_hours=request.horizon_hours)
-    return _task_prediction_response(task.task_id)(
+    return _response_model(task)(
         status="success",
         task_id=task.task_id,
         task_type=task.task_type,
