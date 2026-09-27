@@ -61,15 +61,17 @@ def _exchange_directories(staging: Path, target: Path) -> None:
         raise OSError(error, os.strerror(error), f"{staging} <-> {target}")
 
 
+def _previous_directory(target: Path) -> Path:
+    return target.with_name(f".{target.name}.previous")
+
+
 def _swap_by_renames(staging: Path, target: Path) -> None:
     """Emulate the exchange with renames; readers wait on the lock, so only a crash sees the gap.
 
     A crash between the renames leaves the task without a model until its next
-    training; the old directory it strands is cleared by that next swap.
+    training, which clears the stranded old directory before installing.
     """
-    previous = target.with_name(f".{target.name}.previous")
-    if previous.exists():
-        shutil.rmtree(previous)
+    previous = _previous_directory(target)
     target.rename(previous)
     try:
         staging.rename(target)
@@ -81,6 +83,9 @@ def _swap_by_renames(staging: Path, target: Path) -> None:
 
 def _install(staging: Path, target: Path) -> None:
     """Leave the new model at ``target`` and any previous model at ``staging``."""
+    stranded = _previous_directory(target)
+    if stranded.exists():
+        shutil.rmtree(stranded)
     if not target.exists():
         staging.rename(target)
         return

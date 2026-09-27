@@ -2,6 +2,7 @@
 
 import ctypes
 import errno
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
@@ -66,14 +67,14 @@ def test_failed_save_keeps_the_previous_model(root: Path) -> None:
     assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
 
 
-def _stub_renameat2(monkeypatch: pytest.MonkeyPatch, renameat2) -> None:
+def _stub_renameat2(monkeypatch: pytest.MonkeyPatch, renameat2: Callable[..., int]) -> None:
     """Replace the C library lookup, the only OS boundary the atomic exchange crosses."""
     monkeypatch.setattr(
         ctypes, "CDLL", lambda *_args, **_kwargs: SimpleNamespace(renameat2=renameat2)
     )
 
 
-def _failing_renameat2(error: int):
+def _failing_renameat2(error: int) -> Callable[..., int]:
     def renameat2(*_args: object) -> int:
         ctypes.set_errno(error)
         return -1
@@ -108,19 +109,17 @@ def test_resaving_without_atomic_exchange_support_still_replaces_the_model(
     assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
 
 
-def test_resaving_without_renameat2_clears_a_model_left_by_an_interrupted_swap(
-    root: Path, monkeypatch: pytest.MonkeyPatch
+def test_saving_after_an_interrupted_swap_installs_the_model_and_clears_the_old_one(
+    root: Path,
 ) -> None:
-    """程序於兩次 rename 之間中止時遺留的舊模型，於下次替換時清除。"""
-    save_model(root, "sample_task", _RecordingModel("v2"))
+    """兩次 rename 之間中止時正式目錄已不存在，下次保存須安裝新模型並清除遺留的舊目錄。"""
     leftover = root / ".sample_task.previous"
     leftover.mkdir()
     (leftover / "version.txt").write_text("v1", encoding="utf-8")
-    monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: SimpleNamespace())
 
-    save_model(root, "sample_task", _RecordingModel("v3"))
+    save_model(root, "sample_task", _RecordingModel("v2"))
 
-    assert (root / "sample_task" / "version.txt").read_text(encoding="utf-8") == "v3"
+    assert (root / "sample_task" / "version.txt").read_text(encoding="utf-8") == "v2"
     assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
 
 
