@@ -225,7 +225,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 ### 2.3 隨需動態視界負載預報
 
-- **路徑**：`POST /predict`（動態視界預報任務 `dynamic_horizon_forecast` 的別名，與 §2.4 共用 runner `predict_task` 與錯誤對應；預測 item 即 `recursive_regression` 的 `prediction_item`，同一請求的 `predictions` 與 `POST /tasks/dynamic_horizon_forecast/predict` 相同）
+- **路徑**：`POST /predict`（動態視界預報任務 `dynamic_horizon_forecast` 的別名，與 §2.4 共用 runner `predict_task` 與錯誤對應；預測 item 即該任務的 item（`PredictionItem`：`datetime`、`predicted_load_mw`、`temperature`、`relative_humidity`、`weather_sources`），同一請求的 `predictions` 與 `POST /tasks/dynamic_horizon_forecast/predict` 相同）
 - **預測對象**：固定為 `nationwide`，並於回應 `subject` 揭露；模型只預測全台負載，不宣稱支援區域負載模型。
 - **相容性欄位**：請求 `location` 為選填，於 OpenAPI 標示 `deprecated`；任何值皆被忽略，不影響預測對象，也不再回傳 HTTP 400。回應不再包含 `location`。
 - **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
@@ -276,8 +276,8 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **請求 Body**：`horizon_hours`（整數 1–168，預設 24）；不接受 `location`。語意依任務的天氣輸入而定：
   - 預報天氣任務（`FORECAST`）：負載起點之後預測的小時數（預測視界）。
   - 觀測天氣任務（`OBSERVED`）：評分最近幾個時間窗結束小時，由負載起點往回算，即結束小時落在 `(anchor - horizon_hours, anchor]`；不預測未來。資料有缺口的時間窗不評分，因此回傳筆數可能少於 `horizon_hours`，但不以常數補值。
-- **回應 Body**：共通欄位 `status`（固定為 `success`）、`task_id`、`task_type`、`subject`、`mode`，以及 `predictions`；`predictions` 的 item schema 由任務類型的 `prediction_item` 決定（§5.2），OpenAPI 以 `<TaskType>TaskPredictionResponse` 逐一描述，並以 `task_type` 常數區分。
-- **Item 組成**：runner 回傳的預測列、天氣列（`weather.fields`）與 `weather_sources` 依位置一一對應合併後，以 `prediction_item` 驗證；`datetime` 以字串輸出（`YYYY-MM-DD HH:MM:SS`）。觀測天氣任務的天氣列與來源由 runner 對齊至被評分的結束小時（該小時以前最新一筆測站觀測，來源為 `{"source": "station_observation", "observed_at": ...}`），因此依位置合併的契約同樣成立。
+- **回應 Body**：共通欄位 `status`（固定為 `success`）、`task_id`、`task_type`、`subject`、`mode`，以及 `predictions`；`predictions` 的 item schema 由任務類型的 `prediction_item` 與任務設定的 `weather.fields` 共同決定（§5.2），OpenAPI 以每個任務的 `<TaskId>TaskPredictionResponse`（item 為 `<TaskId>PredictionItem`，未附帶天氣者直接沿用任務類型的 item）逐一描述，並以 `task_type` 常數區分；回應模型於建構時驗證，端點不再以聯集重驗。
+- **Item 組成**：runner 回傳的預測列、天氣列（`weather.fields`）與 `weather_sources` 依位置一一對應合併後，以該任務的 item 驗證；`datetime` 以字串輸出（`YYYY-MM-DD HH:MM:SS`）。觀測天氣任務的天氣列與來源由 runner 對齊至被評分的結束小時（該小時以前最新一筆測站觀測，來源為 `{"source": "station_observation", "observed_at": ...}`），因此依位置合併的契約同樣成立。
 - **錯誤對應**：
 
   | 情境 | HTTP |
@@ -493,7 +493,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 ### 5.1 任務設定 Schema（`tasks/<task_id>.toml`）
 
-以標準函式庫 `tomllib` 讀取，兩階段 Pydantic 驗證：先驗證共通欄位，再以任務類型的 `params_model` 驗證 `[params]`、`health_model` 驗證 `[health]`；任務類型 `prediction_item` 回傳的天氣欄位（`WeatherField` 中出現在 item 欄位者）必須全部列於 `weather.fields`，否則以 `weather.fields` 為欄位路徑拒絕，避免回應驗證時才失敗（500）。Dagster code location 載入與 API 啟動時即載入全部任務設定；任何錯誤皆拋出 `TaskDefinitionError(path, detail)`，`detail` 指出欄位路徑（如 `policies.stale_anchor_max_lag_hours`、`params.rolling_windows`）。未知欄位一律拒絕。
+以標準函式庫 `tomllib` 讀取，兩階段 Pydantic 驗證：先驗證共通欄位，再以任務類型的 `params_model` 驗證 `[params]`、`health_model` 驗證 `[health]`。Dagster code location 載入與 API 啟動時即載入全部任務設定；任何錯誤皆拋出 `TaskDefinitionError(path, detail)`，`detail` 指出欄位路徑（如 `policies.stale_anchor_max_lag_hours`、`params.rolling_windows`）。未知欄位一律拒絕。
 
 | 欄位 | 型別 | 規則 |
 | :--- | :--- | :--- |
@@ -528,7 +528,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 任務類型為純計算 adapter，不接觸 repository；以 `tasks/types/__init__.py` 的明確 registry（`TASK_TYPES`、`get_task_type(name)`）依名稱對應。
 
 - `name`、`params_model`：registry 名稱與 `[params]` 的 Pydantic model。
-- `prediction_item`：`POST /tasks/{task_id}/predict` 單一預測 item 的 Pydantic model（§2.4）；欄位取自 `TaskModel.predict` 輸出欄位、任務的天氣欄位與 `weather_sources`，其餘欄位忽略。
+- `prediction_item`：`POST /tasks/{task_id}/predict` 單一預測 item 中任務類型自身欄位的 Pydantic model（§2.4），欄位取自 `TaskModel.predict` 輸出，其餘欄位忽略。繼承 `WeatherEchoingItem` 者，服務層另補上任務設定 `weather.fields` 的每個天氣欄位（`float`）與 `weather_sources`，因此 item 的天氣欄位跟隨任務設定，任務類型不寫死天氣欄位。
 - `requirements(params) -> InputRequirements(weather, lookback_hours, history_coverage)`：預測時使用預報（`FORECAST`）或觀測（`OBSERVED`）天氣，以及 runner 有界讀取歷史所需的小時數。`history_coverage`（選填，`HistoryCoverage(window_hours, min_valid_hours)`）要求錨點往前 `window_hours`（`(anchor - window_hours, anchor]`）內至少 `min_valid_hours` 個有實際負載的小時；不足時 runner 拋出 `InsufficientLoadHistoryError`，`/tasks/{task_id}/ready` 與 predict 皆回 503，任務類型不會收到歷史不足的 `PredictionData`。
 - `train(params, TrainingData) -> Trained(model, metrics)`：負責特徵、標籤、fit 與評估。`TrainingData` 含 `load`（`datetime`、`subject`、`load_mw`）、`weather`（`datetime` 與 `weather.fields`，一律為觀測天氣）與 `validation_start`；target 時間 `>= validation_start` 者為驗證列，任務類型不得自行切分。
 - `health_model`、`assess_health(thresholds, metrics) -> HealthAssessment(status, reason)`：健康判定規則屬於任務類型，門檻來自任務設定 `[health]`；`status` 為 `HealthStatus.HEALTHY` 或 `WARNING`，`reason` 指出決定判定的指標與門檻。缺少判定所需指標時必須回報 `WARNING`，不得視為健康。
@@ -536,13 +536,13 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 已註冊任務類型：
 
-- `recursive_regression`：LightGBM 單步模型遞迴展開（ADR-0003 僅適用此類型）；`lookback_hours = max(lags, rolling_windows)`；預測輸出 `datetime`、`predicted_load_mw`；`prediction_item` 為 `RecursiveRegressionPrediction`（`datetime`、`predicted_load_mw`、`temperature`、`relative_humidity`、`weather_sources`，與 `/predict` 的 `PredictionItem` 相同），因此此類型的任務須以 `temperature` 與 `relative_humidity` 為天氣欄位（載入任務設定時檢查）；評估為驗證列上的 one-step-ahead MAPE／RMSE／MAE；驗證列為空時不回報任何指標（不得以 `0.0` 佔位），健康判定因缺少 `mape` 而為 `WARNING`。健康判定：驗證期 `mape < max_mape` 為 `HEALTHY`，否則 `WARNING`。
-- `direct_classification`：直接策略二元分類（高負載預警）。每個錨點（有實際負載的小時）與領先時數 `k = 1..168` 組成一列：特徵為錨點當下已知的 `anchor_load_mw`、`load_mw_lag_{L}`（錨點前 `L` 小時的負載）、`load_mw_rolling_mean_{W}`／`load_mw_rolling_std_{W}`（含錨點的前 `W` 小時）與 `threshold_mw`，目標小時的日曆特徵與天氣，以及 `lead_hours = k`；單一 `LGBMClassifier` 涵蓋整個視界，不串接任何預報輸出。高負載門檻 `threshold_mw` 為區間 `(anchor - window_days, anchor]` 內全台逐時實際負載的 `quantile` 分位數（線性內插），只使用錨點當下已知的資料；門檻窗內缺少任一小時的實際負載（28 日須完整 672 小時）時，該錨點不產生門檻與訓練列。`requirements()` 以同一規則宣告 `history_coverage`，預測時歷史不足由 runner 回報不可用（503）。標籤為目標小時實際負載 `>` 錨點門檻；觀測天氣缺漏的目標小時直接捨棄。訓練標籤只有單一類別時拒絕訓練。`lookback_hours = window_days × 24 + max(lags, rolling_windows)`。預測輸出與天氣列逐列對齊（每個預報小時一列、順序相同）：`datetime`、`is_high_load`（`probability >= 0.5`）、`probability`、`threshold_mw`；目標小時超出領先 1–168 小時時拋出錯誤。`prediction_item` 為 `DirectClassificationPrediction`（`datetime`、`is_high_load`、`probability`、`threshold_mw`、`temperature`、`relative_humidity`、`weather_sources`），此類型的任務同樣須以 `temperature` 與 `relative_humidity` 為天氣欄位（載入任務設定時檢查）。評估為驗證列（目標小時 `>= validation_start`）上以 0.5 為界的 precision／recall／F1；驗證列為空時不回報任何指標，健康判定因缺少指標而為 `WARNING`。健康判定：三項指標皆 `>=` 各自的 `min_*` 為 `HEALTHY`；任一不足或缺少即 `WARNING`。
+- `recursive_regression`：LightGBM 單步模型遞迴展開（ADR-0003 僅適用此類型）；`lookback_hours = max(lags, rolling_windows)`；預測輸出 `datetime`、`predicted_load_mw`；`prediction_item` 為 `RecursiveRegressionPrediction`（`datetime`、`predicted_load_mw`，附帶天氣）；動態視界預報任務的 item 因任務設定宣告 `temperature` 與 `relative_humidity`，與 `/predict` 的 `PredictionItem` 相同；評估為驗證列上的 one-step-ahead MAPE／RMSE／MAE；驗證列為空時不回報任何指標（不得以 `0.0` 佔位），健康判定因缺少 `mape` 而為 `WARNING`。健康判定：驗證期 `mape < max_mape` 為 `HEALTHY`，否則 `WARNING`。
+- `direct_classification`：直接策略二元分類（高負載預警）。每個錨點（有實際負載的小時）與領先時數 `k = 1..168` 組成一列：特徵為錨點當下已知的 `anchor_load_mw`、`load_mw_lag_{L}`（錨點前 `L` 小時的負載）、`load_mw_rolling_mean_{W}`／`load_mw_rolling_std_{W}`（含錨點的前 `W` 小時）與 `threshold_mw`，目標小時的日曆特徵與天氣，以及 `lead_hours = k`；單一 `LGBMClassifier` 涵蓋整個視界，不串接任何預報輸出。高負載門檻 `threshold_mw` 為區間 `(anchor - window_days, anchor]` 內全台逐時實際負載的 `quantile` 分位數（線性內插），只使用錨點當下已知的資料；門檻窗內缺少任一小時的實際負載（28 日須完整 672 小時）時，該錨點不產生門檻與訓練列。`requirements()` 以同一規則宣告 `history_coverage`，預測時歷史不足由 runner 回報不可用（503）。標籤為目標小時實際負載 `>` 錨點門檻；觀測天氣缺漏的目標小時直接捨棄。訓練標籤只有單一類別時拒絕訓練。`lookback_hours = window_days × 24 + max(lags, rolling_windows)`。預測輸出與天氣列逐列對齊（每個預報小時一列、順序相同）：`datetime`、`is_high_load`（`probability >= 0.5`）、`probability`、`threshold_mw`；目標小時超出領先 1–168 小時時拋出錯誤。`prediction_item` 為 `DirectClassificationPrediction`（`datetime`、`is_high_load`、`probability`、`threshold_mw`，附帶天氣），item 另含任務 `weather.fields` 的天氣欄位與 `weather_sources`。評估為驗證列（目標小時 `>= validation_start`）上以 0.5 為界的 precision／recall／F1；驗證列為空時不回報任何指標，健康判定因缺少指標而為 `WARNING`。健康判定：三項指標皆 `>=` 各自的 `min_*` 為 `HEALTHY`；任一不足或缺少即 `WARNING`。
 - `unsupervised_reconstruction`：淺層 MLP AutoEncoder（sklearn `MLPRegressor`，以輸入重建輸入）對滑動窗評分，偵測用電型態異常；訓練不需標籤。
   - **輸入**：`requirements()` 為 `OBSERVED` 天氣，`lookback_hours = window_hours + 168`，足以為最多 168 個結束小時各組一個完整時間窗。每個時間窗為結束小時（含）往前 `window_hours` 個連續小時：逐時全台實際負載、逐時 `weather.fields` 測站觀測、逐時週末旗標，加上結束小時的 hour-of-day 與 day-of-week sin/cos 編碼。觀測天氣最多向前補兩小時；負載缺小時或天氣缺口更長的時間窗不訓練也不評分。各特徵以訓練窗的平均與標準差標準化（標準差為 0 時以 1 代替）。
   - **分數與門檻**：`anomaly_score` 為時間窗負載部分（標準化後）的平均平方重建誤差；天氣與日曆只作為判斷條件，不計入分數。結束小時 `>= validation_start` 的時間窗為驗證窗，其餘為訓練窗。驗證窗依結束小時的日曆日由第一個驗證日起交錯分組：第 1、3、5… 個驗證日為校準日，第 2、4、6… 個為保留日；門檻為校準窗重建誤差的 `threshold_quantile` 分位數，`is_anomaly = anomaly_score > threshold`。以整日交錯而非前後對切，使驗證期短於一週時兩組仍分布於相同的平日與週末。沒有訓練窗或校準窗時無法設定門檻，拒絕訓練（`ValueError`）；驗證窗只落在單一日曆日（保留組為空）時只回報 `threshold` 與窗數，健康判定因缺少 `recall`／`false_positive_rate` 而為 `WARNING`。
   - **評估（寫入 MLflow）**：於乾淨保留窗注入三種合成異常並計算門檻下召回率：`recall_sudden_drop`（最後 6 小時負載降 20%）、`recall_pattern_swap`（窗內負載循環位移 12 小時）、`recall_level_shift`（整窗負載升 10%），`recall` 為三者平均；`false_positive_rate` 為乾淨保留窗被判為異常的比例；另記 `threshold`、`calibration_windows`（校準窗數）與 `validation_windows`（保留窗數）。門檻與誤報率取自不同日期的時間窗，誤報率不會因設計而固定接近 `1 - threshold_quantile`，保留日的重建誤差偏高時即可使 `max_false_positive_rate` 判定失敗。
-  - **預測**：輸出 `datetime`（時間窗結束小時）、`anomaly_score`、`is_anomaly`、`threshold`；`prediction_item` 為 `UnsupervisedReconstructionPrediction`（同名四欄位）。
+  - **預測**：輸出 `datetime`（時間窗結束小時）、`anomaly_score`、`is_anomaly`、`threshold`；`prediction_item` 為 `UnsupervisedReconstructionPrediction`（同名四欄位，不附帶天氣）。
   - **健康判定**：`recall >= min_recall` 且 `false_positive_rate <= max_false_positive_rate` 為 `HEALTHY`，否則 `WARNING`；缺少任一指標時為 `WARNING`。
 
 ### 5.3 Runner（`tasks/runner.py`）

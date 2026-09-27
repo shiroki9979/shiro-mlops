@@ -90,6 +90,15 @@ def split_at_validation(
     return fitting, validation
 
 
+class WeatherEchoingItem(BaseModel):
+    """Marks a prediction item that repeats the weather behind each predicted hour.
+
+    The task type declares only its own fields; the serving layer adds the task's
+    ``weather.fields`` and their ``weather_sources``, so items follow the task
+    definition instead of a fixed weather list.
+    """
+
+
 class TaskModel(Protocol):
     """A trained model that predicts from in-memory data and saves itself natively."""
 
@@ -129,7 +138,7 @@ class TaskType(Protocol[P]):
     name: ClassVar[str]
     params_model: ClassVar[type[P]]
     # 回應 schema 依任務類型而定（ADR-0009）：服務層以此組成 /tasks/{task_id}/predict 的
-    # 回應與 OpenAPI。每個 item 由同位置的預測列、天氣列與 weather_sources 合併後驗證。
+    # 回應與 OpenAPI。繼承 WeatherEchoingItem 者，服務層另依任務設定補上天氣欄位與來源。
     prediction_item: ClassVar[type[BaseModel]]
     # 健康判定門檻的 schema；門檻值來自任務設定 [health]，判定規則屬於任務類型。
     health_model: ClassVar[type[BaseModel]]
