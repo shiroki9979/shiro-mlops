@@ -130,7 +130,7 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
 def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
     """Asset: repository-only weather source consumed by feature engineering."""
     observations = _get_time_series_repo(context).fetch_cwa_station_observations(
-        station_id="466920"
+        station_id=settings.cwa_locations[DEFAULT_LOCATION].station_id
     )
     if observations.empty:
         raise RuntimeError("No canonical CWA station observations available for training")
@@ -141,7 +141,7 @@ def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFra
             "relative_humidity_pct": "relative_humidity",
         }
     )
-    result["location"] = "Taipei"
+    result["location"] = DEFAULT_LOCATION
     return result
 
 

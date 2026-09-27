@@ -1,6 +1,6 @@
 """Main Dagster Definitions entrypoint."""
 
-from dagster import Definitions, load_assets_from_modules
+from dagster import Definitions, load_assets_from_modules, resource
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import (
@@ -34,6 +34,13 @@ io_manager = get_parquet_io_manager(
 )
 feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.from_settings(settings))
 
+
+@resource
+def time_series_repo_resource(_context):
+    """Open the database when a run needs it, not while loading definitions."""
+    return TimeSeriesRepository()
+
+
 defs = Definitions(
     assets=all_assets,
     schedules=[
@@ -55,6 +62,6 @@ defs = Definitions(
     resources={
         "io_manager": io_manager,
         "feast_io_manager": feast_io_manager,
-        "time_series_repo": TimeSeriesRepository(),
+        "time_series_repo": time_series_repo_resource,
     },
 )

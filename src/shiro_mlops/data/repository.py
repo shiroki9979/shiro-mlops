@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_LOCATION,
@@ -20,11 +21,7 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
-from shiro_mlops.data.cwa_client import (
-    DEFAULT_CWA_LOCATIONS,
-    CWAForecastRelease,
-    CWAObservationBatch,
-)
+from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
@@ -174,12 +171,7 @@ class TimeSeriesRepository:
             self.engine = get_timescale_engine()
 
         if auto_init:
-            try:
-                ensure_timescale_hypertables(self.engine)
-            except Exception as e:
-                logger.warning(
-                    f"Could not automatically ensure hypertables on repository init: {e}"
-                )
+            ensure_timescale_hypertables(self.engine)
 
         self.supply_demand_repo = TaipowerSupplyDemandRepository(
             engine=self.engine, auto_init=False
@@ -687,9 +679,8 @@ class TimeSeriesRepository:
         pd.DataFrame
             Sorted DataFrame of weather observation records.
         """
-        station_by_alias = {
-            value.alias: value.station_id for value in DEFAULT_CWA_LOCATIONS.values()
-        }
+        locations = settings.cwa_locations
+        station_by_alias = {value.alias: value.station_id for value in locations.values()}
         try:
             canonical = self.fetch_cwa_station_observations(
                 start_time=start_time,
@@ -705,9 +696,7 @@ class TimeSeriesRepository:
                 "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
             }
         )
-        aliases_by_station = {
-            value.station_id: value.alias for value in DEFAULT_CWA_LOCATIONS.values()
-        }
+        aliases_by_station = {value.station_id: value.alias for value in locations.values()}
         result[LOCATION_COL] = (
             result["station_id"].map(aliases_by_station).fillna(location or DEFAULT_LOCATION)
         )

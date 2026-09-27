@@ -37,8 +37,7 @@ export function defaultWindow(hours = 24, lookAheadHours = 0): { start: string; 
 }
 
 export function toDatetimeLocal(value: Date): string {
-  const utc = value.getTime() + value.getTimezoneOffset() * 60_000
-  const taipei = new Date(utc + 8 * 3600_000)
+  const taipei = new Date(value.getTime() + 8 * 3600_000)
   const pad = (part: number) => String(part).padStart(2, '0')
   return `${taipei.getUTCFullYear()}-${pad(taipei.getUTCMonth() + 1)}-${pad(taipei.getUTCDate())}T${pad(taipei.getUTCHours())}:${pad(taipei.getUTCMinutes())}`
 }
