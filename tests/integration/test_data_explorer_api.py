@@ -17,6 +17,7 @@ from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
 from shiro_mlops.service.data_explorer.cursor import encode_cursor
+from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from tests.helpers import (
     TAIWAN,
     create_legacy_load_table,
@@ -112,6 +113,23 @@ def test_all_lists_reject_v1_cursor_before_database_access(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Incompatible cursor version"
+
+
+@pytest.mark.parametrize("location", [["Taipei"], {"name": "Taipei"}])
+def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, location) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    cursor = encode_cursor(
+        dataset="hourly_load",
+        filters=filters,
+        key={"time": "2026-08-01T12:00:00+08:00", "location": location},
+    )
+
+    response = client.get("/data/power/load", params={**window, "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
 
 
 @pytest.mark.parametrize("field", ["issued_at", "source_updated_at"])

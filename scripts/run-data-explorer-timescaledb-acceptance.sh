@@ -2,7 +2,14 @@
 set -euo pipefail
 
 container="pagination-acceptance-$$"
-cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+container_started=false
+cleanup() {
+  status=$?
+  if [[ "$container_started" == true ]]; then
+    docker rm -f "$container" >/dev/null || status=1
+  fi
+  exit "$status"
+}
 trap cleanup EXIT
 
 docker run --rm -d --name "$container" \
@@ -10,6 +17,7 @@ docker run --rm -d --name "$container" \
   -e POSTGRES_DB=pagination_acceptance \
   -p 127.0.0.1::5432 \
   timescale/timescaledb:latest-pg15 >/dev/null
+container_started=true
 
 for attempt in {1..30}; do
   if docker exec "$container" pg_isready -U postgres -d pagination_acceptance >/dev/null 2>&1; then
