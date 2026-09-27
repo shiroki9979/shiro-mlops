@@ -35,6 +35,13 @@ rolling_windows = [6]
 n_estimators = 100
 learning_rate = 0.05
 num_leaves = 31
+
+[schedule]
+training = "{training_cron}"
+monitoring = "0 * * * *"
+
+[health]
+max_mape = 10.0
 """
 
 
@@ -45,7 +52,12 @@ def _write(tmp_path: Path, text: str, name: str = "sample_task") -> Path:
 
 
 def _definition(**overrides: str) -> str:
-    values = {"task_id": "sample_task", "reference_points": '["Taipei"]', "stale_lag": "3"}
+    values = {
+        "task_id": "sample_task",
+        "reference_points": '["Taipei"]',
+        "stale_lag": "3",
+        "training_cron": "0 0 * * *",
+    }
     return VALID_DEFINITION.format(**(values | overrides))
 
 
@@ -62,6 +74,9 @@ def test_shipped_definition_describes_the_dynamic_horizon_forecast() -> None:
     assert task.policies.stale_anchor_max_lag_hours == 3
     assert task.params.lags == [1, 2, 24, 48, 168]
     assert task.params.rolling_windows == [6, 24]
+    assert task.schedule.training == "0 0 * * *"
+    assert task.schedule.monitoring == "0 * * * *"
+    assert task.health.max_mape == 10.0
 
 
 def test_missing_required_field_names_file_and_field(tmp_path: Path) -> None:
@@ -123,3 +138,37 @@ def test_malformed_toml_names_the_file(tmp_path: Path) -> None:
         load_task_definition(path, DEFAULT_CWA_LOCATIONS)
 
     assert error.value.path == path
+
+
+def test_missing_schedule_section_is_rejected(tmp_path: Path) -> None:
+    text = _definition().replace(
+        '[schedule]\ntraining = "0 0 * * *"\nmonitoring = "0 * * * *"\n', ""
+    )
+    path = _write(tmp_path, text)
+
+    with pytest.raises(TaskDefinitionError, match="schedule"):
+        load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+
+@pytest.mark.parametrize("cron", ["0 24 * * *", "every day", "0 0 * *", "*/0 * * * *"])
+def test_invalid_training_cron_names_the_schedule_field(tmp_path: Path, cron: str) -> None:
+    path = _write(tmp_path, _definition(training_cron=cron))
+
+    with pytest.raises(TaskDefinitionError, match=r"schedule\.training"):
+        load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+
+@pytest.mark.parametrize("cron", ["*/15 8-18 * * 1-5", "0,30 0 1 1,6 *"])
+def test_cron_lists_ranges_and_steps_are_accepted(tmp_path: Path, cron: str) -> None:
+    task = load_task_definition(
+        _write(tmp_path, _definition(training_cron=cron)), DEFAULT_CWA_LOCATIONS
+    )
+
+    assert task.schedule.training == cron
+
+
+def test_missing_health_threshold_names_the_health_field(tmp_path: Path) -> None:
+    path = _write(tmp_path, _definition().replace("max_mape = 10.0\n", ""))
+
+    with pytest.raises(TaskDefinitionError, match=r"health\.max_mape"):
+        load_task_definition(path, DEFAULT_CWA_LOCATIONS)

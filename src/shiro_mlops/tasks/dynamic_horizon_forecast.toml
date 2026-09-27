@@ -23,3 +23,12 @@ rolling_windows = [6, 24]
 n_estimators = 100
 learning_rate = 0.05
 num_leaves = 31
+
+[schedule]
+# Asia/Taipei 時間：每日 00:00 重新訓練，每小時整點產生監控報告。
+training = "0 0 * * *"
+monitoring = "0 * * * *"
+
+[health]
+# 驗證期 MAPE（%）低於此值為 HEALTHY，否則 WARNING。
+max_mape = 10.0

@@ -7,6 +7,7 @@ persisted as LightGBM's native text format plus JSON metadata (ADR-0010).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -24,6 +25,8 @@ from shiro_mlops.features.transformers import (
 )
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.tasks.types.base import (
+    HealthAssessment,
+    HealthStatus,
     InputRequirements,
     PredictionData,
     Trained,
@@ -36,6 +39,7 @@ PREDICTION_COL = f"predicted_{LOAD_MW_COL}"
 MODEL_FILE = "model.txt"
 METADATA_FILE = "metadata.json"
 FORMAT_VERSION = 1
+HEALTH_METRIC = "mape"
 NON_FEATURE_COLUMNS = frozenset({DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL})
 # 驗證期為空（資料過短）時沒有可比較的預測，以零值揭露而非中斷訓練。
 EMPTY_VALIDATION_METRICS = {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
@@ -73,11 +77,20 @@ class RecursiveRegressionParams(BaseModel):
         return max(*self.lags, *self.rolling_windows)
 
 
+class RecursiveRegressionHealth(BaseModel):
+    """Monitoring thresholds read from the task definition's ``[health]`` table."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_mape: PositiveFloat
+
+
 class RecursiveRegression:
     """Task type adapter for recursive multi-step regression."""
 
     name: ClassVar[str] = TASK_TYPE_NAME
     params_model: ClassVar[type[RecursiveRegressionParams]] = RecursiveRegressionParams
+    health_model: ClassVar[type[RecursiveRegressionHealth]] = RecursiveRegressionHealth
 
     def requirements(self, params: RecursiveRegressionParams) -> InputRequirements:
         return InputRequirements(
@@ -99,6 +112,24 @@ class RecursiveRegression:
 
     def load(self, directory: Path) -> RecursiveRegressionModel:
         return RecursiveRegressionModel.load(directory)
+
+    def assess_health(
+        self, thresholds: RecursiveRegressionHealth, metrics: Mapping[str, float]
+    ) -> HealthAssessment:
+        """Healthy while validation MAPE stays below ``max_mape``; a missing MAPE warns."""
+        if HEALTH_METRIC not in metrics:
+            return HealthAssessment(
+                HealthStatus.WARNING,
+                f"No {HEALTH_METRIC} metric to compare with max_mape={thresholds.max_mape}",
+            )
+        mape = float(metrics[HEALTH_METRIC])
+        if mape < thresholds.max_mape:
+            return HealthAssessment(
+                HealthStatus.HEALTHY, f"{HEALTH_METRIC}={mape:.4g} < max_mape={thresholds.max_mape}"
+            )
+        return HealthAssessment(
+            HealthStatus.WARNING, f"{HEALTH_METRIC}={mape:.4g} >= max_mape={thresholds.max_mape}"
+        )
 
 
 class RecursiveRegressionModel:
