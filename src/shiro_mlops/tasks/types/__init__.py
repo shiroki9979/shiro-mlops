@@ -5,9 +5,13 @@ from types import MappingProxyType
 
 from shiro_mlops.tasks.types.base import TaskType
 from shiro_mlops.tasks.types.recursive_regression import RecursiveRegression
+from shiro_mlops.tasks.types.unsupervised_reconstruction import UnsupervisedReconstruction
 
 TASK_TYPES: Mapping[str, TaskType] = MappingProxyType(
-    {task_type.name: task_type for task_type in (RecursiveRegression(),)}
+    {
+        task_type.name: task_type
+        for task_type in (RecursiveRegression(), UnsupervisedReconstruction())
+    }
 )
 
 
