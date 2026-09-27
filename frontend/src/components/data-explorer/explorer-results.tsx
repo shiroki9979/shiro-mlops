@@ -18,8 +18,10 @@ interface ExplorerResultsProps {
   error: unknown
   isError: boolean
   isLoading: boolean
+  canRestart: boolean
   onSelect: (row: Record<string, unknown>) => void
   onNextPage: (cursor: string | undefined) => void
+  onRestart: () => void
 }
 
 function listErrorMessage(error: unknown): string {
@@ -39,8 +41,10 @@ export function ExplorerResults({
   error,
   isError,
   isLoading,
+  canRestart,
   onSelect,
   onNextPage,
+  onRestart,
 }: ExplorerResultsProps) {
   return (
     <Card>
@@ -48,7 +52,12 @@ export function ExplorerResults({
         {isLoading ? (
           <p className="text-xs text-slate-500">載入資料中...</p>
         ) : isError ? (
-          <p className="text-xs text-rose-300">{listErrorMessage(error)}</p>
+          <div>
+            <p className="text-xs text-rose-300">{listErrorMessage(error)}</p>
+            {canRestart && typeof error === 'object' && error !== null && 'status' in error && error.status === 400 && (
+              <Button className="mt-4" variant="outline" onClick={onRestart}>回到第一頁</Button>
+            )}
+          </div>
         ) : !data || data.items.length === 0 ? (
           <p className="text-xs text-slate-500">查無符合資料，查詢成功但結果為空。</p>
         ) : (

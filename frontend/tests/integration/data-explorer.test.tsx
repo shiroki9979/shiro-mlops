@@ -159,6 +159,52 @@ describe('Data Explorer routes', () => {
       expect(screen.getByText(message)).toBeInTheDocument()
     }, { timeout: status === 503 ? 2500 : 1000 })
   })
+
+  it.each([
+    ['/data/power/load', 'location=Taipei', 'location', 'Taipei'],
+    ['/data/weather/forecasts', 'dataset_id=F-D0047-089&issued_at=2026-09-09T08%3A00%3A00%2B08%3A00', 'issued_at', '2026-09-09T08:00:00+08:00'],
+    ['/data/weather/forecasts', 'dataset_id=F-D0047-089', 'dataset_id', 'F-D0047-089'],
+  ])('recovers a stale cursor on %s with %s', async (path, filters, filterKey, filterValue) => {
+    const requests: URL[] = []
+    server.use(http.get(`*${path}`, ({ request }) => {
+      const url = new URL(request.url)
+      requests.push(url)
+      return url.searchParams.has('cursor')
+        ? HttpResponse.json({ detail: 'Incompatible cursor version' }, { status: 400 })
+        : HttpResponse.json({ timezone: 'Asia/Taipei', items: [], has_more: false, next_cursor: null, missing_slots: [] })
+    }))
+    const user = userEvent.setup()
+    const start = '2026-09-09T00:00:00+08:00'
+    const end = '2026-09-09T20:00:00+08:00'
+    renderPath(`${path}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&${filters}&cursor=old`)
+
+    expect(await screen.findByRole('button', { name: '回到第一頁' })).toBeInTheDocument()
+    expect(requests).toHaveLength(1)
+    expect(requests[0].searchParams.get('cursor')).toBe('old')
+
+    await user.click(screen.getByRole('button', { name: '回到第一頁' }))
+    await screen.findByText('查無符合資料，查詢成功但結果為空。')
+    expect(requests).toHaveLength(2)
+    expect(requests[1].searchParams.has('cursor')).toBe(false)
+    expect(requests[1].searchParams.get('start')).toBe(start)
+    expect(requests[1].searchParams.get('end')).toBe(end)
+    expect(requests[1].searchParams.get(filterKey)).toBe(filterValue)
+    if (path.includes('forecasts') && filterKey === 'dataset_id') {
+      expect(requests[1].searchParams.has('issued_at')).toBe(false)
+    }
+  })
+
+  it.each([400, 422, 503])('does not offer cursor recovery for an unrelated %s error', async (status) => {
+    server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'failed' }, { status })))
+    renderPath(`/data/power/load?${status === 400 ? '' : 'cursor=old'}`)
+
+    await screen.findByText(status === 400
+      ? '分頁游標無效或已與目前篩選條件不相容。'
+      : status === 422
+        ? '篩選條件無效，請確認時間範圍與欄位格式。'
+        : '資料庫目前無法連線，請稍後再試。', {}, { timeout: status === 503 ? 2500 : 1000 })
+    expect(screen.queryByRole('button', { name: '回到第一頁' })).not.toBeInTheDocument()
+  })
 })
 
 describe('Monitoring Data Source Status', () => {
