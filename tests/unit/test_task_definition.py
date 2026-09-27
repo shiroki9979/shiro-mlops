@@ -97,6 +97,16 @@ def test_shipped_definition_describes_the_high_load_alert() -> None:
     assert task.health.min_f1 > 0.0
 
 
+def test_shipped_tasks_train_at_distinct_times() -> None:
+    """各任務訓練都讀完整歷史，同一時刻啟動會互搶資料庫與 CPU。"""
+    tasks = load_task_definitions(TASK_DEFINITIONS_DIR, DEFAULT_CWA_LOCATIONS)
+
+    crons = {task_id: task.schedule.training for task_id, task in tasks.items()}
+
+    assert len(set(crons.values())) == len(crons), crons
+    assert crons["load_pattern_anomaly"] == "0 1 * * *"
+
+
 def test_missing_required_field_names_file_and_field(tmp_path: Path) -> None:
     path = _write(tmp_path, _definition().replace('subject = "nationwide"\n', ""))
 

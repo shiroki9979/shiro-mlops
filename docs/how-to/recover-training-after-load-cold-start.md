@@ -36,7 +36,7 @@
 | `dynamic_horizon_forecast__monitoring_schedule` | 每小時整點產生監控報告；門檻未達或尚無模型時略過 |
 | `high_load_alert__training_schedule` | 台灣時間 00:30 訓練高負載預警模型；門檻（1344 小時）未達時略過 |
 | `high_load_alert__monitoring_schedule` | 每小時第 5 分鐘產生監控報告；門檻未達或尚無模型時略過 |
-| `load_pattern_anomaly__training_schedule` | 台灣時間 00:30 訓練用電型態異常偵測模型；門檻未達時略過 |
+| `load_pattern_anomaly__training_schedule` | 台灣時間 01:00 訓練用電型態異常偵測模型；門檻未達時略過 |
 | `load_pattern_anomaly__monitoring_schedule` | 每小時整點產生監控報告；門檻未達或尚無模型時略過 |
 
 任務的訓練與監控排程可以在冷啟動當天就開啟，不需等待累積完成。
