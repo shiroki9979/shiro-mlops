@@ -73,12 +73,12 @@ def _all_dataset_fixtures(
     return (
         SqlFixture(
             "raw_taipower_load",
-            "time, location, load_mw, source",
-            ":time, :location, :value, 'regional_snapshot_sum'",
-            "time = :time AND location = :location",
+            "time, subject, load_mw, source",
+            ":time, :subject, :value, 'regional_snapshot_sum'",
+            "time = :time AND subject = :subject",
             rows(
                 "raw_taipower_load",
-                lambda t, i: {"time": t, "location": f"edge-{i}", "value": float(i)},
+                lambda t, i: {"time": t, "subject": f"edge-{i}", "value": float(i)},
             ),
         ),
         SqlFixture(
@@ -214,9 +214,9 @@ def _completeness_fixtures(
     return (
         SqlFixture(
             "raw_taipower_load",
-            "time, location, load_mw, source",
+            "time, subject, load_mw, source",
             ":time, 'edge-completeness', 1, 'regional_snapshot_sum'",
-            "time = :time AND location = 'edge-completeness'",
+            "time = :time AND subject = 'edge-completeness'",
             [{"time": time} for time in (start, outside)],
         ),
         SqlFixture(

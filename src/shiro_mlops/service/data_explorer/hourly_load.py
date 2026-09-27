@@ -17,7 +17,7 @@ class HourlyLoadReader(DatasetReader):
 
     dataset = "hourly_load"
     select_sql = """
-        SELECT time, location, load_mw, created_at
+        SELECT time, subject, load_mw, created_at
         FROM raw_taipower_load
         WHERE {where}
         ORDER BY {order}
@@ -25,13 +25,13 @@ class HourlyLoadReader(DatasetReader):
     """
 
     def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-        location = query.filters.get("location")
+        subject = query.filters.get("subject")
         clauses, sql_params = self.db.time_window("time", query.window)
         clauses.append("source = :source")
         sql_params["source"] = REGIONAL_SNAPSHOT_SUM_SOURCE
-        if location:
-            clauses.append("location = :location")
-            sql_params["location"] = location
+        if subject:
+            clauses.append("subject = :subject")
+            sql_params["subject"] = subject
         return clauses, sql_params
 
     def project_page(
@@ -44,9 +44,9 @@ class HourlyLoadReader(DatasetReader):
             items.append(
                 {
                     "datetime": format_taiwan_time(observed),
-                    "location": row["location"],
+                    "subject": row["subject"],
                     "load_mw": float(row["load_mw"]),
                     "ingested_at": format_taiwan_time(ingested),
                 }
             )
-        return items, hourly_gaps(self.db, query.window, query.filters.get("location"))
+        return items, hourly_gaps(self.db, query.window, query.filters.get("subject"))

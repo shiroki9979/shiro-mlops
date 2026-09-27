@@ -340,7 +340,9 @@ def test_strict_weather_drops_stale_values_across_missing_load_hours() -> None:
         }
     )
 
-    features = build_feature_pipeline(load, weather, strict_weather=True)
+    features = build_feature_pipeline(
+        load, weather, lags=[1, 2, 24], windows=[2], strict_weather=True
+    )
 
     assert features["datetime"].tolist() == [
         pd.Timestamp("2026-09-20 00:00"),
@@ -371,7 +373,9 @@ def test_strict_weather_matches_each_field_to_past_observations_per_location() -
         }
     )
 
-    features = build_feature_pipeline(load, weather, strict_weather=True)
+    features = build_feature_pipeline(
+        load, weather, lags=[1, 2, 24], windows=[2], strict_weather=True
+    )
 
     assert features.set_index("location")[["temperature", "relative_humidity"]].to_dict(
         "index"

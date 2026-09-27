@@ -32,13 +32,10 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
     with sqlite_engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
-                "VALUES (:time, :location, :load_mw, 'regional_snapshot_sum')"
+                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                "VALUES (:time, :subject, :load_mw, 'regional_snapshot_sum')"
             ),
-            [
-                {"time": time, "location": location, "load_mw": load}
-                for time, location, load in rows
-            ],
+            [{"time": time, "subject": subject, "load_mw": load} for time, subject, load in rows],
         )
     reader = HourlyLoadReader(sqlite_engine)
     params = {
@@ -61,8 +58,8 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
     assert [page.items[0]["datetime"] for page in pages[:3]] == ["2026-09-20T12:00:00+08:00"] * 3
     assert [page.has_more for page in pages] == [True, True, True, False]
     assert all(page.missing_slots == ["2026-09-20T11:00:00+08:00"] for page in pages)
-    assert reader.list({**params, "location": "Kaohsiung"}).items == []
-    assert [item["load_mw"] for item in reader.list({**params, "location": "Taipei"}).items] == [
+    assert reader.list({**params, "subject": "Kaohsiung"}).items == []
+    assert [item["load_mw"] for item in reader.list({**params, "subject": "Taipei"}).items] == [
         4.0,
     ]
 
@@ -77,7 +74,7 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
     with legacy_upgraded_engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO raw_taipower_load (time, location, load_mw, source) VALUES "
+                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) VALUES "
                 "('2026-09-20 02:00:00', 'Taipei', 10, 'regional_snapshot_sum'), "
                 "('2026-09-20 03:00:00', 'Taipei', 11, NULL), "
                 "('2026-09-20 04:00:00', 'Taipei', 12, 'regional_snapshot_sum')"
@@ -95,16 +92,16 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
 
 
 def _upsert_hours(
-    repo: TimeSeriesRepository, hours: list[datetime], location: str = "Taipei"
+    repo: TimeSeriesRepository, hours: list[datetime], subject: str = "nationwide"
 ) -> None:
     frame = pd.DataFrame(
         {
             DATETIME_COL: hours,
             LOAD_MW_COL: [30000.0 + index for index in range(len(hours))],
-            "location": location,
+            "subject": subject,
         }
     )
-    repo.upsert_taipower_load(frame, default_location=location)
+    repo.upsert_taipower_load(frame, default_subject=subject)
 
 
 @pytest.mark.parametrize("hours, missing", [([10, 11], []), ([11], ["2026-09-20T10:00:00+08:00"])])
@@ -124,19 +121,19 @@ def test_hourly_load_gaps_only_include_completed_hours_inside_the_window(
     assert page.missing_slots == missing
 
 
-def test_hourly_load_reader_filters_location_and_traverses_next_page(
+def test_hourly_load_reader_filters_subject_and_traverses_next_page(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """逐時負載 reader 必須套用 location 篩選，並以 cursor 走到下一頁。"""
+    """逐時負載 reader 必須套用預測對象篩選，並以 cursor 走到下一頁。"""
     latest = datetime.now(TAIWAN).replace(tzinfo=None, minute=0, second=0, microsecond=0)
     hours = [latest - timedelta(hours=offset) for offset in (2, 1, 0)]
     _upsert_hours(test_repo, hours)
-    _upsert_hours(test_repo, hours, location="Taichung")
+    _upsert_hours(test_repo, hours, subject="north")
     reader = HourlyLoadReader(test_repo.engine)
     params = {
         "start": rfc3339(latest - timedelta(hours=2)),
         "end": rfc3339(latest),
-        "location": "Taipei",
+        "subject": "nationwide",
         "limit": "1",
     }
 
@@ -144,13 +141,13 @@ def test_hourly_load_reader_filters_location_and_traverses_next_page(
 
     assert first.has_more is True
     assert len(first.items) == 1
-    assert first.items[0]["location"] == "Taipei"
+    assert first.items[0]["subject"] == "nationwide"
     assert first.items[0]["datetime"] == rfc3339(latest)
 
     second = reader.list({**params, "cursor": first.next_cursor})
 
     assert second.items[0]["datetime"] == rfc3339(latest - timedelta(hours=1))
-    assert second.items[0]["location"] == "Taipei"
+    assert second.items[0]["subject"] == "nationwide"
 
 
 def test_hourly_load_reader_rejects_invalid_window_and_cursor(
@@ -176,20 +173,20 @@ def test_hourly_load_reader_rejects_invalid_window_and_cursor(
 
     first = reader.list(params)
     with pytest.raises(CursorError, match="filter"):
-        reader.list({**params, "location": "Kaohsiung", "cursor": first.next_cursor})
+        reader.list({**params, "subject": "south", "cursor": first.next_cursor})
     with pytest.raises(CursorError):
         reader.list({**params, "cursor": "not-a-cursor"})
 
 
-@pytest.mark.parametrize("location", [["Taipei"], {"name": "Taipei"}])
+@pytest.mark.parametrize("subject", [["nationwide"], {"name": "nationwide"}])
 def test_hourly_load_reader_rejects_nonscalar_cursor_key(
-    test_repo: TimeSeriesRepository, location
+    test_repo: TimeSeriesRepository, subject
 ) -> None:
     params = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     cursor = encode_cursor(
         dataset="hourly_load",
         filters=ExplorerQuery.from_params("hourly_load", params).filters,
-        key={"time": "2026-08-01T12:00:00+08:00", "location": location},
+        key={"time": "2026-08-01T12:00:00+08:00", "subject": subject},
     )
 
     with pytest.raises(CursorError, match="Invalid cursor key"):
@@ -204,7 +201,7 @@ def test_hourly_load_reader_rejects_non_string_cursor_time_key(
     cursor = encode_cursor(
         dataset="hourly_load",
         filters=ExplorerQuery.from_params("hourly_load", params).filters,
-        key={"time": time_key, "location": "Taipei"},
+        key={"time": time_key, "subject": "nationwide"},
     )
 
     with pytest.raises(CursorError, match="Invalid cursor key"):

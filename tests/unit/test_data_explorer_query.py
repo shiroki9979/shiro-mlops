@@ -14,7 +14,7 @@ def test_explorer_query_carries_window_filters_limit_and_cursor() -> None:
     params = {
         "start": "2026-08-01T00:00:00+08:00",
         "end": "2026-08-02T00:00:00+08:00",
-        "location": "Taipei",
+        "subject": "nationwide",
         "limit": "25",
         "cursor": "opaque-token",
     }
@@ -24,7 +24,7 @@ def test_explorer_query_carries_window_filters_limit_and_cursor() -> None:
     assert query.dataset == "hourly_load"
     assert query.window.start == datetime(2026, 8, 1, 0, 0)
     assert query.window.end == datetime(2026, 8, 2, 0, 0)
-    assert query.filters["location"] == "Taipei"
+    assert query.filters["subject"] == "nationwide"
     assert query.limit == 25
     assert query.cursor == "opaque-token"
 
@@ -46,25 +46,25 @@ def test_explorer_query_decodes_filter_bound_cursor_key() -> None:
     params = {
         "start": "2026-08-01T00:00:00+08:00",
         "end": "2026-08-02T00:00:00+08:00",
-        "location": "Taipei",
+        "subject": "nationwide",
     }
     query = ExplorerQuery.from_params("hourly_load", params)
     token = encode_cursor(
         dataset="hourly_load",
         filters=query.filters,
-        key={"time": "2026-08-01T12:00:00+08:00", "location": "Taipei"},
+        key={"time": "2026-08-01T12:00:00+08:00", "subject": "nationwide"},
     )
     with_cursor = ExplorerQuery.from_params("hourly_load", {**params, "cursor": token})
 
     key = with_cursor.cursor_key()
 
     assert key is not None
-    assert key["location"] == "Taipei"
+    assert key["subject"] == "nationwide"
     assert "time" in key
 
     mismatched = ExplorerQuery.from_params(
         "hourly_load",
-        {**params, "location": "Taichung", "cursor": token},
+        {**params, "subject": "north", "cursor": token},
     )
     with pytest.raises(CursorError, match="filter"):
         mismatched.cursor_key()
@@ -81,7 +81,7 @@ def test_cursor_preserves_fractional_second_window_when_defaults_are_restored() 
     cursor = encode_cursor(
         dataset="hourly_load",
         filters=first.filters,
-        key={"time": "2026-08-01T12:00:00+08:00", "location": "Taipei"},
+        key={"time": "2026-08-01T12:00:00+08:00", "subject": "nationwide"},
     )
 
     next_page = ExplorerQuery.from_params("hourly_load", {"cursor": cursor})

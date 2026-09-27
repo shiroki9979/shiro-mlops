@@ -4,11 +4,10 @@ import { useDashboardStore } from '@/store/dashboard-store'
 import { useQuery } from '@tanstack/react-query'
 
 export function usePrediction(paramsOverride?: Partial<PredictionRequest>) {
-  const { horizonHours, location, autoRefresh, refreshIntervalSec } = useDashboardStore()
+  const { horizonHours, autoRefresh, refreshIntervalSec } = useDashboardStore()
 
   const params: PredictionRequest = {
     horizon_hours: paramsOverride?.horizon_hours ?? horizonHours,
-    location: paramsOverride?.location ?? location,
   }
 
   return useQuery({

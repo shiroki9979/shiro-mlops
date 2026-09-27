@@ -26,7 +26,7 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
     data_explorer_timescaledb_engine: Engine,
 ) -> None:
     suffix = uuid4().hex[:8]
-    locations = (f"b-{suffix}", f"a-{suffix}")
+    subjects = (f"b-{suffix}", f"a-{suffix}")
     stations = (f"b{suffix}", f"a{suffix}")
     rows = [
         datetime(2040, 9, 20, 4, 0, 0, 900002, UTC),
@@ -34,10 +34,10 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
         datetime(2040, 9, 20, 2, 0, 0, 100000, UTC),
     ]
     load_rows = [
-        (rows[0], locations[0], 4.0),
-        (rows[0], locations[1], 3.0),
-        (rows[1], locations[1], 2.0),
-        (rows[2], locations[1], 1.0),
+        (rows[0], subjects[0], 4.0),
+        (rows[0], subjects[1], 3.0),
+        (rows[1], subjects[1], 2.0),
+        (rows[2], subjects[1], 1.0),
     ]
     observation_rows = [
         (rows[0], stations[0], 4.0),
@@ -49,12 +49,12 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
         with data_explorer_timescaledb_engine.begin() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
-                    "VALUES (:time, :location, :load_mw, 'regional_snapshot_sum')"
+                    "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                    "VALUES (:time, :subject, :load_mw, 'regional_snapshot_sum')"
                 ),
                 [
-                    {"time": time, "location": location, "load_mw": load}
-                    for time, location, load in load_rows
+                    {"time": time, "subject": subject, "load_mw": load}
+                    for time, subject, load in load_rows
                 ],
             )
             conn.execute(
@@ -93,6 +93,6 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
                 {"a": stations[0], "b": stations[1]},
             )
             conn.execute(
-                text("DELETE FROM raw_taipower_load WHERE location IN (:a, :b)"),
-                {"a": locations[0], "b": locations[1]},
+                text("DELETE FROM raw_taipower_load WHERE subject IN (:a, :b)"),
+                {"a": subjects[0], "b": subjects[1]},
             )

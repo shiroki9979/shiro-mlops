@@ -133,7 +133,7 @@ def bound_filters(dataset: str, params: dict[str, Any], window: TimeWindow) -> d
         "end": format_taiwan_time(window.end, timespec="auto"),
     }
     for key in (
-        "location",
+        "subject",
         "region",
         "completeness",
         "unit_type",

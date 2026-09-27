@@ -76,10 +76,11 @@ shiro-mlops/
 ├── src/shiro_mlops/
 │   ├── core/               # Config, DB, IO managers, datetime helpers
 │   ├── data/               # Taipower/CWA clients, TimescaleDB repository
-│   ├── features/           # Feast definitions, storage, transformers
-│   ├── models/             # LightGBM recursive forecaster and evaluator
-│   ├── pipelines/          # Dagster assets, feature pipeline, schedules
-│   └── service/            # FastAPI application
+│   ├── features/           # Feast definitions and frozen export, storage, transformers
+│   ├── models/             # Forecast evaluation metrics shared by task types
+│   ├── pipelines/          # Dagster assets, schedules, smoke check
+│   ├── service/            # FastAPI application
+│   └── tasks/              # ML task definitions (*.toml), task types, runner, model store
 ├── tests/
 │   ├── fixtures/           # Mock data fixtures
 │   ├── unit/               # Unit tests

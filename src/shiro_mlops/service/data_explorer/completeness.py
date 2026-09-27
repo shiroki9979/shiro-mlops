@@ -19,14 +19,14 @@ from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_ta
 from shiro_mlops.service.data_explorer.values import to_taiwan
 
 
-def hourly_gaps(db: ExplorerDb, window: TimeWindow, location: str | None) -> list[str]:
+def hourly_gaps(db: ExplorerDb, window: TimeWindow, subject: str | None) -> list[str]:
     """Return expected hourly slots missing from the persisted load series."""
     clauses, params = db.time_window("time", window)
     clauses.append("source = :source")
     params["source"] = REGIONAL_SNAPSHOT_SUM_SOURCE
-    if location:
-        clauses.append("location = :location")
-        params["location"] = location
+    if subject:
+        clauses.append("subject = :subject")
+        params["subject"] = subject
     rows = db.fetch(
         f"SELECT DISTINCT time FROM raw_taipower_load WHERE {' AND '.join(clauses)}",
         params,

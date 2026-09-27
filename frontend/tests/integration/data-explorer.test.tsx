@@ -67,11 +67,14 @@ describe('Data Explorer routes', () => {
 
   it('keeps filters in the URL, paginates, opens typed detail, and exports the current page', async () => {
     const user = userEvent.setup()
-    renderPath('/data/power/load?start=2026-09-09T00:00:00%2B08:00&end=2026-09-09T20:00:00%2B08:00&location=Taipei')
+    renderPath('/data/power/load?start=2026-09-09T00:00:00%2B08:00&end=2026-09-09T20:00:00%2B08:00&subject=nationwide')
 
     await waitFor(() => {
       expect(screen.getByText('32100.5')).toBeInTheDocument()
     })
+    expect(screen.getAllByText('Prediction subject').length).toBeGreaterThan(0)
+    expect(screen.getByPlaceholderText('nationwide')).toHaveValue('nationwide')
+    expect(screen.getAllByText('nationwide').length).toBeGreaterThan(0)
     expect(screen.getByText(/查詢區間缺口/)).toBeInTheDocument()
     expect(screen.getByText(/最後取得時間/)).toBeInTheDocument()
 
@@ -161,7 +164,7 @@ describe('Data Explorer routes', () => {
   })
 
   it.each([
-    ['/data/power/load', 'location=Taipei', 'location', 'Taipei'],
+    ['/data/power/load', 'subject=nationwide', 'subject', 'nationwide'],
     ['/data/weather/forecasts', 'dataset_id=F-D0047-089&issued_at=2026-09-09T08%3A00%3A00%2B08%3A00', 'issued_at', '2026-09-09T08:00:00+08:00'],
     ['/data/weather/forecasts', 'dataset_id=F-D0047-089', 'dataset_id', 'F-D0047-089'],
   ])('recovers a stale cursor on %s with %s', async (path, filters, filterKey, filterValue) => {
