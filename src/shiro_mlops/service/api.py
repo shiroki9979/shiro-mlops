@@ -137,11 +137,21 @@ class TaskPredictionRequest(BaseModel):
         default=DEFAULT_HORIZON_HOURS,
         ge=1,
         le=MAX_HORIZON_HOURS,
-        description=f"Forecast horizon in hours (1-{MAX_HORIZON_HOURS})",
+        description=(
+            f"Hours to predict (1-{MAX_HORIZON_HOURS}): for forecast-weather tasks, the "
+            "forecast horizon after the latest actual load; for observed-weather tasks, "
+            "how many of the latest window end hours up to that load to score"
+        ),
     )
 
 
-class PredictionRequest(TaskPredictionRequest):
+class PredictionRequest(BaseModel):
+    horizon_hours: int = Field(
+        default=DEFAULT_HORIZON_HOURS,
+        ge=1,
+        le=MAX_HORIZON_HOURS,
+        description=f"Forecast horizon in hours (1-{MAX_HORIZON_HOURS})",
+    )
     location: str | None = Field(
         default=None,
         deprecated=True,
