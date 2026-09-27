@@ -33,6 +33,7 @@ from shiro_mlops.tasks.types.base import (
     PredictionData,
     Trained,
     TrainingData,
+    WeatherEchoingItem,
     WeatherInput,
     split_at_validation,
 )
@@ -89,16 +90,13 @@ class DirectClassificationParams(BaseModel):
         return self.threshold.window_hours + max(*self.lags, *self.rolling_windows)
 
 
-class DirectClassificationPrediction(BaseModel):
-    """One served alert hour: the verdict, its probability and threshold, with the weather."""
+class DirectClassificationPrediction(WeatherEchoingItem):
+    """One served alert hour: the verdict, its probability and threshold, served with the weather."""
 
     datetime: str
     is_high_load: bool
     probability: float
     threshold_mw: float
-    temperature: float
-    relative_humidity: float
-    weather_sources: dict[str, dict[str, str]]
 
 
 class DirectClassificationHealth(BaseModel):

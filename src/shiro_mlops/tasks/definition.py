@@ -13,7 +13,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeVar, get_args
+from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import (
     AfterValidator,
@@ -27,7 +27,6 @@ from pydantic import (
 
 from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
 from shiro_mlops.tasks.types import UnknownTaskTypeError, get_task_type
-from shiro_mlops.tasks.types.base import TaskType
 
 HOURLY_ACTUAL_LOAD_TARGET = "hourly_actual_load"
 # 訓練讀測站觀測、預報讀鄉鎮預報；兩者同時提供的欄位才可作為任務的氣象欄位。
@@ -169,7 +168,6 @@ def load_task_definition(path: Path, catalog: Mapping[str, CWALocation]) -> Task
         task_type = get_task_type(spec.task_type)
     except UnknownTaskTypeError as error:
         raise TaskDefinitionError(path, f"task_type: {error}") from error
-    _require_item_weather_fields(path, task_type, spec.weather)
     return TaskDefinition(
         task_id=spec.task_id,
         task_type=spec.task_type,
@@ -207,18 +205,6 @@ def _describe(error: ValidationError, location: str) -> str:
         field = ".".join(str(part) for part in (location, *issue["loc"]) if part != "")
         problems.append(f"{field or '<root>'}: {issue['msg']}")
     return "; ".join(problems)
-
-
-def _require_item_weather_fields(path: Path, task_type: TaskType, weather: _WeatherSection) -> None:
-    """Weather the prediction item echoes must be read, or the response fails validation (500)."""
-    echoed = set(task_type.prediction_item.model_fields) & set(get_args(WeatherField))
-    missing = sorted(echoed - set(weather.fields))
-    if missing:
-        raise TaskDefinitionError(
-            path,
-            f"weather.fields: task type {task_type.name!r} returns {missing} in every "
-            "prediction item, so they must be declared",
-        )
 
 
 def _resolve_reference_point(

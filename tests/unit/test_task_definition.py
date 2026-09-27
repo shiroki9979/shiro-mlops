@@ -123,15 +123,16 @@ def test_missing_task_type_param_names_the_params_field(tmp_path: Path) -> None:
         load_task_definition(path, DEFAULT_CWA_LOCATIONS)
 
 
-def test_weather_fields_missing_from_the_prediction_item_are_rejected(tmp_path: Path) -> None:
-    """recursive_regression 的預測 item 回傳氣溫與濕度；少宣告一項會在回應驗證時才 500。"""
+def test_a_task_may_declare_a_subset_of_the_weather_fields(tmp_path: Path) -> None:
+    """預測 item 的天氣欄位跟隨 weather.fields，任務類型不強制特定天氣欄位。"""
     only_temperature = _definition().replace(
         'fields = ["temperature", "relative_humidity"]', 'fields = ["temperature"]'
     )
     path = _write(tmp_path, only_temperature)
 
-    with pytest.raises(TaskDefinitionError, match=r"weather\.fields.*relative_humidity"):
-        load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+    task = load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+    assert task.weather.fields == ("temperature",)
 
 
 def test_unknown_task_type_is_rejected(tmp_path: Path) -> None:

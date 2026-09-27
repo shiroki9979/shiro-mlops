@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.weather_resolution import WeatherResolution
 from shiro_mlops.service.api import app, model_store
+from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 from shiro_mlops.tasks.model_store import model_directory, save_model
 from shiro_mlops.tasks.runner import (
@@ -378,9 +379,11 @@ def test_openapi_describes_task_predictions_with_the_task_type_item_schema() -> 
     assert set(task_item["required"]) == set(schemas["PredictionItem"]["required"])
 
 
-def _fitted_high_load_alert(last_hour: pd.Timestamp) -> tuple[TaskModel, pd.DataFrame]:
-    """Train the deployed high-load alert on 35 days, leaving 7 days of full threshold windows."""
-    task = deployed_tasks()[HIGH_LOAD_ALERT]
+def _fitted_high_load_alert(
+    last_hour: pd.Timestamp, task: TaskDefinition | None = None
+) -> tuple[TaskModel, pd.DataFrame]:
+    """Train a high-load alert on 35 days, leaving 7 days of full threshold windows."""
+    task = task or deployed_tasks()[HIGH_LOAD_ALERT]
     load, weather = hourly_load_with_weather(24 * 35, last_hour.to_pydatetime())
     data = TrainingData(
         load=load,
@@ -417,6 +420,39 @@ def test_high_load_alert_predicts_each_hour_with_verdict_probability_and_thresho
     thresholds = {item["threshold_mw"] for item in predictions}
     assert len(thresholds) == 1
     assert load["load_mw"].min() < thresholds.pop() < load["load_mw"].max()
+
+
+def test_prediction_items_repeat_only_the_weather_fields_the_task_declares(
+    cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
+) -> None:
+    """預測 item 的天氣欄位跟隨任務設定 weather.fields，而非任務類型寫死的欄位。"""
+    tasks = deployed_tasks()
+    shipped = tasks[HIGH_LOAD_ALERT]
+    temperature_only = replace(
+        shipped,
+        task_id="temperature_only_alert",
+        weather=replace(shipped.weather, fields=("temperature",)),
+    )
+    monkeypatch.setitem(tasks, temperature_only.task_id, temperature_only)
+    model, load = _fitted_high_load_alert(pd.Timestamp("2026-08-21 23:00"), temperature_only)
+    monkeypatch.setitem(model_store.models, temperature_only.task_id, model)
+    _serve_fresh_inputs(load, cwa_obs_df, cwa_forecast_df, monkeypatch)
+
+    response = TestClient(app).post(
+        f"/tasks/{temperature_only.task_id}/predict", json={"horizon_hours": 2}
+    )
+
+    assert response.status_code == 200
+    for item in response.json()["predictions"]:
+        assert set(item) == {
+            "datetime",
+            "is_high_load",
+            "probability",
+            "threshold_mw",
+            "temperature",
+            "weather_sources",
+        }
+        assert set(item["weather_sources"]) == {"temperature"}
 
 
 def test_high_load_alert_refuses_a_stale_load_anchor(
@@ -547,7 +583,7 @@ def test_openapi_describes_high_load_alert_items() -> None:
 
 def test_openapi_describes_anomaly_predictions_and_horizon_semantics() -> None:
     schemas = app.openapi()["components"]["schemas"]
-    response_schema = schemas["UnsupervisedReconstructionTaskPredictionResponse"]
+    response_schema = schemas["LoadPatternAnomalyTaskPredictionResponse"]
     item_ref = response_schema["properties"]["predictions"]["items"]["$ref"]
     item = schemas[item_ref.rsplit("/", 1)[-1]]
 

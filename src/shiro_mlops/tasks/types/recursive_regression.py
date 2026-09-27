@@ -30,6 +30,7 @@ from shiro_mlops.tasks.types.base import (
     PredictionData,
     Trained,
     TrainingData,
+    WeatherEchoingItem,
     WeatherInput,
     split_at_validation,
 )
@@ -63,14 +64,11 @@ class RecursiveRegressionParams(BaseModel):
         return max(*self.lags, *self.rolling_windows)
 
 
-class RecursiveRegressionPrediction(BaseModel):
-    """One served forecast hour: the predicted load with the weather that drove it."""
+class RecursiveRegressionPrediction(WeatherEchoingItem):
+    """One served forecast hour: the predicted load, served with the weather that drove it."""
 
     datetime: str
     predicted_load_mw: float
-    temperature: float
-    relative_humidity: float
-    weather_sources: dict[str, dict[str, str]]
 
 
 class RecursiveRegressionHealth(BaseModel):

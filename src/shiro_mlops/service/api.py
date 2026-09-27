@@ -4,9 +4,9 @@ import logging
 import operator
 from collections.abc import AsyncGenerator, Callable, Iterable
 from contextlib import asynccontextmanager
-from functools import reduce
+from functools import cache, reduce
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Literal
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -39,11 +39,8 @@ from shiro_mlops.tasks.runner import (
     check_task_ready,
     predict_task,
 )
-from shiro_mlops.tasks.types import TASK_TYPES, get_task_type
-from shiro_mlops.tasks.types.base import TaskModel, TaskType
-from shiro_mlops.tasks.types.recursive_regression import RecursiveRegressionPrediction
-
-ItemT = TypeVar("ItemT", bound=BaseModel)
+from shiro_mlops.tasks.types import get_task_type
+from shiro_mlops.tasks.types.base import TaskModel, WeatherEchoingItem
 
 
 class ModelStore:
@@ -128,10 +125,6 @@ class ReadyResponse(BaseModel):
     reason: str | None = None
 
 
-class PredictionItem(RecursiveRegressionPrediction):
-    """One /predict forecast hour; the dynamic horizon forecast task's prediction item."""
-
-
 class TaskPredictionRequest(BaseModel):
     horizon_hours: int = Field(
         default=DEFAULT_HORIZON_HOURS,
@@ -162,6 +155,24 @@ class PredictionRequest(BaseModel):
     )
 
 
+def _prediction_item(task: TaskDefinition, name: str) -> type[BaseModel]:
+    """The task type's item, plus the task's own weather fields when the item echoes weather."""
+    item = get_task_type(task.task_type).prediction_item
+    if not issubclass(item, WeatherEchoingItem):
+        return item
+    weather_fields = {field: (float, ...) for field in task.weather.fields}
+    return create_model(
+        name,
+        __base__=item,
+        **weather_fields,
+        weather_sources=(dict[str, dict[str, str]], ...),
+    )
+
+
+# /predict 的 item 即動態視界預報任務的 item，名稱沿用既有 OpenAPI 契約。
+PredictionItem = _prediction_item(_served_task(), "PredictionItem")
+
+
 class PredictionResponse(BaseModel):
     status: str = "success"
     horizon_hours: int
@@ -179,21 +190,26 @@ class TaskPredictionEnvelope(BaseModel):
     mode: str = Field(description="Weather quality behind the predictions: normal or degraded")
 
 
-def _task_prediction_response(task_type: TaskType) -> type[TaskPredictionEnvelope]:
-    """Response model whose items use the task type's own prediction item schema."""
-    name = "".join(part.title() for part in task_type.name.split("_"))
+@cache
+def _task_prediction_response(task_id: str) -> type[TaskPredictionEnvelope]:
+    """Response model of one task: its task type's item with the task's weather fields.
+
+    Task definitions are fixed per process, so the model is built once per task id.
+    """
+    task = deployed_task(task_id)
+    name = "".join(part.title() for part in task_id.split("_"))
     return create_model(
         f"{name}TaskPredictionResponse",
         __base__=TaskPredictionEnvelope,
-        task_type=(Literal[task_type.name], ...),
-        predictions=(list[task_type.prediction_item], ...),
+        task_type=(Literal[task.task_type], ...),
+        predictions=(list[_prediction_item(task, f"{name}PredictionItem")], ...),
     )
 
 
-TASK_PREDICTION_RESPONSES: dict[str, type[TaskPredictionEnvelope]] = {
-    name: _task_prediction_response(task_type) for name, task_type in TASK_TYPES.items()
-}
-TaskPredictionResponse = reduce(operator.or_, TASK_PREDICTION_RESPONSES.values())
+# 僅供 OpenAPI 描述；各任務的回應模型建構時即已驗證，端點不再以聯集重驗。
+TaskPredictionResponse = reduce(
+    operator.or_, (_task_prediction_response(task_id) for task_id in sorted(deployed_tasks()))
+)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -231,29 +247,32 @@ def task_readiness_check(task_id: str) -> ReadyResponse:
 def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
     """Predict dynamic horizon future power loads from persisted weather and load data."""
     outcome = _predict(_served_task(), horizon_hours=request.horizon_hours)
-    items = _prediction_items(PredictionItem, outcome)
+    rows = _prediction_rows(outcome)
     return PredictionResponse(
         status="success",
-        horizon_hours=len(items),
+        horizon_hours=len(rows),
         subject=outcome.subject,
         mode=outcome.mode,
-        predictions=items,
+        predictions=rows,
     )
 
 
-@app.post("/tasks/{task_id}/predict", response_model=TaskPredictionResponse)
+@app.post(
+    "/tasks/{task_id}/predict",
+    response_model=None,
+    responses={200: {"model": TaskPredictionResponse}},
+)
 def predict_for_task(task_id: str, request: TaskPredictionRequest) -> TaskPredictionEnvelope:
-    """Predict with one task; the prediction item schema depends on the task type."""
+    """Predict with one task; the prediction item schema depends on the task."""
     task = _deployed_task_or_404(task_id)
     outcome = _predict(task, horizon_hours=request.horizon_hours)
-    task_type = get_task_type(task.task_type)
-    return TASK_PREDICTION_RESPONSES[task_type.name](
+    return _task_prediction_response(task.task_id)(
         status="success",
         task_id=task.task_id,
-        task_type=task_type.name,
+        task_type=task.task_type,
         subject=outcome.subject,
         mode=outcome.mode,
-        predictions=_prediction_items(task_type.prediction_item, outcome),
+        predictions=_prediction_rows(outcome),
     )
 
 
@@ -295,8 +314,11 @@ def _predict(task: TaskDefinition, *, horizon_hours: int) -> PredictionOutcome:
         raise HTTPException(status_code=500, detail=f"Prediction error: {error}") from error
 
 
-def _prediction_items(item_model: type[ItemT], outcome: PredictionOutcome) -> list[ItemT]:
-    """Merge each prediction row with the weather row and sources at the same position."""
+def _prediction_rows(outcome: PredictionOutcome) -> list[dict[str, object]]:
+    """Merge each prediction row with the weather row and sources at the same position.
+
+    The response model validates the rows against the task's item; fields it lacks are ignored.
+    """
     rows = zip(
         outcome.predictions.to_dict("records"),
         outcome.weather.to_dict("records"),
@@ -304,14 +326,12 @@ def _prediction_items(item_model: type[ItemT], outcome: PredictionOutcome) -> li
         strict=True,
     )
     return [
-        item_model.model_validate(
-            {
-                **weather,
-                **prediction,
-                DATETIME_COL: str(prediction[DATETIME_COL]),
-                WEATHER_SOURCES_FIELD: sources,
-            }
-        )
+        {
+            **weather,
+            **prediction,
+            DATETIME_COL: str(prediction[DATETIME_COL]),
+            WEATHER_SOURCES_FIELD: sources,
+        }
         for prediction, weather, sources in rows
     ]
 
