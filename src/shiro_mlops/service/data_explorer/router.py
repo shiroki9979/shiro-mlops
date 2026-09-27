@@ -79,12 +79,12 @@ def list_hourly_load(
     request: Request,
     start: str | None = None,
     end: str | None = None,
-    location: str | None = None,
+    subject: str | None = None,
     limit: int | None = Query(default=None),
     cursor: str | None = None,
 ) -> ListEnvelope:
     """List persisted hourly electricity load rows."""
-    del start, end, location, limit, cursor
+    del start, end, subject, limit, cursor
     return _run_list(request, HourlyLoadReader)
 
 

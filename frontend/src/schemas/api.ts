@@ -21,7 +21,6 @@ export type PredictionItem = z.infer<typeof PredictionItemSchema>
 
 export const PredictionRequestSchema = z.object({
   horizon_hours: z.number().int().min(1).max(168).default(24),
-  location: z.string().default('Taipei'),
 })
 
 export type PredictionRequest = z.infer<typeof PredictionRequestSchema>
@@ -29,7 +28,7 @@ export type PredictionRequest = z.infer<typeof PredictionRequestSchema>
 export const PredictionResponseSchema = z.object({
   status: z.string(),
   horizon_hours: z.number().int(),
-  location: z.string(),
+  subject: z.string(),
   predictions: z.array(PredictionItemSchema),
 })
 

@@ -1,7 +1,7 @@
 # 快速上手：本地隨需用電負載預測
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-08
+- 最後更新：2026-09-27
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -14,7 +14,7 @@
 本教學將帶領您啟動本地容器化服務、將必要資料寫入 TimescaleDB、訓練模型，並發送第一個動態視界負載預測請求。
 
 > [!IMPORTANT]
-> `daily_training_job` 需要資料庫中已有與台電逐時負載時間重疊的 canonical CWA 測站觀測歷史。全新空資料庫目前沒有歷史 bootstrap 指令；單次 observation materialization 可能不足以訓練模型，此時只能完成服務與資料擷取驗證，`/ready` 會維持 HTTP 503。
+> `dynamic_horizon_forecast__training_job` 需要資料庫中已有與台電逐時負載時間重疊的 canonical CWA 測站觀測歷史。全新空資料庫目前沒有歷史 bootstrap 指令；單次 observation materialization 可能不足以訓練模型，此時只能完成服務與資料擷取驗證，`/ready` 會維持 HTTP 503。
 
 ---
 
@@ -68,7 +68,7 @@ make compose-up
 1. 開啟 `http://localhost:3000` 進入 Dagster UI。
 2. materialize `raw_cwa_station_observation`。
 3. materialize `raw_cwa_township_forecast`。
-4. 確認已有足夠且時間重疊的 CWA 觀測歷史後，啟動 `daily_training_job`；此工作會擷取台電逐時負載、建立特徵並產生 `data/model.joblib`。若因無可用訓練列而失敗，保留 503 狀態並繼續由排程累積正式觀測資料。
+4. 確認已有足夠且時間重疊的 CWA 觀測歷史後，啟動 `dynamic_horizon_forecast__training_job`；此工作會讀取已入庫的台電逐時負載、訓練模型並產生任務模型目錄 `data/models/dynamic_horizon_forecast/`。若因無可用訓練列而失敗，保留 503 狀態並繼續由排程累積正式觀測資料。
 5. 訓練完成後，重新啟動 API 以載入模型：
 
    ```bash
@@ -92,16 +92,16 @@ make compose-up
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"horizon_hours": 24, "location": "Taipei"}'
+  -d '{"horizon_hours": 24}'
 ```
 
-您將收到包含未來 24 個小時預測用電負載（$MW$）與氣象預報數值的 JSON 回應：
+您將收到包含未來 24 個小時預測用電負載（$MW$）與氣象預報數值的 JSON 回應；`subject` 為預測對象，全台負載固定為 `nationwide`：
 
 ```json
 {
   "status": "success",
   "horizon_hours": 24,
-  "location": "Taipei",
+  "subject": "nationwide",
   "mode": "normal",
   "predictions": [
     {

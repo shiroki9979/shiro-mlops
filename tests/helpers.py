@@ -1,13 +1,14 @@
 """集中共用測試資料，避免測試模組互相依賴私有 builder。"""
 
 import json
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
-from dagster import load_assets_from_modules
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -31,7 +32,8 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
-from shiro_mlops.pipelines import assets as assets_module
+from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -182,20 +184,83 @@ def create_legacy_load_table(engine: Engine) -> None:
         )
 
 
+def create_location_keyed_load_table(engine: Engine) -> None:
+    """模擬 ADR-0009 之前的資料庫：全台負載以 location='Taipei' 保存。"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE raw_taipower_load (
+                    time TIMESTAMP NOT NULL,
+                    location VARCHAR(64) NOT NULL,
+                    load_mw DOUBLE PRECISION NOT NULL,
+                    source VARCHAR(32) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (time, location)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, location, load_mw, source) VALUES "
+                "('2026-08-20 00:00:00', 'Taipei', 26500.0, 'regional_snapshot_sum'), "
+                "('2026-08-20 01:00:00', 'Taipei', 26600.0, 'regional_snapshot_sum')"
+            )
+        )
+
+
 def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
     """以 d015046 時期的寫法（不帶 source）插入一列；需先完成 schema 升級使 source 可為 NULL。"""
     utc_time = pd.Timestamp(taiwan_local_to_utc(pd.Series([taiwan_time])).iloc[0])
     with engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO raw_taipower_load (time, location, load_mw) "
-                "VALUES (:time, 'Taipei', :load_mw)"
+                "INSERT INTO raw_taipower_load (time, subject, load_mw) "
+                "VALUES (:time, 'nationwide', :load_mw)"
             ),
             {"time": utc_time.to_pydatetime(), "load_mw": load_mw},
         )
 
 
 def selected_asset_names(job) -> set[str]:
-    """以正式資產模組解析 job selection，讓各測試對同一份資產圖斷言。"""
-    assets = load_assets_from_modules([assets_module])
-    return {key.to_user_string() for key in job.selection.resolve(assets)}
+    """以正式部署的資產圖解析 job selection，讓各測試對同一份資產圖斷言。"""
+    from shiro_mlops.pipelines.definitions import all_assets
+
+    return {key.to_user_string() for key in job.selection.resolve(all_assets)}
+
+
+def task_jobs() -> list:
+    """資產工廠為所有已部署任務產生的訓練與監控 job。"""
+    from shiro_mlops.pipelines.definitions import task_pipelines
+
+    return [job for pipeline in task_pipelines for job in pipeline.jobs]
+
+
+def hourly_load_with_weather(hours: int, last_hour: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """建立具日週期且與氣溫相關的全台負載及同時段觀測天氣，使模型有可學習的訊號。"""
+    times = pd.date_range(end=last_hour, periods=hours, freq="h")
+    daily = np.sin(2 * np.pi * times.hour / 24.0)
+    temperature = 28.0 + 4.0 * daily
+    load = pd.DataFrame(
+        {
+            "datetime": times,
+            "subject": "nationwide",
+            "load_mw": 30000.0 + 3000.0 * daily + 150.0 * (temperature - 28.0),
+        }
+    )
+    weather = pd.DataFrame(
+        {"datetime": times, "temperature": temperature, "relative_humidity": 75.0 - 5.0 * daily}
+    )
+    return load, weather
+
+
+def override_task_policies(
+    monkeypatch, task_id: str = DYNAMIC_HORIZON_FORECAST, **updates: object
+) -> TaskDefinition:
+    """以測試值取代已部署任務的 [policies]，測試結束後由 monkeypatch 還原。"""
+    tasks = deployed_tasks()
+    task = tasks[task_id]
+    updated = replace(task, policies=task.policies.model_copy(update=updates))
+    monkeypatch.setitem(tasks, task_id, updated)
+    return updated

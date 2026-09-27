@@ -22,11 +22,11 @@ def test_hourly_load_includes_only_exact_closed_window(sqlite_engine: Engine) ->
     with sqlite_engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
-                "VALUES (:time, :location, :load, 'regional_snapshot_sum')"
+                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                "VALUES (:time, :subject, :load, 'regional_snapshot_sum')"
             ),
             [
-                {"time": timestamp, "location": f"edge-{index}", "load": float(index)}
+                {"time": timestamp, "subject": f"edge-{index}", "load": float(index)}
                 for index, timestamp in enumerate(times)
             ],
         )
@@ -82,7 +82,7 @@ def test_window_acceptance_preserves_existing_rows(
     with sqlite_engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
+                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
                 "VALUES (:time, 'existing-row', 99, 'legacy')"
             ),
             {"time": existing_time},
@@ -92,7 +92,7 @@ def test_window_acceptance_preserves_existing_rows(
 
     with sqlite_engine.connect() as connection:
         remaining = connection.execute(
-            text("SELECT COUNT(*) FROM raw_taipower_load WHERE location = 'existing-row'")
+            text("SELECT COUNT(*) FROM raw_taipower_load WHERE subject = 'existing-row'")
         ).scalar_one()
     assert remaining == 1
 

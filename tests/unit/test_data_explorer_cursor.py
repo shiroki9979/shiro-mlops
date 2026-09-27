@@ -15,7 +15,7 @@ from shiro_mlops.service.data_explorer.cursor import (
 def test_cursor_round_trip_preserves_sort_key() -> None:
     """編碼後的 cursor 必須能還原最後一筆排序鍵。"""
     filters = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
-    key = {"time": "2026-08-01T12:00:00+08:00", "location": "Taipei"}
+    key = {"time": "2026-08-01T12:00:00+08:00", "subject": "nationwide"}
 
     token = encode_cursor(dataset="hourly_load", filters=filters, key=key)
 
@@ -28,12 +28,12 @@ def test_cursor_rejects_filter_mismatch() -> None:
     """篩選條件改變後不得繼續使用舊 cursor。"""
     token = encode_cursor(
         dataset="hourly_load",
-        filters={"location": "Taipei"},
+        filters={"subject": "nationwide"},
         key={"time": "2026-08-01T12:00:00+08:00"},
     )
 
     with pytest.raises(CursorError, match="filter"):
-        decode_cursor(token, dataset="hourly_load", filters={"location": "Taichung"})
+        decode_cursor(token, dataset="hourly_load", filters={"subject": "north"})
 
 
 def test_cursor_rejects_invalid_or_incompatible_payload() -> None:

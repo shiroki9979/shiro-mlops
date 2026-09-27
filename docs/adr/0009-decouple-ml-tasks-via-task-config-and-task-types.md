@@ -1,0 +1,73 @@
+# ADR-0009：以任務設定與任務類型解耦單一負載預報任務
+
+> - Created: 2026-09-27
+> - Last Updated: 2026-09-27
+> - Author: White Huang
+> - Status: 已接受
+> - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[CONTEXT.md](../../CONTEXT.md)
+
+---
+
+## 1. Context
+
+系統自資料擷取到 serving 都以「全台逐時負載動態視界預報」為唯一任務寫死：目標欄位 `load_mw`、外生變數（氣溫、相對濕度）、臺北測站 `466920` 與鄉鎮代碼 `63000000`、LightGBM 遞迴預報器、單一模型檔與 MLflow experiment，分散於特徵轉換、Dagster 資產、Feast view 與 REST API。特徵配方另有三套不一致的 lag 設定（預報器、特徵管線、Feast 匯出）。全台逐時實際負載以 `location = "Taipei"` 保存，混淆了預測對象與氣象代表點。
+
+專案要在不犧牲既有任務的前提下，保留新增其他 ML 任務（包含分類與異常偵測）的擴充性。目前沒有已排定的第二個任務，因此抽象必須由實際任務驗證，而非憑空設計。
+
+## 2. Decision
+
+引入 **ML 任務**（定義見 CONTEXT.md）作為一級概念，以「任務設定 + 任務類型」兩層描述：
+
+- **範圍**：限以時間為索引的表格資料，涵蓋監督式（回歸、分類）與非監督式（異常偵測）。
+- **任務設定**：`tasks/<task_id>.toml`，以標準函式庫 `tomllib` 讀取、Pydantic 驗證為有型別的任務定義，設定錯誤於啟動時失敗。承載「用什麼值」：任務類型名稱、預測對象、氣象代表點（可多個、可加權）、目標序列來源、特徵配方參數、模型超參數、排程、評估與健康判定門檻、領域規則參數。
+- **任務類型**：Python 實作，經明確的 registry 以名稱對應，承載「怎麼做」：標籤建構、模型家族、訓練、評估指標、推論與模型保存（見 ADR-0010）。
+- **共用元件**：天氣解析與降級預報、負載起點過舊、最低累積門檻、依時間切分訓練與驗證。由任務設定宣告是否啟用與參數，任務類型不得自行重寫。
+- **預測對象與氣象代表點分離**：全台逐時實際負載的預測對象識別碼遷移為 `nationwide`；氣象代表點引用擷取目錄中的測站與鄉鎮預報區。
+- **擷取範圍獨立於任務**：資料來源與氣象代表點目錄維持獨立設定，任務只能引用；引用不存在的項目於啟動時失敗。
+- **Dagster**：以資產工廠為每個任務產生 `{task_id}__*` 資產（特徵、模型、監控）與排程；擷取資產以資料來源為中心，跨任務共用。每個任務擁有獨立的 MLflow experiment、registered model 與模型目錄。
+- **Serving**：新增 `POST /tasks/{task_id}/predict`，回應 schema 依任務類型而定，附帶天氣的 item 其天氣欄位跟隨任務設定 `weather.fields`。`/predict` 保留為動態視界預報任務的別名，其 `location` 請求欄位標示為 deprecated，回應增加 `subject`。
+- **驗證實作**：以三個任務驗證抽象，各自只變動一個主要維度：
+  - 動態視界預報（既有）：遞迴回歸，LightGBM。
+  - 高負載預警：直接策略分類，`LGBMClassifier`；高負載門檻為預警當下之前 28 日的 P90。
+  - 用電型態異常偵測：非監督重建，淺層 MLP AutoEncoder；24 小時滑動窗，以合成異常注入評估，門檻取驗證期重建誤差 P99。
+
+### Rationale & Alternatives Considered
+
+- **選定方案：任務設定 + 任務類型兩層**。調整參數不需改動程式；新任務類型以固定介面擴充；設定經 Pydantic 驗證可提前失敗。
+- **候選方案 A：純 Python 註冊（任務即程式物件）**。間接層最少、型別完整；未採納，因調整門檻或特徵配方都須改動程式，不符合「任務可彈性配置」的目標。
+- **候選方案 B：純設定檔、不寫程式**。無法表達不同任務類型的標籤與模型邏輯，不可行。
+- **候選方案 C：以 Dagster partition 區分任務**。要求所有任務步驟同形，但異常偵測沒有標籤步驟，不適用。
+- **候選方案 D：每個任務一個 Dagster code location**。隔離最強，但重複部署共用的擷取資產。
+- **候選方案 E：擷取範圍由任務設定聯集推導**。全台逐時實際負載與測站觀測無法回補，事後新增的任務將缺少歷史。
+- **候選方案 F：範圍擴及非時間索引或影像、文字資料**。會失去「時間序、point-in-time 特徵、依時間驗證」的共同不變量，共用介面將淪為淺層的 `run()`。
+- **候選方案 G：高負載預警串接負載預報輸出**。會引入任務間相依，需另一套 seam 設計；改採直接策略保持任務互相獨立。
+
+## 3. Consequences
+
+- **正面效益（Positive）**：
+  - 新增同類型任務只需新增一份設定檔；三個實作使 seam 經過實際驗證。
+  - 特徵配方（lag、rolling、日曆特徵）收斂為任務設定單一來源。
+  - 預測對象語意修正，為多氣象代表點加權（M3）鋪路。
+- **代價與風險（Trade-offs & Risks）**：
+  - 多一層 schema 與解析器；設定檔隨映像檔發布，變更需重新部署。
+  - `raw_taipower_load` 需資料遷移；Data Explorer 與前端需配合調整欄位名稱與地點選單。
+  - 高負載門檻需先累積 28 日歷史才產生第一筆標籤，加上訓練資料，最早約 2026-11-21 可訓練。
+- **不做／延後範圍（Out of Scope / Deferred）**：
+  - Feast 凍結為動態視界預報任務專屬的匯出，不納入任務抽象；[ADR-0002](0002-feast-storage-layer-strategy.md) 的適用範圍縮為該任務。是否移除 Feast 另案評估。
+  - [ADR-0003](0003-recursive-multi-step-forecasting.md) 的遞迴策略僅適用動態視界預報任務。
+  - 前端不做任務泛化，只做跟隨 API 契約的調整。
+  - 深層 AutoEncoder（需 PyTorch）、任務間串接、非時間索引資料。
+
+## 4. Compliance
+
+- 任務設定載入測試：缺少必要欄位、未知任務類型、引用不存在的氣象代表點，皆須於載入時失敗。
+- 將動態視界預報搬入任務抽象的切片，對外行為測試（API、韌性、排程、Data Explorer）除預測對象識別碼與模型格式相關斷言外不得修改；針對已移除內部模組的測試改寫為在任務類型或 runner 介面驗證相同行為。
+- 資產工廠測試：每個任務設定產生預期的資產鍵與排程。
+- 每個任務類型須有公開介面層級的單元測試。
+- Code Review 清單：任務專屬常數（測站編號、鄉鎮代碼、以地名作為預測對象）不得出現在任務設定與擷取目錄以外的程式碼。
+
+## 5. Notes
+
+- 本 ADR 未取代 ADR-0002、ADR-0003，僅縮小其適用範圍，兩者維持已接受。
+- 實作追蹤：[ROADMAP M7](../ROADMAP.md)、[GitHub #64](https://github.com/shiroki9979/shiro-mlops/issues/64)（切片 #65–#70）。
+- 決策經 2026-09-26 至 2026-09-27 的設計訪談定案。

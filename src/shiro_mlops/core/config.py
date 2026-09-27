@@ -46,9 +46,13 @@ class Settings(BaseSettings):
             return f"s3://{self.S3_BUCKET_NAME}/{self.FEAST_S3_PREFIX}/weather_features.parquet"
         return str((self.DATA_DIR / "weather_features.parquet").resolve())
 
+    @property
+    def models_dir(self) -> Path:
+        """Root of the per-task model directories (ADR-0010)."""
+        return self.DATA_DIR / "models"
+
     # MLflow
     MLFLOW_TRACKING_URI: str = "http://localhost:5001"
-    MLFLOW_EXPERIMENT_NAME: str = "taipower_load_forecasting"
 
     # Feast Feature Store
     FEAST_REPO_PATH: Path = Path("src/shiro_mlops/features")
@@ -73,15 +77,11 @@ class Settings(BaseSettings):
     # Nationwide hourly actual load derived from regional snapshots (ADR-0008)
     HOURLY_LOAD_MIN_SAMPLES: PositiveInt = 4
     HOURLY_LOAD_RECOMPUTE_HOURS: PositiveInt = 3
-    # 推算序列無法回補，只能自累積起往後取得；未滿 28 日（672 小時）不得訓練（ADR-0008）。
-    TRAINING_MIN_LOAD_HOURS: PositiveInt = 672
 
     # API Serving
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     DATA_EXPLORER_ENABLED: bool = False
-    # 遞迴預報起點沒有替代來源；實際負載落後請求時間超過此時數即拒絕預報而非降級。
-    LOAD_ANCHOR_MAX_LAG_HOURS: PositiveInt = 3
 
     # TimescaleDB / Operational Time-Series Store
     TIMESCALE_HOST: str = "localhost"

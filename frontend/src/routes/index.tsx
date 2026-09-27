@@ -1,7 +1,6 @@
 import { createRoute } from '@tanstack/react-router'
 import { rootRoute } from './__root'
 import { usePrediction } from '@/hooks/use-prediction'
-import { useDashboardStore } from '@/store/dashboard-store'
 import { ForecastChart } from '@/components/dashboard/forecast-chart'
 import { HorizonControls } from '@/components/dashboard/horizon-controls'
 import { MetricCards } from '@/components/dashboard/metric-cards'
@@ -15,7 +14,6 @@ export const indexRoute = createRoute({
 })
 
 function OverviewPage() {
-  const { location } = useDashboardStore()
   const { data, isLoading, isError, error } = usePrediction()
 
   return (
@@ -48,7 +46,7 @@ function OverviewPage() {
       <PredictionTable
         predictions={data?.predictions}
         isLoading={isLoading}
-        location={location}
+        subject={data?.subject}
       />
     </div>
   )

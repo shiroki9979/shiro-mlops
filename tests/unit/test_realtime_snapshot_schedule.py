@@ -7,12 +7,10 @@ from dagster import build_schedule_context
 
 from shiro_mlops.pipelines.schedules import (
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
-    daily_training_job,
-    hourly_drift_job,
     taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
-from tests.helpers import selected_asset_names
+from tests.helpers import selected_asset_names, task_jobs
 
 
 def test_realtime_job_selects_exactly_three_snapshot_assets() -> None:
@@ -21,12 +19,10 @@ def test_realtime_job_selects_exactly_three_snapshot_assets() -> None:
     assert selected == set(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
 
 
-def test_existing_jobs_exclude_realtime_snapshot_assets() -> None:
-    """既有訓練與漂移工作不得包含三個即時快照資產。"""
-    daily = selected_asset_names(daily_training_job)
-    hourly = selected_asset_names(hourly_drift_job)
-    assert daily.isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
-    assert hourly.isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
+def test_task_jobs_exclude_realtime_snapshot_assets() -> None:
+    """任務的訓練與監控工作不得包含三個即時快照資產。"""
+    for job in task_jobs():
+        assert selected_asset_names(job).isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS), job.name
 
 
 def test_realtime_job_registers_limited_op_retry_policy() -> None:

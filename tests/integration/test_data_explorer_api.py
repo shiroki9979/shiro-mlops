@@ -53,16 +53,16 @@ def explorer_client(test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyP
 
 
 def _upsert_hours(
-    repo: TimeSeriesRepository, hours: list[datetime], location: str = "Taipei"
+    repo: TimeSeriesRepository, hours: list[datetime], subject: str = "nationwide"
 ) -> None:
     frame = pd.DataFrame(
         {
             DATETIME_COL: hours,
             LOAD_MW_COL: [30000.0 + index for index in range(len(hours))],
-            "location": location,
+            "subject": subject,
         }
     )
-    repo.upsert_taipower_load(frame, default_location=location)
+    repo.upsert_taipower_load(frame, default_subject=subject)
 
 
 def test_data_explorer_is_unavailable_when_disabled(
@@ -122,7 +122,7 @@ def test_malformed_v2_cursor_precedes_database_failure(
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     filters = ExplorerQuery.from_params("hourly_load", window).filters
     cursor = encode_cursor(
-        dataset="hourly_load", filters=filters, key={"time": 123, "location": "Taipei"}
+        dataset="hourly_load", filters=filters, key={"time": 123, "subject": "nationwide"}
     )
     router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
     monkeypatch.setattr(
@@ -170,15 +170,15 @@ def test_forecast_cursor_filter_mismatch_precedes_database_failure(
     assert response.json()["detail"] == "Cursor filter mismatch"
 
 
-@pytest.mark.parametrize("location", [["Taipei"], {"name": "Taipei"}])
-def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, location) -> None:
+@pytest.mark.parametrize("subject", [["nationwide"], {"name": "nationwide"}])
+def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, subject) -> None:
     client, _ = explorer_client
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     filters = ExplorerQuery.from_params("hourly_load", window).filters
     cursor = encode_cursor(
         dataset="hourly_load",
         filters=filters,
-        key={"time": "2026-08-01T12:00:00+08:00", "location": location},
+        key={"time": "2026-08-01T12:00:00+08:00", "subject": subject},
     )
 
     response = client.get("/data/power/load", params={**window, "cursor": cursor})
@@ -234,7 +234,7 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     start = rfc3339(latest - timedelta(hours=1))
     end = rfc3339(latest)
     response = client.get(
-        "/data/power/load", params={"start": start, "end": end, "location": "Taipei"}
+        "/data/power/load", params={"start": start, "end": end, "subject": "nationwide"}
     )
     assert response.status_code == 200
     body = response.json()
@@ -242,7 +242,7 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     assert body["has_more"] is False
     assert len(body["items"]) == 2
     assert body["items"][0]["datetime"] >= body["items"][1]["datetime"]
-    assert body["items"][0]["location"] == "Taipei"
+    assert body["items"][0]["subject"] == "nationwide"
     assert "load_mw" in body["items"][0]
     assert "raw_payload" not in body["items"][0]
     assert all(item["datetime"].endswith("+08:00") for item in body["items"])
@@ -293,7 +293,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
         params={
             "start": rfc3339(latest - timedelta(hours=5)),
             "end": rfc3339(latest - timedelta(hours=4)),
-            "location": "Taichung",
+            "subject": "north",
         },
     )
     assert empty.status_code == 200
@@ -324,7 +324,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
         params={
             "start": rfc3339(latest - timedelta(hours=1)),
             "end": rfc3339(latest),
-            "location": "Kaohsiung",
+            "subject": "south",
             "cursor": cursor,
         },
     )
@@ -333,7 +333,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     invalid_window_cursor = encode_cursor(
         dataset="hourly_load",
         filters={"start": "not-a-time", "end": rfc3339(latest), "dataset": "hourly_load"},
-        key={"time": rfc3339(latest), "location": "Taipei"},
+        key={"time": rfc3339(latest), "subject": "nationwide"},
     )
     assert (
         client.get("/data/power/load", params={"cursor": invalid_window_cursor}).status_code == 400
