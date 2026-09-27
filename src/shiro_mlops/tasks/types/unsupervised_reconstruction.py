@@ -4,9 +4,10 @@ Each window holds ``window_hours`` consecutive hours of actual load and observed
 weather plus the calendar position of its end hour. The AutoEncoder reconstructs
 its own input; the reconstruction error of the load part is the anomaly score, so
 weather and calendar only describe the conditions a load shape is judged against
-(CONTEXT.md, 用電型態異常). Training needs no labels: the decision threshold is a
-quantile of clean validation errors, and recall is measured on synthetic anomalies
-injected into clean validation windows.
+(CONTEXT.md, 用電型態異常). Training needs no labels: validation windows alternate
+by calendar day between calibration, whose error quantile is the decision
+threshold, and holdout, where the clean false positive rate and the recall on
+injected synthetic anomalies are measured.
 
 Models are persisted as ``.npz`` arrays (``allow_pickle=False``) plus JSON and
 served by a numpy forward pass (ADR-0010).
@@ -128,20 +129,26 @@ class UnsupervisedReconstruction:
         )
 
     def train(self, params: UnsupervisedReconstructionParams, data: TrainingData) -> Trained:
-        """Fit on windows ending before the split; set the threshold and evaluate after it.
+        """Fit on windows ending before the split; calibrate and evaluate on alternate days after it.
 
-        The threshold and the false positive rate share the clean validation windows,
-        so that rate sits near ``1 - threshold_quantile`` by design and mainly exposes
-        tied or degenerate errors. Holding out part of a validation period shorter
-        than a week would bias the rate by day of week instead.
+        Measuring the false positive rate on the windows that set the threshold
+        would pin it near ``1 - threshold_quantile`` whatever the model does.
+        Alternating whole days, rather than cutting the period in two, keeps both
+        halves spread over the same weekdays and weekends when validation is
+        shorter than a week.
         """
         weather_columns = [column for column in data.weather.columns if column != DATETIME_COL]
         windows = _build_windows(data.load, data.weather, weather_columns, params.window_hours)
         is_validation = windows.end_times >= data.validation_start
-        training, validation = windows.features[~is_validation], windows.features[is_validation]
-        _require_enough_windows(training, validation, data.validation_start)
-        model = UnsupervisedReconstructionModel.fit(params, training, validation, weather_columns)
-        metrics = {"validation_windows": float(len(validation)), **model.evaluate(validation)}
+        training = windows.features[~is_validation]
+        calibration, holdout = _alternate_days(windows.select(is_validation))
+        _require_enough_windows(training, calibration, holdout, data.validation_start)
+        model = UnsupervisedReconstructionModel.fit(params, training, calibration, weather_columns)
+        metrics = {
+            "calibration_windows": float(len(calibration)),
+            "validation_windows": float(len(holdout)),
+            **model.evaluate(holdout),
+        }
         return Trained(model=model, metrics=metrics)
 
     def load(self, directory: Path) -> UnsupervisedReconstructionModel:
@@ -248,7 +255,7 @@ class UnsupervisedReconstructionModel:
         cls,
         params: UnsupervisedReconstructionParams,
         training: np.ndarray,
-        validation: np.ndarray,
+        calibration: np.ndarray,
         weather_columns: list[str],
     ) -> UnsupervisedReconstructionModel:
         scaler = _Scaler.fit(training)
@@ -264,7 +271,7 @@ class UnsupervisedReconstructionModel:
         )
         regressor.fit(scaled, scaled)
         network = NumpyMLP.from_regressor(regressor)
-        errors = _load_reconstruction_errors(network, scaler, validation, params.window_hours)
+        errors = _load_reconstruction_errors(network, scaler, calibration, params.window_hours)
         return cls(
             network,
             scaler,
@@ -393,6 +400,9 @@ class _Windows:
     end_times: pd.DatetimeIndex
     features: np.ndarray
 
+    def select(self, mask: np.ndarray) -> _Windows:
+        return _Windows(self.end_times[mask], self.features[mask])
+
 
 def _build_windows(
     load: pd.DataFrame, weather: pd.DataFrame, weather_columns: list[str], window_hours: int
@@ -466,18 +476,32 @@ def _feature_names(window_hours: int, weather_columns: list[str]) -> list[str]:
     return [*series, *CALENDAR_FEATURES]
 
 
+def _alternate_days(validation: _Windows) -> tuple[np.ndarray, np.ndarray]:
+    """Calibration windows end on the 1st, 3rd, ... validation day; holdout on the 2nd, 4th, ..."""
+    if len(validation.end_times) == 0:
+        return validation.features, validation.features
+    days = validation.end_times.normalize()
+    day_position = (days - days.min()) // pd.Timedelta(days=1)
+    is_holdout = np.asarray(day_position % 2 == 1)
+    return validation.features[~is_holdout], validation.features[is_holdout]
+
+
 def _require_enough_windows(
-    training: np.ndarray, validation: np.ndarray, validation_start: pd.Timestamp
+    training: np.ndarray,
+    calibration: np.ndarray,
+    holdout: np.ndarray,
+    validation_start: pd.Timestamp,
 ) -> None:
     if len(training) == 0:
         raise ValueError(
             f"No complete training windows end before validation start "
             f"{validation_start.isoformat()}"
         )
-    if len(validation) == 0:
+    if len(calibration) == 0 or len(holdout) == 0:
         raise ValueError(
-            f"No complete validation windows end at or after {validation_start.isoformat()} "
-            "to set the anomaly threshold"
+            f"Complete validation windows from {validation_start.isoformat()} must end on at "
+            "least two validation days: alternate days set the anomaly threshold and "
+            "measure it"
         )
 
 

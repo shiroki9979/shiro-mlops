@@ -18,7 +18,7 @@ validation_fraction = 0.2
 
 [params]
 window_hours = 24
-# 判定門檻：驗證期重建誤差的 P99。
+# 判定門檻：驗證期校準日（與保留日逐日交錯）重建誤差的 P99。
 threshold_quantile = 0.99
 
 [params.model]
