@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import ClassVar, Protocol, TypeVar
 
@@ -76,14 +76,35 @@ class Trained:
     metrics: Mapping[str, float]
 
 
+class HealthStatus(StrEnum):
+    """Monitoring verdict on a trained model."""
+
+    HEALTHY = "HEALTHY"
+    WARNING = "WARNING"
+
+
+@dataclass(frozen=True)
+class HealthAssessment:
+    """A monitoring verdict with the metric and threshold that decided it."""
+
+    status: HealthStatus
+    reason: str
+
+
 class TaskType(Protocol[P]):
     """How one family of tasks builds labels, trains, evaluates, predicts, and persists."""
 
     name: ClassVar[str]
     params_model: ClassVar[type[P]]
+    # 健康判定門檻的 schema；門檻值來自任務設定 [health]，判定規則屬於任務類型。
+    health_model: ClassVar[type[BaseModel]]
 
     def requirements(self, params: P) -> InputRequirements: ...
 
     def train(self, params: P, data: TrainingData) -> Trained: ...
 
     def load(self, directory: Path) -> TaskModel: ...
+
+    def assess_health(
+        self, thresholds: BaseModel, metrics: Mapping[str, float]
+    ) -> HealthAssessment: ...

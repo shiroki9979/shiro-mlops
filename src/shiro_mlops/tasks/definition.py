@@ -1,20 +1,29 @@
 """Task definitions: ``tasks/<task_id>.toml`` read with tomllib and validated in two stages.
 
 Stage one validates the fields every task shares; stage two validates ``[params]``
-against the params model of the named task type. Every failure raises
+and ``[health]`` against the models of the named task type. Every failure raises
 ``TaskDefinitionError`` naming the file and the offending field, so a bad
 definition stops the process at startup (ADR-0009).
 """
 
 from __future__ import annotations
 
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveInt,
+    ValidationError,
+    field_validator,
+)
 
 from shiro_mlops.data.cwa_client import CWALocation
 from shiro_mlops.tasks.types import UnknownTaskTypeError, get_task_type
@@ -23,6 +32,10 @@ HOURLY_ACTUAL_LOAD_TARGET = "hourly_actual_load"
 # 訓練讀測站觀測、預報讀鄉鎮預報；兩者同時提供的欄位才可作為任務的氣象欄位。
 WeatherField = Literal["temperature", "relative_humidity"]
 Model = TypeVar("Model", bound=BaseModel)
+# minute hour day-of-month month day-of-week；只接受數字、*、範圍、步進與逗號清單，
+# 為 Dagster 可解析之 cron 的嚴格子集，錯誤得以在載入任務設定時就失敗。
+CRON_FIELD_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+_CRON_PART = re.compile(r"^(?:\*|(\d+)(?:-(\d+))?)(?:/(\d+))?$")
 
 
 class TaskDefinitionError(ValueError):
@@ -42,6 +55,43 @@ class TaskPolicies(BaseModel):
     min_training_hours: PositiveInt
     stale_anchor_max_lag_hours: PositiveInt
     validation_fraction: float = Field(gt=0.0, lt=1.0)
+
+
+def _validate_cron(expression: str) -> str:
+    fields = expression.split()
+    if len(fields) != len(CRON_FIELD_RANGES):
+        raise ValueError(
+            f"{expression!r} must have five fields: minute hour day-of-month month day-of-week"
+        )
+    for field, (low, high) in zip(fields, CRON_FIELD_RANGES, strict=True):
+        if not all(_is_valid_cron_part(part, low, high) for part in field.split(",")):
+            raise ValueError(
+                f"{expression!r} has an invalid field {field!r} (allowed {low}-{high})"
+            )
+    return expression
+
+
+def _is_valid_cron_part(part: str, low: int, high: int) -> bool:
+    match = _CRON_PART.match(part)
+    if match is None:
+        return False
+    start, end, step = match.groups()
+    bounds = [int(value) for value in (start, end) if value is not None]
+    in_range = all(low <= value <= high for value in bounds)
+    ordered = end is None or int(start) <= int(end)
+    return in_range and ordered and (step is None or int(step) > 0)
+
+
+CronExpression = Annotated[str, AfterValidator(_validate_cron)]
+
+
+class TaskSchedule(BaseModel):
+    """Cron expressions in Asia/Taipei time for the task's training and monitoring runs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    training: CronExpression
+    monitoring: CronExpression
 
 
 class _WeatherSection(BaseModel):
@@ -71,6 +121,8 @@ class _TaskFile(BaseModel):
     weather: _WeatherSection
     policies: TaskPolicies
     params: dict[str, Any]
+    schedule: TaskSchedule
+    health: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -92,6 +144,9 @@ class TaskDefinition:
     weather: WeatherSpec
     policies: TaskPolicies
     params: BaseModel
+    schedule: TaskSchedule
+    # 依任務類型的 health_model 驗證；判定規則見 TaskType.assess_health。
+    health: BaseModel
 
 
 def load_task_definitions(
@@ -124,6 +179,8 @@ def load_task_definition(path: Path, catalog: Mapping[str, CWALocation]) -> Task
         ),
         policies=spec.policies,
         params=_validate(path, task_type.params_model, spec.params, location="params"),
+        schedule=spec.schedule,
+        health=_validate(path, task_type.health_model, spec.health, location="health"),
     )
 
 
