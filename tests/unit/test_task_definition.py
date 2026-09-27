@@ -79,6 +79,24 @@ def test_shipped_definition_describes_the_dynamic_horizon_forecast() -> None:
     assert task.health.max_mape == 10.0
 
 
+def test_shipped_definition_describes_the_high_load_alert() -> None:
+    """門檻為錨點前 28 日的 P90；每筆標籤前都需完整門檻窗，故最低累積為兩倍門檻窗。"""
+    task = load_task_definitions(TASK_DEFINITIONS_DIR, DEFAULT_CWA_LOCATIONS)["high_load_alert"]
+
+    assert task.task_type == "direct_classification"
+    assert task.subject == "nationwide"
+    assert task.weather.reference_point == DEFAULT_CWA_LOCATIONS["Taipei"]
+    assert task.weather.fields == ("temperature", "relative_humidity")
+    assert task.params.threshold.window_days == 28
+    assert task.params.threshold.quantile == 0.9
+    assert task.policies.min_training_hours == 1344
+    assert task.policies.stale_anchor_max_lag_hours == 3
+    assert task.params.lookback_hours >= 672 + max(task.params.lags)
+    assert task.health.min_precision > 0.0
+    assert task.health.min_recall > 0.0
+    assert task.health.min_f1 > 0.0
+
+
 def test_missing_required_field_names_file_and_field(tmp_path: Path) -> None:
     path = _write(tmp_path, _definition().replace('subject = "nationwide"\n', ""))
 

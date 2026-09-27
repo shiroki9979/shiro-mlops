@@ -13,7 +13,7 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hypertables
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import TaskModel, TrainingData
 from tests.helpers import create_legacy_load_table, override_task_policies
@@ -44,8 +44,9 @@ def mock_mlflow_offline_backend(
 
 @pytest.fixture
 def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
-    """Lower the task's training accumulation threshold and return the value in effect."""
-    override_task_policies(monkeypatch, min_training_hours=TEST_MIN_LOAD_HOURS)
+    """Lower every deployed task's training accumulation threshold and return the value."""
+    for task_id in deployed_tasks():
+        override_task_policies(monkeypatch, task_id, min_training_hours=TEST_MIN_LOAD_HOURS)
     return TEST_MIN_LOAD_HOURS
 
 

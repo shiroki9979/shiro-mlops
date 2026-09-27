@@ -18,7 +18,11 @@ from shiro_mlops.tasks.runner import (
     StaleLoadAnchorError,
     WeatherUnavailableError,
 )
-from shiro_mlops.tasks.types.base import TaskModel
+from shiro_mlops.tasks.types import get_task_type
+from shiro_mlops.tasks.types.base import TaskModel, TrainingData
+from tests.helpers import hourly_load_with_weather
+
+HIGH_LOAD_ALERT = "high_load_alert"
 
 
 def test_api_health_endpoint() -> None:
@@ -341,6 +345,7 @@ def test_startup_loads_each_task_model_independently(
     assert health["tasks"] == {
         DYNAMIC_HORIZON_FORECAST: {"task_type": "recursive_regression", "model_loaded": False},
         other.task_id: {"task_type": "recursive_regression", "model_loaded": True},
+        HIGH_LOAD_ALERT: {"task_type": "direct_classification", "model_loaded": False},
     }
     assert other_predict.status_code == 200
     assert len(other_predict.json()["predictions"]) == 3
@@ -362,3 +367,72 @@ def test_openapi_describes_task_predictions_with_the_task_type_item_schema() -> 
 
     assert task_item["properties"] == item_properties
     assert set(task_item["required"]) == set(schemas["PredictionItem"]["required"])
+
+
+def _fitted_high_load_alert(last_hour: pd.Timestamp) -> tuple[TaskModel, pd.DataFrame]:
+    """Train the deployed high-load alert on 35 days, leaving 7 days of full threshold windows."""
+    task = deployed_tasks()[HIGH_LOAD_ALERT]
+    load, weather = hourly_load_with_weather(24 * 35, last_hour.to_pydatetime())
+    data = TrainingData(
+        load=load,
+        weather=weather[["datetime", *task.weather.fields]],
+        validation_start=last_hour + pd.Timedelta(hours=1),
+    )
+    return get_task_type(task.task_type).train(task.params, data).model, load
+
+
+def test_high_load_alert_predicts_each_hour_with_verdict_probability_and_threshold(
+    cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
+) -> None:
+    model, load = _fitted_high_load_alert(pd.Timestamp("2026-08-21 23:00"))
+    monkeypatch.setitem(model_store.models, HIGH_LOAD_ALERT, model)
+    _serve_fresh_inputs(load, cwa_obs_df, cwa_forecast_df, monkeypatch)
+
+    response = TestClient(app).post(f"/tasks/{HIGH_LOAD_ALERT}/predict", json={"horizon_hours": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["task_id"] == HIGH_LOAD_ALERT
+    assert body["task_type"] == "direct_classification"
+    assert body["subject"] == "nationwide"
+    predictions = body["predictions"]
+    assert [item["datetime"] for item in predictions] == [
+        f"2026-08-22 {hour:02d}:00:00" for hour in range(6)
+    ]
+    for item in predictions:
+        assert isinstance(item["is_high_load"], bool)
+        assert 0.0 <= item["probability"] <= 1.0
+        assert item["is_high_load"] == (item["probability"] >= 0.5)
+        assert "predicted_load_mw" not in item
+        assert set(item["weather_sources"]) == {"temperature", "relative_humidity"}
+    thresholds = {item["threshold_mw"] for item in predictions}
+    assert len(thresholds) == 1
+    assert load["load_mw"].min() < thresholds.pop() < load["load_mw"].max()
+
+
+def test_high_load_alert_refuses_a_stale_load_anchor(
+    cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
+) -> None:
+    """負載起點過舊時高負載預警與動態視界預報一樣不降級，回 503。"""
+    model, load = _fitted_high_load_alert(pd.Timestamp("2026-08-21 12:00"))
+    monkeypatch.setitem(model_store.models, HIGH_LOAD_ALERT, model)
+    _serve_fresh_inputs(load, cwa_obs_df, cwa_forecast_df, monkeypatch)
+
+    response = TestClient(app).post(f"/tasks/{HIGH_LOAD_ALERT}/predict", json={"horizon_hours": 6})
+
+    assert response.status_code == 503
+    assert "Stale load anchor" in response.json()["detail"]
+
+
+def test_openapi_describes_high_load_alert_items() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    task_response = next(
+        schema
+        for name, schema in schemas.items()
+        if name.endswith("TaskPredictionResponse")
+        and schema["properties"]["task_type"].get("const") == "direct_classification"
+    )
+    item_ref = task_response["properties"]["predictions"]["items"]["$ref"]
+    item = schemas[item_ref.rsplit("/", 1)[-1]]
+
+    assert {"datetime", "is_high_load", "probability", "threshold_mw"} <= set(item["required"])
