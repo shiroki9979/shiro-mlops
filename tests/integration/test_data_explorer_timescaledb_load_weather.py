@@ -1,31 +1,13 @@
 """Opt-in TimescaleDB pagination acceptance for load and station observations."""
 
-import os
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
 from shiro_mlops.service.data_explorer.weather import ObservationReader
-
-
-@pytest.fixture
-def timescaledb_engine():
-    uri = os.getenv("TIMESCALE_INTEGRATION_URI")
-    if not uri:
-        pytest.skip("Set TIMESCALE_INTEGRATION_URI for isolated TimescaleDB acceptance")
-    engine = create_engine(uri)
-    try:
-        with engine.connect() as conn:
-            assert conn.execute(
-                text("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
-            ).scalar_one_or_none()
-        yield engine
-    finally:
-        engine.dispose()
 
 
 def _all_pages(reader, params: dict) -> list:
@@ -41,7 +23,7 @@ def _all_pages(reader, params: dict) -> list:
 
 
 def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
-    timescaledb_engine: Engine,
+    data_explorer_timescaledb_engine: Engine,
 ) -> None:
     suffix = uuid4().hex[:8]
     locations = (f"b-{suffix}", f"a-{suffix}")
@@ -64,7 +46,7 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
         (rows[2], stations[1], 1.0),
     ]
     try:
-        with timescaledb_engine.begin() as conn:
+        with data_explorer_timescaledb_engine.begin() as conn:
             conn.execute(
                 text(
                     "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
@@ -91,8 +73,8 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
             "end": "2040-09-20T12:00:01+08:00",
             "limit": 1,
         }
-        load_pages = _all_pages(HourlyLoadReader(timescaledb_engine), params)
-        observation_pages = _all_pages(ObservationReader(timescaledb_engine), params)
+        load_pages = _all_pages(HourlyLoadReader(data_explorer_timescaledb_engine), params)
+        observation_pages = _all_pages(ObservationReader(data_explorer_timescaledb_engine), params)
 
         assert [page.items[0]["load_mw"] for page in load_pages] == [4.0, 3.0, 2.0, 1.0]
         assert [page.items[0]["temperature_c"] for page in observation_pages] == [
@@ -105,7 +87,7 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
             assert [page.has_more for page in pages] == [True, True, True, False]
             assert all(page.missing_slots == pages[0].missing_slots for page in pages)
     finally:
-        with timescaledb_engine.begin() as conn:
+        with data_explorer_timescaledb_engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM raw_cwa_station_observation WHERE station_id IN (:a, :b)"),
                 {"a": stations[0], "b": stations[1]},
