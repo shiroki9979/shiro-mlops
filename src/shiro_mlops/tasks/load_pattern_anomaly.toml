@@ -28,8 +28,9 @@ learning_rate_init = 0.001
 max_iter = 500
 
 [schedule]
-# Asia/Taipei 時間：每日 00:30 重新訓練（錯開動態視界預報），每小時整點產生監控報告。
-training = "30 0 * * *"
+# Asia/Taipei 時間：每日 01:00 重新訓練（錯開動態視界預報 00:00 與高負載預警 00:30），
+# 每小時整點產生監控報告。
+training = "0 1 * * *"
 monitoring = "0 * * * *"
 
 [health]

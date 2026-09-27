@@ -30,7 +30,7 @@ learning_rate = 0.05
 num_leaves = 31
 
 [schedule]
-# Asia/Taipei 時間：錯開動態視界預報的 00:00 訓練；監控每小時第 5 分。
+# Asia/Taipei 時間：00:30 訓練，錯開動態視界預報 00:00 與用電型態異常偵測 01:00；監控每小時第 5 分。
 training = "30 0 * * *"
 monitoring = "5 * * * *"
 
