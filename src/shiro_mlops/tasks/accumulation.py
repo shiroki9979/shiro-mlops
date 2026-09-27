@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from shiro_mlops.core.constants import HOURS_PER_DAY
 from shiro_mlops.data.hourly_actual_load import HourlyLoadAccumulation
 
-HOURS_PER_DAY = 24
 LEGACY_LOAD_GUIDE = "docs/how-to/remove-legacy-d015046-load-rows.md"
 
 

@@ -20,7 +20,12 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from sklearn.metrics import f1_score, precision_score, recall_score
 
-from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, MAX_HORIZON_HOURS
+from shiro_mlops.core.constants import (
+    DATETIME_COL,
+    HOURS_PER_DAY,
+    LOAD_MW_COL,
+    MAX_HORIZON_HOURS,
+)
 from shiro_mlops.features.transformers import create_calendar_features
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
@@ -39,7 +44,6 @@ TASK_TYPE_NAME = "direct_classification"
 MODEL_FILE = "model.txt"
 METADATA_FILE = "metadata.json"
 FORMAT_VERSION = 1
-HOURS_PER_DAY = 24
 ANCHOR_COL = "anchor"
 ANCHOR_LOAD_COL = f"anchor_{LOAD_MW_COL}"
 LEAD_HOURS_COL = "lead_hours"
