@@ -20,7 +20,7 @@ describe('Overview Page Integration Test', () => {
     expect(screen.getByText('預測時效：')).toBeInTheDocument()
     expect(screen.getByText('24 小時')).toBeInTheDocument()
     expect(screen.getByText('48 小時')).toBeInTheDocument()
-    expect(screen.getByText('預測對象：全台')).toBeInTheDocument()
+    expect(screen.getByText('Prediction subject: Nationwide')).toBeInTheDocument()
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 
     // Wait for MSW to respond and populate metrics
