@@ -338,9 +338,14 @@ def test_startup_loads_each_task_model_independently(
         alias_predict = client.post("/predict", json={"horizon_hours": 3})
 
     assert health["model_loaded"] is False
-    assert health["tasks"] == {
-        DYNAMIC_HORIZON_FORECAST: {"task_type": "recursive_regression", "model_loaded": False},
-        other.task_id: {"task_type": "recursive_regression", "model_loaded": True},
+    assert set(health["tasks"]) == set(tasks)
+    assert health["tasks"][DYNAMIC_HORIZON_FORECAST] == {
+        "task_type": "recursive_regression",
+        "model_loaded": False,
+    }
+    assert health["tasks"][other.task_id] == {
+        "task_type": "recursive_regression",
+        "model_loaded": True,
     }
     assert other_predict.status_code == 200
     assert len(other_predict.json()["predictions"]) == 3

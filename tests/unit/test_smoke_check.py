@@ -1,7 +1,9 @@
 """Offline tests for the container smoke check of schedules and downstream readiness."""
 
+from dataclasses import replace
 from datetime import datetime
 
+import pytest
 from dagster import (
     AssetMaterialization,
     AssetSelection,
@@ -14,6 +16,7 @@ from dagster import (
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import all_assets, defs
 from shiro_mlops.pipelines.smoke_check import (
+    EXPECTED_SCHEDULES,
     CheckStatus,
     Deployment,
     check_downstream_readiness,
@@ -24,10 +27,23 @@ from shiro_mlops.pipelines.smoke_check import (
     run_smoke_check,
     running_schedule_names,
 )
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.tasks.deployed import deployed_tasks
 from tests.helpers import derived_hourly_load
 
 NOW = datetime(2026, 9, 27, 0, 30)
 ALL_SCHEDULES = frozenset(schedule.name for schedule in defs.schedules)
+TEST_MIN_LOAD_HOURS = 24
+
+
+@pytest.fixture
+def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Smoke check covers every deployed task, so every task gets the lowered threshold."""
+    tasks = deployed_tasks()
+    for task_id, task in list(tasks.items()):
+        policies = task.policies.model_copy(update={"min_training_hours": TEST_MIN_LOAD_HOURS})
+        monkeypatch.setitem(tasks, task_id, replace(task, policies=policies))
+    return TEST_MIN_LOAD_HOURS
 
 
 def _statuses(results) -> dict[str, CheckStatus]:
@@ -75,8 +91,12 @@ def test_load_consumer_boundaries_pass_for_registered_jobs() -> None:
     results = check_load_consumer_boundaries(defs)
 
     assert _statuses(results) == {
-        "job dynamic_horizon_forecast__training_job": CheckStatus.PASS,
-        "job dynamic_horizon_forecast__monitoring_job": CheckStatus.PASS,
+        f"job {job}": CheckStatus.PASS
+        for task_id in deployed_tasks()
+        for job in (
+            TaskPipelineNames(task_id).training_job,
+            TaskPipelineNames(task_id).monitoring_job,
+        )
     }
 
 
@@ -117,12 +137,14 @@ def test_cold_start_reports_waiting_readiness_without_failing(
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
     statuses = _statuses(results)
-    assert statuses == {
-        "dynamic_horizon_forecast load accumulation": CheckStatus.WAIT,
-        "dynamic_horizon_forecast load freshness": CheckStatus.PASS,
-        "tick dynamic_horizon_forecast__training_schedule": CheckStatus.WAIT,
-        "tick dynamic_horizon_forecast__monitoring_schedule": CheckStatus.WAIT,
-    }
+    for task_id in deployed_tasks():
+        names = TaskPipelineNames(task_id)
+        assert {name: status for name, status in statuses.items() if task_id in name} == {
+            f"{task_id} load accumulation": CheckStatus.WAIT,
+            f"{task_id} load freshness": CheckStatus.PASS,
+            f"tick {names.training_schedule}": CheckStatus.WAIT,
+            f"tick {names.monitoring_schedule}": CheckStatus.WAIT,
+        }
     accumulation = next(
         result for result in results if result.name == "dynamic_horizon_forecast load accumulation"
     )
@@ -135,9 +157,10 @@ def test_recovered_stack_reports_both_ticks_triggering(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 23, 0)))
-    dagster_instance.report_runless_asset_event(
-        AssetMaterialization("dynamic_horizon_forecast__model")
-    )
+    for task_id in deployed_tasks():
+        dagster_instance.report_runless_asset_event(
+            AssetMaterialization(TaskPipelineNames(task_id).model)
+        )
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
@@ -184,5 +207,8 @@ def test_full_run_on_fresh_deployment_flags_stopped_schedules_and_waiting_readin
     assert "[FAIL] schedule dynamic_horizon_forecast__training_schedule" in report
     assert "[PASS] job dynamic_horizon_forecast__training_job" in report
     assert "[WAIT] dynamic_horizon_forecast load accumulation" in report
-    assert report.splitlines()[-1] == "Summary: 2 pass, 4 wait, 6 fail"
+    # 每個任務：兩個 job 通過、累積／新鮮度／兩個 tick 等待、兩個排程未啟動。
+    tasks = len(deployed_tasks())
+    failed = len(EXPECTED_SCHEDULES) + 2 * tasks
+    assert report.splitlines()[-1] == f"Summary: {2 * tasks} pass, {4 * tasks} wait, {failed} fail"
     assert exit_code(results, require_ready=False) == 1
