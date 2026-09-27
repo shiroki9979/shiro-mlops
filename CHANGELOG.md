@@ -16,11 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 拆分預測對象與氣象代表點（ADR-0009）：`raw_taipower_load.location` 改名為 `subject`，全台負載由 `Taipei` 遷移為 `nationwide`（服務啟動時自動且可重複遷移，操作順序見 `docs/how-to/migrate-load-subject-to-nationwide.md`）；天氣解析與訓練天氣改以 CWA 擷取目錄的氣象代表點 alias 取值；`/predict` 回應以 `subject` 取代 `location`；Data Explorer 逐時負載改以 `subject` 顯示與篩選，儀表板移除地點選單（#65）。
 - 將 Data Explorer 列表查詢抽出為 typed `ExplorerQuery`，並讓逐時負載改走共用 cursor／keyset 分頁 seam（#52）。
 - 將 CWA 觀測、鄉鎮預報與 audit 列表遷移至 typed query 上的 focused readers，保留 vintage 與 missing-identifier 契約（#53）。
 - 將全台／區域供需與機組發電列表遷移至 typed query readers，保留 MW 轉換、完整度與 nullable 欄位契約（#54）。
 - 將 Data Explorer 狀態彙總抽成 focused collaborators，並移除單體 `DataExplorerStore`（#55）。
 - 簡化 Data Explorer 電力與預報 reader 的查詢、映射與測試資料 seam，讓列表契約可獨立維護與驗證。
+
+### Deprecated
+
+- `/predict` 的 `location` 請求欄位改為選填並於 OpenAPI 標示 deprecated；任何值皆被忽略，不再回傳 HTTP 400（#65）。
 
 ### Removed
 

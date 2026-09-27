@@ -1,7 +1,7 @@
 # 快速上手：本地隨需用電負載預測
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-08
+- 最後更新：2026-09-27
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -92,16 +92,16 @@ make compose-up
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"horizon_hours": 24, "location": "Taipei"}'
+  -d '{"horizon_hours": 24}'
 ```
 
-您將收到包含未來 24 個小時預測用電負載（$MW$）與氣象預報數值的 JSON 回應：
+您將收到包含未來 24 個小時預測用電負載（$MW$）與氣象預報數值的 JSON 回應；`subject` 為預測對象，全台負載固定為 `nationwide`：
 
 ```json
 {
   "status": "success",
   "horizon_hours": 24,
-  "location": "Taipei",
+  "subject": "nationwide",
   "mode": "normal",
   "predictions": [
     {
