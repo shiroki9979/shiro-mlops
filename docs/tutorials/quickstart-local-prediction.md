@@ -68,7 +68,7 @@ make compose-up
 1. 開啟 `http://localhost:3000` 進入 Dagster UI。
 2. materialize `raw_cwa_station_observation`。
 3. materialize `raw_cwa_township_forecast`。
-4. 確認已有足夠且時間重疊的 CWA 觀測歷史後，啟動 `daily_training_job`；此工作會擷取台電逐時負載、建立特徵並產生 `data/model.joblib`。若因無可用訓練列而失敗，保留 503 狀態並繼續由排程累積正式觀測資料。
+4. 確認已有足夠且時間重疊的 CWA 觀測歷史後，啟動 `daily_training_job`；此工作會讀取已入庫的台電逐時負載、訓練模型並產生任務模型目錄 `data/models/dynamic_horizon_forecast/`。若因無可用訓練列而失敗，保留 503 狀態並繼續由排程累積正式觀測資料。
 5. 訓練完成後，重新啟動 API 以載入模型：
 
    ```bash

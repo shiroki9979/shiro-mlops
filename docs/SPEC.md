@@ -164,7 +164,8 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **Features (`cwa_weather_features`)**:
   - `temperature`: float32
   - `relative_humidity`: float32
-- **時間正確性**：特徵擷取必須提供明確的 `FeatureQueryWindow`（訓練起迄、可選預測對象與氣象代表點）；repository 查詢起點另含 lag/rolling lookback，禁止無界歷史掃描。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
+- **匯出來源**：Feast 凍結為動態視界預報任務專屬匯出，由 runner 交付的訓練資料（§5.3 `TrainingData.load` 與觀測天氣）自行計算上列欄位，不共用任何任務的特徵配方；Feast 無正式讀取者。
+- **時間正確性**：訓練資料由 runner 以明確 `as_of` 讀取 `as_of` 以前的目標序列，時間窗由已累積的目標列推導；serving 只讀負載起點往前 `lookback_hours`（§5.3）的歷史，禁止無界歷史掃描。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
 - **訓練氣象缺口**：氣溫與相對濕度只能由較早觀測 forward-fill 最多兩小時；補值後仍缺少任一必要氣象欄位的 load row 必須移除。禁止 `bfill` 與固定氣象常數。
 
 ### 1.5 Dagster Artifact 序列化與信任邊界
@@ -200,12 +201,13 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 - **路徑**：`GET /ready`
 - **語意**：模型已載入、負載起點未過舊，且正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足、或負載起點過舊時回傳 HTTP 503，並列出未就緒原因。
-- **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過 `LOAD_ANCHOR_MAX_LAG_HOURS`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
+- **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過任務設定 `[policies].stale_anchor_max_lag_hours`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
+- **模型**：API 啟動時載入 `DATA_DIR/models/dynamic_horizon_forecast/`（§5.4）；既有 `DATA_DIR/model.joblib` 不載入，首次以新格式重新訓練前 `/ready` 維持 `not_ready`。任務設定無效時 API 啟動失敗。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
 
 ### 2.3 隨需動態視界負載預報
 
-- **路徑**：`POST /predict`
+- **路徑**：`POST /predict`（動態視界預報任務 `dynamic_horizon_forecast` 的別名，經 runner `predict_task` 實作）
 - **預測對象**：固定為 `nationwide`，並於回應 `subject` 揭露；模型只預測全台負載，不宣稱支援區域負載模型。
 - **相容性欄位**：請求 `location` 為選填，於 OpenAPI 標示 `deprecated`；任何值皆被忽略，不影響預測對象，也不再回傳 HTTP 400。回應不再包含 `location`。
 - **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
@@ -256,8 +258,8 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 1. **`daily_training_job`**：
    - **排程**：`0 16 * * *`（每日台灣時間 00:00 執行）
-   - **管線鏈路**：`raw_taipower_load`（由 `hourly_actual_load_job` 維護，經 `taipower_load_feature_source` 讀取）+ `cwa_observation_feature_source` $\to$ `engineered_feature_set`（`engineered_features` / `taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`；selection 明列上述資產，不含任何快照、推算或 CWA ingestion 資產。
-   - **最低累積**：`raw_taipower_load` 有效逐時觀測少於 `TRAINING_MIN_LOAD_HOURS`（預設 `672`，即 28 日）時，訓練必須明確失敗或略過並揭露原因，不得以不足資料產出模型。有效逐時觀測指 `source = 'regional_snapshot_sum'` 的列；存在 `source IS NULL` 的舊列時視為未就緒。排程 tick 以 `SkipReason` 揭露差距；手動執行時 `taipower_load_feature_source` 以 Dagster `Failure` 失敗並附 `valid_hours`／`required_hours` metadata。
+   - **管線鏈路**：`raw_taipower_load`（由 `hourly_actual_load_job` 維護，經 `taipower_load_feature_source` 讀取）+ `cwa_observation_feature_source` $\to$ `engineered_feature_set`（`engineered_features` 為目標負載與觀測天氣的逐時訓練表／`taipower_features` / `weather_features`）$\to$ `trained_forecaster_model` $\to$ `drift_monitoring_report`；selection 明列上述資產，不含任何快照、推算或 CWA ingestion 資產。資產只經 runner（§5.3）取門檻、訓練資料與訓練結果；`trained_forecaster_model` 以 `train_task` 訓練並將模型存入 `DATA_DIR/models/dynamic_horizon_forecast/`。
+   - **最低累積**：`raw_taipower_load` 有效逐時觀測少於任務設定 `[policies].min_training_hours`（預設 `672`，即 28 日）時，訓練必須明確失敗或略過並揭露原因，不得以不足資料產出模型。有效逐時觀測指 `source = 'regional_snapshot_sum'` 的列；存在 `source IS NULL` 的舊列時視為未就緒。排程 tick 以 `SkipReason` 揭露差距；runner 拋出領域錯誤 `TaskNotReady`，手動執行時由 `taipower_load_feature_source` 轉為 Dagster `Failure` 並附 `valid_hours`／`required_hours` metadata。
    - **Feast 發布**：`taipower_features` 與 `weather_features` 透過 `feast_io_manager`（`FeastParquetIOManager`）寫入本機 `DATA_DIR` 或 `s3://{bucket}/{FEAST_S3_PREFIX}/`；特徵計算邏輯不依賴儲存目標。
 2. **`hourly_drift_job`**：
    - **排程**：`0 * * * *`（每小時整點執行）
@@ -371,3 +373,63 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 10. 移除 Feature Store Snapshot 與 `GET /features/latest`。
 
 每個切片皆必須同時交付 repository 查詢、typed API contract、frontend schema／query，可操作介面與對應自動化測試，不採用先完成全部 backend 後才開始 frontend 的水平切分。
+
+---
+
+## 5. ML 任務設定與任務類型介面
+
+> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md) 與 [ADR-0010](adr/0010-persist-models-in-native-non-executable-formats.md)。程式位於 `src/shiro_mlops/tasks/`，任務設定檔與程式一同隨映像檔發布。
+
+### 5.1 任務設定 Schema（`tasks/<task_id>.toml`）
+
+以標準函式庫 `tomllib` 讀取，兩階段 Pydantic 驗證：先驗證共通欄位，再以任務類型的 `params_model` 驗證 `[params]`。Dagster code location 載入與 API 啟動時即載入全部任務設定；任何錯誤皆拋出 `TaskDefinitionError(path, detail)`，`detail` 指出欄位路徑（如 `policies.stale_anchor_max_lag_hours`、`params.rolling_windows`）。未知欄位一律拒絕。
+
+| 欄位 | 型別 | 規則 |
+| :--- | :--- | :--- |
+| `task_id` | string | 小寫英數與底線；必須等於檔名（不含 `.toml`） |
+| `task_type` | string | 必須為已註冊的任務類型（§5.2） |
+| `subject` | string | 預測對象識別碼，例如 `nationwide` |
+| `target` | `"hourly_actual_load"` | 目標序列來源；目前只有全台逐時實際負載（`raw_taipower_load`，`source = 'regional_snapshot_sum'`） |
+| `weather.reference_points` | list[string] | 必須引用 CWA 擷取目錄中的 alias；目前恰好一個，多於一個以錯誤拒絕（加權留待 M3） |
+| `weather.fields` | list[`temperature` \| `relative_humidity`] | 訓練觀測與預報皆提供的氣象欄位 |
+| `policies.min_training_hours` | 正整數 | 最低累積門檻（§3.1） |
+| `policies.stale_anchor_max_lag_hours` | 正整數 | 負載起點過舊門檻（§2.2） |
+| `policies.validation_fraction` | 0 < x < 1 | 依時間切分的驗證比例 |
+| `params` | table | 依任務類型驗證；為特徵配方與模型超參數的唯一來源 |
+
+`recursive_regression` 的 `[params]`：`lags`（正整數 list，至少一個）、`rolling_windows`（正整數 list，至少一個）、`[params.model]` 的 `n_estimators`（正整數）、`learning_rate`（正數）、`num_leaves`（≥ 2）；objective、metric 與 random seed 由任務類型固定。
+
+動態視界預報任務設定 `tasks/dynamic_horizon_forecast.toml`：`subject = "nationwide"`、氣象代表點 `Taipei`、`min_training_hours = 672`、`stale_anchor_max_lag_hours = 3`、`validation_fraction = 0.2`、`lags = [1, 2, 24, 48, 168]`、`rolling_windows = [6, 24]`、LightGBM `n_estimators = 100`、`learning_rate = 0.05`、`num_leaves = 31`。
+
+### 5.2 任務類型介面（`tasks/types/`）
+
+任務類型為純計算 adapter，不接觸 repository；以 `tasks/types/__init__.py` 的明確 registry（`TASK_TYPES`、`get_task_type(name)`）依名稱對應。
+
+- `name`、`params_model`：registry 名稱與 `[params]` 的 Pydantic model。
+- `requirements(params) -> InputRequirements(weather, lookback_hours)`：預測時使用預報（`FORECAST`）或觀測（`OBSERVED`）天氣，以及 runner 有界讀取歷史所需的小時數。
+- `train(params, TrainingData) -> Trained(model, metrics)`：負責特徵、標籤、fit 與評估。`TrainingData` 含 `load`（`datetime`、`subject`、`load_mw`）、`weather`（`datetime` 與 `weather.fields`，一律為觀測天氣）與 `validation_start`；target 時間 `>= validation_start` 者為驗證列，任務類型不得自行切分。
+- `load(directory) -> TaskModel`；`TaskModel.predict(PredictionData) -> DataFrame`、`TaskModel.save(directory)`。`PredictionData` 含 `anchor`、`load_history`、`weather`、`horizon_hours`，交付時已保證負載起點新鮮且天氣欄位完整，任務類型不得以常數補值。
+
+已註冊任務類型：
+
+- `recursive_regression`：LightGBM 單步模型遞迴展開（ADR-0003 僅適用此類型）；`lookback_hours = max(lags, rolling_windows)`；預測輸出 `datetime`、`predicted_load_mw`；評估為驗證列上的 one-step-ahead MAPE／RMSE／MAE，驗證列為空時回報 `0.0`。
+
+### 5.3 Runner（`tasks/runner.py`）
+
+Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件（累積門檻、取資料、負載起點過舊、天氣解析與降級）；所有時間相關判斷皆傳入明確 `as_of`（台灣本地 naive 時間）。
+
+| 函式 | 行為 |
+| :--- | :--- |
+| `check_training_readiness(task, runtime)` | 回傳累積摘要，排程 skip 與 smoke check 共用 |
+| `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`；讀取 `as_of` 以前的目標序列與同期觀測天氣，並以 `validation_fraction` 推導 `validation_start` |
+| `train_task(task, runtime, *, as_of) -> Trained` | `load_training_data` 後交由任務類型訓練 |
+| `check_task_ready(task, model, runtime, *, as_of) -> Readiness` | 模型、負載起點與完整 168 小時天氣皆可用時 `ready`，並回報 `mode` |
+| `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`WeatherUnavailableError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；結果含 `mode`、預測、逐時天氣與其來源 |
+
+serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史。
+
+### 5.4 模型保存（`tasks/model_store.py`）
+
+- `save_model(root, task_id, model) -> Path`：模型寫入暫存目錄後 rename 為 `root/<task_id>`；寫入失敗時保留前一版模型。`root` 為 `DATA_DIR/models`。
+- `load_model(root, task) -> TaskModel | None`：目錄不存在時回傳 `None`（任務尚未訓練）；既有 `model.joblib` 不載入。
+- 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）。`src/` 不得 import `pickle` 或 `joblib`，由測試強制。
