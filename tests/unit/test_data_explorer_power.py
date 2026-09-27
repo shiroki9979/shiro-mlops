@@ -1,9 +1,10 @@
 """Power dataset readers preserve MW conversion, completeness, and nullable fields."""
 
-from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
@@ -17,10 +18,14 @@ from shiro_mlops.service.data_explorer.power import (
 )
 from tests.helpers import (
     TAIWAN,
-    regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
     unit_generation_snapshots,
+)
+from tests.scenarios.data_explorer_power import (
+    assert_national_reader_pages,
+    assert_regional_reader_pages,
+    assert_unit_reader_pages,
 )
 
 
@@ -119,144 +124,6 @@ def test_unit_generation_reader_preserves_zero_and_nullable_fields(
     assert filtered.items[0]["unit_name"] == "大潭CC#1"
 
 
-def _all_pages(reader, params: dict, identity) -> tuple[list, list]:
-    items = []
-    gaps = []
-    cursor = None
-    seen_cursors = set()
-    while True:
-        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
-        items.extend(identity(item) for item in page.items)
-        gaps.append(page.missing_slots)
-        assert page.has_more is (page.next_cursor is not None)
-        if not page.has_more:
-            break
-        cursor = page.next_cursor
-        assert cursor not in seen_cursors
-        seen_cursors.add(cursor)
-    return items, gaps
-
-
-def assert_national_reader_pages(
-    test_repo: TimeSeriesRepository,
-) -> None:
-    observed = datetime(2026, 9, 5, 17, 30)
-    moments = [
-        observed.replace(microsecond=700000),
-        observed.replace(microsecond=200000),
-        observed - timedelta(minutes=20),
-    ]
-    for index, moment in enumerate(moments):
-        test_repo.upsert_supply_demand_snapshot(
-            replace(supply_demand_snapshot(moment), curr_load_wan_kw=1000.0 + index)
-        )
-    params = {
-        "start": rfc3339(observed - timedelta(minutes=20)),
-        "end": rfc3339(observed + timedelta(seconds=1)),
-        "limit": 1,
-    }
-
-    loads, gaps = _all_pages(
-        NationalSupplyDemandReader(test_repo.engine), params, lambda item: item["curr_load_wan_kw"]
-    )
-
-    assert loads == [1000.0, 1001.0, 1002.0]
-    assert gaps == [[rfc3339(observed - timedelta(minutes=10)), rfc3339(observed)]] * 3
-
-
-def assert_regional_reader_pages(
-    test_repo: TimeSeriesRepository,
-) -> None:
-    observed = datetime(2026, 9, 5, 17, 30)
-    complete = observed.replace(microsecond=200000)
-    newer = observed.replace(microsecond=700000)
-    older = observed - timedelta(minutes=10)
-    rows = regional_supply_demand_snapshots(complete)
-    rows += [replace(row, observed_at=newer, load_wan_kw=900.0) for row in rows[:1]]
-    rows += [replace(row, observed_at=older, load_wan_kw=800.0) for row in rows[:1]]
-    test_repo.upsert_regional_supply_demand_snapshots(rows)
-    reader = RegionalSupplyDemandReader(test_repo.engine)
-    params = {"start": rfc3339(older), "end": rfc3339(observed + timedelta(seconds=1)), "limit": 1}
-
-    regions, gaps = _all_pages(reader, params, lambda item: (item["region"], item["slot_complete"]))
-    assert regions == [
-        ("北部", False),
-        ("東部", True),
-        ("南部", True),
-        ("北部", True),
-        ("中部", True),
-        ("北部", False),
-    ]
-    assert gaps == [[rfc3339(newer), rfc3339(older)]] * 6
-
-    complete_north, _ = _all_pages(
-        reader,
-        {**params, "region": "北部", "completeness": "complete"},
-        lambda item: (item["region"], item["slot_complete"], item["missing_regions"]),
-    )
-    assert complete_north == [("北部", True, [])]
-    incomplete, _ = _all_pages(
-        reader,
-        {**params, "completeness": "incomplete"},
-        lambda item: item["load_wan_kw"],
-    )
-    assert incomplete == [900.0, 800.0]
-
-
-def assert_unit_reader_pages(
-    test_repo: TimeSeriesRepository,
-) -> None:
-    observed = datetime(2026, 9, 5, 17, 30)
-    seed = unit_generation_snapshots(observed)[0]
-    rows = [
-        replace(
-            seed,
-            observed_at=observed.replace(microsecond=700000),
-            unit_type="燃氣",
-            unit_name="B",
-            net_generation_mw=70.0,
-        ),
-        replace(
-            seed,
-            observed_at=observed.replace(microsecond=200000),
-            unit_type="燃煤",
-            unit_name="A",
-            net_generation_mw=20.0,
-        ),
-        replace(seed, unit_type="燃煤", unit_name="B", net_generation_mw=3.0),
-        replace(seed, unit_type="燃煤", unit_name="A", net_generation_mw=0.0),
-        replace(seed, unit_type="燃氣", unit_name="B", net_generation_mw=None),
-        replace(seed, unit_type="燃氣", unit_name="A", net_generation_mw=1.0),
-    ]
-    test_repo.upsert_unit_generation_snapshots(rows)
-    reader = UnitGenerationReader(test_repo.engine)
-    params = {
-        "start": rfc3339(observed),
-        "end": rfc3339(observed + timedelta(seconds=1)),
-        "limit": 1,
-    }
-
-    units, gaps = _all_pages(
-        reader,
-        params,
-        lambda item: (item["unit_type"], item["unit_name"], item["net_generation_mw"]),
-    )
-
-    assert units == [
-        ("燃氣", "B", 70.0),
-        ("燃煤", "A", 20.0),
-        ("燃煤", "B", 3.0),
-        ("燃煤", "A", 0.0),
-        ("燃氣", "B", None),
-        ("燃氣", "A", 1.0),
-    ]
-    assert gaps == [[]] * 6
-    filtered, _ = _all_pages(
-        reader, {**params, "unit_type": "燃氣", "unit_name": "A"}, lambda item: item["unit_name"]
-    )
-    assert filtered == ["A"]
-
-
 def test_national_reader_paginates_raw_microseconds_without_losing_window_gaps(
     test_repo: TimeSeriesRepository,
 ) -> None:
@@ -273,3 +140,33 @@ def test_unit_reader_paginates_full_composite_key_and_preserves_nulls(
     test_repo: TimeSeriesRepository,
 ) -> None:
     assert_unit_reader_pages(test_repo)
+
+
+def test_regional_completeness_filter_matches_mixed_sqlite_time_storage(
+    sqlite_engine: Engine,
+) -> None:
+    """同一 slot 的 aware 與 naive UTC 列必須視為同一時間點，才能判定四區齊全。"""
+    stored = {
+        "北部": "2026-09-20 04:00:00",
+        "中部": "2026-09-20 04:00:00",
+        "南部": "2026-09-20 04:00:00.000000",
+        "東部": "2026-09-20 04:00:00+00:00",
+    }
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_regional_supply_demand_snapshot "
+                "(observed_at, region, source_time, load_wan_kw, raw_payload) "
+                "VALUES (:time, :region, :time, 1, '{}')"
+            ),
+            [{"time": time, "region": region} for region, time in stored.items()],
+        )
+    params = {
+        "start": "2026-09-20T12:00:00+08:00",
+        "end": "2026-09-20T12:00:00+08:00",
+        "completeness": "complete",
+    }
+
+    page = RegionalSupplyDemandReader(sqlite_engine).list(params)
+
+    assert sorted(item["region"] for item in page.items) == ["中部", "北部", "南部", "東部"]

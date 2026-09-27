@@ -55,6 +55,7 @@ def _run_list(request: Request, reader_cls: type[DatasetReader]) -> ListEnvelope
     try:
         params = _query_params(request)
         if params.get("cursor"):
+            # Resolving the engine may open the repository, so stale cursors fail first.
             decode_cursor_filters(params["cursor"], dataset=reader_cls.dataset)
         return reader_cls(_engine(request)).list(params)
     except CursorError as exc:

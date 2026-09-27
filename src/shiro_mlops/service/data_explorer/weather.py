@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from shiro_mlops.service.data_explorer.completeness import observation_gaps
-from shiro_mlops.service.data_explorer.cursor import decode_cursor_filters
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
@@ -27,7 +26,8 @@ def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> dict[str,
         SELECT dataset_id, issued_at, source_updated_at
         FROM raw_cwa_forecast_release
         {where}
-        ORDER BY issued_at DESC, source_updated_at DESC
+        ORDER BY {db.time_operand("issued_at")} DESC,
+                 {db.time_operand("source_updated_at")} DESC
         LIMIT 1
         """,
         params,
@@ -57,24 +57,20 @@ def _has_explicit_forecast_version(params: dict[str, Any]) -> bool:
     )
 
 
-def _cursor_forecast_version(params: dict[str, Any], dataset: str) -> dict[str, Any]:
-    if not params.get("cursor"):
-        return {}
-    filters = decode_cursor_filters(str(params["cursor"]), dataset=dataset)
-    if filters.get("issued_at") and filters.get("source_updated_at"):
-        return filters
-    return {}
+def _cursor_forecast_version(cursor_filters: dict[str, Any] | None) -> dict[str, Any]:
+    filters = cursor_filters or {}
+    return filters if filters.get("issued_at") and filters.get("source_updated_at") else {}
 
 
 def _pin_forecast_version(
     db: ExplorerDb,
-    dataset: str,
     params: dict[str, Any],
+    cursor_filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
     query_params = dict(params)
     if _has_explicit_forecast_version(query_params):
         return query_params
-    version = _cursor_forecast_version(query_params, dataset)
+    version = _cursor_forecast_version(cursor_filters)
     if version:
         query_params.setdefault("dataset_id", version.get("dataset_id"))
         query_params["issued_at"] = version["issued_at"]
@@ -132,31 +128,23 @@ class ObservationReader(DatasetReader):
     """List persisted CWA station observations newest first."""
 
     dataset = "cwa_observations"
+    select_sql = """
+        SELECT observed_at, station_id, station_name, town_code, temperature_c,
+               relative_humidity_pct, air_pressure_hpa, precipitation_mm,
+               wind_speed_m_s, wind_direction_deg, created_at
+        FROM raw_cwa_station_observation
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT :limit
+    """
 
-    def fetch_rows(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         station_id = query.filters.get("station_id")
         clauses, sql_params = self.db.time_window("observed_at", query.window)
         if station_id:
             clauses.append("station_id = :station_id")
             sql_params["station_id"] = station_id
-        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
-        sql_params.update(cursor_params)
-        sql = f"""
-            SELECT observed_at, station_id, station_name, town_code, temperature_c,
-                   relative_humidity_pct, air_pressure_hpa, precipitation_mm,
-                   wind_speed_m_s, wind_direction_deg, created_at
-            FROM raw_cwa_station_observation
-            WHERE {where}
-            ORDER BY {order}
-            LIMIT :limit
-        """
-        sql_params["limit"] = limit
-        return self.db.fetch(sql, sql_params)
+        return clauses, sql_params
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -185,34 +173,25 @@ class ForecastReader(DatasetReader):
     """List persisted CWA township forecasts newest first."""
 
     dataset = "cwa_forecasts"
+    select_sql = """
+        SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
+               location_name, temperature_c, dew_point_c, apparent_temperature_c,
+               relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+               wind_direction, created_at
+        FROM raw_cwa_township_forecast
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT :limit
+    """
 
-    def build_query(self, params: dict[str, Any]) -> ExplorerQuery:
-        query_params = _pin_forecast_version(self.db, self.dataset, params)
-        return ExplorerQuery.from_params(self.dataset, query_params)
+    def build_query(
+        self, params: dict[str, Any], cursor_filters: dict[str, Any] | None
+    ) -> ExplorerQuery:
+        query_params = _pin_forecast_version(self.db, params, cursor_filters)
+        return ExplorerQuery.from_params(self.dataset, query_params, cursor_filters=cursor_filters)
 
-    def fetch_rows(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
-        clauses, sql_params = _forecast_filters(self.db, query)
-        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
-        sql_params.update(cursor_params)
-        sql_params["limit"] = limit
-        return self.db.fetch(
-            f"""
-            SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                   location_name, temperature_c, dew_point_c, apparent_temperature_c,
-                   relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
-                   wind_direction, created_at
-            FROM raw_cwa_township_forecast
-            WHERE {where}
-            ORDER BY {order}
-            LIMIT :limit
-            """,
-            sql_params,
-        )
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+        return _forecast_filters(self.db, query)
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -224,13 +203,15 @@ class ObservationAuditReader(DatasetReader):
     """List CWA observation batch audit headers without raw payloads."""
 
     dataset = "cwa_observation_audits"
+    select_sql = """
+        SELECT fetched_at, status, missing_station_ids, created_at
+        FROM raw_cwa_observation_batch
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT :limit
+    """
 
-    def fetch_rows(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         status = _audit_status(query.filters.get("status"))
         clauses, sql_params = self.db.time_window("fetched_at", query.window)
         if status:
@@ -239,17 +220,7 @@ class ObservationAuditReader(DatasetReader):
         if query.filters.get("missing_station_id"):
             clauses.append("CAST(missing_station_ids AS TEXT) LIKE :missing_station")
             sql_params["missing_station"] = f'%"{query.filters["missing_station_id"]}"%'
-        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
-        sql_params.update(cursor_params)
-        sql = f"""
-            SELECT fetched_at, status, missing_station_ids, created_at
-            FROM raw_cwa_observation_batch
-            WHERE {where}
-            ORDER BY {order}
-            LIMIT :limit
-        """
-        sql_params["limit"] = limit
-        return self.db.fetch(sql, sql_params)
+        return clauses, sql_params
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -273,13 +244,16 @@ class ForecastAuditReader(DatasetReader):
     """List CWA forecast release audit headers without raw payloads."""
 
     dataset = "cwa_forecast_audits"
+    select_sql = """
+        SELECT dataset_id, issued_at, source_updated_at, fetched_at, status,
+               missing_geocodes, created_at
+        FROM raw_cwa_forecast_release
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT :limit
+    """
 
-    def fetch_rows(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         status = _audit_status(query.filters.get("status"))
         clauses, sql_params = self.db.time_window("issued_at", query.window)
         if query.filters.get("dataset_id"):
@@ -291,20 +265,7 @@ class ForecastAuditReader(DatasetReader):
         if query.filters.get("missing_geocode"):
             clauses.append("CAST(missing_geocodes AS TEXT) LIKE :missing_geocode")
             sql_params["missing_geocode"] = f'%"{query.filters["missing_geocode"]}"%'
-        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
-        sql_params.update(cursor_params)
-        sql_params["limit"] = limit
-        return self.db.fetch(
-            f"""
-            SELECT dataset_id, issued_at, source_updated_at, fetched_at, status,
-                   missing_geocodes, created_at
-            FROM raw_cwa_forecast_release
-            WHERE {where}
-            ORDER BY {order}
-            LIMIT :limit
-        """,
-            sql_params,
-        )
+        return clauses, sql_params
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]

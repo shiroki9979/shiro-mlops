@@ -16,13 +16,15 @@ class HourlyLoadReader(DatasetReader):
     """List persisted hourly load rows newest first."""
 
     dataset = "hourly_load"
+    select_sql = """
+        SELECT time, location, load_mw, created_at
+        FROM raw_taipower_load
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT :limit
+    """
 
-    def fetch_rows(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         location = query.filters.get("location")
         clauses, sql_params = self.db.time_window("time", query.window)
         clauses.append("source = :source")
@@ -30,17 +32,7 @@ class HourlyLoadReader(DatasetReader):
         if location:
             clauses.append("location = :location")
             sql_params["location"] = location
-        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
-        sql_params.update(cursor_params)
-        sql = f"""
-            SELECT time, location, load_mw, created_at
-            FROM raw_taipower_load
-            WHERE {where}
-            ORDER BY {order}
-            LIMIT :limit
-        """
-        sql_params["limit"] = limit
-        return self.db.fetch(sql, sql_params)
+        return clauses, sql_params
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
