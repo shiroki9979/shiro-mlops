@@ -4,7 +4,8 @@
 - 建立日期：2026-09-27
 - 最後更新：2026-09-27
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：待評估；尚未選定實作候選或定義新 interface
+- 狀態：候選 1 規格與五張工單已發布，待實作；候選 2、3 待評估
+- 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)（ready-for-agent）
 - 檢視基準：`da538a58433a3e00ccf84dee19f7de9679c02e0e`
 
 ## 範圍與結論
@@ -16,13 +17,13 @@
 
 | 候選 | 建議強度 | 主要收益 | 建議時機 |
 | :--- | :--- | :--- | :--- |
-| 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 優先深入評估 |
+| 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 規格與工單已發布，待實作 |
 | 2. 集中預報版本選取與降級解析 | Worth exploring | 預報消費政策具有共同 locality | 確認後續政策變更需要共同修改時 |
 | 3. 收攏營運資料檢視器的查詢生命週期 | Worth exploring | 畫面操作共用窗口與 cursor 有效性規則 | 下次新增篩選或查詢操作時 |
 
 優先建議候選 1：相同排序 invariant 曾需三處同步修補，已有具體維護成本；
 沿用既有 list interface 與離線 fixture 即可驗證改善，範圍也較候選 2 容易控制。
-此排序為評估建議，尚未形成實作承諾。
+2026-09-27 已選定候選 1，並確認 Q1 至 Q8 的設計選擇；完整方案已整理為 GitHub 規格 #72，五張工單已確認並發布為 #73 至 #77。
 
 ## 評估用語
 
@@ -148,7 +149,7 @@ After ：畫面操作 → 查詢 module〔窗口／cursor 有效性／URL〕→ 
 
 已有足夠 depth、應保留的 module 包括 DatasetReader 的 list interface、
 全台逐時實際負載推算，以及排程、asset 與 smoke check 共用的訓練就緒檢查。
-本次尚無需要重開 ADR 的衝突；新 interface 與具體 implementation 留待候選選定後討論。
+本次尚無需要重開 ADR 的衝突；候選 1 的 interface 方向與交付要求記錄於後續設計討論。
 
 ## 檢視時的驗證紀錄
 
@@ -175,8 +176,102 @@ pnpm exec vitest run tests/integration/data-explorer.test.tsx
 引用的 `test_data_explorer_api.py` 案例已閱讀，未包含於上述執行範圍。
 本次未執行完整測試套件或 PostgreSQL 實機驗證；通過的既有測試不代表候選重構已完成。
 
-## 後續待決事項
+## 候選 1 設計方案（規格已發布）
 
-選定候選後，再確認責任範圍、interface、internal seam、測試保留方式與最小變更切片。
+### 候選 1：已確認的設計方向
+
+2026-09-27 設計討論已確認：
+
+| 問題 | 選擇 | 決定 |
+| :--- | :--- | :--- |
+| Q1：分頁 module 的責任 | B | 集中排序、keyset 比較、cursor 編解碼與時間正規化；reader 保留資料集篩選及結果投影。 |
+| Q2：交付範圍 | A | 最終交付涵蓋全部 8 個 datasets；實作過程可分切片遷移。 |
+| Q3：資料列時間精度 | A | 本次納入精度修正，先建立重現測試；排序與 cursor 保留原始時間精度，畫面可維持整秒顯示。 |
+| Q4：真實資料庫驗收 | A | 交付須通過隔離的本機 PostgreSQL／TimescaleDB 分頁測試；日常 CI 維持現有離線流程。 |
+| Q5：舊 cursor 相容策略 | A | 全部 datasets 統一升為 v2；v1 cursor 一律回傳 HTTP 400，使用者重新查詢第一頁。 |
+| Q6：舊 cursor 的畫面恢復操作 | A | 新增「回到第一頁」按鈕，清除 cursor，保留目前畫面的時間窗口與篩選條件。 |
+| Q7：分頁 module 的 interface | C | 加深既有 `DatasetReader.list(params)`，統一分頁生命週期；reader 提供資料選取、filters 與整頁 projection。 |
+| Q8：精確時間窗口 | A | 本次移除起訖各放寬一秒的補償，使用精確閉區間 `[start, end]`；同步驗證列表與完整度查詢在兩種資料庫的端點、微秒及缺口判斷。 |
+
+以上八項選擇均已確認；2026-09-27 已依 to-spec 發布規格 #72，並於拆分獲確認後依 to-tickets 發布五張工單 #73 至 #77。尚未開始實作。
+
+### 候選 1：相容性與時間精度的查證
+
+- [cursor.py](../../src/shiro_mlops/service/data_explorer/cursor.py) 的 v1 token 保存版本、dataset、filters 與最後排序鍵。排序宣告的位置不在 token 內；若鍵值與比較語意不變，單純集中責任不必升版。
+- [pagination.py](../../src/shiro_mlops/service/data_explorer/pagination.py) 從已格式化的回傳 item 建立下一頁 key；[timefmt.py](../../src/shiro_mlops/service/data_explorer/timefmt.py) 預設只輸出整秒，資料列的小數秒可能在此遺失。
+- v1 token 未另存原始列識別資訊；觀測批次審計只以 `fetched_at` 為 key，同秒不同微秒的兩列可能產生相同 token，無法一般性無損復原原先的分頁位置。入庫批次使用 `datetime.now()`，儲存亦未移除微秒；此風險並非僅來自不符合契約的輸入，實際列表漏列仍待重現測試確認。
+- SQLite 的 `datetime(...)` 亦將小數秒化為整秒，目前只在預報 reader 的 cursor 比較啟用，SQL 排序則仍使用原始欄位。已查證兩種運算的精度差異，尚未重現實際列表漏列。
+- 現有測試覆蓋 filter 時間窗的小數秒及預報 `valid_to` 複合鍵；此輪搜尋未見資料列 sort key 的微秒跨頁案例。
+- [TimescaleDB 測試](../../tests/integration/test_timescaledb_repository.py) 有 `TIMESCALE_INTEGRATION_URI` opt-in 入口；未設定時略過。[CI](../../.github/workflows/ci.yml) 未配置該資料庫，現有真實資料庫案例亦未涵蓋營運資料檢視器分頁。
+- `TimeWindow.as_utc()` 為補償 SQLite 格式比較而將起訖各放寬一秒，實際上同時影響 PostgreSQL、全部 8 個列表，以及 `hourly_gaps`、`observation_gaps`、`ten_minute_gaps`、`regional_slot_map`。未找到允許窗口外資料的契約；Q8 已決定一併修正，且須保留上下界資料正確納入的驗證。
+
+### 候選 1：interface 比較（已選 C）
+
+三案均保留外部 `DatasetReader.list(params)`，透過既有 SQL adapter 執行有界查詢，
+並在顯示投影前取得最後一筆可見原始列的完整排序鍵。
+
+| 方案 | interface 與 seam | depth／locality 取捨 |
+| :--- | :--- | :--- |
+| A：獨立分頁 module | reader 提供查詢來源、參數與整頁投影，交由單一 `paginate` 入口執行。 | 分頁流程集中且可獨立使用；新增查詢來源物件與 callback 協議。 |
+| B：兩階段查詢計畫 | 分頁 module 補入排序與 cursor 條件，reader 執行查詢後再交回完成分頁。 | 執行方式較彈性，但呼叫端須遵守步驟順序與查詢不可再修改的規則，depth 較小。 |
+| C：加深既有 DatasetReader | `list(params)` 統一生命週期；reader 提供可信資料選取、filters 與整頁 projection，預報保留版本解析 hook。 | 沿用既有 seam，分頁 locality 集中且新增結構較少；reader 作者須理解固定 hook 契約。 |
+
+已選定 C。八個 reader 已共用 `DatasetReader`，可直接收回 SQL 排序、
+跨頁比較、`limit + 1`、完整原始鍵擷取與 v2 cursor 的協調責任。
+整頁 projection 保留區域完整度補查與全時間窗 `missing_slots`，須維持可見列的筆數與順序；
+完整度篩選仍先在資料查詢生效。測試跨 `list` seam 驗證行為，不綁定 hook 呼叫次序。
+
+### 候選 1：module 責任與執行順序
+
+外部 interface 保留 `DatasetReader(engine).list(params) -> ListEnvelope`。
+reader 的 internal interface 由資料集識別、可信 `SELECT ... FROM`、
+`filters(query)` 與 `project(query, rows)` 組成；預報 reader 保留 `build_query(params)`
+以解析或恢復已釘選版本。方法名稱可依最小實作調整，責任固定如下：
+
+1. 共用流程驗證 cursor 版本與格式、建立 query，恢復固定時間窗口與必要版本篩選，並驗證 filters 綁定。
+2. reader 提供完整資料集篩選；分頁 module 以單一排序宣告產生相同語意的 `ORDER BY` 與 keyset 比較，加入 `limit + 1` 後查詢。
+3. 分頁 module 截取可見列，從最後可見的原始列保留完整排序鍵，再交給 reader 進行整頁 projection；projection 保持列數與順序。
+4. 共用流程產生 v2 cursor 與既有 envelope；預報版本釘選資訊亦保留完整原始時間精度。
+
+原始鍵、SQL 方言與時間比較均位於共用 implementation；reader 使用既有 SQL adapter
+完成資料集特有查詢與補充資料。新增排序鍵時只修改其共用宣告與對應測試，
+不再要求同步修改 reader 的排序與 cursor 欄位 tuple。
+所有查詢值繼續參數化，資料表與欄位名稱來自可信程式碼。
+
+`CursorError`、無效查詢與資料庫不可用仍沿用 400、422、503 的對外語意。
+沿用逐次請求讀取與既有 keyset 行為；跨頁完整性驗收採固定 fixture，
+時間窗口與預報版本釘選不新增資料庫 snapshot 隔離。
+
+### 候選 1：交付切片與驗收
+
+1. 以觀測批次審計的同秒不同微秒資料建立失敗案例，確認原始排序鍵在投影前保留；先加深共用分頁流程，再以複合鍵最多的鄉鎮預報驗證版本釘選。
+2. 遷移全部 8 個 readers，移除各自重複的排序欄位、keyset 比較與方言選擇；資料集篩選、整頁投影及全窗口缺口語意維持既有責任。
+3. 統一 v2 cursor，保留時間窗口與預報版本釘選、filters 綁定及最新優先順序；v1、格式錯誤或不相容 cursor 維持 HTTP 400。
+4. 在 HTTP 400 且存在 cursor 時提供「回到第一頁」，透過既有 search 更新流程清除 cursor。保留畫面目前的時間與明確篩選；未明確指定預報版本時重新套用既有最新版本規則。
+5. 將時間窗口改為精確閉區間，同步驗證全部列表與四個完整度查詢；上下界恰好相等的列納入，窗口外一微秒的列排除，`start = end` 仍合法。
+6. 透過 `list(params)` 驗證八個 datasets 的跨頁完整性，涵蓋同時間複合鍵切頁、原始微秒精度、最後一頁，以及區域完整度篩選先於分頁截斷。
+7. 保留原有時間窗口固定、預報版本固定與缺口測試；以新的 list 行為測試取代綁定 `query.cursor_key()` 或已格式化 item 抽鍵等舊 implementation 的測試。仍有獨立契約的 cursor codec 測試保留。
+8. 在 SQLite 與隔離的本機 PostgreSQL／TimescaleDB 驗證相同排序、跨頁及時間範圍契約；前端操作測試驗證 v1 失效後恢復查詢及保留篩選。日常 CI 不新增資料庫相依。
+9. 使用獨立的測試容器與暫存資料，保留可重跑的驗證方式；執行後只清理此次建立的資源。依改動執行 Python 測試與 Ruff，以及前端相關測試、型別建置與 lint，並同步更新 SPEC 的 v2、精度與恢復操作契約。
+
+具體函式命名、SQL 組裝與微秒比較 implementation 在上述責任內選擇最小可行方案，
+並以 Red → Green → Refactor 驗證。設計選擇與工單拆分已確認，下一步由無阻擋的 #73 開始實作。
 若需修訂既有 ADR，應另行記錄決策理由。
 本文件保存候選與證據，後續狀態可由 [ROADMAP.md](../ROADMAP.md) 追蹤。
+
+### 候選 1：已發布工單
+
+正式需求以 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 為準；五張工單皆標記 ready-for-agent，並連結至該規格。
+
+| 工單 | 交付行為 | 阻擋來源 |
+| :--- | :--- | :--- |
+| [#73](https://github.com/shiroki9979/shiro-mlops/issues/73) | 擴充共用生命週期，完成觀測批次審計微秒分頁、全域 v2 與畫面失效恢復。 | 無 |
+| [#74](https://github.com/shiroki9979/shiro-mlops/issues/74) | 遷移鄉鎮預報與預報版本審計，保留完整複合鍵及微秒版本釘選。 | #73 |
+| [#75](https://github.com/shiroki9979/shiro-mlops/issues/75) | 遷移逐時負載與測站觀測，保留來源隔離及全窗口缺口。 | #73 |
+| [#76](https://github.com/shiroki9979/shiro-mlops/issues/76) | 遷移全台、區域與機組快照，保留完整度先篩後分頁。 | #73 |
+| [#77](https://github.com/shiroki9979/shiro-mlops/issues/77) | 八列表與四完整度查詢使用精確閉區間，移除舊內部流程，完成交付驗收及文件同步。 | #74、#75、#76 |
+
+工單 #73 先擴充既有流程；#74 至 #76 分批遷移；#77 收斂共同時間窗口與過渡流程。
+每張遷移工單包含 SQLite 與隔離本機 PostgreSQL／TimescaleDB 驗證。
+工單 #73 即統一 v2 並拒絕 v1，其餘 reader 的完整原始精度隨遷移補齊；不得新增 v1 相容層。
+中間切片屬遷移狀態，整體完成與發布須等待 #77 通過。
