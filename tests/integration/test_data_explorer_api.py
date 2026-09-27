@@ -51,16 +51,16 @@ def explorer_client(test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyP
 
 
 def _upsert_hours(
-    repo: TimeSeriesRepository, hours: list[datetime], location: str = "Taipei"
+    repo: TimeSeriesRepository, hours: list[datetime], subject: str = "nationwide"
 ) -> None:
     frame = pd.DataFrame(
         {
             DATETIME_COL: hours,
             LOAD_MW_COL: [30000.0 + index for index in range(len(hours))],
-            "location": location,
+            "subject": subject,
         }
     )
-    repo.upsert_taipower_load(frame, default_location=location)
+    repo.upsert_taipower_load(frame, default_subject=subject)
 
 
 def test_data_explorer_is_unavailable_when_disabled(
@@ -129,7 +129,7 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     start = rfc3339(latest - timedelta(hours=1))
     end = rfc3339(latest)
     response = client.get(
-        "/data/power/load", params={"start": start, "end": end, "location": "Taipei"}
+        "/data/power/load", params={"start": start, "end": end, "subject": "nationwide"}
     )
     assert response.status_code == 200
     body = response.json()
@@ -137,7 +137,7 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     assert body["has_more"] is False
     assert len(body["items"]) == 2
     assert body["items"][0]["datetime"] >= body["items"][1]["datetime"]
-    assert body["items"][0]["location"] == "Taipei"
+    assert body["items"][0]["subject"] == "nationwide"
     assert "load_mw" in body["items"][0]
     assert "raw_payload" not in body["items"][0]
     assert all(item["datetime"].endswith("+08:00") for item in body["items"])
@@ -188,7 +188,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
         params={
             "start": rfc3339(latest - timedelta(hours=5)),
             "end": rfc3339(latest - timedelta(hours=4)),
-            "location": "Taichung",
+            "subject": "north",
         },
     )
     assert empty.status_code == 200
@@ -219,7 +219,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
         params={
             "start": rfc3339(latest - timedelta(hours=1)),
             "end": rfc3339(latest),
-            "location": "Kaohsiung",
+            "subject": "south",
             "cursor": cursor,
         },
     )

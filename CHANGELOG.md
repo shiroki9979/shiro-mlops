@@ -16,18 +16,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 預測 item 的天氣欄位改依任務設定 `weather.fields` 產生，不再由任務類型寫死氣溫與濕度；通用端點 OpenAPI 改以每個任務的 `<TaskId>TaskPredictionResponse`（以 `task_id` 常數區分）取代 `<TaskType>TaskPredictionResponse`，`/predict` 的 `PredictionItem` 契約不變（#69）。
+- 將儀表板與 Data Explorer 新增的預測對象標籤改為英文，與程式內字串規範一致（#65）。
+- 引入 ML 任務抽象（ADR-0009）：動態視界預報改由 `tasks/dynamic_horizon_forecast.toml` 任務設定與 `recursive_regression` 任務類型描述，Dagster 與 API 只經 task runner 訓練與預測；`TRAINING_MIN_LOAD_HOURS`、`LOAD_ANCHOR_MAX_LAG_HOURS` 環境變數改為任務設定 `[policies]`，lag／rolling 配方以任務設定為唯一來源，serving 依 `lookback_hours` 有界讀取負載歷史（#66）。
+- 模型改以 LightGBM 原生文字格式加 JSON metadata 保存於 `DATA_DIR/models/<task_id>/`（ADR-0010）；既有 `DATA_DIR/model.joblib` 不再載入，首次重新訓練前 `/ready` 維持 not_ready（#66）。
+- Dagster 改以資產工廠依任務設定產生每個任務的 `{task_id}__features`／`__model`／`__monitoring` 資產、訓練與監控 job 及 Asia/Taipei 排程（cron 來自任務設定 `[schedule]`）；`daily_training_job`／`hourly_drift_job` 與其排程、`trained_forecaster_model` 等資產鍵由 `dynamic_horizon_forecast__*` 取代，舊鍵 materialization 歷史不轉移，新排程需重新開啟並先完成一次訓練。每個任務以 `task_id` 命名獨立的 MLflow experiment 與 registered model；監控健康判定改由任務類型依任務設定 `[health]` 門檻決定，取代寫死的 `mape < 10.0`；Feast 匯出只掛在動態視界預報任務（#67）。
+
+- 拆分預測對象與氣象代表點（ADR-0009）：`raw_taipower_load.location` 改名為 `subject`，全台負載由 `Taipei` 遷移為 `nationwide`（服務啟動時自動且可重複遷移，操作順序見 `docs/how-to/migrate-load-subject-to-nationwide.md`）；天氣解析與訓練天氣改以 CWA 擷取目錄的氣象代表點 alias 取值；`/predict` 回應以 `subject` 取代 `location`；Data Explorer 逐時負載改以 `subject` 顯示與篩選，儀表板移除地點選單（#65）。
 - 將 Data Explorer 列表查詢抽出為 typed `ExplorerQuery`，並讓逐時負載改走共用 cursor／keyset 分頁 seam（#52）。
 - 將 CWA 觀測、鄉鎮預報與 audit 列表遷移至 typed query 上的 focused readers，保留 vintage 與 missing-identifier 契約（#53）。
 - 將全台／區域供需與機組發電列表遷移至 typed query readers，保留 MW 轉換、完整度與 nullable 欄位契約（#54）。
 - 將 Data Explorer 狀態彙總抽成 focused collaborators，並移除單體 `DataExplorerStore`（#55）。
 - 簡化 Data Explorer 電力與預報 reader 的查詢、映射與測試資料 seam，讓列表契約可獨立維護與驗證。
 
+### Deprecated
+
+- `/predict` 的 `location` 請求欄位改為選填並於 OpenAPI 標示 deprecated；任何值皆被忽略，不再回傳 HTTP 400（#65）。
+
 ### Removed
 
+- 移除 `MLFLOW_EXPERIMENT_NAME` 設定：MLflow experiment 名稱改由任務 id 推導（#67）。
+- 移除 `FallbackFeatureSources` 與特徵查詢窗等訓練備援路徑，以及 `predict_recursive` 的固定氣象預設值（#66）。
 - 移除誤標為 Feast 的 Monitoring Feature Store Snapshot 與 `GET /features/latest` 過渡端點（#50）。
 
 ### Fixed
 
+- 以原子目錄交換修復模型替換中斷時舊模型遺失、讀取期間短暫無模型，以及異常偵測缺少完整評分窗卻回報就緒的問題（#66、#68）。
+- 高負載預警僅在門檻窗的 28 日逐時負載完整時訓練與預測，避免缺值改變 P90 門檻（#69）。
+- 核心或檔案系統不支援 `renameat2(RENAME_EXCHANGE)` 時，模型替換改於排他鎖內以 rename 完成，非 Linux 環境不再於第二次訓練保存時失敗（#66）。
 - 暫緩需歷史逐時負載的訓練與 drift 排程，讓 Dagster 明確顯示來源待補原因，並維持 CWA 與台電即時快照排程運作（#61）。
 - 改由 CWA 原始 XML 預報檔取得 `IssueTime`／`Update`，並限制無憑證下載 redirect 的 HTTPS 儲存目標，避免 flattened REST 回應缺少版本時間而使 forecast ingestion 永久重試。
 - 讓 `make compose-up` 以根目錄 `.env` 做 Compose 插值，把 `CWA_API_KEY` 注入 Dagster／API 容器，避免空授權碼導致 CWA 入庫 401。

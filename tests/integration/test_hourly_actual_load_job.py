@@ -50,7 +50,7 @@ def _run_scheduled_tick(repo: TimeSeriesRepository):
 
 
 def _persisted_load(repo: TimeSeriesRepository) -> dict[pd.Timestamp, float]:
-    loads = repo.fetch_load_range(location="Taipei")
+    loads = repo.fetch_load_range(subject="nationwide")
     return dict(zip(loads["time"], loads["load_mw"], strict=True))
 
 

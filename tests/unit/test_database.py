@@ -18,7 +18,7 @@ from shiro_mlops.core.database import (
     get_timescale_init_ddl,
     init_db,
 )
-from tests.helpers import create_legacy_load_table
+from tests.helpers import create_legacy_load_table, create_location_keyed_load_table
 
 
 def test_settings_timescaledb_defaults():
@@ -92,7 +92,7 @@ def test_timescale_init_ddl_content():
     assert "raw_taipower_unit_generation_snapshot" in ddl
 
     # Verify primary keys
-    assert "PRIMARY KEY (time, location)" in ddl
+    assert "PRIMARY KEY (time, subject)" in ddl
     assert "PRIMARY KEY (observed_at)" in ddl
     assert "PRIMARY KEY (observed_at, region)" in ddl
     assert "PRIMARY KEY (observed_at, unit_type, unit_name)" in ddl
@@ -128,7 +128,7 @@ def test_docker_init_sql_file_exists_and_matches():
     assert "raw_taipower_supply_demand_snapshot" in sql_content
     assert "raw_taipower_regional_supply_demand_snapshot" in sql_content
     assert "raw_taipower_unit_generation_snapshot" in sql_content
-    assert "PRIMARY KEY (time, location)" in sql_content
+    assert "PRIMARY KEY (time, subject)" in sql_content
     assert "PRIMARY KEY (observed_at)" in sql_content
     assert "PRIMARY KEY (observed_at, region)" in sql_content
     assert "PRIMARY KEY (observed_at, unit_type, unit_name)" in sql_content
@@ -228,8 +228,8 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         with engine.connect() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO raw_taipower_load (time, location, load_mw, source) "
-                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0, 'regional_snapshot_sum')"
+                    "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                    "VALUES ('2026-08-20 00:00:00', 'nationwide', 26500.0, 'regional_snapshot_sum')"
                 )
             )
             conn.commit()
@@ -242,7 +242,7 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT * FROM raw_taipower_load")).fetchall()
             assert len(rows) == 1
-            assert rows[0][1] == "Taipei"
+            assert rows[0][1] == "nationwide"
             assert rows[0][2] == 26500.0
     finally:
         engine.dispose()
@@ -332,6 +332,73 @@ def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
         engine.dispose()
 
 
+def test_fresh_schema_keys_taipower_load_by_prediction_subject(tmp_path) -> None:
+    """新建資料庫直接以預測對象識別負載序列，不再有 location 欄。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_subject.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        inspector = inspect(engine)
+        column_names = {column["name"] for column in inspector.get_columns("raw_taipower_load")}
+        assert "subject" in column_names
+        assert "location" not in column_names
+        primary_key = inspector.get_pk_constraint("raw_taipower_load")["constrained_columns"]
+        assert primary_key == ["time", "subject"]
+    finally:
+        engine.dispose()
+
+
+def test_existing_location_keyed_load_migrates_to_nationwide_subject_repeatably(
+    tmp_path,
+) -> None:
+    """既有以 location='Taipei' 保存的全台負載，重複套用升級後皆為 subject='nationwide'。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'location_keyed_load.db'}")
+    try:
+        create_location_keyed_load_table(engine)
+
+        ensure_timescale_hypertables(engine)
+        ensure_timescale_hypertables(engine)
+
+        inspector = inspect(engine)
+        column_names = {column["name"] for column in inspector.get_columns("raw_taipower_load")}
+        assert "location" not in column_names
+        primary_key = inspector.get_pk_constraint("raw_taipower_load")["constrained_columns"]
+        assert primary_key == ["time", "subject"]
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT subject, load_mw, source FROM raw_taipower_load ORDER BY time")
+            ).fetchall()
+        assert rows == [
+            ("nationwide", 26500.0, "regional_snapshot_sum"),
+            ("nationwide", 26600.0, "regional_snapshot_sum"),
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_pre_provenance_load_table_gains_source_and_subject_together(tmp_path) -> None:
+    """d015046 時期的舊表同時補上 source 並改以預測對象識別，舊列仍以 NULL source 標示。"""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'pre_provenance.db'}")
+    try:
+        create_legacy_load_table(engine)
+
+        ensure_timescale_hypertables(engine)
+
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT subject, load_mw, source FROM raw_taipower_load")
+            ).fetchall()
+        assert rows == [("nationwide", 26500.0, None)]
+    finally:
+        engine.dispose()
+
+
 def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -> None:
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
@@ -359,14 +426,12 @@ def test_repository_auto_init_on_existing_volume(tmp_path):
     try:
         # Launch repo against fresh volume
         repo1 = TimeSeriesRepository(engine=engine, auto_init=True)
-        sample_df = pd.DataFrame(
-            [{"datetime": "2026-08-20 00:00:00", "load_mw": 30000.0, "location": "Taipei"}]
-        )
+        sample_df = pd.DataFrame([{"datetime": "2026-08-20 00:00:00", "load_mw": 30000.0}])
         repo1.upsert_taipower_load(sample_df)
 
         # Launch new repo instance against existing volume (service reboot)
         repo2 = TimeSeriesRepository(engine=engine, auto_init=True)
-        persisted = repo2.fetch_load_range(location="Taipei")
+        persisted = repo2.fetch_load_range(subject="nationwide")
         assert len(persisted) == 1
         assert persisted.iloc[0]["load_mw"] == 30000.0
     finally:

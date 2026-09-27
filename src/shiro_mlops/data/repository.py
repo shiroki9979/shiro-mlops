@@ -12,15 +12,20 @@ from sqlalchemy.engine import Connection, Engine
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
-    DEFAULT_LOCATION,
     LOAD_MW_COL,
     LOCATION_COL,
+    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
+    SUBJECT_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
-from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
+from shiro_mlops.data.cwa_client import (
+    CWAForecastRelease,
+    CWAObservationBatch,
+    resolve_cwa_location,
+)
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
@@ -56,10 +61,8 @@ def _serialize_raw_payload(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _prepare_timeseries_df(
-    df: pd.DataFrame, default_location: str = DEFAULT_LOCATION
-) -> pd.DataFrame:
-    """Normalize timestamp, assign default location, and deduplicate records."""
+def _prepare_load_df(df: pd.DataFrame, default_subject: str) -> pd.DataFrame:
+    """Normalize timestamp, assign the default prediction subject, and deduplicate records."""
     if df.empty:
         return df
 
@@ -70,19 +73,18 @@ def _prepare_timeseries_df(
     if "time" not in work_df.columns:
         raise KeyError("DataFrame must contain 'time' or 'datetime' column.")
 
-    if LOCATION_COL not in work_df.columns:
-        work_df[LOCATION_COL] = default_location
+    if SUBJECT_COL not in work_df.columns:
+        work_df[SUBJECT_COL] = default_subject
     else:
-        work_df[LOCATION_COL] = work_df[LOCATION_COL].fillna(default_location)
+        work_df[SUBJECT_COL] = work_df[SUBJECT_COL].fillna(default_subject)
 
     work_df["time"] = taiwan_local_to_utc(work_df["time"])
-    return work_df.drop_duplicates(subset=["time", LOCATION_COL], keep="last")
+    return work_df.drop_duplicates(subset=["time", SUBJECT_COL], keep="last")
 
 
-def _build_time_location_filter(
+def _build_time_filter(
     start_time: datetime | str | None = None,
     end_time: datetime | str | None = None,
-    location: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Construct SQL WHERE clause conditions and parameter mappings."""
     clauses: list[str] = ["1=1"]
@@ -97,10 +99,6 @@ def _build_time_location_filter(
         clauses.append("time <= :end_time")
         dt_end = taiwan_local_to_utc(pd.Series([end_time])).iloc[0]
         params["end_time"] = pd.to_datetime(dt_end).to_pydatetime()
-
-    if location is not None:
-        clauses.append("location = :location")
-        params["location"] = str(location)
 
     return " AND ".join(clauses), params
 
@@ -209,20 +207,20 @@ class TimeSeriesRepository:
     def upsert_taipower_load(
         self,
         df: pd.DataFrame,
-        default_location: str = DEFAULT_LOCATION,
+        default_subject: str = NATIONWIDE_SUBJECT,
         source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
     ) -> int:
         """Upsert Taipower electricity load records into raw_taipower_load table.
 
-        Handles composite primary key conflict on (time, location) by updating load_mw
+        Handles composite primary key conflict on (time, subject) by updating load_mw
         and source, so a recomputed hour always carries its current provenance.
 
         Parameters
         ----------
         df : pd.DataFrame
             DataFrame containing 'datetime' (or 'time') and 'load_mw' columns.
-        default_location : str
-            Fallback location identifier when 'location' column is missing or null.
+        default_subject : str
+            Prediction subject used when the 'subject' column is missing or null.
         source : str
             Derivation provenance stored on every row.
 
@@ -234,7 +232,7 @@ class TimeSeriesRepository:
         if df.empty:
             return 0
 
-        work_df = _prepare_timeseries_df(df, default_location=default_location)
+        work_df = _prepare_load_df(df, default_subject=default_subject)
         if LOAD_MW_COL not in work_df.columns:
             raise KeyError(f"DataFrame must contain '{LOAD_MW_COL}' column.")
 
@@ -245,7 +243,7 @@ class TimeSeriesRepository:
                     if hasattr(row["time"], "to_pydatetime")
                     else row["time"]
                 ),
-                "location": str(row[LOCATION_COL]),
+                "subject": str(row[SUBJECT_COL]),
                 "load_mw": float(row[LOAD_MW_COL]),
                 "source": source,
             }
@@ -254,9 +252,9 @@ class TimeSeriesRepository:
 
         upsert_stmt = text(
             """
-            INSERT INTO raw_taipower_load (time, location, load_mw, source)
-            VALUES (:time, :location, :load_mw, :source)
-            ON CONFLICT (time, location) DO UPDATE SET
+            INSERT INTO raw_taipower_load (time, subject, load_mw, source)
+            VALUES (:time, :subject, :load_mw, :source)
+            ON CONFLICT (time, subject) DO UPDATE SET
                 load_mw = EXCLUDED.load_mw,
                 source = EXCLUDED.source
             """
@@ -271,7 +269,7 @@ class TimeSeriesRepository:
     def upsert_cwa_weather(
         self,
         df: pd.DataFrame,
-        default_location: str = DEFAULT_LOCATION,
+        default_location: str | None = None,
     ) -> int:
         """Reject deprecated weather writes that do not carry source StationId provenance."""
         del df, default_location
@@ -588,10 +586,10 @@ class TimeSeriesRepository:
         self,
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
-        location: str | None = None,
+        subject: str | None = None,
         source: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch historical Taipower load records filtered by time range and location.
+        """Fetch historical Taipower load records filtered by time range and prediction subject.
 
         Parameters
         ----------
@@ -599,8 +597,8 @@ class TimeSeriesRepository:
             Start of time filter range (inclusive).
         end_time : datetime | str | None
             End of time filter range (inclusive).
-        location : str | None
-            Optional location filter.
+        subject : str | None
+            Optional prediction subject filter.
         source : str | None
             Optional derivation provenance filter. Rows with NULL source never match,
             so consumers that must not mix load bases pass the derived source.
@@ -610,43 +608,49 @@ class TimeSeriesRepository:
         pd.DataFrame
             Sorted DataFrame of power load records.
         """
-        where_clause, params = _build_time_location_filter(start_time, end_time, location)
+        where_clause, params = _build_time_filter(start_time, end_time)
+        if subject is not None:
+            where_clause += " AND subject = :subject"
+            params["subject"] = subject
         if source is not None:
             where_clause += " AND source = :source"
             params["source"] = source
         query = f"""
-            SELECT time, location, load_mw, created_at
+            SELECT time, subject, load_mw, created_at
             FROM raw_taipower_load
             WHERE {where_clause}
-            ORDER BY time ASC, location ASC
+            ORDER BY time ASC, subject ASC
         """
         return self._read_load_frame(query, params)
 
     def fetch_latest_load(
         self,
-        location: str = DEFAULT_LOCATION,
+        subject: str = NATIONWIDE_SUBJECT,
         source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+        at_or_before: datetime | None = None,
     ) -> pd.DataFrame:
         """Fetch only the newest load row of one source, or an empty frame.
 
         Hourly consumers need the latest actual value, not the series, so the
-        query stays bounded as the accumulated history grows.
+        query stays bounded as the accumulated history grows. ``at_or_before``
+        (Taiwan-local) ignores rows persisted after a point-in-time decision.
         """
-        query = """
-            SELECT time, location, load_mw, created_at
+        where_clause, params = _build_time_filter(None, at_or_before)
+        query = f"""
+            SELECT time, subject, load_mw, created_at
             FROM raw_taipower_load
-            WHERE location = :location AND source = :source
+            WHERE {where_clause} AND subject = :subject AND source = :source
             ORDER BY time DESC
             LIMIT 1
         """
-        return self._read_load_frame(query, {"location": location, "source": source})
+        return self._read_load_frame(query, {**params, "subject": subject, "source": source})
 
     def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
         with self.engine.connect() as conn:
             df = pd.read_sql_query(text(query), con=conn, params=params)
 
         if df.empty:
-            empty_df = pd.DataFrame(columns=["time", "location", "load_mw", "created_at"])
+            empty_df = pd.DataFrame(columns=["time", SUBJECT_COL, "load_mw", "created_at"])
             empty_df["time"] = pd.to_datetime(empty_df["time"])
             return empty_df
 
@@ -654,7 +658,7 @@ class TimeSeriesRepository:
         return df
 
     def summarize_hourly_load_accumulation(
-        self, location: str = DEFAULT_LOCATION
+        self, subject: str = NATIONWIDE_SUBJECT
     ) -> HourlyLoadAccumulation:
         """Count derived hourly observations and legacy rows without loading the series."""
         query = text(
@@ -664,10 +668,10 @@ class TimeSeriesRepository:
                 COALESCE(SUM(CASE WHEN source IS NULL THEN 1 ELSE 0 END), 0) AS legacy_rows,
                 MAX(CASE WHEN source = :derived THEN time END) AS latest_time
             FROM raw_taipower_load
-            WHERE location = :location
+            WHERE subject = :subject
             """
         )
-        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "location": location}
+        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "subject": subject}
         with self.engine.connect() as conn:
             row = conn.execute(query, params).one()
 
@@ -685,9 +689,9 @@ class TimeSeriesRepository:
         self,
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
-        location: str | None = None,
+        reference_point: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch historical CWA weather records filtered by time range and location.
+        """Fetch historical CWA station observations for one weather reference point.
 
         Parameters
         ----------
@@ -695,20 +699,24 @@ class TimeSeriesRepository:
             Start of time filter range (inclusive).
         end_time : datetime | str | None
             End of time filter range (inclusive).
-        location : str | None
-            Optional location filter.
+        reference_point : str | None
+            Optional weather reference point alias from the CWA ingestion catalog;
+            the result's ``location`` column carries that alias.
 
         Returns
         -------
         pd.DataFrame
             Sorted DataFrame of weather observation records.
         """
-        locations = settings.cwa_locations
-        station_by_alias = {value.alias: value.station_id for value in locations.values()}
+        station_id = (
+            resolve_cwa_location(settings.cwa_locations, reference_point).station_id
+            if reference_point is not None
+            else None
+        )
         canonical = self.fetch_cwa_station_observations(
             start_time=start_time,
             end_time=end_time,
-            station_id=station_by_alias.get(location) if location else None,
+            station_id=station_id,
         )
         result = canonical.rename(
             columns={
@@ -717,10 +725,10 @@ class TimeSeriesRepository:
                 "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
             }
         )
-        aliases_by_station = {value.station_id: value.alias for value in locations.values()}
-        result[LOCATION_COL] = (
-            result["station_id"].map(aliases_by_station).fillna(location or DEFAULT_LOCATION)
-        )
+        aliases_by_station = {
+            value.station_id: value.alias for value in settings.cwa_locations.values()
+        }
+        result[LOCATION_COL] = result["station_id"].map(aliases_by_station)
         if result.empty:
             result["time"] = pd.to_datetime(result["time"])
         return result[

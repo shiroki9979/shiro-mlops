@@ -67,11 +67,14 @@ describe('Data Explorer routes', () => {
 
   it('keeps filters in the URL, paginates, opens typed detail, and exports the current page', async () => {
     const user = userEvent.setup()
-    renderPath('/data/power/load?start=2026-09-09T00:00:00%2B08:00&end=2026-09-09T20:00:00%2B08:00&location=Taipei')
+    renderPath('/data/power/load?start=2026-09-09T00:00:00%2B08:00&end=2026-09-09T20:00:00%2B08:00&subject=nationwide')
 
     await waitFor(() => {
       expect(screen.getByText('32100.5')).toBeInTheDocument()
     })
+    expect(screen.getAllByText('Prediction subject').length).toBeGreaterThan(0)
+    expect(screen.getByPlaceholderText('nationwide')).toHaveValue('nationwide')
+    expect(screen.getAllByText('nationwide').length).toBeGreaterThan(0)
     expect(screen.getByText(/查詢區間缺口/)).toBeInTheDocument()
     expect(screen.getByText(/最後取得時間/)).toBeInTheDocument()
 

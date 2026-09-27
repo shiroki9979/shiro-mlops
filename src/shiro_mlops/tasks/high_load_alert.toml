@@ -1,0 +1,41 @@
+# 全台逐時實際負載的高負載預警：判定未來各小時是否將超過高負載門檻（ADR-0009）。
+task_id = "high_load_alert"
+task_type = "direct_classification"
+subject = "nationwide"
+target = "hourly_actual_load"
+
+[weather]
+reference_points = ["Taipei"]
+fields = ["temperature", "relative_humidity"]
+
+[policies]
+# 每筆標籤前都需完整 28 日門檻窗（672 小時），再加 672 小時的訓練列：未滿 1344 小時不得訓練。
+min_training_hours = 1344
+# 預警以最新實際負載為錨點，無替代起點；落後請求時間超過此時數即拒絕而非降級。
+stale_anchor_max_lag_hours = 3
+validation_fraction = 0.2
+
+[params]
+lags = [1, 2, 24, 168]       # 錨點前 k 小時的實際負載；錨點當下負載恆為特徵
+rolling_windows = [6, 24]
+
+[params.threshold]
+# 高負載門檻：錨點前 28 日（不含錨點後）全台逐時實際負載的 P90。
+window_days = 28
+quantile = 0.9
+
+[params.model]
+n_estimators = 200
+learning_rate = 0.05
+num_leaves = 31
+
+[schedule]
+# Asia/Taipei 時間：00:30 訓練，錯開動態視界預報 00:00 與用電型態異常偵測 01:00；監控每小時第 5 分。
+training = "30 0 * * *"
+monitoring = "5 * * * *"
+
+[health]
+# 驗證期 precision、recall、F1 皆需達到下限才為 HEALTHY，任一不足或缺少即 WARNING。
+min_precision = 0.5
+min_recall = 0.5
+min_f1 = 0.5

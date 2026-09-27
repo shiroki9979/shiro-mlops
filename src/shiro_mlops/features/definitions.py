@@ -11,7 +11,7 @@ from shiro_mlops.core.config import settings
 location_entity = Entity(
     name="location",
     value_type=ValueType.STRING,
-    description="Geographical region or grid location (e.g. Taipei)",
+    description="Prediction subject (e.g. nationwide); name frozen by ADR-0009",
     join_keys=["location"],
 )
 
