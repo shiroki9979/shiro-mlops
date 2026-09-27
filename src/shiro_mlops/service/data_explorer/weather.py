@@ -67,15 +67,11 @@ def _pin_forecast_version(
     params: dict[str, Any],
     cursor_filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    query_params = dict(params)
-    if _has_explicit_forecast_version(query_params):
+    query_params = _restore_cursor_forecast_version(params, cursor_filters or {})
+    # A cursor resumes the filters resolved on its first page, including no pinned version.
+    if cursor_filters is not None or _has_explicit_forecast_version(query_params):
         return query_params
-    version = _cursor_forecast_version(cursor_filters)
-    if version:
-        query_params.setdefault("dataset_id", version.get("dataset_id"))
-        query_params["issued_at"] = version["issued_at"]
-        query_params["source_updated_at"] = version["source_updated_at"]
-        return query_params
+
     latest = latest_forecast_version(db, query_params.get("dataset_id"))
     if latest is not None:
         query_params["dataset_id"] = latest["latest_dataset_id"]
@@ -85,6 +81,20 @@ def _pin_forecast_version(
         query_params["source_updated_at"] = format_taiwan_time(
             to_taiwan(latest["latest_source_updated_at"]), timespec="microseconds"
         )
+    return query_params
+
+
+def _restore_cursor_forecast_version(
+    params: dict[str, Any], cursor_filters: dict[str, Any]
+) -> dict[str, Any]:
+    query_params = dict(params)
+    if _has_explicit_forecast_version(query_params):
+        return query_params
+    version = _cursor_forecast_version(cursor_filters)
+    if version:
+        query_params.setdefault("dataset_id", version.get("dataset_id"))
+        query_params["issued_at"] = version["issued_at"]
+        query_params["source_updated_at"] = version["source_updated_at"]
     return query_params
 
 
@@ -183,6 +193,12 @@ class ForecastReader(DatasetReader):
         ORDER BY {order}
         LIMIT :limit
     """
+
+    @classmethod
+    def cursor_query_params(
+        cls, params: dict[str, Any], cursor_filters: dict[str, Any]
+    ) -> dict[str, Any]:
+        return _restore_cursor_forecast_version(params, cursor_filters)
 
     def build_query(
         self, params: dict[str, Any], cursor_filters: dict[str, Any] | None

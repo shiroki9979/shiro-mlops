@@ -115,6 +115,61 @@ def test_all_lists_reject_v1_cursor_before_database_access(
     assert response.json()["detail"] == "Incompatible cursor version"
 
 
+def test_malformed_v2_cursor_precedes_database_failure(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    cursor = encode_cursor(
+        dataset="hourly_load", filters=filters, key={"time": 123, "location": "Taipei"}
+    )
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get("/data/power/load", params={**window, "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
+
+
+def test_forecast_cursor_filter_mismatch_precedes_database_failure(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("cwa_forecasts", {**window, "geocode": "A"}).filters
+    cursor = encode_cursor(
+        dataset="cwa_forecasts",
+        filters=filters,
+        key={
+            "valid_from": "2026-08-01T12:00:00+08:00",
+            "issued_at": "2026-08-01T00:00:00+08:00",
+            "source_updated_at": "2026-08-01T00:00:00+08:00",
+            "dataset_id": "F-EDGE",
+            "geocode": "A",
+            "valid_to": "2026-08-01T13:00:00+08:00",
+        },
+    )
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get(
+        "/data/weather/forecasts", params={**window, "geocode": "B", "cursor": cursor}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cursor filter mismatch"
+
+
 @pytest.mark.parametrize("location", [["Taipei"], {"name": "Taipei"}])
 def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, location) -> None:
     client, _ = explorer_client

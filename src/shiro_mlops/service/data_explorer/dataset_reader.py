@@ -26,17 +26,30 @@ class DatasetReader:
         self.db = ExplorerDb(engine)
 
     def list(self, params: dict[str, Any]) -> ListEnvelope:
-        cursor_filters = self._decode_cursor_filters(params)
+        cursor_filters = self.validate_cursor_request(params)
         query = self.build_query(params, cursor_filters)
         try:
             return paginate_raw_list(query, self.fetch_rows, self.project_page)
         except SQLAlchemyError as exc:
             raise DatabaseUnavailableError(str(exc)) from exc
 
-    def _decode_cursor_filters(self, params: dict[str, Any]) -> dict[str, Any] | None:
-        """Reject malformed or incompatible cursors before any database access."""
+    @classmethod
+    def validate_cursor_request(cls, params: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate the complete cursor before repository initialization or reads."""
         cursor = params.get("cursor")
-        return decode_cursor_filters(str(cursor), dataset=self.dataset) if cursor else None
+        if not cursor:
+            return None
+        cursor_filters = decode_cursor_filters(str(cursor), dataset=cls.dataset)
+        query_params = cls.cursor_query_params(params, cursor_filters)
+        query = ExplorerQuery.from_params(cls.dataset, query_params, cursor_filters=cursor_filters)
+        query.cursor_key()
+        return cursor_filters
+
+    @classmethod
+    def cursor_query_params(
+        cls, params: dict[str, Any], cursor_filters: dict[str, Any]
+    ) -> dict[str, Any]:
+        return params
 
     def build_query(
         self, params: dict[str, Any], cursor_filters: dict[str, Any] | None
