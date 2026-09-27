@@ -13,7 +13,7 @@ help:
 	@echo "  make format        Format code with ruff"
 	@echo "  make compose-up    Start full local stack (Dagster, MLflow, Redis, TimescaleDB)"
 	@echo "  make compose-down  Stop full local stack"
-	@echo "  make smoke-check   Verify schedules and training/drift readiness in the Dagster container"
+	@echo "  make smoke-check   Verify schedules and per-task training/monitoring readiness in the Dagster container"
 	@echo "  make clean         Clean temporary files and caches"
 
 install:

@@ -29,8 +29,8 @@
 
 1. 在 Dagster UI 的 **Automation** 頁面停用下列排程：
    - `hourly_actual_load_schedule`
-   - `daily_training_schedule`
-   - `hourly_drift_schedule`
+   - `daily_training_schedule`（新版改名為 `dynamic_horizon_forecast__training_schedule`）
+   - `hourly_drift_schedule`（新版改名為 `dynamic_horizon_forecast__monitoring_schedule`）
 2. 在 **Runs** 頁面確認 `hourly_actual_load_job`、`daily_training_job`、`hourly_drift_job` 沒有執行中的 run；有的話等待結束。
 
 `taipower_supply_demand_snapshot_schedule` 與兩個 CWA 擷取排程**保持啟用**：它們只寫入快照與氣象資料表，且區域快照無法回補，停用會造成永久缺口。
@@ -94,7 +94,8 @@ COMMIT;
 
    預期只有 `nationwide` 一列，筆數等於第 3 節的筆數。
 4. 在 Dagster UI 手動 materialize `raw_taipower_load` 一次，確認 run 成功，且重跑上一步查詢時仍只有 `nationwide`。
-5. 重新啟用第 2 節停用的三個排程。
+5. 重新啟用 `hourly_actual_load_schedule`，並開啟新版的 `dynamic_horizon_forecast__training_schedule` 與 `dynamic_horizon_forecast__monitoring_schedule`。新版以資產工廠產生每個任務的資產與排程，舊的 `daily_training_schedule` 與 `hourly_drift_schedule` 已不存在，新排程預設為停用。
+6. 手動啟動一次 `dynamic_horizon_forecast__training_job`。Dagster 不會把舊資產 `trained_forecaster_model` 的 materialization 轉給新資產 `dynamic_horizon_forecast__model`，第一次訓練成功前監控排程會略過。
 
 ---
 
