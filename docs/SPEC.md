@@ -558,7 +558,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 | `training_table(data)`／`training_data_from_table(task, table)` | 將 `TrainingData` 攤平為每個目標小時一列（left join 觀測天氣）以便跨 run 保存，並可逆還原：完全沒有觀測天氣的小時在還原後仍為缺口而非 NaN 列，`validation_start` 以相同切分規則重算 |
 | `monitor_task(task, runtime, metrics, *, as_of) -> MonitoringReport` | 未達門檻拋 `TaskNotReady`；以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新目標列，交由任務類型 `assess_health` 依 `[health]` 判定；結果含 `health`、`metrics`、`target_hours`、`latest_target_time`、`latest_target_value` |
 | `check_task_ready(task, model, runtime, *, as_of) -> Readiness` | 模型、負載起點、任務類型宣告的 `history_coverage` 與完整 168 小時天氣皆可用時 `ready`，並回報 `mode`；`OBSERVED` 任務只需 lookback 內有測站觀測，`mode` 固定 `normal` |
-| `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；結果含 `mode`、預測、逐時天氣與其來源，三者逐列對應 |
+| `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；資料庫錯誤（`SQLAlchemyError`）原樣拋出，不得轉為空資料而偽裝成資料缺口（API 同樣對應 503）；結果含 `mode`、預測、逐時天氣與其來源，三者逐列對應 |
 
 serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史。
 

@@ -8,7 +8,6 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
@@ -693,14 +692,11 @@ class TimeSeriesRepository:
             if reference_point is not None
             else None
         )
-        try:
-            canonical = self.fetch_cwa_station_observations(
-                start_time=start_time,
-                end_time=end_time,
-                station_id=station_id,
-            )
-        except SQLAlchemyError:
-            canonical = pd.DataFrame()
+        canonical = self.fetch_cwa_station_observations(
+            start_time=start_time,
+            end_time=end_time,
+            station_id=station_id,
+        )
         result = canonical.rename(
             columns={
                 "observed_at": "time",
