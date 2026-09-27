@@ -16,13 +16,13 @@ import { Download, FileSpreadsheet } from 'lucide-react'
 interface PredictionTableProps {
   predictions?: PredictionItem[]
   isLoading: boolean
-  location: string
+  subject?: string
 }
 
 export function PredictionTable({
   predictions,
   isLoading,
-  location,
+  subject = 'nationwide',
 }: PredictionTableProps) {
   const [page, setPage] = useState(0)
   const pageSize = 10
@@ -43,7 +43,7 @@ export function PredictionTable({
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.setAttribute('href', url)
-    link.setAttribute('download', `load_forecast_${location}_${new Date().toISOString().slice(0, 10)}.csv`)
+    link.setAttribute('download', `load_forecast_${subject}_${new Date().toISOString().slice(0, 10)}.csv`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
