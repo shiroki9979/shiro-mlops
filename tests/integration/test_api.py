@@ -379,7 +379,6 @@ def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() 
 
     assert set(schemas["PredictionItem"]["properties"]) == expected_fields
     assert set(schemas["PredictionItem"]["required"]) == expected_fields
-    assert set(task_item["properties"]) == expected_fields
     assert set(task_item["required"]) == expected_fields
     assert task_item["properties"] == schemas["PredictionItem"]["properties"]
 
