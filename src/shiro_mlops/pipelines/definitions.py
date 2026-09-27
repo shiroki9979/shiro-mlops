@@ -24,6 +24,10 @@ from shiro_mlops.pipelines.schedules import (
     taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
+from shiro_mlops.tasks.deployed import deployed_tasks
+
+# 任務設定錯誤須在 code location 載入時失敗，而非等到第一次訓練 run。
+deployed_tasks()
 
 all_assets = load_assets_from_modules([assets])
 

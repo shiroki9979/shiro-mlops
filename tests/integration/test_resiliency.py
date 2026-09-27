@@ -7,9 +7,7 @@ import pandas as pd
 import pytest
 from dagster import Definitions, RetryPolicy, define_asset_job
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
-from shiro_mlops.core.config import Settings, settings
 from shiro_mlops.data.cwa_client import (
     CWAClient,
     CWAForecastRelease,
@@ -18,8 +16,6 @@ from shiro_mlops.data.cwa_client import (
     CWATownshipForecast,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.features.transformers import build_feature_pipeline
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.pipelines.assets import raw_cwa_station_observation, raw_cwa_township_forecast
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_RETRY_POLICY,
@@ -27,7 +23,9 @@ from shiro_mlops.pipelines.schedules import (
     cwa_observation_job,
 )
 from shiro_mlops.service.api import app, model_store
-from tests.helpers import insert_legacy_load_row
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.types.base import TaskModel
+from tests.helpers import insert_legacy_load_row, override_task_policies
 
 # taipower_sample.json 的最後一筆實際負載即為遞迴預報起點。
 LOAD_ANCHOR = pd.Timestamp("2026-08-21 23:00")
@@ -119,29 +117,15 @@ def _stale_forecast_release() -> CWAForecastRelease:
 
 
 @pytest.fixture
-def fitted_forecaster(
-    taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
-) -> LightGBMRecursiveForecaster:
-    features = build_feature_pipeline(
-        load_df=taipower_raw_df, weather_df=cwa_obs_df, lags=[1, 2, 24], windows=[6]
-    )
-    forecaster = LightGBMRecursiveForecaster(
-        lags=[1, 2, 24], windows=[6], params={"n_estimators": 5, "verbose": -1}
-    )
-    forecaster.fit(features)
-    return forecaster
-
-
-@pytest.fixture
 def serving_repo(
     test_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
-    fitted_forecaster: LightGBMRecursiveForecaster,
+    fitted_task_model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> TimeSeriesRepository:
-    """A loaded model reading persisted Taipei load history, with no weather yet."""
+    """A loaded model reading persisted nationwide load history, with no weather yet."""
     test_repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
-    monkeypatch.setattr(model_store, "forecaster", fitted_forecaster)
+    monkeypatch.setattr(model_store, "model", fitted_task_model)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     return test_repo
 
@@ -335,7 +319,7 @@ def test_stale_load_anchor_refuses_predict_and_ready(
 def test_newer_legacy_rows_never_anchor_serving(
     legacy_upgraded_engine,
     taipower_raw_df: pd.DataFrame,
-    fitted_forecaster: LightGBMRecursiveForecaster,
+    fitted_task_model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ADR-0008：較新的 d015046 舊列不得讓過舊的推算負載看似新鮮而混用口徑。"""
@@ -344,7 +328,7 @@ def test_newer_legacy_rows_never_anchor_serving(
     insert_legacy_load_row(
         legacy_upgraded_engine, STALE_REQUEST_TIME.floor("h").to_pydatetime(), load_mw=26500.0
     )
-    monkeypatch.setattr(model_store, "forecaster", fitted_forecaster)
+    monkeypatch.setattr(model_store, "model", fitted_task_model)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
     _request_at(monkeypatch, STALE_REQUEST_TIME)
 
@@ -361,7 +345,7 @@ def test_newer_legacy_rows_never_anchor_serving(
 def test_load_anchor_lag_threshold_is_configurable(
     degraded_weather_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "LOAD_ANCHOR_MAX_LAG_HOURS", 6)
+    override_task_policies(monkeypatch, stale_anchor_max_lag_hours=6)
     _request_at(monkeypatch, STALE_REQUEST_TIME)
 
     assert _predict().status_code == 200
@@ -369,13 +353,9 @@ def test_load_anchor_lag_threshold_is_configurable(
 
 
 def test_load_anchor_lag_threshold_defaults_to_three_hours() -> None:
-    assert Settings(_env_file=None).LOAD_ANCHOR_MAX_LAG_HOURS == 3
+    task = deployed_task(DYNAMIC_HORIZON_FORECAST)
 
-
-def test_load_anchor_lag_threshold_rejects_non_positive_hours() -> None:
-    """零或負值會讓每個起點都過舊，服務將無聲地永久拒絕預報。"""
-    with pytest.raises(ValidationError, match="LOAD_ANCHOR_MAX_LAG_HOURS"):
-        Settings(_env_file=None, LOAD_ANCHOR_MAX_LAG_HOURS=0)
+    assert task.policies.stale_anchor_max_lag_hours == 3
 
 
 # --- Serving never crosses the CWA ingestion boundary ---------------------------------------

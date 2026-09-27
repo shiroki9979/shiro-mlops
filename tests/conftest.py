@@ -13,8 +13,10 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hypertables
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
-from tests.helpers import create_legacy_load_table
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.types import get_task_type
+from shiro_mlops.tasks.types.base import TaskModel, TrainingData
+from tests.helpers import create_legacy_load_table, override_task_policies
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -42,8 +44,8 @@ def mock_mlflow_offline_backend(
 
 @pytest.fixture
 def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
-    """Lower the training accumulation threshold and return the value in effect."""
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", TEST_MIN_LOAD_HOURS)
+    """Lower the task's training accumulation threshold and return the value in effect."""
+    override_task_policies(monkeypatch, min_training_hours=TEST_MIN_LOAD_HOURS)
     return TEST_MIN_LOAD_HOURS
 
 
@@ -98,11 +100,15 @@ def populated_repo(
 
 
 @pytest.fixture
-def lightweight_forecaster() -> LightGBMRecursiveForecaster:
-    """Create a lightweight fast forecaster for offline testing."""
-    return LightGBMRecursiveForecaster(
-        params={"n_estimators": 2, "min_child_samples": 1, "verbose": -1}
+def fitted_task_model(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> TaskModel:
+    """Train the deployed dynamic horizon task type directly on the fixture frames."""
+    task = deployed_task(DYNAMIC_HORIZON_FORECAST)
+    data = TrainingData(
+        load=taipower_raw_df.assign(subject=task.subject),
+        weather=cwa_obs_df[["datetime", *task.weather.fields]],
+        validation_start=taipower_raw_df["datetime"].max() + pd.Timedelta(hours=1),
     )
+    return get_task_type(task.task_type).train(task.params, data).model
 
 
 @pytest.fixture

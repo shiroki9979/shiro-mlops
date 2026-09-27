@@ -1,12 +1,12 @@
 """Time-series feature engineering and transformation functions."""
 
+from collections.abc import Sequence
+
 import numpy as np
 import pandas as pd
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
-    DEFAULT_LAG_HOURS,
-    DEFAULT_ROLLING_WINDOWS,
     LOAD_MW_COL,
     LOCATION_COL,
     RELATIVE_HUMIDITY_COL,
@@ -42,14 +42,13 @@ def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL)
 
 def create_lag_features(
     df: pd.DataFrame,
+    *,
+    lags: Sequence[int],
     value_col: str = LOAD_MW_COL,
-    lags: list[int] | None = None,
     location_col: str = LOCATION_COL,
 ) -> pd.DataFrame:
     """Generate lag features for the specified target value, isolated per location."""
     df = df.copy()
-    if lags is None:
-        lags = DEFAULT_LAG_HOURS
 
     has_location = location_col in df.columns and df[location_col].nunique() > 1
 
@@ -64,14 +63,13 @@ def create_lag_features(
 
 def create_rolling_features(
     df: pd.DataFrame,
+    *,
+    windows: Sequence[int],
     value_col: str = LOAD_MW_COL,
-    windows: list[int] | None = None,
     location_col: str = LOCATION_COL,
 ) -> pd.DataFrame:
     """Generate rolling window statistics for the target value, isolated per location."""
     df = df.copy()
-    if windows is None:
-        windows = DEFAULT_ROLLING_WINDOWS
 
     has_location = location_col in df.columns and df[location_col].nunique() > 1
 
@@ -157,8 +155,9 @@ def merge_weather_features(
 def build_feature_pipeline(
     load_df: pd.DataFrame,
     weather_df: pd.DataFrame | None = None,
-    lags: list[int] | None = None,
-    windows: list[int] | None = None,
+    *,
+    lags: Sequence[int],
+    windows: Sequence[int],
     drop_na: bool = True,
     location_col: str = LOCATION_COL,
     strict_weather: bool = False,
@@ -181,16 +180,8 @@ def build_feature_pipeline(
     else:
         min_len = len(df)
 
-    if lags is None:
-        effective_lags = [1, 2, 24]
-        if min_len > 48:
-            effective_lags.append(48)
-        if min_len > 168:
-            effective_lags.append(168)
-    else:
-        effective_lags = lags
-
-    effective_windows = windows or DEFAULT_ROLLING_WINDOWS
+    effective_lags = list(lags)
+    effective_windows = list(windows)
 
     df = create_calendar_features(df)
     df = create_lag_features(

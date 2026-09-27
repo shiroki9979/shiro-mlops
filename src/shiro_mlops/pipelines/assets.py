@@ -1,12 +1,17 @@
 """Dagster Software-Defined Assets for Taipower load forecasting MLOps pipeline."""
 
+from datetime import datetime
+
 import mlflow
 import pandas as pd
 from dagster import (
     AssetExecutionContext,
+    AssetKey,
     AssetOut,
     Backoff,
     Config,
+    Failure,
+    MetadataValue,
     Output,
     RetryPolicy,
     asset,
@@ -17,12 +22,10 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_EXPERIMENT_NAME,
-    DEFAULT_WEATHER_REFERENCE_POINT,
     LOAD_MW_COL,
-    LOCATION_COL,
-    NATIONWIDE_SUBJECT,
     STORAGE_TIME_COL,
 )
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.cwa_client import (
     CWAClient,
     CWAForecastRelease,
@@ -48,21 +51,72 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationClient,
     TaipowerUnitGenerationSnapshot,
 )
-from shiro_mlops.models.evaluator import evaluate_forecast
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
-from shiro_mlops.pipelines.feature_pipeline import (
-    FallbackFeatureSources,
-    build_feast_feature_frames,
-    build_feature_query_window,
-    fetch_feature_source_data,
-    transform_feature_source_data,
+from shiro_mlops.features.feast_export import build_feast_feature_frames
+from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
+from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.model_store import save_model
+from shiro_mlops.tasks.runner import (
+    TaskNotReady,
+    TaskRuntime,
+    check_training_readiness,
+    load_observed_weather,
+    load_training_data,
+    train_task,
 )
-from shiro_mlops.pipelines.readiness import require_training_load_readiness
+from shiro_mlops.tasks.types.base import Trained, TrainingData
 
 
 def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
     """Retrieve TimeSeriesRepository from Dagster resources or instantiate default."""
     return getattr(context.resources, "time_series_repo", None) or TimeSeriesRepository()
+
+
+def _task() -> TaskDefinition:
+    """The task these assets train; the per-task asset factory replaces this (#67)."""
+    return deployed_task(DYNAMIC_HORIZON_FORECAST)
+
+
+def _runtime(context: AssetExecutionContext) -> TaskRuntime:
+    return TaskRuntime(repository=_get_time_series_repo(context))
+
+
+def _taiwan_now() -> datetime:
+    """Training decisions are point-in-time at the run's start, in Taiwan-local naive time."""
+    return pd.Timestamp.now(tz=TAIWAN_TZ).tz_localize(None).to_pydatetime()
+
+
+def _not_ready_failure(readiness: TrainingLoadReadiness) -> Failure:
+    """Translate the runner's domain error into a Dagster Failure carrying the gap."""
+    return Failure(
+        description=readiness.reason,
+        metadata={
+            "valid_hours": MetadataValue.int(readiness.valid_hours),
+            "required_hours": MetadataValue.int(readiness.required_hours),
+            "legacy_rows": MetadataValue.int(readiness.legacy_rows),
+        },
+    )
+
+
+def _require_training_data(context: AssetExecutionContext) -> TrainingData:
+    try:
+        return load_training_data(_task(), _runtime(context), as_of=_taiwan_now())
+    except TaskNotReady as error:
+        raise _not_ready_failure(error.readiness) from error
+
+
+def _train(context: AssetExecutionContext, task: TaskDefinition) -> Trained:
+    try:
+        return train_task(task, _runtime(context), as_of=_taiwan_now())
+    except TaskNotReady as error:
+        raise _not_ready_failure(error.readiness) from error
+
+
+def _require_training_readiness(context: AssetExecutionContext) -> TrainingLoadReadiness:
+    readiness = check_training_readiness(_task(), _runtime(context))
+    if not readiness.ready:
+        raise _not_ready_failure(readiness)
+    return readiness
 
 
 class SnapshotObservationConfig(Config):
@@ -87,26 +141,6 @@ TAIPOWER_REGIONAL_SNAPSHOT_RETRY_POLICY = RetryPolicy(
 )
 
 
-def compute_engineered_feature_outputs(
-    repository: TimeSeriesRepository,
-    fallbacks: FallbackFeatureSources,
-    subject: str | None = NATIONWIDE_SUBJECT,
-    weather_reference_point: str | None = DEFAULT_WEATHER_REFERENCE_POINT,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """計算模型訓練特徵矩陣與 Feast 資料合約，儲存目標交由 I/O Manager 決定。"""
-    query_window = build_feature_query_window(
-        fallbacks.load, subject=subject, weather_reference_point=weather_reference_point
-    )
-    source_data = fetch_feature_source_data(
-        repository,
-        fallbacks,
-        query_window,
-    )
-    features_df = transform_feature_source_data(source_data, window=query_window)
-    feast_frames = build_feast_feature_frames(features_df, source_data.weather)
-    return features_df, feast_frames.taipower, feast_frames.weather
-
-
 @asset(
     name="raw_cwa_station_observation",
     group_name="ingestion",
@@ -129,26 +163,15 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
 @asset(
     name="cwa_observation_feature_source",
     group_name="features",
-    description="Read canonical CWA station observations for training features",
+    description="Read observed weather at the task's weather reference point",
     required_resource_keys={"time_series_repo"},
 )
 def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
-    """Asset: repository-only weather source consumed by feature engineering."""
-    reference_point = settings.weather_reference_point(DEFAULT_WEATHER_REFERENCE_POINT)
-    observations = _get_time_series_repo(context).fetch_cwa_station_observations(
-        station_id=reference_point.station_id
-    )
+    """Asset: repository-only observed weather consumed by the Feast export."""
+    observations = load_observed_weather(_task(), _runtime(context))
     if observations.empty:
         raise RuntimeError("No canonical CWA station observations available for training")
-    result = observations.rename(
-        columns={
-            "observed_at": "datetime",
-            "temperature_c": "temperature",
-            "relative_humidity_pct": "relative_humidity",
-        }
-    )
-    result[LOCATION_COL] = reference_point.alias
-    return result
+    return observations
 
 
 @asset(
@@ -281,7 +304,7 @@ def raw_taipower_unit_generation_snapshot(
 
 @asset(
     group_name="features",
-    description="Read derived nationwide hourly actual load for training features",
+    description="Read the task's derived hourly actual load once minimum accumulation is met",
     required_resource_keys={"time_series_repo"},
     deps=[raw_taipower_load],
 )
@@ -290,20 +313,16 @@ def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame
 
     Fails before any feature or model work when the minimum accumulation is unmet.
     """
-    repository = _get_time_series_repo(context)
-    readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
-    context.log.info(readiness.reason)
-    load = repository.fetch_load_range(
-        subject=NATIONWIDE_SUBJECT, source=REGIONAL_SNAPSHOT_SUM_SOURCE
-    )
-    return load.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
+    load = _require_training_data(context).load
+    context.log.info("Read %s derived hourly actual load rows.", len(load))
+    return load
 
 
 @multi_asset(
     outs={
         "engineered_features": AssetOut(
             group_name="features",
-            description="Lag, rolling, calendar, and weather features for model training",
+            description="Hourly training table: target load joined with observed weather",
         ),
         "taipower_features": AssetOut(
             group_name="features",
@@ -316,81 +335,69 @@ def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame
             description="Feast CWA weather offline Parquet contract",
         ),
     },
-    required_resource_keys={"time_series_repo"},
 )
 def engineered_feature_set(
     context: AssetExecutionContext,
     taipower_load_feature_source: pd.DataFrame,
     cwa_observation_feature_source: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Build training features and Feast frames; I/O Manager selects local or S3 publication."""
-    fallbacks = FallbackFeatureSources(
-        load=taipower_load_feature_source,
-        weather=cwa_observation_feature_source,
+    """Build the training table and Feast frames; the task type engineers its own features."""
+    training_table = taipower_load_feature_source.merge(
+        cwa_observation_feature_source, on=DATETIME_COL, how="left"
     )
-    features_df, taipower_features, weather_features = compute_engineered_feature_outputs(
-        _get_time_series_repo(context),
-        fallbacks,
+    feast_frames = build_feast_feature_frames(
+        taipower_load_feature_source, cwa_observation_feature_source
     )
     context.log.info(
-        "Constructed engineered features table with shape %s; Feast frames ready for I/O Manager",
-        features_df.shape,
+        "Constructed training table with shape %s; Feast frames ready for I/O Manager",
+        training_table.shape,
     )
-    return features_df, taipower_features, weather_features
+    return training_table, feast_frames.taipower, feast_frames.weather
 
 
 @asset(
     group_name="modeling",
-    description="Train LightGBM Recursive Forecaster and log artifacts to MLflow",
+    description="Train the task through the runner, save its native model, and log to MLflow",
+    required_resource_keys={"time_series_repo"},
+    deps=[AssetKey("engineered_features")],
 )
-def trained_forecaster_model(
-    context: AssetExecutionContext,
-    engineered_features: pd.DataFrame,
-) -> Output[dict]:
-    """Asset: Train recursive forecaster, evaluate with out-of-time validation, and log to MLflow."""
-    df = engineered_features.copy()
-    split_idx = int(len(df) * 0.8)
-    train_df = df.iloc[:split_idx]
-    val_df = df.iloc[split_idx:]
-
-    forecaster = getattr(context.resources, "forecaster", None)
-    if forecaster is None:
-        if settings.ENVIRONMENT == "test":
-            forecaster = LightGBMRecursiveForecaster(
-                params={"n_estimators": 2, "min_child_samples": 1, "verbose": -1}
-            )
-        else:
-            forecaster = LightGBMRecursiveForecaster()
-
-    forecaster.fit(train_df)
-
-    x_val = val_df[forecaster.feature_names]
-    y_val = val_df[LOAD_MW_COL].values
-    if len(x_val) > 0 and forecaster.model is not None:
-        y_pred = forecaster.model.predict(x_val)
-        metrics = evaluate_forecast(y_val, y_pred)
-    else:
-        metrics = {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
-
-    model_path = settings.DATA_DIR / "model.joblib"
-    forecaster.save(model_path)
+def trained_forecaster_model(context: AssetExecutionContext) -> Output[dict]:
+    """Asset: train with out-of-time validation, persist the model directory, log to MLflow."""
+    task = _task()
+    trained = _train(context, task)
+    metrics = {name: float(value) for name, value in trained.metrics.items()}
+    model_dir = save_model(settings.models_dir, task.task_id, trained.model)
 
     try:
         mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
         mlflow.set_experiment(settings.MLFLOW_EXPERIMENT_NAME or DEFAULT_EXPERIMENT_NAME)
         with mlflow.start_run(run_name="dagster_daily_training") as run:
             mlflow.log_metrics(metrics)
-            mlflow.log_params(forecaster.params)
-            mlflow.log_artifact(str(model_path), artifact_path="model")
+            mlflow.log_params(_flatten_params(task))
+            mlflow.log_artifacts(str(model_dir), artifact_path="model")
             run_id = run.info.run_id
     except Exception as e:
         context.log.warning(f"MLflow logging skipped or failed: {e}")
         run_id = "local_run"
 
     return Output(
-        value={"metrics": metrics, "run_id": run_id, "model_path": str(model_path)},
+        value={"metrics": metrics, "run_id": run_id, "model_path": str(model_dir)},
         metadata={"mape": metrics["mape"], "rmse": metrics["rmse"], "mae": metrics["mae"]},
     )
+
+
+def _flatten_params(task: TaskDefinition) -> dict[str, object]:
+    """MLflow params are flat key/value pairs; nested task params become dotted keys."""
+    flat: dict[str, object] = {"task_id": task.task_id, "task_type": task.task_type}
+    pending = [("", task.params.model_dump())]
+    while pending:
+        prefix, values = pending.pop()
+        for key, value in values.items():
+            if isinstance(value, dict):
+                pending.append((f"{prefix}{key}.", value))
+            else:
+                flat[f"{prefix}{key}"] = value
+    return flat
 
 
 @asset(
@@ -410,11 +417,12 @@ def drift_monitoring_report(
     queries instead of the full series; the readiness gate also keeps manual runs
     from reporting while legacy rows or too few hours remain.
     """
-    repository = _get_time_series_repo(context)
-    readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
-    latest_actual = repository.fetch_latest_load(
-        subject=NATIONWIDE_SUBJECT, source=REGIONAL_SNAPSHOT_SUM_SOURCE
-    ).iloc[-1]
+    readiness = _require_training_readiness(context)
+    latest_actual = (
+        _get_time_series_repo(context)
+        .fetch_latest_load(subject=_task().subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE)
+        .iloc[-1]
+    )
     metrics = trained_forecaster_model.get("metrics", {})
     report = {
         "status": "HEALTHY" if metrics.get("mape", 0.0) < 10.0 else "WARNING",

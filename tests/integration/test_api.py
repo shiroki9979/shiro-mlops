@@ -7,9 +7,8 @@ from fastapi.testclient import TestClient
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.weather_resolution import WeatherResolution
-from shiro_mlops.features.transformers import build_feature_pipeline
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.service.api import app, model_store
+from shiro_mlops.tasks.types.base import TaskModel
 
 
 def test_api_health_endpoint() -> None:
@@ -38,7 +37,7 @@ def test_app_startup_skips_timescale_initialization_in_test_environment(monkeypa
 
 def test_api_ready_reports_cold_start_without_constructing_a_cwa_client(monkeypatch) -> None:
     """An empty database is live but not ready until ingestion and training complete."""
-    model_store.forecaster = None
+    model_store.model = None
 
     with TestClient(app) as client:
         response = client.get("/ready")
@@ -50,7 +49,7 @@ def test_api_ready_reports_cold_start_without_constructing_a_cwa_client(monkeypa
 def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
     """Readiness exposes a usable full-horizon weather mode from persisted sources."""
     repository = MagicMock()
-    repository.fetch_load_range.return_value = pd.DataFrame(
+    latest_load = pd.DataFrame(
         [
             {
                 "datetime": pd.Timestamp("2026-08-20 12:00"),
@@ -59,19 +58,25 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
             }
         ]
     )
+    repository.fetch_latest_load.return_value = latest_load
+    repository.fetch_load_range.return_value = latest_load
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
     monkeypatch.setattr(
         "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-20 13:00")
     )
-    model_store.forecaster = MagicMock()
+    model_store.model = MagicMock()
     weather = WeatherResolution(
-        dataframe=pd.DataFrame({"datetime": [pd.Timestamp("2026-08-20 13:00")]}),
+        dataframe=pd.DataFrame(
+            {
+                "datetime": [pd.Timestamp("2026-08-20 13:00")],
+                "temperature": [30.0],
+                "relative_humidity": [70.0],
+            }
+        ),
         sources=({},),
         mode="degraded",
     )
-    monkeypatch.setattr(
-        "shiro_mlops.service.api._resolve_prediction_weather", lambda *args: weather
-    )
+    monkeypatch.setattr("shiro_mlops.tasks.runner.resolve_weather", lambda *args, **kwargs: weather)
 
     with TestClient(app) as client:
         response = client.get("/ready")
@@ -81,28 +86,17 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
 
 
 def _serve_fitted_forecaster(
+    fitted_task_model: TaskModel,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> MagicMock:
-    """Attach a fitted forecaster and a repository holding fresh load and forecast rows."""
-    # 1. Prepare and attach a fitted forecaster to model_store
-    feat_df = build_feature_pipeline(
-        load_df=taipower_raw_df,
-        weather_df=cwa_obs_df,
-        lags=[1, 2, 24],
-        windows=[6],
-    )
-    forecaster = LightGBMRecursiveForecaster(
-        lags=[1, 2, 24],
-        windows=[6],
-        params={"n_estimators": 5, "verbose": -1},
-    )
-    forecaster.fit(feat_df)
-    model_store.forecaster = forecaster
+    """Attach a fitted model and a repository holding fresh load and forecast rows."""
+    model_store.model = fitted_task_model
 
     repository = MagicMock()
+    repository.fetch_latest_load.return_value = taipower_raw_df.tail(1)
     repository.fetch_load_range.return_value = taipower_raw_df
     repository.fetch_cwa_station_observations.return_value = cwa_obs_df.rename(
         columns={
@@ -128,13 +122,16 @@ def _serve_fitted_forecaster(
 
 
 def test_api_predict_dynamic_horizon(
+    fitted_task_model: TaskModel,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> None:
     """Test dynamic horizon prediction endpoint."""
-    _serve_fitted_forecaster(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
+    _serve_fitted_forecaster(
+        fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
 
     client = TestClient(app)
     response = client.post("/predict", json={"horizon_hours": 12})
@@ -150,13 +147,16 @@ def test_api_predict_dynamic_horizon(
 
 
 def test_api_predict_ignores_legacy_location_and_reads_nationwide_subject(
+    fitted_task_model: TaskModel,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> None:
     """舊客戶端傳入的 location 不影響預測對象，負載一律以 nationwide 讀取。"""
-    repository = _serve_fitted_forecaster(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
+    repository = _serve_fitted_forecaster(
+        fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
 
     client = TestClient(app)
     response = client.post("/predict", json={"horizon_hours": 6, "location": "Kaohsiung"})
@@ -167,13 +167,16 @@ def test_api_predict_ignores_legacy_location_and_reads_nationwide_subject(
 
 
 def test_api_predict_reads_weather_from_the_weather_reference_point(
+    fitted_task_model: TaskModel,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> None:
     """天氣取自擷取目錄中的氣象代表點，而非預測對象。"""
-    repository = _serve_fitted_forecaster(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
+    repository = _serve_fitted_forecaster(
+        fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
 
     TestClient(app).post("/predict", json={"horizon_hours": 1})
 
