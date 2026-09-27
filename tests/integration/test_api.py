@@ -432,6 +432,24 @@ def test_high_load_alert_refuses_a_stale_load_anchor(
     assert "Stale load anchor" in response.json()["detail"]
 
 
+def test_high_load_alert_without_threshold_window_history_answers_503(
+    cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
+) -> None:
+    """門檻窗歷史不足是服務輸入暫時不可用，predict 與 ready 都回 503 而非 500 或 ready。"""
+    model, load = _fitted_high_load_alert(pd.Timestamp("2026-08-21 23:00"))
+    monkeypatch.setitem(model_store.models, HIGH_LOAD_ALERT, model)
+    _serve_fresh_inputs(load.tail(24 * 20), cwa_obs_df, cwa_forecast_df, monkeypatch)
+    client = TestClient(app)
+
+    predicted = client.post(f"/tasks/{HIGH_LOAD_ALERT}/predict", json={"horizon_hours": 6})
+    ready = client.get(f"/tasks/{HIGH_LOAD_ALERT}/ready")
+
+    assert predicted.status_code == 503
+    assert "672-hour window" in predicted.json()["detail"]
+    assert ready.status_code == 503
+    assert "672-hour window" in ready.json()["reason"]
+
+
 # --- Observed-weather task: load_pattern_anomaly -------------------------------------------
 
 ANOMALY_ANCHOR = pd.Timestamp("2026-09-20 23:00")

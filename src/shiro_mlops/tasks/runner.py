@@ -34,6 +34,7 @@ from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
+    HistoryCoverage,
     InputRequirements,
     PredictionData,
     TaskModel,
@@ -73,6 +74,10 @@ class MissingLoadHistoryError(TaskUnavailableError):
 
 class StaleLoadAnchorError(TaskUnavailableError):
     """The latest actual load is too old to anchor a recursive forecast."""
+
+
+class InsufficientLoadHistoryError(TaskUnavailableError):
+    """Too few actual load hours before the anchor for the task type's history window."""
 
 
 class WeatherUnavailableError(TaskUnavailableError):
@@ -261,7 +266,7 @@ def predict_task(
     observed-weather tasks score the latest ``horizon_hours`` hours up to the anchor.
     Either way each outcome weather row and source belongs to the prediction row
     at the same position. Raises ``MissingLoadHistoryError``,
-    ``StaleLoadAnchorError``, ``WeatherUnavailableError`` or
+    ``StaleLoadAnchorError``, ``InsufficientLoadHistoryError``, ``WeatherUnavailableError`` or
     ``ObservedInputsIncompleteError`` (all ``TaskUnavailableError``) instead of
     degrading where no substitute exists.
     """
@@ -296,6 +301,8 @@ def _prepare_prediction(
     anchor = _fresh_load_anchor(task, runtime.repository, as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
     history = _fetch_target(task, runtime.repository, start=history_start, end=anchor)
+    if requirements.history_coverage is not None:
+        _require_history_coverage(task, history, anchor, requirements.history_coverage)
     if requirements.weather is WeatherInput.OBSERVED:
         weather = _observed_weather_until(task, runtime, start=history_start, anchor=anchor)
     else:
@@ -328,6 +335,20 @@ def _fresh_load_anchor(
             f"{pd.Timestamp(as_of).isoformat()} by more than {max_lag_hours} hours."
         )
     return anchor
+
+
+def _require_history_coverage(
+    task: TaskDefinition, history: pd.DataFrame, anchor: pd.Timestamp, coverage: HistoryCoverage
+) -> None:
+    """Refuse rather than let the task type fail: missing past load has no substitute."""
+    window_start = anchor - timedelta(hours=coverage.window_hours)
+    times = pd.to_datetime(history.loc[history[LOAD_MW_COL].notna(), DATETIME_COL])
+    valid_hours = times[(times > window_start) & (times <= anchor)].nunique()
+    if valid_hours < coverage.min_valid_hours:
+        raise InsufficientLoadHistoryError(
+            f"Only {valid_hours} {task.subject} load hours in the {coverage.window_hours}-hour "
+            f"window ending at anchor {anchor.isoformat()}; {coverage.min_valid_hours} required."
+        )
 
 
 def _resolve_future_weather(

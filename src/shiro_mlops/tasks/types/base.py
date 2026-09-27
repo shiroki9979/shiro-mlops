@@ -27,11 +27,21 @@ class WeatherInput(Enum):
 
 
 @dataclass(frozen=True)
+class HistoryCoverage:
+    """Valid target hours a prediction needs in the ``window_hours`` ending at the anchor."""
+
+    window_hours: int
+    min_valid_hours: int
+
+
+@dataclass(frozen=True)
 class InputRequirements:
     """Inputs a task type needs, so the runner can fetch bounded history."""
 
     weather: WeatherInput
     lookback_hours: int
+    # 歷史不足時由 runner 拒絕並回報不可用，任務類型不必在預測時自行失敗；None 表示不檢查。
+    history_coverage: HistoryCoverage | None = None
 
 
 @dataclass(frozen=True)

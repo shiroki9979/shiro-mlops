@@ -10,9 +10,11 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import deployed_task
 from shiro_mlops.tasks.runner import (
+    InsufficientLoadHistoryError,
     StaleLoadAnchorError,
     TaskNotReady,
     TaskRuntime,
+    check_task_ready,
     monitor_task,
     predict_task,
     train_task,
@@ -92,6 +94,47 @@ def test_stale_load_anchor_refuses_the_alert(
 ) -> None:
     with pytest.raises(StaleLoadAnchorError):
         predict_task(task, model, runtime, as_of=STALE_AS_OF, horizon_hours=HORIZON_HOURS)
+
+
+def _drop_load_hours(
+    runtime: TaskRuntime, monkeypatch: pytest.MonkeyPatch, start: pd.Timestamp, hours: int
+) -> None:
+    """Serve persisted load without ``hours`` consecutive hours from ``start``."""
+    fetch_load_range = runtime.repository.fetch_load_range
+    end = start + pd.Timedelta(hours=hours - 1)
+
+    def gapped(**kwargs):
+        load = fetch_load_range(**kwargs)
+        return load[~pd.to_datetime(load["time"]).between(start, end)]
+
+    monkeypatch.setattr(runtime.repository, "fetch_load_range", gapped)
+
+
+@pytest.mark.parametrize(
+    ("gap_start", "gap_hours"),
+    [
+        # 門檻窗中段缺一日：窗內 144 < 152 個有效小時。
+        (ANCHOR - pd.Timedelta(hours=72), 24),
+        # 只剩錨點前 101 小時：歷史未涵蓋門檻窗。
+        (ANCHOR - pd.Timedelta(days=20), 24 * 20 - 100),
+    ],
+)
+def test_threshold_window_without_enough_load_history_is_unavailable(
+    task: TaskDefinition,
+    runtime: TaskRuntime,
+    model: TaskModel,
+    monkeypatch: pytest.MonkeyPatch,
+    gap_start: pd.Timestamp,
+    gap_hours: int,
+) -> None:
+    _drop_load_hours(runtime, monkeypatch, gap_start, gap_hours)
+
+    with pytest.raises(InsufficientLoadHistoryError, match="168-hour window"):
+        predict_task(task, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS)
+
+    readiness = check_task_ready(task, model, runtime, as_of=FRESH_AS_OF)
+    assert not readiness.ready
+    assert "168-hour window" in readiness.reason
 
 
 def test_monitoring_judges_metrics_with_the_configured_floors(
