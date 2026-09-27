@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 from dagster import load_assets_from_modules
 from sqlalchemy import text
@@ -225,3 +226,21 @@ def selected_asset_names(job) -> set[str]:
     """以正式資產模組解析 job selection，讓各測試對同一份資產圖斷言。"""
     assets = load_assets_from_modules([assets_module])
     return {key.to_user_string() for key in job.selection.resolve(assets)}
+
+
+def hourly_load_with_weather(hours: int, last_hour: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """建立具日週期且與氣溫相關的全台負載及同時段觀測天氣，使模型有可學習的訊號。"""
+    times = pd.date_range(end=last_hour, periods=hours, freq="h")
+    daily = np.sin(2 * np.pi * times.hour / 24.0)
+    temperature = 28.0 + 4.0 * daily
+    load = pd.DataFrame(
+        {
+            "datetime": times,
+            "subject": "nationwide",
+            "load_mw": 30000.0 + 3000.0 * daily + 150.0 * (temperature - 28.0),
+        }
+    )
+    weather = pd.DataFrame(
+        {"datetime": times, "temperature": temperature, "relative_humidity": 75.0 - 5.0 * daily}
+    )
+    return load, weather
