@@ -1,5 +1,6 @@
 """Data Explorer HTTP contracts against a real SQLite repository."""
 
+import importlib
 import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
@@ -80,6 +81,37 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     """過渡快照端點不得再作為營運資料來源。"""
     client, _ = explorer_client
     assert client.get("/features/latest").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/data/power/load",
+        "/data/power/supply-demand",
+        "/data/power/regional",
+        "/data/power/units",
+        "/data/weather/observations",
+        "/data/weather/forecasts",
+        "/data/audits/cwa-observations",
+        "/data/audits/cwa-forecasts",
+    ],
+)
+def test_all_lists_reject_v1_cursor_before_database_access(
+    explorer_client, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    client, _ = explorer_client
+    legacy = urlsafe_b64encode(b'{"v":1,"ds":"hourly_load","f":{},"k":{}}').decode().rstrip("=")
+
+    def unavailable(_request):
+        raise SQLAlchemyError("database unavailable")
+
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(router_module, "_engine", unavailable)
+
+    response = client.get(path, params={"cursor": legacy})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Incompatible cursor version"
 
 
 @pytest.mark.parametrize("field", ["issued_at", "source_updated_at"])

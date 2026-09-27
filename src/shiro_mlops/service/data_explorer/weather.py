@@ -9,8 +9,9 @@ from shiro_mlops.service.data_explorer.cursor import decode_cursor_filters
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.pagination import apply_cursor
+from shiro_mlops.service.data_explorer.pagination import apply_cursor, sort_order
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql_utc
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
@@ -226,13 +227,14 @@ class ObservationAuditReader(DatasetReader):
     """List CWA observation batch audit headers without raw payloads."""
 
     dataset = "cwa_observation_audits"
+    raw_pagination = True
 
-    def fetch_page(
+    def fetch_rows(
         self,
         query: ExplorerQuery,
         cursor: dict[str, Any] | None,
         limit: int,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> list[dict[str, Any]]:
         status = _audit_status(query.filters.get("status"))
         clauses = ["fetched_at >= :start_time", "fetched_at <= :end_time"]
         sql_params: dict[str, Any] = {
@@ -245,18 +247,24 @@ class ObservationAuditReader(DatasetReader):
         if query.filters.get("missing_station_id"):
             clauses.append("CAST(missing_station_ids AS TEXT) LIKE :missing_station")
             sql_params["missing_station"] = f'%"{query.filters["missing_station_id"]}"%'
-        where, cursor_params = apply_cursor(clauses, cursor, ("fetched_at",))
+        sort = DATASET_SPECS[self.dataset]["sort"]
+        where, cursor_params = apply_cursor(clauses, cursor, sort)
         sql_params.update(cursor_params)
         sql = f"""
             SELECT fetched_at, status, missing_station_ids, created_at
             FROM raw_cwa_observation_batch
             WHERE {where}
-            ORDER BY fetched_at DESC
+            ORDER BY {sort_order(sort)}
             LIMIT :limit
         """
         sql_params["limit"] = limit
+        return self.db.fetch(sql, sql_params)
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         items = []
-        for row in self.db.fetch(sql, sql_params):
+        for row in rows:
             items.append(
                 {
                     "fetched_at": format_taiwan_time(to_taiwan(row["fetched_at"])),
