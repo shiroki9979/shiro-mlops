@@ -15,6 +15,7 @@ from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
+from shiro_mlops.service.data_explorer.cursor import encode_cursor
 from tests.helpers import (
     TAIWAN,
     create_legacy_load_table,
@@ -209,6 +210,14 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     )
     assert mismatched.status_code == 400
     assert client.get("/data/power/load", params={"cursor": "not-a-cursor"}).status_code == 400
+    invalid_window_cursor = encode_cursor(
+        dataset="hourly_load",
+        filters={"start": "not-a-time", "end": rfc3339(latest), "dataset": "hourly_load"},
+        key={"time": rfc3339(latest), "location": "Taipei"},
+    )
+    assert (
+        client.get("/data/power/load", params={"cursor": invalid_window_cursor}).status_code == 400
+    )
 
     missing_key = _replace_cursor_key(cursor, {})
     malformed = client.get(
@@ -252,6 +261,30 @@ def test_hourly_load_pagination_and_hourly_gaps(explorer_client) -> None:
         },
     )
     assert rfc3339(gap_start + timedelta(hours=1)) in gapped_page.json()["missing_slots"]
+
+
+def test_default_window_cursor_stays_valid_after_clock_advances(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, repo = explorer_client
+    latest = _now().replace(minute=0)
+    _upsert_hours(repo, [latest - timedelta(hours=1), latest])
+    clock = latest + timedelta(minutes=1)
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.query.now_taiwan", lambda: clock)
+    first = client.get("/data/power/load", params={"limit": 1})
+    assert first.status_code == 200
+    assert first.json()["next_cursor"]
+
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.query.now_taiwan",
+        lambda: clock + timedelta(seconds=1),
+    )
+    second = client.get(
+        "/data/power/load", params={"limit": 1, "cursor": first.json()["next_cursor"]}
+    )
+
+    assert second.status_code == 200
+    assert second.json()["items"][0]["datetime"] == rfc3339(latest - timedelta(hours=1))
 
 
 def test_status_returns_503_when_database_unavailable(explorer_client) -> None:

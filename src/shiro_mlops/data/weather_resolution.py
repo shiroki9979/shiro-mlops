@@ -6,8 +6,10 @@ from typing import Literal
 
 import pandas as pd
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
+    DEFAULT_LOCATION,
     LOCATION_COL,
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
@@ -146,18 +148,17 @@ def resolve_weather(
     start_time: datetime | str | pd.Timestamp,
     horizon_hours: int,
     as_of: datetime | str | pd.Timestamp | None = None,
-    geocode: str = "63000000",
-    station_id: str = "466920",
     fields: tuple[str, ...] = DEFAULT_RESOLUTION_FIELDS,
 ) -> WeatherResolution:
     """Resolve forecast and degraded weather for an hourly prediction horizon."""
+    location = settings.cwa_locations[DEFAULT_LOCATION]
     start = _as_timestamp(start_time)
     cutoff = _as_timestamp(as_of or start)
     moments = [start + timedelta(hours=index) for index in range(horizon_hours)]
     end = moments[-1] if moments else start
     forecasts = _latest_rows(
         repository.fetch_cwa_forecast_rows(
-            geocode=geocode,
+            geocode=location.geocode,
             issued_before=cutoff,
             source_updated_before=cutoff,
             valid_start=start,
@@ -167,7 +168,7 @@ def resolve_weather(
     observations = repository.fetch_cwa_station_observations(
         start_time=start - timedelta(days=366),
         end_time=cutoff,
-        station_id=station_id,
+        station_id=location.station_id,
     )
     issued = forecasts["issued_at"].max() if not forecasts.empty else None
     stale = issued is None or cutoff - issued > timedelta(hours=7)
@@ -183,7 +184,7 @@ def resolve_weather(
     sources: list[dict[str, dict[str, str]]] = []
     degraded = False
     for moment in moments:
-        output: dict[str, object] = {DATETIME_COL: moment, LOCATION_COL: "Taipei"}
+        output: dict[str, object] = {DATETIME_COL: moment, LOCATION_COL: DEFAULT_LOCATION}
         point_sources: dict[str, dict[str, str]] = {}
         for output_name in fields:
             source_column = FORECAST_FIELDS[output_name]

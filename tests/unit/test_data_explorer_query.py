@@ -71,6 +71,26 @@ def test_explorer_query_decodes_filter_bound_cursor_key() -> None:
         mismatched.cursor_key()
 
 
+def test_cursor_preserves_fractional_second_window_when_defaults_are_restored() -> None:
+    first = ExplorerQuery.from_params(
+        "hourly_load",
+        {
+            "start": "2026-08-01T00:00:00.500000+08:00",
+            "end": "2026-08-02T00:00:00.500000+08:00",
+        },
+    )
+    cursor = encode_cursor(
+        dataset="hourly_load",
+        filters=first.filters,
+        key={"time": "2026-08-01T12:00:00+08:00", "location": "Taipei"},
+    )
+
+    next_page = ExplorerQuery.from_params("hourly_load", {"cursor": cursor})
+
+    assert next_page.window == first.window
+    assert next_page.cursor_key() is not None
+
+
 def test_paginate_list_encodes_next_cursor_from_last_visible_item() -> None:
     """共用 keyset 分頁必須用最後一筆可見列編碼 next_cursor，並回傳多一筆偵測到的 has_more。"""
     params = {

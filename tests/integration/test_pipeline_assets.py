@@ -70,6 +70,27 @@ def test_canonical_cwa_forecast_asset_persists_both_products(
     repository.upsert_cwa_forecast_releases.assert_called_once_with(releases)
 
 
+def test_training_weather_source_uses_configured_taipei_station(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "CWA_LOCATION_ALLOWLIST",
+        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    )
+    repository = MagicMock(spec=TimeSeriesRepository)
+    observation = pd.DataFrame([{"observed_at": datetime(2026, 8, 20, 12), "temperature_c": 30.0}])
+    repository.fetch_cwa_station_observations.side_effect = lambda station_id: (
+        observation if station_id == "999999" else pd.DataFrame()
+    )
+
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        result = cwa_observation_feature_source(context)
+
+    assert result.loc[0, "temperature"] == 30.0
+    assert result.loc[0, "location"] == "Taipei"
+
+
 def test_taipower_load_feature_source_fails_without_derived_load(
     test_repo: TimeSeriesRepository,
 ) -> None:

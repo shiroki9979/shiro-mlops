@@ -4,7 +4,9 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.data.weather_resolution import resolve_weather
 
 
@@ -48,6 +50,57 @@ def test_resolver_prefers_three_day_and_falls_back_to_weekly_per_field() -> None
     assert result.dataframe.loc[0, "relative_humidity"] == 70.0
     assert result.sources[0]["temperature"]["source"] == "three_day"
     assert result.sources[0]["relative_humidity"]["source"] == "weekly"
+
+
+def test_resolver_uses_configured_taipei_forecast_and_observation_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "CWA_LOCATION_ALLOWLIST",
+        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    )
+    repository = MagicMock()
+    forecast = pd.DataFrame(
+        [
+            {
+                "dataset_id": "F-D0047-089",
+                "issued_at": pd.Timestamp("2026-08-20 10:00"),
+                "source_updated_at": pd.Timestamp("2026-08-20 10:10"),
+                "valid_from": pd.Timestamp("2026-08-20 12:00"),
+                "valid_to": pd.Timestamp("2026-08-20 12:00"),
+                "geocode": "99999999",
+                "temperature_c": 30.0,
+                "relative_humidity_pct": None,
+            }
+        ]
+    )
+    observation = pd.DataFrame(
+        [
+            {
+                "observed_at": pd.Timestamp("2026-08-19 12:00"),
+                "station_id": "999999",
+                "temperature_c": 28.0,
+                "relative_humidity_pct": 70.0,
+            }
+        ]
+    )
+    repository.fetch_cwa_forecast_rows.side_effect = lambda **kwargs: (
+        forecast if kwargs["geocode"] == "99999999" else pd.DataFrame()
+    )
+    repository.fetch_cwa_station_observations.side_effect = lambda **kwargs: (
+        observation if kwargs["station_id"] == "999999" else pd.DataFrame()
+    )
+
+    result = resolve_weather(
+        repository,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 11),
+    )
+
+    assert result.dataframe.loc[0, "temperature"] == 30.0
+    assert result.dataframe.loc[0, "relative_humidity"] == 70.0
 
 
 def test_resolver_uses_previous_day_observation_when_forecast_is_stale() -> None:
