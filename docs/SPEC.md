@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-26
+- 最後更新：2026-09-27
 - 專案版本：`0.3.0`
 
 ---
@@ -15,11 +15,13 @@
   - **有效樣本**：以區域快照 `source_time` 識別；同一 `source_time` 重複擷取只計一次；北、中、南、東四區皆存在時才有效，四區 `load_wan_kw` 加總乘以 10 轉為 MW。
   - **逐時聚合**：`datetime` 為小時起點（台灣本地時間），`load_mw` 為 `[datetime, datetime + 1h)` 內有效樣本平均；有效樣本數低於 `HOURLY_LOAD_MIN_SAMPLES`（預設 `4`，每小時最多 6）時該小時缺值，不內插；未結束的小時不產出。
   - **可取得範圍**：只自開始累積區域快照時往後取得，不回補歷史。
+- **預測對象**：全台逐時實際負載的預測對象識別碼固定為 `nationwide`（[ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md)）。預測對象只識別負載序列本身，與天氣取自哪個氣象代表點無關。
 - **欄位契約**：
 
 | 欄位名稱 | 型態 | 單位/範例 | 說明 |
 | :--- | :--- | :--- | :--- |
 | `datetime` | `datetime64[ns]` | `2026-08-20 14:00:00` | 時間戳記（逐時） |
+| `subject` | `str` | `nationwide` | 預測對象識別碼 |
 | `load_mw` | `float64` | `39800.0` | 當前系統總用電負載（百萬瓦） |
 
 ### 1.2 中央氣象署資料實體 (CWA Weather Schemas)
@@ -33,6 +35,10 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 與 `geocode`，不得以兩份依賴排序的獨立清單配對。預設 mapping 對齊
 `F-D0047-089`／`F-D0047-091` 縣市 `Geocode`：`Taipei: 466920 / 63000000`、
 `Taichung: 467490 / 66000000`、`Kaohsiung: 467441 / 64000000`。
+
+allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 引用氣象代表點，
+再由目錄取得其 `station_id` 與 `geocode`；測站編號與鄉鎮代碼不得寫死於目錄以外的程式碼。
+動態視界預報目前使用氣象代表點 `Taipei`；引用不存在的 alias 時直接失敗。
 
 #### 1.2.1 氣象署逐時測站觀測
 
@@ -57,13 +63,13 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)
-     - `location` (VARCHAR(64), NOT NULL)
+     - `subject` (VARCHAR(64), NOT NULL)：預測對象識別碼；全台逐時實際負載為 `nationwide`。
      - `load_mw` (DOUBLE PRECISION, NOT NULL)
      - `source` (VARCHAR(32), NOT NULL)：推算來源；目前唯一值為 `regional_snapshot_sum`。
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
-     - `location` 固定為相容性值 `Taipei`，語意為全台負載。
+     - **預測對象遷移**：ADR-0009 之前的資料庫以 `location = 'Taipei'` 保存全台負載。服務啟動時的 schema 升級在單一交易內將 `location` 改名為 `subject`，並把 `Taipei` 列改為 `nationwide`；已遷移的資料庫重跑時不改動任何列。新建資料庫直接採 `subject`。升級順序見[遷移全台負載預測對象](how-to/migrate-load-subject-to-nationwide.md)。
      - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。既有資料庫升級時只補上可為 `NULL` 的 `source`，不改寫或刪除任何列；`source IS NULL` 即 d015046 時期資料列。清除與補上 `NOT NULL` 由操作人員依[移除 d015046 時期舊負載資料列](how-to/remove-legacy-d015046-load-rows.md)執行後，才開啟 `hourly_actual_load_schedule`。
-     - **Constraint**: `PRIMARY KEY (time, location)`
+     - **Constraint**: `PRIMARY KEY (time, subject)`
      - **Hypertable**: `create_hypertable('raw_taipower_load', 'time')`
   2. `raw_cwa_observation_batch`:
      - 每次逐時觀測 API 成功回應保存一筆批次 header；完整來源回應僅在此保存一次，不複製到各測站觀測列。
@@ -143,11 +149,12 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 - 每個有效小時與 typed 欄位優先採用最新可用的 `F-D0047-089`；欄位缺少或超出其涵蓋範圍時，退回最新可用的 `F-D0047-091`。
 - `F-D0047-089` 的連續數值點資料在相鄰時間點間線性插值；`F-D0047-091` 的區間平均值展開為有效區間內每小時固定值；風向與文字／代碼不得線性插值。
 - 可消費 `incomplete` header 中已存在的指定行政區資料；指定行政區缺少時，退回該行政區上一個完整版本。
-- 預報缺少或最新 `issued_at` 超過七小時時，依序使用臺北站前日同小時觀測、同月份同小時歷史平均；月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料。
+- 預報與觀測皆取自同一氣象代表點：預報讀其 `geocode`，替代資料讀其 `station_id`。
+- 預報缺少或最新 `issued_at` 超過七小時時，依序使用氣象代表點測站的前日同小時觀測、同月份同小時歷史平均；月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料。
 
 ### 1.4 Feast 特徵庫視圖 (Feature View Schema)
 
-- **Entity**: `location` (Join Key: `location`)
+- **Entity**: `location` (Join Key: `location`)；schema 凍結為動態視界預報任務專屬匯出（ADR-0009），entity 名稱不變，值為預測對象（`nationwide`）。`cwa_weather_features` 以其代表的預測對象為 entity 值，使兩個 view 可依同一 entity join。
 - **Features (`taipower_load_features`)**:
   - `load_mw`: float32
   - `load_mw_lag_1`, `load_mw_lag_2`, `load_mw_lag_24`: float32
@@ -157,7 +164,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 - **Features (`cwa_weather_features`)**:
   - `temperature`: float32
   - `relative_humidity`: float32
-- **時間正確性**：特徵擷取必須提供明確的 `FeatureQueryWindow`（訓練起迄與可選地點）；repository 查詢起點另含 lag/rolling lookback，禁止無界歷史掃描。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
+- **時間正確性**：特徵擷取必須提供明確的 `FeatureQueryWindow`（訓練起迄、可選預測對象與氣象代表點）；repository 查詢起點另含 lag/rolling lookback，禁止無界歷史掃描。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
 - **訓練氣象缺口**：氣溫與相對濕度只能由較早觀測 forward-fill 最多兩小時；補值後仍缺少任一必要氣象欄位的 load row 必須移除。禁止 `bfill` 與固定氣象常數。
 
 ### 1.5 Dagster Artifact 序列化與信任邊界
@@ -199,16 +206,16 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 ### 2.3 隨需動態視界負載預報
 
 - **路徑**：`POST /predict`
-- **相容性欄位**：`location` 暫時保留但只接受 `Taipei`，並標示為待移除；模型仍預測全臺負載，不宣稱支援區域負載模型。
-- **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回臺北站前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
+- **預測對象**：固定為 `nationwide`，並於回應 `subject` 揭露；模型只預測全台負載，不宣稱支援區域負載模型。
+- **相容性欄位**：請求 `location` 為選填，於 OpenAPI 標示 `deprecated`；任何值皆被忽略，不影響預測對象，也不再回傳 HTTP 400。回應不再包含 `location`。
+- **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
 - **狀態欄位**：`status` 表示請求成功（固定為 `success`）；`mode` 表示預報品質（`normal` 或 `degraded`），兩者不得混用。
 - **來源追溯**：每個預測點的 `weather_sources` 必須逐一揭露各氣象欄位的來源，以及可用的預報發布／更新時間；同一時點允許不同欄位來自不同產品或降級來源。
 - **請求 Body**：
 
   ```json
   {
-    "horizon_hours": 24,
-    "location": "Taipei"
+    "horizon_hours": 24
   }
   ```
 
@@ -218,7 +225,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
   {
     "status": "success",
     "horizon_hours": 24,
-    "location": "Taipei",
+    "subject": "nationwide",
     "mode": "normal",
     "predictions": [
       {
@@ -272,11 +279,11 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
    - **故障邊界**：使用獨立 job 與 schedule，不因觀測擷取或其他管線失敗而跳過當次預報版本。
 6. **`hourly_actual_load_job`**：
    - **排程**：`5 * * * *`（`Asia/Taipei`）。
-   - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 §1.1 推算最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，以 `(time, location)` upsert 至 `raw_taipower_load`；不呼叫任何台電外部 API。
+   - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 §1.1 推算最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，以 `(time, subject)` upsert 至 `raw_taipower_load`，`subject` 為 `nationwide`；不呼叫任何台電外部 API。
    - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
 7. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。
-   - 既有模型在本階段只使用臺北站 `466920` 及其 `TownCode` 對應預報；臺中與高雄資料先完成入庫，三站加權仍由 TICKET-301 處理。
+   - 既有模型在本階段只使用氣象代表點 `Taipei`（測站與預報區見 §1.2 目錄）；臺中與高雄資料先完成入庫，多氣象代表點加權仍由 TICKET-301 處理。
 8. **本機冷啟動**：
    - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達 §3 訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
    - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
@@ -333,7 +340,7 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 
 - **Freshness 維度**：分別顯示 ingestion age 與 source age。前者表示距上次成功入庫所經時間，後者表示最新來源事件或發布時間距今時間；不得以其中一者取代另一者。
 - **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。
-- **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供 location，區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
+- **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供預測對象（`subject`，如 `nationwide`），區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
 - **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
 - **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
 - **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。
