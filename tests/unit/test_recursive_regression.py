@@ -114,12 +114,15 @@ def test_saved_model_reloads_with_identical_predictions(trained, tmp_path: Path)
     ]
 
 
-def test_validation_split_after_all_rows_leaves_metrics_empty() -> None:
+def test_validation_split_after_all_rows_reports_no_metrics_so_health_warns() -> None:
+    """沒有驗證列就沒有量測過的指標；回報 0.0 會讓 MAPE 看似健康。"""
     after_last_row = pd.Timestamp(LAST_HOUR) + pd.Timedelta(hours=1)
+    thresholds = task_type.health_model.model_validate({"max_mape": 10.0})
 
     result = task_type.train(PARAMS, _training_data(validation_start=after_last_row))
 
-    assert result.metrics == {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
+    assert result.metrics == {}
+    assert task_type.assess_health(thresholds, result.metrics).status is HealthStatus.WARNING
 
 
 def test_validation_split_before_all_rows_refuses_to_train() -> None:
@@ -141,7 +144,7 @@ def test_rows_beyond_a_two_hour_weather_gap_are_dropped_not_synthesized() -> Non
 
     result = task_type.train(PARAMS, gapped)
 
-    assert result.metrics == {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
+    assert result.metrics == {}
 
 
 @pytest.mark.parametrize(

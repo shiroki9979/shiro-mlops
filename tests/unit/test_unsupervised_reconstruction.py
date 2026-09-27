@@ -38,6 +38,7 @@ PARAMS = UnsupervisedReconstructionParams.model_validate(
     }
 )
 task_type = get_task_type("unsupervised_reconstruction")
+THRESHOLDS = {"min_recall": 0.8, "max_false_positive_rate": 0.05}
 
 
 def _load_with_weather(hours: int) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -168,11 +169,16 @@ def test_false_positive_rate_is_measured_on_days_the_threshold_never_saw(trained
     assert result.metrics["false_positive_rate"] > 0.5
 
 
-def test_validation_within_a_single_day_refuses_to_train() -> None:
-    last_day = ANCHOR.normalize()
+def test_validation_within_a_single_day_measures_nothing_so_health_warns() -> None:
+    """只有校準日時沒有保留窗可量測誤報率與召回率，不得回報看似健康的指標。"""
+    thresholds = task_type.health_model.model_validate(THRESHOLDS)
 
-    with pytest.raises(ValueError, match="two validation days"):
-        task_type.train(PARAMS, _training_data(validation_start=last_day))
+    result = task_type.train(PARAMS, _training_data(validation_start=ANCHOR.normalize()))
+
+    assert "false_positive_rate" not in result.metrics
+    assert "recall" not in result.metrics
+    assert result.metrics["validation_windows"] == 0.0
+    assert task_type.assess_health(thresholds, result.metrics).status is HealthStatus.WARNING
 
 
 def test_threshold_follows_the_configured_quantile_of_validation_errors(trained) -> None:
@@ -277,8 +283,6 @@ def test_no_training_windows_refuses_to_train() -> None:
 
 
 # --- Health --------------------------------------------------------------------------------
-
-THRESHOLDS = {"min_recall": 0.8, "max_false_positive_rate": 0.05}
 
 
 @pytest.mark.parametrize(
