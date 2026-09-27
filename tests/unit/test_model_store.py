@@ -1,6 +1,5 @@
 """Per-task model directories: atomic replacement and no legacy joblib loading."""
 
-import ctypes
 import errno
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -71,13 +70,10 @@ def test_failed_atomic_exchange_keeps_the_previous_model(
 ) -> None:
     save_model(root, "sample_task", _RecordingModel("v1"))
 
-    def fail_exchange(*_args: object) -> int:
-        ctypes.set_errno(errno.EIO)
-        return -1
+    def fail_exchange(_staging: Path, _target: Path) -> None:
+        raise OSError(errno.EIO, "Input/output error")
 
-    monkeypatch.setattr(
-        ctypes, "CDLL", lambda *_args, **_kwargs: SimpleNamespace(renameat2=fail_exchange)
-    )
+    monkeypatch.setattr(model_store, "_exchange_directories", fail_exchange)
 
     with pytest.raises(OSError, match="Input/output error"):
         save_model(root, "sample_task", _RecordingModel("v2"))
@@ -86,34 +82,41 @@ def test_failed_atomic_exchange_keeps_the_previous_model(
     assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
 
 
+@pytest.mark.parametrize("unsupported", [errno.ENOSYS, errno.EINVAL])
+def test_resaving_without_atomic_exchange_support_still_replaces_the_model(
+    root: Path, monkeypatch: pytest.MonkeyPatch, unsupported: int
+) -> None:
+    """非 Linux 核心或不支援 RENAME_EXCHANGE 的檔案系統仍須能重新訓練。"""
+    save_model(root, "sample_task", _RecordingModel("v1"))
+
+    def exchange_unsupported(_staging: Path, _target: Path) -> None:
+        raise OSError(unsupported, "exchange unsupported")
+
+    monkeypatch.setattr(model_store, "_exchange_directories", exchange_unsupported)
+
+    save_model(root, "sample_task", _RecordingModel("v2"))
+
+    assert (root / "sample_task" / "version.txt").read_text(encoding="utf-8") == "v2"
+    assert [path.name for path in root.iterdir() if path.is_dir()] == ["sample_task"]
+
+
 def test_reader_waits_for_model_replacement(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     save_model(root, "sample_task", _RecordingModel("v1"))
     swapped = Event()
     resume = Event()
     reading = Event()
-    exchange = ctypes.CDLL(None, use_errno=True).renameat2
-    exchange.argtypes = (
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    )
-    exchange.restype = ctypes.c_int
+    install = model_store._install
 
-    def pause_after_exchange(*args: object) -> int:
-        result = exchange(*args)
+    def pause_after_install(staging: Path, target: Path) -> None:
+        install(staging, target)
         swapped.set()
         assert resume.wait(3)
-        return result
 
     def read_model() -> _RecordingModel | None:
         reading.set()
         return load_model(root, SimpleNamespace(task_id="sample_task", task_type="recording"))
 
-    monkeypatch.setattr(
-        ctypes, "CDLL", lambda *_args, **_kwargs: SimpleNamespace(renameat2=pause_after_exchange)
-    )
+    monkeypatch.setattr(model_store, "_install", pause_after_install)
     monkeypatch.setattr(
         model_store,
         "get_task_type",
