@@ -29,26 +29,18 @@ class TrackedRun:
     model_version: str
 
 
-def experiment_name(task_id: str) -> str:
-    return task_id
-
-
-def registered_model_name(task_id: str) -> str:
-    return task_id
-
-
 def log_training_run(
     task: TaskDefinition, metrics: Mapping[str, float], model_dir: Path
 ) -> TrackedRun:
     """Log metrics, flattened params and the native model files, then register a new version."""
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(experiment_name(task.task_id))
+    mlflow.set_experiment(task.task_id)
     with mlflow.start_run(run_name=f"{task.task_id}_training") as run:
         mlflow.log_metrics(dict(metrics))
         mlflow.log_params(flatten_params(task))
         mlflow.log_artifacts(str(model_dir), artifact_path=MODEL_ARTIFACT_PATH)
         source = mlflow.get_artifact_uri(MODEL_ARTIFACT_PATH)
-    version = _register_version(registered_model_name(task.task_id), source, run.info.run_id)
+    version = _register_version(task.task_id, source, run.info.run_id)
     return TrackedRun(run_id=run.info.run_id, model_version=version)
 
 

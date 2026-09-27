@@ -48,6 +48,7 @@ from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import training_data_from_table
 
 FEAST_TASK_NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
+FEAST_EXPORT_ASSET = f"{DYNAMIC_HORIZON_FORECAST}_feast_export"
 
 
 def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
@@ -225,7 +226,7 @@ def raw_taipower_unit_generation_snapshot(
 
 
 @multi_asset(
-    name="dynamic_horizon_forecast_feast_export",
+    name=FEAST_EXPORT_ASSET,
     ins={"features": AssetIn(key=AssetKey(FEAST_TASK_NAMES.features))},
     outs={
         "taipower_features": AssetOut(

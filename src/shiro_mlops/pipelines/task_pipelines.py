@@ -321,15 +321,14 @@ def _monitoring_schedule(
 # --- Shared helpers ------------------------------------------------------------------------
 
 
-def _runtime(context: AssetExecutionContext) -> TaskRuntime:
+def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> TaskRuntime:
     return TaskRuntime(repository=getattr(context.resources, TIME_SERIES_REPO))
 
 
 def _schedule_readiness(
     context: ScheduleEvaluationContext, task: TaskDefinition
 ) -> TrainingLoadReadiness:
-    repository = getattr(context.resources, TIME_SERIES_REPO)
-    return check_training_readiness(task, TaskRuntime(repository=repository))
+    return check_training_readiness(task, _runtime(context))
 
 
 def _taiwan_now() -> datetime:
