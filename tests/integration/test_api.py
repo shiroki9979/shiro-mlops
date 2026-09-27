@@ -16,13 +16,20 @@ from shiro_mlops.tasks.model_store import model_directory, save_model
 from shiro_mlops.tasks.runner import (
     MissingLoadHistoryError,
     StaleLoadAnchorError,
+    TaskRuntime,
     WeatherUnavailableError,
+    train_task,
 )
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import TaskModel, TrainingData
-from tests.helpers import hourly_load_with_weather
+from tests.helpers import (
+    canonical_observation_batch,
+    hourly_load_with_weather,
+    override_task_policies,
+)
 
 HIGH_LOAD_ALERT = "high_load_alert"
+ANOMALY_TASK = "load_pattern_anomaly"
 
 
 def test_api_health_endpoint() -> None:
@@ -346,6 +353,7 @@ def test_startup_loads_each_task_model_independently(
         DYNAMIC_HORIZON_FORECAST: {"task_type": "recursive_regression", "model_loaded": False},
         other.task_id: {"task_type": "recursive_regression", "model_loaded": True},
         HIGH_LOAD_ALERT: {"task_type": "direct_classification", "model_loaded": False},
+        ANOMALY_TASK: {"task_type": "unsupervised_reconstruction", "model_loaded": False},
     }
     assert other_predict.status_code == 200
     assert len(other_predict.json()["predictions"]) == 3
@@ -424,6 +432,72 @@ def test_high_load_alert_refuses_a_stale_load_anchor(
     assert "Stale load anchor" in response.json()["detail"]
 
 
+# --- Observed-weather task: load_pattern_anomaly -------------------------------------------
+
+ANOMALY_ANCHOR = pd.Timestamp("2026-09-20 23:00")
+
+
+@pytest.fixture
+def serve_anomaly_task(test_repo, monkeypatch) -> None:
+    """A trained anomaly model over a SQLite store holding 21 days of load and observations."""
+    hours = 24 * 21
+    load, weather = hourly_load_with_weather(hours, ANOMALY_ANCHOR.to_pydatetime())
+    test_repo.upsert_taipower_load(load)
+    test_repo.upsert_cwa_observation_batch(
+        canonical_observation_batch(weather.assign(location="Taipei"))
+    )
+    task = override_task_policies(monkeypatch, ANOMALY_TASK, min_training_hours=hours)
+    as_of = ANOMALY_ANCHOR + pd.Timedelta(minutes=30)
+    model = train_task(task, TaskRuntime(repository=test_repo), as_of=as_of).model
+    monkeypatch.setitem(model_store.models, ANOMALY_TASK, model)
+    monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
+    monkeypatch.setattr("shiro_mlops.service.api.request_clock", lambda: as_of)
+
+
+def test_anomaly_task_scores_the_latest_window_end_hours(serve_anomaly_task) -> None:
+    """horizon_hours 對觀測任務表示評分最近幾個時間窗結束小時，往回算到負載起點為止。"""
+    response = TestClient(app).post(f"/tasks/{ANOMALY_TASK}/predict", json={"horizon_hours": 3})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {key: body[key] for key in ("status", "task_id", "task_type", "subject", "mode")} == {
+        "status": "success",
+        "task_id": ANOMALY_TASK,
+        "task_type": "unsupervised_reconstruction",
+        "subject": "nationwide",
+        "mode": "normal",
+    }
+    items = body["predictions"]
+    assert [item["datetime"] for item in items] == [
+        "2026-09-20 21:00:00",
+        "2026-09-20 22:00:00",
+        "2026-09-20 23:00:00",
+    ]
+    assert all(
+        set(item) == {"datetime", "anomaly_score", "is_anomaly", "threshold"} for item in items
+    )
+    assert all(item["is_anomaly"] == (item["anomaly_score"] > item["threshold"]) for item in items)
+
+
+def test_anomaly_task_ready_reports_normal_mode_without_forecasts(serve_anomaly_task) -> None:
+    response = TestClient(app).get(f"/tasks/{ANOMALY_TASK}/ready")
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "normal"
+
+
+def test_anomaly_task_answers_503_on_a_stale_load_anchor(serve_anomaly_task, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "shiro_mlops.service.api.request_clock",
+        lambda: ANOMALY_ANCHOR + pd.Timedelta(hours=3, minutes=1),
+    )
+
+    response = TestClient(app).post(f"/tasks/{ANOMALY_TASK}/predict", json={"horizon_hours": 1})
+
+    assert response.status_code == 503
+    assert "Stale load anchor" in response.json()["detail"]
+
+
 def test_openapi_describes_high_load_alert_items() -> None:
     schemas = app.openapi()["components"]["schemas"]
     task_response = next(
@@ -436,3 +510,17 @@ def test_openapi_describes_high_load_alert_items() -> None:
     item = schemas[item_ref.rsplit("/", 1)[-1]]
 
     assert {"datetime", "is_high_load", "probability", "threshold_mw"} <= set(item["required"])
+
+
+def test_openapi_describes_anomaly_predictions_and_horizon_semantics() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    response_schema = schemas["UnsupervisedReconstructionTaskPredictionResponse"]
+    item_ref = response_schema["properties"]["predictions"]["items"]["$ref"]
+    item = schemas[item_ref.rsplit("/", 1)[-1]]
+
+    assert set(item["properties"]) == {"datetime", "anomaly_score", "is_anomaly", "threshold"}
+    task_horizon = schemas["TaskPredictionRequest"]["properties"]["horizon_hours"]["description"]
+    assert "observed-weather tasks" in task_horizon
+    assert schemas["PredictionRequest"]["properties"]["horizon_hours"]["description"] == (
+        "Forecast horizon in hours (1-168)"
+    )

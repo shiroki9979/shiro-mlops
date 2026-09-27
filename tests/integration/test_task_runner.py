@@ -6,15 +6,18 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import (
     MissingLoadHistoryError,
+    ObservedInputsIncompleteError,
     StaleLoadAnchorError,
     TaskNotReady,
     TaskRuntime,
+    WeatherUnavailableError,
     check_task_ready,
     fit_task,
     load_training_data,
@@ -273,3 +276,124 @@ def test_subject_without_history_raises_missing_load_history(
 
     with pytest.raises(MissingLoadHistoryError, match="No persisted north load history"):
         predict_task(north, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS)
+
+
+# --- Serving with observed weather (load_pattern_anomaly) ----------------------------------
+
+ANOMALY_TASK = "load_pattern_anomaly"
+
+
+@pytest.fixture
+def anomaly_task() -> TaskDefinition:
+    """The shipped anomaly task with a threshold the 21-day fixture meets."""
+    shipped = deployed_task(ANOMALY_TASK)
+    policies = shipped.policies.model_copy(update={"min_training_hours": HOURS})
+    return replace(shipped, policies=policies)
+
+
+@pytest.fixture
+def anomaly_model(anomaly_task: TaskDefinition, runtime: TaskRuntime) -> TaskModel:
+    return train_task(anomaly_task, runtime, as_of=FRESH_AS_OF).model
+
+
+def test_observed_prediction_scores_window_end_hours_up_to_the_anchor(
+    anomaly_task: TaskDefinition, runtime: TaskRuntime, anomaly_model: TaskModel
+) -> None:
+    """觀測路徑不讀預報、不降級：mode 固定 normal，天氣列逐一對應被評分的時間窗結束小時。"""
+    outcome = predict_task(
+        anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
+    )
+
+    expected_hours = [ANCHOR - pd.Timedelta(hours=h) for h in range(HORIZON_HOURS - 1, -1, -1)]
+    assert outcome.mode == "normal"
+    assert outcome.subject == "nationwide"
+    assert outcome.predictions["datetime"].tolist() == expected_hours
+    assert outcome.weather["datetime"].tolist() == expected_hours
+    assert list(outcome.weather.columns) == ["datetime", "temperature", "relative_humidity"]
+    assert len(outcome.weather_sources) == HORIZON_HOURS
+    assert outcome.weather_sources[-1]["temperature"] == {
+        "source": "station_observation",
+        "observed_at": ANCHOR.isoformat(),
+    }
+    assert check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF).mode == (
+        "normal"
+    )
+
+
+def test_observed_prediction_reads_history_for_the_window_and_the_longest_horizon(
+    anomaly_task: TaskDefinition,
+    runtime: TaskRuntime,
+    anomaly_model: TaskModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = runtime.repository
+    load_calls: list[dict] = []
+    weather_calls: list[dict] = []
+    fetch_load_range, fetch_weather_range = (
+        repository.fetch_load_range,
+        repository.fetch_weather_range,
+    )
+
+    def record_load(**kwargs):
+        load_calls.append(kwargs)
+        return fetch_load_range(**kwargs)
+
+    def record_weather(**kwargs):
+        weather_calls.append(kwargs)
+        return fetch_weather_range(**kwargs)
+
+    monkeypatch.setattr(repository, "fetch_load_range", record_load)
+    monkeypatch.setattr(repository, "fetch_weather_range", record_weather)
+
+    predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
+
+    window = (ANCHOR - pd.Timedelta(hours=24 + 168), ANCHOR)
+    assert [(call["start_time"], call["end_time"]) for call in load_calls] == [window]
+    assert [(call["start_time"], call["end_time"]) for call in weather_calls] == [window]
+
+
+def test_observed_prediction_still_refuses_a_stale_load_anchor(
+    anomaly_task: TaskDefinition, runtime: TaskRuntime, anomaly_model: TaskModel
+) -> None:
+    with pytest.raises(StaleLoadAnchorError, match="Stale load anchor"):
+        predict_task(anomaly_task, anomaly_model, runtime, as_of=STALE_AS_OF, horizon_hours=1)
+
+    readiness = check_task_ready(anomaly_task, anomaly_model, runtime, as_of=STALE_AS_OF)
+    assert not readiness.ready
+    assert "Stale load anchor" in readiness.reason
+
+
+def test_observed_prediction_without_observations_is_unavailable(
+    anomaly_task: TaskDefinition, runtime: TaskRuntime, anomaly_model: TaskModel
+) -> None:
+    elsewhere = replace(
+        anomaly_task,
+        weather=replace(anomaly_task.weather, reference_point=settings.cwa_locations["Kaohsiung"]),
+    )
+
+    with pytest.raises(WeatherUnavailableError, match="No observed weather"):
+        predict_task(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
+
+    assert not check_task_ready(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF).ready
+
+
+def test_observed_prediction_with_no_scorable_window_is_unavailable(
+    anomaly_task: TaskDefinition,
+    runtime: TaskRuntime,
+    anomaly_model: TaskModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """起點前三小時沒有觀測天氣時，結束於起點的時間窗無法評分，應回報不可用而非空結果。"""
+    repository = runtime.repository
+    fetch_weather_range = repository.fetch_weather_range
+    last_observation = ANCHOR - pd.Timedelta(hours=3)
+
+    def observations_until_three_hours_before_anchor(**kwargs):
+        return fetch_weather_range(**{**kwargs, "end_time": last_observation})
+
+    monkeypatch.setattr(
+        repository, "fetch_weather_range", observations_until_three_hours_before_anchor
+    )
+
+    with pytest.raises(ObservedInputsIncompleteError, match="No complete observed window"):
+        predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
