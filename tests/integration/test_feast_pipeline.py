@@ -21,14 +21,10 @@ from shiro_mlops.features.definitions import (
     location_entity,
 )
 from shiro_mlops.features.feast_export import build_feast_feature_frames
-from shiro_mlops.pipelines.assets import (
-    cwa_observation_feature_source,
-    drift_monitoring_report,
-    engineered_feature_set,
-    raw_cwa_station_observation,
-    taipower_load_feature_source,
-    trained_forecaster_model,
-)
+from shiro_mlops.pipelines.assets import feast_feature_export, raw_cwa_station_observation
+from shiro_mlops.pipelines.definitions import task_pipelines
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import TaskRuntime, load_training_data
 from shiro_mlops.tasks.types.base import TrainingData
@@ -45,6 +41,14 @@ def _training_data(
     override_task_policies(monkeypatch, min_training_hours=1)
     return load_training_data(
         deployed_task(DYNAMIC_HORIZON_FORECAST), TaskRuntime(repository=repository), as_of=as_of
+    )
+
+
+def _dynamic_horizon_forecast_assets():
+    return next(
+        pipeline.assets
+        for pipeline in task_pipelines
+        if pipeline.names.task_id == DYNAMIC_HORIZON_FORECAST
     )
 
 
@@ -346,20 +350,13 @@ def test_full_dagster_mlops_pipeline_materialization(
             "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
             return_value=observation_batch,
         ),
-        patch("shiro_mlops.pipelines.assets.mlflow") as mock_mlflow,
+        patch(
+            "shiro_mlops.pipelines.task_pipelines.log_training_run",
+            return_value=TrackedRun(run_id="test_run_123", model_version="1"),
+        ),
     ):
-        mock_run = MagicMock()
-        mock_run.info.run_id = "test_run_123"
-        mock_mlflow.start_run.return_value.__enter__.return_value = mock_run
-
         res = materialize(
-            assets=[
-                taipower_load_feature_source,
-                cwa_observation_feature_source,
-                engineered_feature_set,
-                trained_forecaster_model,
-                drift_monitoring_report,
-            ],
+            assets=[*_dynamic_horizon_forecast_assets(), feast_feature_export],
             resources={
                 "time_series_repo": repo,
                 "feast_io_manager": feast_io_manager,
@@ -374,10 +371,10 @@ def test_full_dagster_mlops_pipeline_materialization(
     assert (tmp_path / "taipower_features.parquet").exists()
     assert (tmp_path / "weather_features.parquet").exists()
 
-    report = res.output_for_node("drift_monitoring_report")
-    assert "status" in report
+    report = res.output_for_node(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).monitoring)
     assert report["status"] in {"HEALTHY", "WARNING"}
-    assert report["feature_count"] > 0
+    assert "max_mape=10.0" in report["health_reason"]
+    assert report["training_rows"] == len(taipower_raw_df)
     assert report["actual_load_hours"] == len(taipower_raw_df)
     assert report["latest_actual_load_time"] == "2026-08-21T23:00:00"
     assert report["latest_actual_load_mw"] == 29100.0

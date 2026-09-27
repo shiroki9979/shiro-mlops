@@ -8,13 +8,11 @@ from dagster import Backoff, RetryPolicy, build_schedule_context
 from shiro_mlops.core.config import Settings
 from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.schedules import (
-    daily_training_job,
     hourly_actual_load_job,
     hourly_actual_load_schedule,
-    hourly_drift_job,
     taipower_supply_demand_snapshot_job,
 )
-from tests.helpers import selected_asset_names
+from tests.helpers import selected_asset_names, task_jobs
 
 HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
 
@@ -31,10 +29,10 @@ def test_hourly_actual_load_job_selects_only_derivation_asset() -> None:
     assert selected_asset_names(hourly_actual_load_job) == {HOURLY_ACTUAL_LOAD_ASSET}
 
 
-def test_training_and_drift_jobs_do_not_run_the_snapshot_derivation() -> None:
-    """訓練與 drift 不得讀取快照表，因此也不得包含由快照推算的資產。"""
-    assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(daily_training_job)
-    assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(hourly_drift_job)
+def test_task_jobs_do_not_run_the_snapshot_derivation() -> None:
+    """任務的訓練與監控不得讀取快照表，因此也不得包含由快照推算的資產。"""
+    for job in task_jobs():
+        assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(job), job.name
 
 
 def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> None:

@@ -1,17 +1,19 @@
-"""Dagster schedule definitions for Taipower MLOps pipeline."""
+"""Dagster jobs and schedules for the shared ingestion assets.
+
+Per-task training and monitoring jobs and schedules come from the asset factory
+in ``pipelines/task_pipelines.py``.
+"""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from dagster import (
-    AssetKey,
     AssetSelection,
     Backoff,
     RetryPolicy,
     RunRequest,
     ScheduleDefinition,
     ScheduleEvaluationContext,
-    SkipReason,
     define_asset_job,
     schedule,
 )
@@ -19,9 +21,6 @@ from dagster_shared.check import CheckError
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.taipower_supply_demand import floor_to_ten_minutes
-from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -40,83 +39,10 @@ CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
 CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
 CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
 HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
-# 只讀 raw_taipower_load 資料表的負載來源；推算資產本身讀區域快照表，不得進入訓練或 drift。
-LOAD_FEATURE_SOURCE_ASSET = "taipower_load_feature_source"
-TRAINED_MODEL_ASSET = "trained_forecaster_model"
-DRIFT_REPORT_ASSET = "drift_monitoring_report"
-# 明列而非以 all() 扣除，新增的擷取資產才不會被默默帶進訓練並呼叫外部 API。
-TRAINING_ASSETS = (
-    LOAD_FEATURE_SOURCE_ASSET,
-    "cwa_observation_feature_source",
-    "engineered_features",
-    "taipower_features",
-    "weather_features",
-    TRAINED_MODEL_ASSET,
-    DRIFT_REPORT_ASSET,
-)
-# drift 每小時只需最新一列與有效時數，由報告資產以有界查詢讀取；
-# 重跑 LOAD_FEATURE_SOURCE_ASSET 會隨累積時數讀取整段歷史。
-DRIFT_ASSETS = (DRIFT_REPORT_ASSET,)
-NO_TRAINED_MODEL_REASON = (
-    f"No {TRAINED_MODEL_ASSET} materialization yet; "
-    "hourly drift waits for the first successful daily_training_job run."
-)
-
-# 1. Daily Training and Evaluation Job
-daily_training_job = define_asset_job(
-    name="daily_training_job",
-    selection=AssetSelection.assets(*TRAINING_ASSETS),
-    description="Read persisted load and weather, engineer features, train, and report drift",
-)
 
 
-@schedule(
-    job=daily_training_job,
-    cron_schedule="0 16 * * *",  # 16:00 UTC (00:00 Taipei time)
-    description="Daily retrain schedule at midnight Taipei time",
-    required_resource_keys={"time_series_repo"},
-)
-def daily_training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Train only after the minimum hourly-load accumulation; otherwise disclose the gap."""
-    readiness = _load_readiness(context)
-    if not readiness.ready:
-        return SkipReason(readiness.reason)
-    return RunRequest(run_key=_tick_run_key(context))
-
-
-# 2. Hourly Drift and Monitoring Job
-hourly_drift_job = define_asset_job(
-    name="hourly_drift_job",
-    selection=AssetSelection.assets(*DRIFT_ASSETS),
-    description="Compare the newest persisted actual load with the latest trained model",
-)
-
-
-@schedule(
-    job=hourly_drift_job,
-    cron_schedule="0 * * * *",  # Every hour
-    description="Hourly drift evaluation schedule",
-    required_resource_keys={"time_series_repo"},
-)
-def hourly_drift_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Evaluate drift once load is sufficient and a trained model artifact exists."""
-    readiness = _load_readiness(context)
-    if not readiness.ready:
-        return SkipReason(readiness.reason)
-    if context.instance.get_latest_materialization_event(AssetKey(TRAINED_MODEL_ASSET)) is None:
-        return SkipReason(NO_TRAINED_MODEL_REASON)
-    return RunRequest(run_key=_tick_run_key(context))
-
-
-def _load_readiness(context: ScheduleEvaluationContext) -> TrainingLoadReadiness:
-    return check_training_readiness(
-        deployed_task(DYNAMIC_HORIZON_FORECAST),
-        TaskRuntime(repository=context.resources.time_series_repo),
-    )
-
-
-def _tick_run_key(context: ScheduleEvaluationContext) -> str | None:
-    """同一 tick 重複評估時以 run_key 去重，避免重跑訓練或 drift。"""
+def tick_run_key(context: ScheduleEvaluationContext) -> str | None:
+    """同一 tick 重複評估時以 run_key 去重，避免重跑同一 slot 的 run。"""
     tick = _scheduled_tick(context)
     if tick is None:
         return None
@@ -165,7 +91,7 @@ cwa_forecast_schedule = ScheduleDefinition(
 )
 
 
-# 3. 台電即時快照擷取（全台／區域／機組）
+# 台電即時快照擷取（全台／區域／機組）
 def build_taipower_supply_demand_snapshot_job(
     op_retry_policy: RetryPolicy | None = TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY,
 ):
@@ -214,7 +140,7 @@ def taipower_supply_demand_snapshot_schedule(
     )
 
 
-# 4. 全台逐時實際負載推算（只讀區域快照資料表，不呼叫台電外部 API）
+# 全台逐時實際負載推算（只讀區域快照資料表，不呼叫台電外部 API）
 hourly_actual_load_job = define_asset_job(
     name="hourly_actual_load_job",
     selection=AssetSelection.assets(HOURLY_ACTUAL_LOAD_ASSET),
@@ -233,7 +159,7 @@ def hourly_actual_load_schedule(context: ScheduleEvaluationContext) -> RunReques
 
     無 tick 的手動評估不去重，也不帶 evaluated_at，由 run 以執行當下決定窗口。
     """
-    evaluated_at = _tick_run_key(context)
+    evaluated_at = tick_run_key(context)
     if evaluated_at is None:
         return RunRequest()
     return RunRequest(
