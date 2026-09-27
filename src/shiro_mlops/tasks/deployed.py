@@ -17,6 +17,10 @@ TASK_DEFINITIONS_DIR = Path(__file__).parent
 DYNAMIC_HORIZON_FORECAST = "dynamic_horizon_forecast"
 
 
+class UnknownTaskError(LookupError):
+    """No shipped task definition has the requested task id."""
+
+
 @cache
 def deployed_tasks() -> dict[str, TaskDefinition]:
     """All shipped task definitions keyed by task id, validated against the CWA catalog."""
@@ -27,5 +31,5 @@ def deployed_task(task_id: str) -> TaskDefinition:
     """One shipped task definition; unknown ids fail loudly."""
     tasks = deployed_tasks()
     if task_id not in tasks:
-        raise KeyError(f"Unknown task {task_id!r}; deployed tasks: {sorted(tasks)}")
+        raise UnknownTaskError(f"Unknown task {task_id!r}; deployed tasks: {sorted(tasks)}")
     return tasks[task_id]

@@ -25,7 +25,7 @@ from pydantic import (
     field_validator,
 )
 
-from shiro_mlops.data.cwa_client import CWALocation
+from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
 from shiro_mlops.tasks.types import UnknownTaskTypeError, get_task_type
 from shiro_mlops.tasks.types.base import TaskType
 
@@ -224,11 +224,7 @@ def _require_item_weather_fields(path: Path, task_type: TaskType, weather: _Weat
 def _resolve_reference_point(
     path: Path, weather: _WeatherSection, catalog: Mapping[str, CWALocation]
 ) -> CWALocation:
-    alias = weather.reference_points[0]
-    if alias not in catalog:
-        raise TaskDefinitionError(
-            path,
-            f"weather.reference_points: {alias!r} is not in the CWA ingestion catalog; "
-            f"known aliases: {sorted(catalog)}",
-        )
-    return catalog[alias]
+    try:
+        return resolve_cwa_location(catalog, weather.reference_points[0])
+    except ValueError as error:
+        raise TaskDefinitionError(path, f"weather.reference_points: {error}") from error

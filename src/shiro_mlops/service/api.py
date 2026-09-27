@@ -22,7 +22,12 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
 from shiro_mlops.tasks.definition import TaskDefinition
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
+from shiro_mlops.tasks.deployed import (
+    DYNAMIC_HORIZON_FORECAST,
+    UnknownTaskError,
+    deployed_task,
+    deployed_tasks,
+)
 from shiro_mlops.tasks.model_store import load_model
 from shiro_mlops.tasks.runner import (
     MODEL_NOT_LOADED_REASON,
@@ -258,12 +263,10 @@ def predict_for_task(task_id: str, request: TaskPredictionRequest) -> TaskPredic
 
 
 def _deployed_task_or_404(task_id: str) -> TaskDefinition:
-    tasks = deployed_tasks()
-    if task_id not in tasks:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown task {task_id!r}; deployed tasks: {sorted(tasks)}"
-        )
-    return tasks[task_id]
+    try:
+        return deployed_task(task_id)
+    except UnknownTaskError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 def _readiness(task: TaskDefinition) -> ReadyResponse:

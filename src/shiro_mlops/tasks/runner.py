@@ -19,9 +19,9 @@ from shiro_mlops.core.constants import (
     DATETIME_COL,
     LOAD_MW_COL,
     MAX_HORIZON_HOURS,
-    STORAGE_TIME_COL,
     SUBJECT_COL,
 )
+from shiro_mlops.core.datetime_utils import with_datetime_column
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE, is_stale_load_anchor
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import (
@@ -195,7 +195,7 @@ def load_observed_weather(
     observed = runtime.repository.fetch_weather_range(
         start_time=start, end_time=end, reference_point=task.weather.reference_point.alias
     )
-    observed = _with_datetime_column(observed)
+    observed = with_datetime_column(observed)
     return observed[[DATETIME_COL, *task.weather.fields]].reset_index(drop=True)
 
 
@@ -214,16 +214,7 @@ def monitor_task(
     readiness = check_training_readiness(task, runtime)
     if not readiness.ready:
         raise TaskNotReady(readiness)
-    latest = _with_datetime_column(
-        runtime.repository.fetch_latest_load(
-            subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE, at_or_before=as_of
-        )
-    )
-    if latest.empty:
-        raise MissingLoadHistoryError(
-            f"No persisted {task.subject} target at or before {as_of.isoformat()}."
-        )
-    newest = latest.sort_values(DATETIME_COL).iloc[-1]
+    newest = _latest_target_row(task, runtime.repository, as_of)
     return MonitoringReport(
         task_id=task.task_id,
         health=get_task_type(task.task_type).assess_health(task.health, metrics),
@@ -320,14 +311,7 @@ def _fresh_load_anchor(
     task: TaskDefinition, repository: TimeSeriesRepository, as_of: datetime
 ) -> pd.Timestamp:
     """Refuse rather than degrade: actual load has no substitute as the recursion origin."""
-    latest = _with_datetime_column(
-        repository.fetch_latest_load(
-            subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE, at_or_before=as_of
-        )
-    )
-    if latest.empty:
-        raise MissingLoadHistoryError(f"No persisted {task.subject} load history is available.")
-    anchor = pd.Timestamp(latest[DATETIME_COL].max())
+    anchor = pd.Timestamp(_latest_target_row(task, repository, as_of)[DATETIME_COL])
     max_lag_hours = task.policies.stale_anchor_max_lag_hours
     if is_stale_load_anchor(anchor, pd.Timestamp(as_of), max_lag_hours):
         raise StaleLoadAnchorError(
@@ -436,6 +420,23 @@ def _observation_source(
 # --- Shared I/O ----------------------------------------------------------------------------
 
 
+def _latest_target_row(
+    task: TaskDefinition, repository: TimeSeriesRepository, as_of: datetime
+) -> pd.Series:
+    """The newest derived target row known at ``as_of``; its absence has no substitute."""
+    latest = with_datetime_column(
+        repository.fetch_latest_load(
+            subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE, at_or_before=as_of
+        )
+    )
+    if latest.empty:
+        raise MissingLoadHistoryError(
+            f"No persisted {task.subject} load history at or before "
+            f"{pd.Timestamp(as_of).isoformat()}."
+        )
+    return latest.sort_values(DATETIME_COL).iloc[-1]
+
+
 def _fetch_target(
     task: TaskDefinition,
     repository: TimeSeriesRepository,
@@ -451,17 +452,10 @@ def _fetch_target(
     load = repository.fetch_load_range(
         start_time=start, end_time=end, subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE
     )
-    load = _with_datetime_column(load)
+    load = with_datetime_column(load)
     if SUBJECT_COL not in load.columns:
         load = load.assign(**{SUBJECT_COL: task.subject})
     return load[TARGET_COLUMNS].reset_index(drop=True)
-
-
-def _with_datetime_column(frame: pd.DataFrame) -> pd.DataFrame:
-    """Persisted tables name their instant column ``time``; task frames use ``datetime``."""
-    if DATETIME_COL not in frame.columns and STORAGE_TIME_COL in frame.columns:
-        return frame.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
-    return frame
 
 
 def _validation_start(times: pd.Series, validation_fraction: float) -> pd.Timestamp:
