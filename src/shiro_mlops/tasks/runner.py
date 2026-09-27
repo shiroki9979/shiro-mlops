@@ -9,7 +9,7 @@ Taiwan-local naive time.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -236,7 +236,7 @@ def check_task_ready(
         return Readiness(ready=False, reason=MODEL_NOT_LOADED_REASON)
     try:
         _, weather = _prepare_prediction(
-            task, runtime, _requirements(task), as_of=as_of, horizon_hours=MAX_HORIZON_HOURS
+            _ServingRequest.of(task, runtime, as_of, MAX_HORIZON_HOURS)
         )
     except TaskUnavailableError as error:
         return Readiness(ready=False, reason=str(error))
@@ -261,13 +261,10 @@ def predict_task(
     ``ObservedInputsIncompleteError`` (all ``TaskUnavailableError``) instead of
     degrading where no substitute exists.
     """
-    requirements = _requirements(task)
-    data, weather = _prepare_prediction(
-        task, runtime, requirements, as_of=as_of, horizon_hours=horizon_hours
-    )
+    request = _ServingRequest.of(task, runtime, as_of, horizon_hours)
+    data, weather = _prepare_prediction(request)
     predictions = model.predict(data)
-    if requirements.weather is WeatherInput.OBSERVED:
-        weather = _observed_weather_at(predictions, weather)
+    weather = request.weather_path.align(predictions, weather)
     return PredictionOutcome(
         subject=task.subject,
         mode=weather.mode,
@@ -277,32 +274,53 @@ def predict_task(
     )
 
 
-def _requirements(task: TaskDefinition) -> InputRequirements:
-    return get_task_type(task.task_type).requirements(task.params)
+@dataclass(frozen=True)
+class _ServingRequest:
+    """One point-in-time prediction: the task, its store, the request time, and the horizon."""
+
+    task: TaskDefinition
+    runtime: TaskRuntime
+    as_of: datetime
+    horizon_hours: int | None
+    requirements: InputRequirements
+
+    @classmethod
+    def of(
+        cls, task: TaskDefinition, runtime: TaskRuntime, as_of: datetime, horizon_hours: int | None
+    ) -> _ServingRequest:
+        requirements = get_task_type(task.task_type).requirements(task.params)
+        return cls(task, runtime, as_of, horizon_hours, requirements)
+
+    @property
+    def repository(self) -> TimeSeriesRepository:
+        return self.runtime.repository
+
+    @property
+    def weather_path(self) -> _WeatherPath:
+        return _WEATHER_PATHS[self.requirements.weather]
 
 
-def _prepare_prediction(
-    task: TaskDefinition,
-    runtime: TaskRuntime,
-    requirements: InputRequirements,
-    *,
-    as_of: datetime,
-    horizon_hours: int | None,
-) -> tuple[PredictionData, WeatherResolution]:
-    anchor = _fresh_load_anchor(task, runtime.repository, as_of)
+@dataclass(frozen=True)
+class _WeatherPath:
+    """How one weather input is read before predicting and matched to prediction rows after."""
+
+    read: Callable[[_ServingRequest, pd.Timestamp, pd.Timestamp], WeatherResolution]
+    align: Callable[[pd.DataFrame, WeatherResolution], WeatherResolution]
+
+
+def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeatherResolution]:
+    task, requirements = request.task, request.requirements
+    anchor = _fresh_load_anchor(task, request.repository, request.as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
-    history = _fetch_target(task, runtime.repository, start=history_start, end=anchor)
+    history = _fetch_target(task, request.repository, start=history_start, end=anchor)
     if requirements.history_coverage is not None:
         _require_history_coverage(task, history, anchor, requirements.history_coverage)
-    if requirements.weather is WeatherInput.OBSERVED:
-        weather = _observed_weather_until(task, runtime, start=history_start, anchor=anchor)
-    else:
-        weather = _resolve_future_weather(task, runtime, anchor, as_of, horizon_hours)
+    weather = request.weather_path.read(request, history_start, anchor)
     data = PredictionData(
         anchor=anchor,
         load_history=history,
         weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],
-        horizon_hours=horizon_hours,
+        horizon_hours=request.horizon_hours,
     )
     return data, weather
 
@@ -336,21 +354,18 @@ def _require_history_coverage(
 
 
 def _resolve_future_weather(
-    task: TaskDefinition,
-    runtime: TaskRuntime,
-    anchor: pd.Timestamp,
-    as_of: datetime,
-    horizon_hours: int | None,
+    request: _ServingRequest, _history_start: pd.Timestamp, anchor: pd.Timestamp
 ) -> WeatherResolution:
-    if horizon_hours is None:
+    """Forecasts (or degraded fallbacks) for the hours after the anchor."""
+    if request.horizon_hours is None:
         raise ValueError("Forecast-weather prediction needs an explicit horizon_hours")
     weather = resolve_weather(
-        runtime.repository,
-        reference_point=task.weather.reference_point,
+        request.repository,
+        reference_point=request.task.weather.reference_point,
         start_time=anchor + timedelta(hours=1),
-        horizon_hours=horizon_hours,
-        as_of=as_of,
-        fields=task.weather.fields,
+        horizon_hours=request.horizon_hours,
+        as_of=request.as_of,
+        fields=request.task.weather.fields,
     )
     if weather.mode == "unavailable" or weather.dataframe.empty:
         raise WeatherUnavailableError(weather.reason or "Weather coverage is unavailable.")
@@ -358,14 +373,15 @@ def _resolve_future_weather(
 
 
 def _observed_weather_until(
-    task: TaskDefinition, runtime: TaskRuntime, *, start: pd.Timestamp, anchor: pd.Timestamp
+    request: _ServingRequest, start: pd.Timestamp, anchor: pd.Timestamp
 ) -> WeatherResolution:
     """Station observations over the load history; observed tasks never degrade (mode normal).
 
     Observations are already known at the anchor, so no forecast release or
     fallback applies; each row's source records when it was observed.
     """
-    observed = load_observed_weather(task, runtime, start=start, end=anchor)
+    task = request.task
+    observed = load_observed_weather(task, request.runtime, start=start, end=anchor)
     observed = observed.dropna(subset=list(task.weather.fields), how="all")
     if observed.empty:
         raise WeatherUnavailableError(
@@ -408,6 +424,21 @@ def _observed_weather_at(
         sources=tuple(observed.sources[row] for row in rows),
         mode=observed.mode,
     )
+
+
+def _forecast_weather_as_delivered(
+    _predictions: pd.DataFrame, weather: WeatherResolution
+) -> WeatherResolution:
+    """Forecast-weather task types already return one row per delivered weather hour."""
+    return weather
+
+
+_WEATHER_PATHS = {
+    WeatherInput.FORECAST: _WeatherPath(
+        read=_resolve_future_weather, align=_forecast_weather_as_delivered
+    ),
+    WeatherInput.OBSERVED: _WeatherPath(read=_observed_weather_until, align=_observed_weather_at),
+}
 
 
 def _observation_source(
