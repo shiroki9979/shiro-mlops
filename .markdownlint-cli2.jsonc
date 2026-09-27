@@ -1,0 +1,16 @@
+{
+  "config": {
+    "default": true,
+    "MD013": false,
+    "MD033": false
+  },
+  "gitignore": true,
+  "ignores": [
+    "**/.venv/**",
+    "**/node_modules/**",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache/**",
+    "data/**"
+  ]
+}
