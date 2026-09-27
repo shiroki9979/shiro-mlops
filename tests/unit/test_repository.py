@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -359,6 +360,20 @@ def test_fetch_weather_range_filters_and_sorting(repository: TimeSeriesRepositor
     )
     assert len(filtered_df) == 1
     assert filtered_df.iloc[0]["temperature"] == pytest.approx(26.9)
+
+
+def test_fetch_weather_range_propagates_database_errors(
+    repository: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """資料庫中斷不得偽裝成「沒有觀測天氣」，否則呼叫端會誤判為資料缺口。"""
+
+    def unavailable(**_: object) -> pd.DataFrame:
+        raise OperationalError("SELECT", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(repository, "fetch_cwa_station_observations", unavailable)
+
+    with pytest.raises(OperationalError):
+        repository.fetch_weather_range(reference_point="Taipei")
 
 
 def test_fetch_empty_results_schema(repository: TimeSeriesRepository):

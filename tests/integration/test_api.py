@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.weather_resolution import WeatherResolution
@@ -502,6 +503,20 @@ def test_anomaly_task_ready_reports_normal_mode_without_forecasts(serve_anomaly_
 
     assert response.status_code == 200
     assert response.json()["mode"] == "normal"
+
+
+def test_anomaly_task_reports_a_database_outage_instead_of_missing_weather(
+    serve_anomaly_task, test_repo, monkeypatch
+) -> None:
+    def unavailable(**_: object) -> pd.DataFrame:
+        raise OperationalError("SELECT", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(test_repo, "fetch_cwa_station_observations", unavailable)
+
+    response = TestClient(app).post(f"/tasks/{ANOMALY_TASK}/predict", json={"horizon_hours": 1})
+
+    assert response.status_code == 503
+    assert "Persistence unavailable" in response.json()["detail"]
 
 
 def test_anomaly_task_answers_503_on_a_stale_load_anchor(serve_anomaly_task, monkeypatch) -> None:
