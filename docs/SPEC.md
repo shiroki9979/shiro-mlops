@@ -566,7 +566,7 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 
 ### 5.4 模型保存（`tasks/model_store.py`）
 
-- `save_model(root, task_id, model) -> Path`：模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝。每任務檔案鎖保護交換與讀取；交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
+- `save_model(root, task_id, model) -> Path`：模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗，僅程序於兩次 rename 之間中止時任務會暫時沒有模型。每任務檔案鎖保護交換與讀取；交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
 - `load_model(root, task) -> TaskModel | None`：在同一把鎖下讀取 `root/<task_id>`，替換期間只會載入完整的前一版或新模型；目錄不存在時回傳 `None`（任務尚未訓練）；既有 `model.joblib` 不載入。
 - 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）；`direct_classification` 同為 `model.txt`（二元分類 Booster 文字格式）與 `metadata.json`（格式版本、任務類型、完整 `[params]`、`max_lead_hours`、特徵名稱、氣象欄位）；`unsupervised_reconstruction` 為 `model.npz`（`coef_{i}`、`intercept_{i}` 各層權重與偏差，`scaler_mean`、`scaler_scale` 標準化參數；以 `allow_pickle=False` 讀取）與 `metadata.json`（格式版本、任務類型、激活函數、層數、`window_hours`、氣象欄位、特徵名稱、`threshold`），推論以 numpy 前向計算，不重建 sklearn 物件。
 - `src/` 不得 import `pickle` 或 `joblib`，由測試強制。

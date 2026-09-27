@@ -23,6 +23,8 @@ from shiro_mlops.tasks.types.base import TaskModel
 
 _AT_FDCWD = -100
 _RENAME_EXCHANGE = 2
+# 核心沒有 renameat2（如 macOS）或檔案系統不支援 RENAME_EXCHANGE 時改以 rename 模擬交換。
+_EXCHANGE_UNSUPPORTED = frozenset({errno.ENOSYS, errno.EINVAL})
 
 
 def model_directory(root: Path, task_id: str) -> Path:
@@ -59,10 +61,36 @@ def _exchange_directories(staging: Path, target: Path) -> None:
         raise OSError(error, os.strerror(error), f"{staging} <-> {target}")
 
 
-def save_model(root: Path, task_id: str, model: TaskModel) -> Path:
-    """Write the model into staging, then atomically install it on Linux.
+def _swap_by_renames(staging: Path, target: Path) -> None:
+    """Emulate the exchange with renames; readers wait on the lock, so only a crash sees the gap."""
+    previous = staging.with_name(f"{staging.name}.previous")
+    target.rename(previous)
+    try:
+        staging.rename(target)
+    except OSError:
+        previous.rename(target)
+        raise
+    previous.rename(staging)
 
-    Readers never observe a half-written or missing model. A per-task lock keeps
+
+def _install(staging: Path, target: Path) -> None:
+    """Leave the new model at ``target`` and any previous model at ``staging``."""
+    if not target.exists():
+        staging.rename(target)
+        return
+    try:
+        _exchange_directories(staging, target)
+    except OSError as error:
+        if error.errno not in _EXCHANGE_UNSUPPORTED:
+            raise
+        _swap_by_renames(staging, target)
+
+
+def save_model(root: Path, task_id: str, model: TaskModel) -> Path:
+    """Write the model into staging, then install it under the task's exclusive lock.
+
+    Readers never observe a half-written or missing model. On Linux the swap is
+    one atomic exchange; elsewhere it falls back to renames. A per-task lock keeps
     readers on one version while the old directory is removed after the swap.
     """
     root.mkdir(parents=True, exist_ok=True)
@@ -72,10 +100,7 @@ def save_model(root: Path, task_id: str, model: TaskModel) -> Path:
     try:
         model.save(staging)
         with _model_lock(root, task_id, exclusive=True):
-            if target.exists():
-                _exchange_directories(staging, target)
-            else:
-                staging.rename(target)
+            _install(staging, target)
     finally:
         if staging.exists():
             shutil.rmtree(staging)
