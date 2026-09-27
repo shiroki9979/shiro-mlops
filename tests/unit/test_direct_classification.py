@@ -37,6 +37,7 @@ PARAMS = DirectClassificationParams.model_validate(
     }
 )
 task_type = get_task_type("direct_classification")
+HEALTH = {"min_precision": 0.6, "min_recall": 0.5, "min_f1": 0.55}
 
 
 def _training_data(
@@ -218,12 +219,15 @@ def test_loading_another_task_types_model_fails(tmp_path: Path) -> None:
         task_type.load(tmp_path / "m")
 
 
-def test_validation_split_after_all_rows_leaves_metrics_empty() -> None:
+def test_validation_split_after_all_rows_reports_no_metrics_so_health_warns() -> None:
+    """沒有驗證列就沒有量測過的指標；回報 0.0 會掩蓋未經驗證的模型。"""
     after_last_row = pd.Timestamp(LAST_HOUR) + pd.Timedelta(hours=1)
+    thresholds = task_type.health_model.model_validate(HEALTH)
 
     result = task_type.train(PARAMS, _training_data(validation_start=after_last_row))
 
-    assert result.metrics == {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    assert result.metrics == {}
+    assert task_type.assess_health(thresholds, result.metrics).status is HealthStatus.WARNING
 
 
 def test_validation_split_before_all_rows_refuses_to_train() -> None:
@@ -238,9 +242,6 @@ def test_labels_of_a_single_class_refuse_to_train() -> None:
 
     with pytest.raises(ValueError, match="single class"):
         task_type.train(PARAMS, _training_data(load=flat.assign(load_mw=30000.0)))
-
-
-HEALTH = {"min_precision": 0.6, "min_recall": 0.5, "min_f1": 0.55}
 
 
 @pytest.mark.parametrize(

@@ -31,6 +31,7 @@ from shiro_mlops.tasks.types.base import (
     Trained,
     TrainingData,
     WeatherInput,
+    split_at_validation,
 )
 from shiro_mlops.tasks.types.recursive_regression import LightGBMParams
 
@@ -53,8 +54,6 @@ MIN_THRESHOLD_WINDOW_COVERAGE = 0.9
 # 以機率 0.5 判定是否預警，與 LightGBM 二元分類的預設決策界線一致。
 ALERT_PROBABILITY = 0.5
 METRIC_NAMES = ("precision", "recall", "f1")
-# 驗證期為空（資料過短）時沒有可比較的預測，以零值揭露而非中斷訓練。
-EMPTY_VALIDATION_METRICS = dict.fromkeys(METRIC_NAMES, 0.0)
 NON_FEATURE_COLUMNS = frozenset({ANCHOR_COL, DATETIME_COL, LOAD_MW_COL, LABEL_COL})
 FIXED_LIGHTGBM_PARAMS = {
     "objective": "binary",
@@ -137,16 +136,12 @@ class DirectClassification:
 
     def train(self, params: DirectClassificationParams, data: TrainingData) -> Trained:
         """Label every (anchor, lead) pair, fit on targets before the split, evaluate after it."""
-        rows = training_rows(params, data)
-        is_validation = rows[DATETIME_COL] >= data.validation_start
-        fitting_rows = rows.loc[~is_validation]
-        if fitting_rows.empty:
-            raise ValueError(
-                f"No training rows before validation start {data.validation_start.isoformat()}"
-            )
+        fitting_rows, validation_rows = split_at_validation(
+            training_rows(params, data), data.validation_start
+        )
         weather_columns = [column for column in data.weather.columns if column != DATETIME_COL]
         model = DirectClassificationModel.fit(params, fitting_rows, weather_columns)
-        return Trained(model=model, metrics=model.evaluate(rows.loc[is_validation]))
+        return Trained(model=model, metrics=model.evaluate(validation_rows))
 
     def load(self, directory: Path) -> DirectClassificationModel:
         return DirectClassificationModel.load(directory)
@@ -210,9 +205,9 @@ class DirectClassificationModel:
         )
 
     def evaluate(self, validation_rows: pd.DataFrame) -> dict[str, float]:
-        """Precision, recall and F1 of the alert verdict on out-of-time rows."""
+        """Precision, recall and F1 of the alert verdict on out-of-time rows; none without rows."""
         if validation_rows.empty:
-            return dict(EMPTY_VALIDATION_METRICS)
+            return {}
         actual = validation_rows[LABEL_COL].astype(int)
         predicted = self._probabilities(validation_rows) >= ALERT_PROBABILITY
         return {

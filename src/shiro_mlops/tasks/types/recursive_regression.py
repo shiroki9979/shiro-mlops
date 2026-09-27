@@ -32,6 +32,7 @@ from shiro_mlops.tasks.types.base import (
     Trained,
     TrainingData,
     WeatherInput,
+    split_at_validation,
 )
 
 TASK_TYPE_NAME = "recursive_regression"
@@ -41,8 +42,6 @@ METADATA_FILE = "metadata.json"
 FORMAT_VERSION = 1
 HEALTH_METRIC = "mape"
 NON_FEATURE_COLUMNS = frozenset({DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL})
-# 驗證期為空（資料過短）時沒有可比較的預測，以零值揭露而非中斷訓練。
-EMPTY_VALIDATION_METRICS = {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
 FIXED_LIGHTGBM_PARAMS = {
     "objective": "regression",
     "metric": "rmse",
@@ -111,15 +110,10 @@ class RecursiveRegression:
     def train(self, params: RecursiveRegressionParams, data: TrainingData) -> Trained:
         """Engineer features, fit on rows before the split, and evaluate one step ahead after it."""
         features = _training_features(params, data)
-        is_validation = features[DATETIME_COL] >= data.validation_start
-        training_rows = features.loc[~is_validation]
-        if training_rows.empty:
-            raise ValueError(
-                f"No training rows before validation start {data.validation_start.isoformat()}"
-            )
+        training_rows, validation_rows = split_at_validation(features, data.validation_start)
         weather_columns = [column for column in data.weather.columns if column != DATETIME_COL]
         model = RecursiveRegressionModel.fit(params, training_rows, weather_columns)
-        return Trained(model=model, metrics=model.evaluate(features.loc[is_validation]))
+        return Trained(model=model, metrics=model.evaluate(validation_rows))
 
     def load(self, directory: Path) -> RecursiveRegressionModel:
         return RecursiveRegressionModel.load(directory)
@@ -180,9 +174,9 @@ class RecursiveRegressionModel:
         )
 
     def evaluate(self, validation_rows: pd.DataFrame) -> dict[str, float]:
-        """One-step-ahead metrics on validation rows whose lags hold actual load."""
+        """One-step-ahead metrics on validation rows whose lags hold actual load; none without rows."""
         if validation_rows.empty:
-            return dict(EMPTY_VALIDATION_METRICS)
+            return {}
         predicted = self.booster.predict(validation_rows[self.feature_names])
         return evaluate_forecast(validation_rows[LOAD_MW_COL].to_numpy(), predicted)
 

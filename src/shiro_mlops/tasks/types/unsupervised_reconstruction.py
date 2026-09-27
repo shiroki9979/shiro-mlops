@@ -142,7 +142,7 @@ class UnsupervisedReconstruction:
         is_validation = windows.end_times >= data.validation_start
         training = windows.features[~is_validation]
         calibration, holdout = _alternate_days(windows.select(is_validation))
-        _require_enough_windows(training, calibration, holdout, data.validation_start)
+        _require_enough_windows(training, calibration, data.validation_start)
         model = UnsupervisedReconstructionModel.fit(params, training, calibration, weather_columns)
         metrics = {
             "calibration_windows": float(len(calibration)),
@@ -285,7 +285,12 @@ class UnsupervisedReconstructionModel:
         return _load_reconstruction_errors(self.network, self.scaler, features, self.window_hours)
 
     def evaluate(self, clean: np.ndarray) -> dict[str, float]:
-        """False positive rate on clean windows and recall on each injected anomaly kind."""
+        """False positive rate on clean windows and recall on each injected anomaly kind.
+
+        Without clean windows only the threshold is reported, so health warns.
+        """
+        if len(clean) == 0:
+            return {THRESHOLD_COL: self.threshold}
         metrics = {
             THRESHOLD_COL: self.threshold,
             FALSE_POSITIVE_RATE_METRIC: self._flagged_fraction(clean),
@@ -487,21 +492,17 @@ def _alternate_days(validation: _Windows) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _require_enough_windows(
-    training: np.ndarray,
-    calibration: np.ndarray,
-    holdout: np.ndarray,
-    validation_start: pd.Timestamp,
+    training: np.ndarray, calibration: np.ndarray, validation_start: pd.Timestamp
 ) -> None:
     if len(training) == 0:
         raise ValueError(
             f"No complete training windows end before validation start "
             f"{validation_start.isoformat()}"
         )
-    if len(calibration) == 0 or len(holdout) == 0:
+    if len(calibration) == 0:
         raise ValueError(
-            f"Complete validation windows from {validation_start.isoformat()} must end on at "
-            "least two validation days: alternate days set the anomaly threshold and "
-            "measure it"
+            f"No complete validation windows end at or after {validation_start.isoformat()} "
+            "to set the anomaly threshold"
         )
 
 

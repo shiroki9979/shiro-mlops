@@ -16,6 +16,8 @@ from typing import ClassVar, Protocol, TypeVar
 import pandas as pd
 from pydantic import BaseModel
 
+from shiro_mlops.core.constants import DATETIME_COL
+
 P = TypeVar("P", bound=BaseModel)
 
 
@@ -66,6 +68,21 @@ class PredictionData:
     load_history: pd.DataFrame
     weather: pd.DataFrame
     horizon_hours: int | None
+
+
+def split_at_validation(
+    rows: pd.DataFrame, validation_start: pd.Timestamp
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Rows to fit and rows to validate, by target ``datetime``; no rows to fit is refused.
+
+    Validation may be empty: task types then report no metrics rather than
+    placeholders, so ``assess_health`` warns about the unvalidated model.
+    """
+    is_validation = rows[DATETIME_COL] >= validation_start
+    fitting, validation = rows.loc[~is_validation], rows.loc[is_validation]
+    if fitting.empty:
+        raise ValueError(f"No training rows before validation start {validation_start.isoformat()}")
+    return fitting, validation
 
 
 class TaskModel(Protocol):
