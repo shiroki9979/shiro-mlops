@@ -9,9 +9,7 @@ from shiro_mlops.service.data_explorer.cursor import decode_cursor_filters
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.pagination import apply_cursor, sort_order
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql_utc
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
@@ -94,17 +92,15 @@ def _pin_forecast_version(
     return query_params
 
 
-def _forecast_filters(query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-    start_time, end_time = query.window.as_utc()
-    clauses = ["valid_from >= :start_time", "valid_from <= :end_time"]
-    params: dict[str, Any] = {"start_time": start_time, "end_time": end_time}
+def _forecast_filters(db: ExplorerDb, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+    clauses, params = db.time_window("valid_from", query.window)
     for name in ("dataset_id", "geocode"):
         if query.filters.get(name):
             clauses.append(f"{name} = :{name}")
             params[name] = query.filters[name]
     for name in ("issued_at", "source_updated_at"):
         if query.filters.get(name):
-            clauses.append(f"{name} = :{name}")
+            clauses.append(db.time_equals(name, name))
             try:
                 params[name] = to_sql_utc(query.filters[name])
             except (TypeError, ValueError, OverflowError) as exc:
@@ -136,7 +132,6 @@ class ObservationReader(DatasetReader):
     """List persisted CWA station observations newest first."""
 
     dataset = "cwa_observations"
-    raw_pagination = True
 
     def fetch_rows(
         self,
@@ -145,21 +140,11 @@ class ObservationReader(DatasetReader):
         limit: int,
     ) -> list[dict[str, Any]]:
         station_id = query.filters.get("station_id")
-        clauses = ["observed_at >= :start_time", "observed_at <= :end_time"]
-        sql_params: dict[str, Any] = {
-            "start_time": query.window.as_utc()[0],
-            "end_time": query.window.as_utc()[1],
-        }
+        clauses, sql_params = self.db.time_window("observed_at", query.window)
         if station_id:
             clauses.append("station_id = :station_id")
             sql_params["station_id"] = station_id
-        sort = DATASET_SPECS[self.dataset]["sort"]
-        where, cursor_params = apply_cursor(
-            clauses,
-            cursor,
-            sort,
-            dialect_name=getattr(getattr(self.db.engine, "dialect", None), "name", None),
-        )
+        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
         sql_params.update(cursor_params)
         sql = f"""
             SELECT observed_at, station_id, station_name, town_code, temperature_c,
@@ -167,7 +152,7 @@ class ObservationReader(DatasetReader):
                    wind_speed_m_s, wind_direction_deg, created_at
             FROM raw_cwa_station_observation
             WHERE {where}
-            ORDER BY {sort_order(sort)}
+            ORDER BY {order}
             LIMIT :limit
         """
         sql_params["limit"] = limit
@@ -200,7 +185,6 @@ class ForecastReader(DatasetReader):
     """List persisted CWA township forecasts newest first."""
 
     dataset = "cwa_forecasts"
-    raw_pagination = True
 
     def build_query(self, params: dict[str, Any]) -> ExplorerQuery:
         query_params = _pin_forecast_version(self.db, self.dataset, params)
@@ -212,11 +196,8 @@ class ForecastReader(DatasetReader):
         cursor: dict[str, Any] | None,
         limit: int,
     ) -> list[dict[str, Any]]:
-        clauses, sql_params = _forecast_filters(query)
-        sort = DATASET_SPECS[self.dataset]["sort"]
-        where, cursor_params = apply_cursor(
-            clauses, cursor, sort, dialect_name=self.db.engine.dialect.name
-        )
+        clauses, sql_params = _forecast_filters(self.db, query)
+        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
         sql_params.update(cursor_params)
         sql_params["limit"] = limit
         return self.db.fetch(
@@ -227,7 +208,7 @@ class ForecastReader(DatasetReader):
                    wind_direction, created_at
             FROM raw_cwa_township_forecast
             WHERE {where}
-            ORDER BY {sort_order(sort)}
+            ORDER BY {order}
             LIMIT :limit
             """,
             sql_params,
@@ -243,7 +224,6 @@ class ObservationAuditReader(DatasetReader):
     """List CWA observation batch audit headers without raw payloads."""
 
     dataset = "cwa_observation_audits"
-    raw_pagination = True
 
     def fetch_rows(
         self,
@@ -252,25 +232,20 @@ class ObservationAuditReader(DatasetReader):
         limit: int,
     ) -> list[dict[str, Any]]:
         status = _audit_status(query.filters.get("status"))
-        clauses = ["fetched_at >= :start_time", "fetched_at <= :end_time"]
-        sql_params: dict[str, Any] = {
-            "start_time": query.window.as_utc()[0],
-            "end_time": query.window.as_utc()[1],
-        }
+        clauses, sql_params = self.db.time_window("fetched_at", query.window)
         if status:
             clauses.append("status = :status")
             sql_params["status"] = status
         if query.filters.get("missing_station_id"):
             clauses.append("CAST(missing_station_ids AS TEXT) LIKE :missing_station")
             sql_params["missing_station"] = f'%"{query.filters["missing_station_id"]}"%'
-        sort = DATASET_SPECS[self.dataset]["sort"]
-        where, cursor_params = apply_cursor(clauses, cursor, sort)
+        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
         sql_params.update(cursor_params)
         sql = f"""
             SELECT fetched_at, status, missing_station_ids, created_at
             FROM raw_cwa_observation_batch
             WHERE {where}
-            ORDER BY {sort_order(sort)}
+            ORDER BY {order}
             LIMIT :limit
         """
         sql_params["limit"] = limit
@@ -298,7 +273,6 @@ class ForecastAuditReader(DatasetReader):
     """List CWA forecast release audit headers without raw payloads."""
 
     dataset = "cwa_forecast_audits"
-    raw_pagination = True
 
     def fetch_rows(
         self,
@@ -307,11 +281,7 @@ class ForecastAuditReader(DatasetReader):
         limit: int,
     ) -> list[dict[str, Any]]:
         status = _audit_status(query.filters.get("status"))
-        clauses = ["issued_at >= :start_time", "issued_at <= :end_time"]
-        sql_params: dict[str, Any] = {
-            "start_time": query.window.as_utc()[0],
-            "end_time": query.window.as_utc()[1],
-        }
+        clauses, sql_params = self.db.time_window("issued_at", query.window)
         if query.filters.get("dataset_id"):
             clauses.append("dataset_id = :dataset_id")
             sql_params["dataset_id"] = query.filters["dataset_id"]
@@ -321,10 +291,7 @@ class ForecastAuditReader(DatasetReader):
         if query.filters.get("missing_geocode"):
             clauses.append("CAST(missing_geocodes AS TEXT) LIKE :missing_geocode")
             sql_params["missing_geocode"] = f'%"{query.filters["missing_geocode"]}"%'
-        sort = DATASET_SPECS[self.dataset]["sort"]
-        where, cursor_params = apply_cursor(
-            clauses, cursor, sort, dialect_name=self.db.engine.dialect.name
-        )
+        where, order, cursor_params = self.db.page_sql(query, clauses, cursor)
         sql_params.update(cursor_params)
         sql_params["limit"] = limit
         return self.db.fetch(
@@ -333,7 +300,7 @@ class ForecastAuditReader(DatasetReader):
                    missing_geocodes, created_at
             FROM raw_cwa_forecast_release
             WHERE {where}
-            ORDER BY {sort_order(sort)}
+            ORDER BY {order}
             LIMIT :limit
         """,
             sql_params,

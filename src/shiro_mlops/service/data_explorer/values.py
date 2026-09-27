@@ -50,9 +50,5 @@ def json_list(value: object) -> list[Any]:
     return parsed
 
 
-def floor_ten_minutes(value: datetime) -> datetime:
-    return value.replace(minute=(value.minute // 10) * 10, second=0, microsecond=0)
-
-
 def is_truthy(value: object) -> bool:
     return str(value).lower() in {"1", "true", "yes"}

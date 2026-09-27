@@ -4,8 +4,8 @@
 - 建立日期：2026-09-27
 - 最後更新：2026-09-27
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 1 規格與五張工單已發布，待實作；候選 2、3 待評估
-- 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)（ready-for-agent）
+- 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估
+- 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)
 - 檢視基準：`da538a58433a3e00ccf84dee19f7de9679c02e0e`
 
 ## 範圍與結論
@@ -17,7 +17,7 @@
 
 | 候選 | 建議強度 | 主要收益 | 建議時機 |
 | :--- | :--- | :--- | :--- |
-| 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 規格與工單已發布，待實作 |
+| 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 已實作並驗收 |
 | 2. 集中預報版本選取與降級解析 | Worth exploring | 預報消費政策具有共同 locality | 確認後續政策變更需要共同修改時 |
 | 3. 收攏營運資料檢視器的查詢生命週期 | Worth exploring | 畫面操作共用窗口與 cursor 有效性規則 | 下次新增篩選或查詢操作時 |
 
@@ -193,7 +193,7 @@ pnpm exec vitest run tests/integration/data-explorer.test.tsx
 | Q7：分頁 module 的 interface | C | 加深既有 `DatasetReader.list(params)`，統一分頁生命週期；reader 提供資料選取、filters 與整頁 projection。 |
 | Q8：精確時間窗口 | A | 本次移除起訖各放寬一秒的補償，使用精確閉區間 `[start, end]`；同步驗證列表與完整度查詢在兩種資料庫的端點、微秒及缺口判斷。 |
 
-以上八項選擇均已確認；2026-09-27 已依 to-spec 發布規格 #72，並於拆分獲確認後依 to-tickets 發布五張工單 #73 至 #77。尚未開始實作。
+以上八項選擇均已確認；2026-09-27 發布規格 #72 與工單 #73 至 #77，並完成實作。驗收結果與重跑指令見 [操作文件](../how-to/verify-data-explorer-pagination.md)。
 
 ### 候選 1：相容性與時間精度的查證
 
@@ -255,13 +255,13 @@ reader 的 internal interface 由資料集識別、可信 `SELECT ... FROM`、
 9. 使用獨立的測試容器與暫存資料，保留可重跑的驗證方式；執行後只清理此次建立的資源。依改動執行 Python 測試與 Ruff，以及前端相關測試、型別建置與 lint，並同步更新 SPEC 的 v2、精度與恢復操作契約。
 
 具體函式命名、SQL 組裝與微秒比較 implementation 在上述責任內選擇最小可行方案，
-並以 Red → Green → Refactor 驗證。設計選擇與工單拆分已確認，下一步由無阻擋的 #73 開始實作。
+並以 Red → Green → Refactor 驗證。設計選擇與工單拆分已確認；#73 至 #77 已依阻擋關係完成於同一交付分支。
 若需修訂既有 ADR，應另行記錄決策理由。
 本文件保存候選與證據，後續狀態可由 [ROADMAP.md](../ROADMAP.md) 追蹤。
 
 ### 候選 1：已發布工單
 
-正式需求以 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 為準；五張工單皆標記 ready-for-agent，並連結至該規格。
+正式需求以 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 為準；下表保留五張工單的原始阻擋關係。
 
 | 工單 | 交付行為 | 阻擋來源 |
 | :--- | :--- | :--- |
@@ -271,7 +271,4 @@ reader 的 internal interface 由資料集識別、可信 `SELECT ... FROM`、
 | [#76](https://github.com/shiroki9979/shiro-mlops/issues/76) | 遷移全台、區域與機組快照，保留完整度先篩後分頁。 | #73 |
 | [#77](https://github.com/shiroki9979/shiro-mlops/issues/77) | 八列表與四完整度查詢使用精確閉區間，移除舊內部流程，完成交付驗收及文件同步。 | #74、#75、#76 |
 
-工單 #73 先擴充既有流程；#74 至 #76 分批遷移；#77 收斂共同時間窗口與過渡流程。
-每張遷移工單包含 SQLite 與隔離本機 PostgreSQL／TimescaleDB 驗證。
-工單 #73 即統一 v2 並拒絕 v1，其餘 reader 的完整原始精度隨遷移補齊；不得新增 v1 相容層。
-中間切片屬遷移狀態，整體完成與發布須等待 #77 通過。
+工單 #73 先擴充既有流程；#74 至 #76 分批遷移；#77 收斂共同時間窗口與過渡流程。八個列表與四種完整度已在 SQLite 與隔離本機 TimescaleDB 驗收；v2 拒絕 v1，且無 v1 相容層。驗收命令與結果見[操作文件](../how-to/verify-data-explorer-pagination.md)。
