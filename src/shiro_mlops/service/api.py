@@ -15,28 +15,31 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_HORIZON_HOURS,
-    DEFAULT_WEATHER_REFERENCE_POINT,
     MAX_HORIZON_HOURS,
-    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
-    STORAGE_TIME_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
-from shiro_mlops.data.hourly_actual_load import (
-    REGIONAL_SNAPSHOT_SUM_SOURCE,
-    is_stale_load_anchor,
-)
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.data.weather_resolution import WeatherResolution, resolve_weather
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
+from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.model_store import load_model
+from shiro_mlops.tasks.runner import (
+    Readiness,
+    TaskRuntime,
+    TaskUnavailableError,
+    check_task_ready,
+    predict_task,
+)
+from shiro_mlops.tasks.types.base import TaskModel
+from shiro_mlops.tasks.types.recursive_regression import PREDICTION_COL
 
 
-# In-memory cached model instance
+# In-memory cached model of the task /predict serves
 class ModelStore:
-    forecaster: LightGBMRecursiveForecaster | None = None
+    model: TaskModel | None = None
 
 
 def _taiwan_now() -> pd.Timestamp:
@@ -50,13 +53,14 @@ request_clock: Callable[[], pd.Timestamp] = _taiwan_now
 logger = logging.getLogger(__name__)
 
 
-class StaleLoadAnchorError(RuntimeError):
-    """The latest actual load is too old to anchor a recursive forecast."""
+def _served_task() -> TaskDefinition:
+    """/predict is the alias of the dynamic horizon forecast task (ADR-0009)."""
+    return deployed_task(DYNAMIC_HORIZON_FORECAST)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Lifespan event to ensure DB schema and load or initialize the LightGBM model."""
+    """Ensure DB schema, fail fast on invalid task definitions, and load the served model."""
     if settings.ENVIRONMENT != "test":
         try:
             from shiro_mlops.core.database import init_db
@@ -65,14 +69,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("Database initialization failed; readiness will remain unavailable.")
 
-    model_path = settings.DATA_DIR / "model.joblib"
-
-    if model_path.exists():
-        try:
-            model_store.forecaster = LightGBMRecursiveForecaster.load(model_path)
-        except Exception:
-            logger.exception("Could not load model artifact from %s.", model_path)
-            model_store.forecaster = None
+    task = _served_task()
+    try:
+        model = load_model(settings.models_dir, task)
+    except Exception:
+        logger.exception("Could not load the %s model from %s.", task.task_id, settings.models_dir)
+        model = None
+    if model is not None:
+        model_store.model = model
     yield
 
 
@@ -140,144 +144,73 @@ def health_check() -> HealthResponse:
         status="ok",
         version=__version__,
         environment=settings.ENVIRONMENT,
-        model_loaded=model_store.forecaster is not None,
+        model_loaded=model_store.model is not None,
         data_explorer_enabled=is_data_explorer_enabled(),
     )
 
 
-def _get_repository() -> TimeSeriesRepository:
-    """Return the process repository, allowing tests to inject an isolated store."""
-    return repository_store or TimeSeriesRepository()
-
-
-def _load_history(repository: TimeSeriesRepository) -> pd.DataFrame:
-    """Load persisted nationwide load history in the model's feature-column contract.
-
-    Only derived rows are read: d015046-era rows (NULL source) use a different
-    measurement basis and must never anchor or feed a recursive forecast (ADR-0008).
-    """
-    history = repository.fetch_load_range(
-        subject=NATIONWIDE_SUBJECT, source=REGIONAL_SNAPSHOT_SUM_SOURCE
-    )
-    if history.empty:
-        return history
-    if DATETIME_COL not in history.columns and STORAGE_TIME_COL in history.columns:
-        history = history.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
-    return history
-
-
-def _load_anchor(history: pd.DataFrame) -> pd.Timestamp:
-    """The newest actual load hour, from which the recursive forecast starts."""
-    return pd.Timestamp(history[DATETIME_COL].max())
-
-
-def _ensure_fresh_load_anchor(anchor: pd.Timestamp, request_time: pd.Timestamp) -> None:
-    """Refuse rather than degrade: actual load has no substitute as the recursion origin."""
-    max_lag_hours = settings.LOAD_ANCHOR_MAX_LAG_HOURS
-    if is_stale_load_anchor(anchor, request_time, max_lag_hours):
-        raise StaleLoadAnchorError(
-            f"Stale load anchor: latest actual load at {anchor.isoformat()} lags request time "
-            f"{request_time.isoformat()} by more than {max_lag_hours} hours."
-        )
-
-
-def _resolve_prediction_weather(
-    repository: TimeSeriesRepository,
-    anchor: pd.Timestamp,
-    horizon_hours: int,
-    request_time: pd.Timestamp,
-) -> WeatherResolution:
-    """Resolve future weather from canonical storage as it was known at request time."""
-    return resolve_weather(
-        repository,
-        reference_point=settings.weather_reference_point(DEFAULT_WEATHER_REFERENCE_POINT),
-        start_time=anchor + pd.Timedelta(hours=1),
-        horizon_hours=horizon_hours,
-        as_of=request_time,
-    )
+def _runtime() -> TaskRuntime:
+    """Runner resources for this process, allowing tests to inject an isolated store."""
+    return TaskRuntime(repository=repository_store or TimeSeriesRepository())
 
 
 @app.get("/ready", response_model=ReadyResponse)
 def readiness_check() -> ReadyResponse:
     """Report whether a model and full normal/degraded weather horizon are available."""
-    if model_store.forecaster is None:
-        response = ReadyResponse(
-            status="not_ready", model_loaded=False, reason="Model is not loaded or trained yet."
-        )
-        return JSONResponse(status_code=503, content=response.model_dump())
+    model = model_store.model
     try:
-        request_time = request_clock()
-        repository = _get_repository()
-        history = _load_history(repository)
-        if history.empty:
-            raise RuntimeError("No persisted nationwide load history is available.")
-        anchor = _load_anchor(history)
-        _ensure_fresh_load_anchor(anchor, request_time)
-        weather = _resolve_prediction_weather(repository, anchor, MAX_HORIZON_HOURS, request_time)
-        if weather.mode == "unavailable":
-            raise RuntimeError(weather.reason or "Weather coverage is unavailable.")
-        return ReadyResponse(
-            status="ready",
-            mode=weather.mode,
-            model_loaded=True,
-        )
+        readiness = check_task_ready(_served_task(), model, _runtime(), as_of=request_clock())
     except Exception as error:
-        response = ReadyResponse(status="not_ready", model_loaded=True, reason=str(error))
+        readiness = Readiness(ready=False, reason=str(error))
+    if not readiness.ready:
+        response = ReadyResponse(
+            status="not_ready", model_loaded=model is not None, reason=readiness.reason
+        )
         return JSONResponse(status_code=503, content=response.model_dump())
+    return ReadyResponse(status="ready", mode=readiness.mode, model_loaded=True)
 
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
     """Predict dynamic horizon future power loads from persisted weather and load data."""
-    if model_store.forecaster is None:
+    model = model_store.model
+    if model is None:
         raise HTTPException(status_code=503, detail="Model is not loaded or trained yet.")
 
     try:
-        request_time = request_clock()
-        repository = _get_repository()
-        history_df = _load_history(repository)
-        if history_df.empty:
-            raise HTTPException(
-                status_code=503, detail="No persisted nationwide load history available."
-            )
-        anchor = _load_anchor(history_df)
-        _ensure_fresh_load_anchor(anchor, request_time)
-        weather = _resolve_prediction_weather(
-            repository, anchor, request.horizon_hours, request_time
-        )
-        if weather.mode == "unavailable" or weather.dataframe.empty:
-            raise HTTPException(
-                status_code=503, detail=weather.reason or "Weather coverage unavailable."
-            )
-        pred_df = model_store.forecaster.predict_recursive(
-            history_df=history_df,
-            future_weather_df=weather.dataframe,
+        outcome = predict_task(
+            _served_task(),
+            model,
+            _runtime(),
+            as_of=request_clock(),
             horizon_hours=request.horizon_hours,
         )
-
-        items = [
-            PredictionItem(
-                datetime=str(row[DATETIME_COL]),
-                predicted_load_mw=float(row["predicted_load_mw"]),
-                temperature=float(row[TEMPERATURE_COL]),
-                relative_humidity=float(row[RELATIVE_HUMIDITY_COL]),
-                weather_sources=weather.sources[index],
-            )
-            for index, (_, row) in enumerate(pred_df.iterrows())
-        ]
-
-        return PredictionResponse(
-            status="success",
-            horizon_hours=len(items),
-            subject=NATIONWIDE_SUBJECT,
-            mode=weather.mode,
-            predictions=items,
-        )
-    except HTTPException:
-        raise
-    except StaleLoadAnchorError as error:
+    except TaskUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except SQLAlchemyError as error:
         raise HTTPException(status_code=503, detail=f"Persistence unavailable: {error}") from error
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}") from e
+
+    items = [
+        PredictionItem(
+            datetime=str(prediction[DATETIME_COL]),
+            predicted_load_mw=float(prediction[PREDICTION_COL]),
+            temperature=float(weather[TEMPERATURE_COL]),
+            relative_humidity=float(weather[RELATIVE_HUMIDITY_COL]),
+            weather_sources=sources,
+        )
+        for (_, prediction), (_, weather), sources in zip(
+            outcome.predictions.iterrows(),
+            outcome.weather.iterrows(),
+            outcome.weather_sources,
+            strict=True,
+        )
+    ]
+    return PredictionResponse(
+        status="success",
+        horizon_hours=len(items),
+        subject=outcome.subject,
+        mode=outcome.mode,
+        predictions=items,
+    )

@@ -28,7 +28,7 @@ from shiro_mlops.pipelines.assets import (
 )
 from shiro_mlops.pipelines.definitions import all_assets
 from shiro_mlops.pipelines.schedules import daily_training_job, hourly_drift_job
-from tests.helpers import derived_hourly_load
+from tests.helpers import derived_hourly_load, override_task_policies
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
 
@@ -84,7 +84,7 @@ def test_taipower_load_feature_source_fails_without_derived_load(
 def test_taipower_load_feature_source_refuses_training_below_minimum_accumulation(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """預設 TRAINING_MIN_LOAD_HOURS=672：差一小時也不得進入訓練，並揭露差距。"""
+    """預設 policies.min_training_hours=672：差一小時也不得進入訓練，並揭露差距。"""
     test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_LOAD_HOUR))
     with (
         build_asset_context(resources={"time_series_repo": test_repo}) as context,
@@ -110,7 +110,7 @@ def test_taipower_load_feature_source_returns_load_once_minimum_accumulation_is_
 def test_training_load_source_excludes_other_provenance(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", 2)
+    override_task_policies(monkeypatch, min_training_hours=2)
     test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
     test_repo.upsert_taipower_load(
         pd.DataFrame([{"datetime": "2026-09-26 11:00", "load_mw": 99999.0}]),
@@ -133,7 +133,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
 ):
     """Verify Dagster materialize reads persisted load and weather through feature engineering."""
     # fixture 只有 48 小時；降低門檻以驗證特徵鏈路，門檻本身由上方測試涵蓋。
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     observation_batch = CWAObservationBatch(
         fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
         status="complete",
@@ -205,7 +205,7 @@ def test_training_then_hourly_drift_jobs_read_latest_persisted_actual_load(
 ) -> None:
     """drift 以最新入庫的逐時實際負載對照前次訓練產物，且不執行任何擷取資產。"""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     test_repo.upsert_taipower_load(taipower_raw_df)
     test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
     job_defs = Definitions(

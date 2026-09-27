@@ -24,10 +24,9 @@ from dagster import DagsterInstance, Definitions, ScheduleDefinition, build_sche
 # Dagster 未公開排程狀態型別；僅此處依賴內部路徑，升級時由離線測試揭露破壞。
 from dagster._core.scheduler.instigation import InstigatorType
 
-from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.hourly_actual_load import is_stale_load_anchor
-from shiro_mlops.pipelines.readiness import LoadAccumulationSource, check_training_load_readiness
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
     DRIFT_REPORT_ASSET,
@@ -35,6 +34,9 @@ from shiro_mlops.pipelines.schedules import (
     LOAD_FEATURE_SOURCE_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
+from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
 
 # 各 job 經由哪個資產讀取 raw_taipower_load 資料表。
 LOAD_CONSUMER_JOBS = {
@@ -94,7 +96,7 @@ class Deployment:
     """One deployment under check: its code, Dagster instance, and load store at ``now``."""
 
     defs: Definitions
-    repository: LoadAccumulationSource
+    repository: TimeSeriesRepository
     instance: DagsterInstance
     now: datetime
 
@@ -127,10 +129,9 @@ def check_load_consumer_boundaries(defs: Definitions) -> list[CheckResult]:
 
 def check_downstream_readiness(deployment: Deployment) -> list[CheckResult]:
     """Report load accumulation, its freshness, and what the next training/drift ticks do."""
+    task = deployed_task(DYNAMIC_HORIZON_FORECAST)
     try:
-        readiness = check_training_load_readiness(
-            deployment.repository, settings.TRAINING_MIN_LOAD_HOURS
-        )
+        readiness = check_training_readiness(task, TaskRuntime(repository=deployment.repository))
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
         return [
@@ -143,7 +144,7 @@ def check_downstream_readiness(deployment: Deployment) -> list[CheckResult]:
             CheckStatus.PASS if readiness.ready else CheckStatus.WAIT,
             readiness.reason,
         ),
-        _check_load_freshness(readiness.latest_hour, deployment.now),
+        _check_load_freshness(task, readiness.latest_hour, deployment.now),
         *(_check_tick(deployment, name) for name in READINESS_SCHEDULES),
     ]
 
@@ -183,7 +184,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from shiro_mlops.data.repository import TimeSeriesRepository
     from shiro_mlops.pipelines.definitions import defs
 
     now = datetime.now(tz=ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
@@ -237,16 +237,19 @@ def _check_load_consumer(defs: Definitions, job_name: str, load_reader: str) -> 
     return CheckResult(check_name, CheckStatus.PASS, f"reads raw_taipower_load via {load_reader}")
 
 
-def _check_load_freshness(latest_hour: datetime | None, now: datetime) -> CheckResult:
+def _check_load_freshness(
+    task: TaskDefinition, latest_hour: datetime | None, now: datetime
+) -> CheckResult:
     """A stale newest hour means snapshot capture or hourly derivation stopped accumulating."""
     if latest_hour is None:
         return CheckResult(
             "load freshness", CheckStatus.WAIT, "no derived hourly actual load persisted yet"
         )
-    max_lag = timedelta(hours=settings.LOAD_ANCHOR_MAX_LAG_HOURS)
+    max_lag_hours = task.policies.stale_anchor_max_lag_hours
+    max_lag = timedelta(hours=max_lag_hours)
     lag = now - latest_hour
     detail = f"latest derived hour {latest_hour.isoformat()} lags {now.isoformat()} by {lag}"
-    if is_stale_load_anchor(latest_hour, now, settings.LOAD_ANCHOR_MAX_LAG_HOURS):
+    if is_stale_load_anchor(latest_hour, now, max_lag_hours):
         return CheckResult(
             "load freshness",
             CheckStatus.FAIL,

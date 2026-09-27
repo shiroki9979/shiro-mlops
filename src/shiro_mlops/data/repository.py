@@ -607,20 +607,23 @@ class TimeSeriesRepository:
         self,
         subject: str = NATIONWIDE_SUBJECT,
         source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+        at_or_before: datetime | None = None,
     ) -> pd.DataFrame:
         """Fetch only the newest load row of one source, or an empty frame.
 
         Hourly consumers need the latest actual value, not the series, so the
-        query stays bounded as the accumulated history grows.
+        query stays bounded as the accumulated history grows. ``at_or_before``
+        (Taiwan-local) ignores rows persisted after a point-in-time decision.
         """
-        query = """
+        where_clause, params = _build_time_filter(None, at_or_before)
+        query = f"""
             SELECT time, subject, load_mw, created_at
             FROM raw_taipower_load
-            WHERE subject = :subject AND source = :source
+            WHERE {where_clause} AND subject = :subject AND source = :source
             ORDER BY time DESC
             LIMIT 1
         """
-        return self._read_load_frame(query, {"subject": subject, "source": source})
+        return self._read_load_frame(query, {**params, "subject": subject, "source": source})
 
     def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
         with self.engine.connect() as conn:

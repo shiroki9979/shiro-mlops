@@ -17,10 +17,11 @@ from dagster import (
 )
 from dagster_shared.check import CheckError
 
-from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.taipower_supply_demand import floor_to_ten_minutes
-from shiro_mlops.pipelines.readiness import TrainingLoadReadiness, check_training_load_readiness
+from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -108,8 +109,9 @@ def hourly_drift_schedule(context: ScheduleEvaluationContext) -> RunRequest | Sk
 
 
 def _load_readiness(context: ScheduleEvaluationContext) -> TrainingLoadReadiness:
-    return check_training_load_readiness(
-        context.resources.time_series_repo, settings.TRAINING_MIN_LOAD_HOURS
+    return check_training_readiness(
+        deployed_task(DYNAMIC_HORIZON_FORECAST),
+        TaskRuntime(repository=context.resources.time_series_repo),
     )
 
 

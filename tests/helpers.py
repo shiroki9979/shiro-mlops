@@ -1,6 +1,7 @@
 """集中共用測試資料，避免測試模組互相依賴私有 builder。"""
 
 import json
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ from shiro_mlops.data.taipower_unit_generation import (
     parse_unit_generation_payload,
 )
 from shiro_mlops.pipelines import assets as assets_module
+from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -244,3 +247,12 @@ def hourly_load_with_weather(hours: int, last_hour: datetime) -> tuple[pd.DataFr
         {"datetime": times, "temperature": temperature, "relative_humidity": 75.0 - 5.0 * daily}
     )
     return load, weather
+
+
+def override_task_policies(monkeypatch, **updates: object) -> TaskDefinition:
+    """以測試值取代已部署任務的 [policies]，測試結束後由 monkeypatch 還原。"""
+    tasks = deployed_tasks()
+    task = tasks[DYNAMIC_HORIZON_FORECAST]
+    updated = replace(task, policies=task.policies.model_copy(update=updates))
+    monkeypatch.setitem(tasks, DYNAMIC_HORIZON_FORECAST, updated)
+    return updated

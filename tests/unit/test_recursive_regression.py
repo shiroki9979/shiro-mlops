@@ -122,3 +122,18 @@ def test_validation_split_before_all_rows_refuses_to_train() -> None:
 
     with pytest.raises(ValueError, match="No training rows"):
         task_type.train(PARAMS, _training_data(validation_start=before_first_row))
+
+
+def test_rows_beyond_a_two_hour_weather_gap_are_dropped_not_synthesized() -> None:
+    """觀測天氣只能向前補兩小時；驗證期全無天氣時不得以常數或未來值補出驗證列。"""
+    data = _training_data()
+    weather_until = data.validation_start - pd.Timedelta(hours=3)
+    gapped = TrainingData(
+        load=data.load,
+        weather=data.weather[data.weather["datetime"] <= weather_until],
+        validation_start=data.validation_start,
+    )
+
+    result = task_type.train(PARAMS, gapped)
+
+    assert result.metrics == {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
