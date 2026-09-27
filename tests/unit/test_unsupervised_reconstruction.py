@@ -139,13 +139,40 @@ def test_training_records_synthetic_anomaly_recall_and_clean_false_positive_rate
         "recall_level_shift",
     } <= set(metrics)
     assert metrics["threshold"] > 0.0
-    # 門檻取同一批乾淨驗證窗的 P99，誤報率依設計接近 1%。
-    assert metrics["false_positive_rate"] <= 0.02
+    # 門檻取校準日驗證窗的 P99；乾淨的保留日誤報率應在健康上限內。
+    assert metrics["false_positive_rate"] <= 0.05
     for kind in ("sudden_drop", "pattern_swap", "level_shift"):
         assert metrics[f"recall_{kind}"] >= 0.8, kind
     assert metrics["recall"] == pytest.approx(
         np.mean([metrics[f"recall_{k}"] for k in ("sudden_drop", "pattern_swap", "level_shift")])
     )
+
+
+def _holdout_days(validation_start: pd.Timestamp) -> list[pd.Timestamp]:
+    """驗證窗依結束小時的日期由第一個驗證日起交錯分組：奇數位置的日期為保留日。"""
+    days = pd.date_range(validation_start.normalize(), ANCHOR.normalize(), freq="D")
+    return list(days[1::2])
+
+
+def test_false_positive_rate_is_measured_on_days_the_threshold_never_saw(trained) -> None:
+    """保留日 00:00 驟降只出現在結束於保留日的時間窗：門檻不變，誤報率必須反映出來。"""
+    data = _training_data()
+    holdout_midnights = data.load["datetime"].isin(_holdout_days(data.validation_start))
+    spiked = data.load.assign(
+        load_mw=data.load["load_mw"].where(~holdout_midnights, data.load["load_mw"] * 0.5)
+    )
+
+    result = task_type.train(PARAMS, replace(data, load=spiked))
+
+    assert result.metrics["threshold"] == pytest.approx(trained.metrics["threshold"])
+    assert result.metrics["false_positive_rate"] > 0.5
+
+
+def test_validation_within_a_single_day_refuses_to_train() -> None:
+    last_day = ANCHOR.normalize()
+
+    with pytest.raises(ValueError, match="two validation days"):
+        task_type.train(PARAMS, _training_data(validation_start=last_day))
 
 
 def test_threshold_follows_the_configured_quantile_of_validation_errors(trained) -> None:
