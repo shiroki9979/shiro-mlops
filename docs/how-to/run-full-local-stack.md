@@ -1,7 +1,7 @@
 # 如何在全地端運行完整 MLOps 容器化環境
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-26
+- 最後更新：2026-09-27
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -62,13 +62,13 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 
 ## 4. 準備資料並訓練模型
 
-`daily_training_job` 需要 TimescaleDB 中已有至少 `TRAINING_MIN_LOAD_HOURS`（預設 `672`，約 28 日）個有效的全台逐時實際負載，以及時間重疊的 canonical CWA 測站觀測歷史。逐時負載只能由區域快照往後累積，無法回補；累積期間訓練與 drift 排程會略過並揭露原因，`/ready` 應維持 HTTP 503，不應以測試 fixture 建立正式模型。開啟排程、追蹤累積進度與預期失敗邊界見 [如何在逐時負載冷啟動後恢復訓練與 drift 排程](recover-training-after-load-cold-start.md)。
+`daily_training_job` 需要 TimescaleDB 中已有至少任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，約 28 日）個有效的全台逐時實際負載，以及時間重疊的 canonical CWA 測站觀測歷史。逐時負載只能由區域快照往後累積，無法回補；累積期間訓練與 drift 排程會略過並揭露原因，`/ready` 應維持 HTTP 503，不應以測試 fixture 建立正式模型。開啟排程、追蹤累積進度與預期失敗邊界見 [如何在逐時負載冷啟動後恢復訓練與 drift 排程](recover-training-after-load-cold-start.md)。
 
 1. 開啟瀏覽器進入 `http://localhost:3000`。
 2. 先 materialize `raw_cwa_station_observation`，確認三個預設測站觀測已寫入 TimescaleDB。
 3. materialize `raw_cwa_township_forecast`，確認三日與一週預報版本已寫入 TimescaleDB。
 4. 執行 `make smoke-check ARGS=--require-ready`，確認 `load accumulation` 為 `PASS` 後啟動 `daily_training_job`；訓練與推論只讀已入庫的 canonical tables，不會自行呼叫外部台電或 CWA API。累積不足時 `taipower_load_feature_source` 會明確失敗且不產出模型。
-5. 訓練完成後執行 `docker compose -f docker/docker-compose.yml restart api`，讓 API 載入新產生的 `data/model.joblib`。
+5. 訓練完成後執行 `docker compose -f docker/docker-compose.yml restart api`，讓 API 載入新產生的任務模型目錄 `data/models/dynamic_horizon_forecast/`（LightGBM 原生文字格式與 JSON metadata）。既有的 `data/model.joblib` 已失效且不再載入，首次重新訓練前 `/ready` 維持 `not_ready`。
 6. 執行 `curl -i http://localhost:8000/ready`，確認回傳 HTTP 200 及 `normal` 或 `degraded` mode。
 7. 至 `http://localhost:5001` 檢視最新模型參數與評估指標。
 
