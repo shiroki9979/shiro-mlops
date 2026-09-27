@@ -16,11 +16,15 @@ from shiro_mlops.tasks.runner import (
     TaskNotReady,
     TaskRuntime,
     check_task_ready,
+    fit_task,
     load_training_data,
+    monitor_task,
     predict_task,
     train_task,
+    training_data_from_table,
+    training_table,
 )
-from shiro_mlops.tasks.types.base import TaskModel
+from shiro_mlops.tasks.types.base import HealthStatus, TaskModel
 from tests.helpers import canonical_observation_batch, hourly_load_with_weather
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
@@ -116,6 +120,70 @@ def test_training_reports_out_of_time_metrics(task: TaskDefinition, runtime: Tas
     trained = train_task(task, runtime, as_of=FRESH_AS_OF)
 
     assert 0.0 < trained.metrics["mape"] < 5.0
+
+
+def test_training_table_round_trip_trains_the_same_model(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    """資產以單一訓練表跨 run 保存；還原後須與直接讀取的訓練資料訓練出相同結果。"""
+    data = load_training_data(task, runtime, as_of=FRESH_AS_OF)
+
+    restored = training_data_from_table(task, training_table(data))
+
+    assert restored.validation_start == data.validation_start
+    assert len(restored.weather) == len(data.weather)
+    assert fit_task(task, restored).metrics == train_task(task, runtime, as_of=FRESH_AS_OF).metrics
+
+
+def test_training_table_round_trip_keeps_weather_gaps_as_gaps(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    data = load_training_data(task, runtime, as_of=FRESH_AS_OF)
+    gap = data.weather["datetime"].iloc[100]
+    with_gap = replace(data, weather=data.weather[data.weather["datetime"] != gap])
+
+    restored = training_data_from_table(task, training_table(with_gap))
+
+    assert gap not in set(restored.weather["datetime"])
+    assert restored.weather[["temperature", "relative_humidity"]].notna().all().all()
+
+
+# --- Monitoring ----------------------------------------------------------------------------
+
+
+def test_monitoring_reports_latest_target_and_healthy_metrics(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    report = monitor_task(task, runtime, {"mape": 3.0, "rmse": 1.0}, as_of=FRESH_AS_OF)
+
+    assert report.task_id == task.task_id
+    assert report.health.status is HealthStatus.HEALTHY
+    assert report.target_hours == HOURS
+    assert report.latest_target_time == ANCHOR
+    expected_load, _ = hourly_load_with_weather(HOURS, LAST_HOUR)
+    assert report.latest_target_value == pytest.approx(expected_load["load_mw"].iloc[-1])
+
+
+def test_monitoring_warns_when_metrics_breach_the_configured_threshold(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    strict = replace(task, health=task.health.model_copy(update={"max_mape": 2.0}))
+
+    report = monitor_task(strict, runtime, {"mape": 3.0}, as_of=FRESH_AS_OF)
+
+    assert report.health.status is HealthStatus.WARNING
+    assert "max_mape=2.0" in report.health.reason
+
+
+def test_monitoring_below_minimum_accumulation_raises_task_not_ready(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    short_of_threshold = replace(
+        task, policies=task.policies.model_copy(update={"min_training_hours": HOURS + 1})
+    )
+
+    with pytest.raises(TaskNotReady):
+        monitor_task(short_of_threshold, runtime, {"mape": 3.0}, as_of=FRESH_AS_OF)
 
 
 # --- Serving -------------------------------------------------------------------------------

@@ -8,7 +8,12 @@ import pandas as pd
 import pytest
 
 from shiro_mlops.tasks.types import get_task_type
-from shiro_mlops.tasks.types.base import PredictionData, TrainingData, WeatherInput
+from shiro_mlops.tasks.types.base import (
+    HealthStatus,
+    PredictionData,
+    TrainingData,
+    WeatherInput,
+)
 from shiro_mlops.tasks.types.recursive_regression import RecursiveRegressionParams
 from tests.helpers import hourly_load_with_weather
 
@@ -137,3 +142,27 @@ def test_rows_beyond_a_two_hour_weather_gap_are_dropped_not_synthesized() -> Non
     result = task_type.train(PARAMS, gapped)
 
     assert result.metrics == {"mape": 0.0, "rmse": 0.0, "mae": 0.0}
+
+
+@pytest.mark.parametrize(
+    ("mape", "expected"),
+    [(9.99, HealthStatus.HEALTHY), (10.0, HealthStatus.WARNING), (25.0, HealthStatus.WARNING)],
+)
+def test_health_compares_validation_mape_with_the_configured_ceiling(
+    mape: float, expected: HealthStatus
+) -> None:
+    thresholds = task_type.health_model.model_validate({"max_mape": 10.0})
+
+    assessment = task_type.assess_health(thresholds, {"mape": mape, "rmse": 1.0, "mae": 1.0})
+
+    assert assessment.status is expected
+    assert "max_mape" in assessment.reason
+
+
+def test_health_without_a_mape_metric_warns_instead_of_passing() -> None:
+    thresholds = task_type.health_model.model_validate({"max_mape": 10.0})
+
+    assessment = task_type.assess_health(thresholds, {"rmse": 1.0})
+
+    assert assessment.status is HealthStatus.WARNING
+    assert "mape" in assessment.reason

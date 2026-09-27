@@ -53,7 +53,6 @@ class Settings(BaseSettings):
 
     # MLflow
     MLFLOW_TRACKING_URI: str = "http://localhost:5001"
-    MLFLOW_EXPERIMENT_NAME: str = "taipower_load_forecasting"
 
     # Feast Feature Store
     FEAST_REPO_PATH: Path = Path("src/shiro_mlops/features")
