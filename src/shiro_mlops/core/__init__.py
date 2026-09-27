@@ -4,9 +4,9 @@ from shiro_mlops.core.config import Settings, settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_HORIZON_HOURS,
-    DEFAULT_LOCATION,
     LOAD_MW_COL,
     LOCATION_COL,
+    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
@@ -15,9 +15,9 @@ from shiro_mlops.core.io_managers import ParquetIOManager, get_parquet_io_manage
 __all__ = [
     "DATETIME_COL",
     "DEFAULT_HORIZON_HOURS",
-    "DEFAULT_LOCATION",
     "LOAD_MW_COL",
     "LOCATION_COL",
+    "NATIONWIDE_SUBJECT",
     "ParquetIOManager",
     "RELATIVE_HUMIDITY_COL",
     "Settings",

@@ -15,8 +15,9 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_HORIZON_HOURS,
-    DEFAULT_LOCATION,
+    DEFAULT_WEATHER_REFERENCE_POINT,
     MAX_HORIZON_HOURS,
+    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
     STORAGE_TIME_COL,
     TEMPERATURE_COL,
@@ -114,13 +115,20 @@ class PredictionRequest(BaseModel):
         le=MAX_HORIZON_HOURS,
         description=f"Forecast horizon in hours (1-{MAX_HORIZON_HOURS})",
     )
-    location: str = Field(default=DEFAULT_LOCATION, description="Location region (e.g. Taipei)")
+    location: str | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated and ignored: the forecast subject is always nationwide, "
+            "whatever value is sent."
+        ),
+    )
 
 
 class PredictionResponse(BaseModel):
     status: str = "success"
     horizon_hours: int
-    location: str
+    subject: str = Field(description="Prediction subject whose load is forecast")
     mode: str = "normal"
     predictions: list[PredictionItem]
 
@@ -143,13 +151,13 @@ def _get_repository() -> TimeSeriesRepository:
 
 
 def _load_history(repository: TimeSeriesRepository) -> pd.DataFrame:
-    """Load persisted Taipei load history in the model's feature-column contract.
+    """Load persisted nationwide load history in the model's feature-column contract.
 
     Only derived rows are read: d015046-era rows (NULL source) use a different
     measurement basis and must never anchor or feed a recursive forecast (ADR-0008).
     """
     history = repository.fetch_load_range(
-        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+        subject=NATIONWIDE_SUBJECT, source=REGIONAL_SNAPSHOT_SUM_SOURCE
     )
     if history.empty:
         return history
@@ -182,6 +190,7 @@ def _resolve_prediction_weather(
     """Resolve future weather from canonical storage as it was known at request time."""
     return resolve_weather(
         repository,
+        reference_point=settings.weather_reference_point(DEFAULT_WEATHER_REFERENCE_POINT),
         start_time=anchor + pd.Timedelta(hours=1),
         horizon_hours=horizon_hours,
         as_of=request_time,
@@ -201,7 +210,7 @@ def readiness_check() -> ReadyResponse:
         repository = _get_repository()
         history = _load_history(repository)
         if history.empty:
-            raise RuntimeError("No persisted Taipei load history is available.")
+            raise RuntimeError("No persisted nationwide load history is available.")
         anchor = _load_anchor(history)
         _ensure_fresh_load_anchor(anchor, request_time)
         weather = _resolve_prediction_weather(repository, anchor, MAX_HORIZON_HOURS, request_time)
@@ -223,16 +232,13 @@ def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
     if model_store.forecaster is None:
         raise HTTPException(status_code=503, detail="Model is not loaded or trained yet.")
 
-    if request.location != DEFAULT_LOCATION:
-        raise HTTPException(status_code=400, detail="Only Taipei is supported in this model phase.")
-
     try:
         request_time = request_clock()
         repository = _get_repository()
         history_df = _load_history(repository)
         if history_df.empty:
             raise HTTPException(
-                status_code=503, detail="No persisted Taipei load history available."
+                status_code=503, detail="No persisted nationwide load history available."
             )
         anchor = _load_anchor(history_df)
         _ensure_fresh_load_anchor(anchor, request_time)
@@ -263,7 +269,7 @@ def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
         return PredictionResponse(
             status="success",
             horizon_hours=len(items),
-            location=request.location,
+            subject=NATIONWIDE_SUBJECT,
             mode=weather.mode,
             predictions=items,
         )

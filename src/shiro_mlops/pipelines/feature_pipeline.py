@@ -11,11 +11,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_LAG_HOURS,
-    DEFAULT_LOCATION,
     DEFAULT_ROLLING_WINDOWS,
     LOAD_MW_COL,
     LOCATION_COL,
+    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
+    SUBJECT_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
@@ -40,7 +41,8 @@ class FeatureQueryWindow:
 
     start_time: datetime
     end_time: datetime
-    location: str | None = None
+    subject: str | None = None
+    weather_reference_point: str | None = None
     lookback_hours: int = max(max(DEFAULT_LAG_HOURS), max(DEFAULT_ROLLING_WINDOWS))
 
     @property
@@ -76,13 +78,14 @@ class FallbackFeatureSources:
 def build_feature_query_window(
     reference_load: pd.DataFrame,
     *,
-    location: str | None = None,
+    subject: str | None = None,
+    weather_reference_point: str | None = None,
     lookback_hours: int | None = None,
 ) -> FeatureQueryWindow:
     """Derive an explicit time window from a reference load frame.
 
-    Location is only applied when callers pass it explicitly, so multi-location
-    repositories remain visible inside the same time bounds.
+    Subject and weather reference point only filter when passed explicitly, so
+    multi-subject repositories remain visible inside the same time bounds.
     """
     if reference_load.empty or DATETIME_COL not in reference_load.columns:
         raise ValueError("reference_load must include a non-empty datetime column")
@@ -91,7 +94,8 @@ def build_feature_query_window(
     return FeatureQueryWindow(
         start_time=pd.Timestamp(datetimes.min()).to_pydatetime(),
         end_time=pd.Timestamp(datetimes.max()).to_pydatetime(),
-        location=location,
+        subject=subject,
+        weather_reference_point=weather_reference_point,
         lookback_hours=(
             lookback_hours
             if lookback_hours is not None
@@ -109,24 +113,22 @@ def _to_transformer_input(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_export_frame(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure an export frame has the shared Feast entity and event-time columns."""
+    """Ensure an export frame has the event-time column Feast reads."""
     result = df.copy()
-    if LOCATION_COL not in result.columns:
-        result[LOCATION_COL] = DEFAULT_LOCATION
     if DATETIME_COL not in result.columns and STORAGE_TIME_COL in result.columns:
         result = result.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
     return result
 
 
 def _filter_frame_to_window(df: pd.DataFrame, window: FeatureQueryWindow) -> pd.DataFrame:
-    """Keep only rows inside the training window and optional location filter."""
+    """Keep only rows inside the training window and optional subject filter."""
     if df.empty:
         return df
     result = df.copy()
     result[DATETIME_COL] = standardize_taiwan_datetime(result[DATETIME_COL])
     mask = (result[DATETIME_COL] >= window.start_time) & (result[DATETIME_COL] <= window.end_time)
-    if window.location is not None and LOCATION_COL in result.columns:
-        mask &= result[LOCATION_COL] == window.location
+    if window.subject is not None and SUBJECT_COL in result.columns:
+        mask &= result[SUBJECT_COL] == window.subject
     return result.loc[mask].reset_index(drop=True)
 
 
@@ -140,13 +142,13 @@ def fetch_feature_source_data(
         persisted_load = repository.fetch_load_range(
             start_time=window.fetch_start_time,
             end_time=window.end_time,
-            location=window.location,
+            subject=window.subject,
             source=REGIONAL_SNAPSHOT_SUM_SOURCE,
         )
         persisted_weather = repository.fetch_weather_range(
             start_time=window.fetch_start_time,
             end_time=window.end_time,
-            location=window.location,
+            reference_point=window.weather_reference_point,
         )
     except SQLAlchemyError as error:
         logger.warning(
@@ -167,9 +169,12 @@ def transform_feature_source_data(
     window: FeatureQueryWindow | None = None,
 ) -> pd.DataFrame:
     """Create the model-training feature matrix, optionally clipped to the training window."""
+    # Weather joins by time only: the source already holds just the subject's
+    # weather reference point, and lags/rolling stay isolated per subject.
     features = build_feature_pipeline(
-        load_df=source_data.load,
-        weather_df=source_data.weather,
+        load_df=_with_subject(source_data.load),
+        weather_df=source_data.weather.drop(columns=[LOCATION_COL], errors="ignore"),
+        location_col=SUBJECT_COL,
         strict_weather=True,
     )
     if window is None:
@@ -182,9 +187,23 @@ def _fill_load_history_without_leakage(series: pd.Series) -> pd.Series:
     return series.ffill().fillna(NON_LEAKING_LOAD_FILL)
 
 
+def _with_subject(load: pd.DataFrame) -> pd.DataFrame:
+    """Label unlabelled load frames with the nationwide subject they always represent."""
+    if SUBJECT_COL in load.columns:
+        return load
+    return load.assign(**{SUBJECT_COL: NATIONWIDE_SUBJECT})
+
+
 def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
-    """Build the Taipower Feast schema from engineered features."""
-    result = _normalize_export_frame(features_df)
+    """Build the Taipower Feast schema from engineered features.
+
+    The frozen Feast schema keeps its ``location`` entity (ADR-0009); its values
+    are prediction subjects.
+    """
+    result = _normalize_export_frame(_with_subject(features_df))
+    result = result.drop(columns=[LOCATION_COL], errors="ignore").rename(
+        columns={SUBJECT_COL: LOCATION_COL}
+    )
 
     datetime_values = pd.to_datetime(result[DATETIME_COL])
     if "hour" not in result.columns:
@@ -245,9 +264,16 @@ def _build_taipower_export(features_df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _build_weather_export(weather_df: pd.DataFrame) -> pd.DataFrame:
-    """Build the CWA Feast schema from weather source observations."""
-    result = _normalize_export_frame(weather_df)
+def _build_weather_export(weather_df: pd.DataFrame, subjects: list[str]) -> pd.DataFrame:
+    """Build the CWA Feast schema from weather source observations.
+
+    Weather rows are keyed by the subjects they represent, so both frozen Feast
+    views join on the same ``location`` entity values.
+    """
+    base = _normalize_export_frame(weather_df).drop(columns=[LOCATION_COL], errors="ignore")
+    result = pd.concat(
+        [base.assign(**{LOCATION_COL: subject}) for subject in subjects], ignore_index=True
+    )
     if TEMPERATURE_COL not in result.columns:
         result[TEMPERATURE_COL] = DEFAULT_TEMPERATURE_CELSIUS
     if RELATIVE_HUMIDITY_COL not in result.columns:
@@ -277,7 +303,9 @@ def build_feast_feature_frames(
     weather_df: pd.DataFrame,
 ) -> FeastFeatureFrames:
     """Build stable Taipower and CWA Feast schemas without choosing a storage target."""
+    taipower = _build_taipower_export(features_df)
+    subjects = sorted(taipower[LOCATION_COL].unique()) or [NATIONWIDE_SUBJECT]
     return FeastFeatureFrames(
-        taipower=_build_taipower_export(features_df),
-        weather=_build_weather_export(weather_df),
+        taipower=taipower,
+        weather=_build_weather_export(weather_df, subjects),
     )

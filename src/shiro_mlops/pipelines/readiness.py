@@ -12,7 +12,7 @@ from typing import Protocol
 
 from dagster import Failure, MetadataValue
 
-from shiro_mlops.core.constants import DEFAULT_LOCATION
+from shiro_mlops.core.constants import NATIONWIDE_SUBJECT
 from shiro_mlops.data.hourly_actual_load import HourlyLoadAccumulation
 
 HOURS_PER_DAY = 24
@@ -22,7 +22,7 @@ LEGACY_LOAD_GUIDE = "docs/how-to/remove-legacy-d015046-load-rows.md"
 class LoadAccumulationSource(Protocol):
     """Anything that can summarize persisted derived hourly load."""
 
-    def summarize_hourly_load_accumulation(self, location: str) -> HourlyLoadAccumulation: ...
+    def summarize_hourly_load_accumulation(self, subject: str) -> HourlyLoadAccumulation: ...
 
 
 @dataclass(frozen=True)
@@ -61,10 +61,10 @@ class TrainingLoadReadiness:
 def check_training_load_readiness(
     repository: LoadAccumulationSource,
     required_hours: int,
-    location: str = DEFAULT_LOCATION,
+    subject: str = NATIONWIDE_SUBJECT,
 ) -> TrainingLoadReadiness:
     """Summarize persisted derived load against the minimum training accumulation."""
-    accumulation = repository.summarize_hourly_load_accumulation(location=location)
+    accumulation = repository.summarize_hourly_load_accumulation(subject=subject)
     return TrainingLoadReadiness(
         valid_hours=accumulation.valid_hours,
         required_hours=required_hours,
@@ -76,10 +76,10 @@ def check_training_load_readiness(
 def require_training_load_readiness(
     repository: LoadAccumulationSource,
     required_hours: int,
-    location: str = DEFAULT_LOCATION,
+    subject: str = NATIONWIDE_SUBJECT,
 ) -> TrainingLoadReadiness:
     """Raise a Dagster Failure carrying the reason when training must not proceed."""
-    readiness = check_training_load_readiness(repository, required_hours, location)
+    readiness = check_training_load_readiness(repository, required_hours, subject)
     if not readiness.ready:
         raise Failure(
             description=readiness.reason,

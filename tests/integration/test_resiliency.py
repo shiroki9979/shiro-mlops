@@ -140,7 +140,7 @@ def serving_repo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> TimeSeriesRepository:
     """A loaded model reading persisted Taipei load history, with no weather yet."""
-    test_repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    test_repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     monkeypatch.setattr(model_store, "forecaster", fitted_forecaster)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     return test_repo
@@ -340,7 +340,7 @@ def test_newer_legacy_rows_never_anchor_serving(
 ) -> None:
     """ADR-0008：較新的 d015046 舊列不得讓過舊的推算負載看似新鮮而混用口徑。"""
     repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
-    repository.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    repository.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     insert_legacy_load_row(
         legacy_upgraded_engine, STALE_REQUEST_TIME.floor("h").to_pydatetime(), load_mw=26500.0
     )

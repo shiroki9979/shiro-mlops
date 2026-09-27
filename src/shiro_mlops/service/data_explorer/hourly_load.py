@@ -24,23 +24,23 @@ class HourlyLoadReader(DatasetReader):
         cursor: dict[str, Any] | None,
         limit: int,
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        location = query.filters.get("location")
+        subject = query.filters.get("subject")
         clauses = ["time >= :start_time", "time <= :end_time", "source = :source"]
         sql_params: dict[str, Any] = {
             "start_time": query.window.as_utc()[0],
             "end_time": query.window.as_utc()[1],
             "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
         }
-        if location:
-            clauses.append("location = :location")
-            sql_params["location"] = location
-        where, cursor_params = apply_cursor(clauses, cursor, ("time", "location"))
+        if subject:
+            clauses.append("subject = :subject")
+            sql_params["subject"] = subject
+        where, cursor_params = apply_cursor(clauses, cursor, ("time", "subject"))
         sql_params.update(cursor_params)
         sql = f"""
-            SELECT time, location, load_mw, created_at
+            SELECT time, subject, load_mw, created_at
             FROM raw_taipower_load
             WHERE {where}
-            ORDER BY time DESC, location DESC
+            ORDER BY time DESC, subject DESC
             LIMIT :limit
         """
         sql_params["limit"] = limit
@@ -51,9 +51,9 @@ class HourlyLoadReader(DatasetReader):
             items.append(
                 {
                     "datetime": format_taiwan_time(observed),
-                    "location": row["location"],
+                    "subject": row["subject"],
                     "load_mw": float(row["load_mw"]),
                     "ingested_at": format_taiwan_time(ingested),
                 }
             )
-        return items, hourly_gaps(self.db, query.window, location)
+        return items, hourly_gaps(self.db, query.window, subject)

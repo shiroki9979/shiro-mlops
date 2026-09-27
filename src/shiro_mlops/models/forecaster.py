@@ -12,7 +12,9 @@ from shiro_mlops.core.constants import (
     DEFAULT_LAG_HOURS,
     DEFAULT_ROLLING_WINDOWS,
     LOAD_MW_COL,
+    LOCATION_COL,
     RELATIVE_HUMIDITY_COL,
+    SUBJECT_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.features.transformers import (
@@ -52,7 +54,7 @@ class LightGBMRecursiveForecaster:
         """Train the LightGBM regressor on feature-engineered training data."""
         df = train_df.copy()
         if feature_cols is None:
-            exclude_cols = {DATETIME_COL, LOAD_MW_COL, "location"}
+            exclude_cols = {DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL}
             feature_cols = [c for c in df.columns if c not in exclude_cols]
 
         self.feature_names = feature_cols

@@ -24,7 +24,8 @@ def _sample_window() -> FeatureQueryWindow:
     return FeatureQueryWindow(
         start_time=datetime(2026, 8, 20, 0, 0, 0),
         end_time=datetime(2026, 8, 21, 23, 0, 0),
-        location="Taipei",
+        subject="nationwide",
+        weather_reference_point="Taipei",
         lookback_hours=24,
     )
 
@@ -32,7 +33,7 @@ def _sample_window() -> FeatureQueryWindow:
 def test_fetch_feature_source_data_uses_bounded_window_and_normalizes_storage_columns(
     taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
 ) -> None:
-    """Feature retrieval queries a bounded time/location window, not an unbounded scan."""
+    """Feature retrieval queries a bounded time/subject window, not an unbounded scan."""
     repository = MagicMock(spec=TimeSeriesRepository)
     persisted_load = taipower_raw_df.rename(columns={"datetime": "time"}).assign(
         created_at="2026-08-20T00:00:00Z"
@@ -57,13 +58,13 @@ def test_fetch_feature_source_data_uses_bounded_window_and_normalizes_storage_co
     repository.fetch_load_range.assert_called_once_with(
         start_time=window.fetch_start_time,
         end_time=window.end_time,
-        location=window.location,
+        subject="nationwide",
         source=REGIONAL_SNAPSHOT_SUM_SOURCE,
     )
     repository.fetch_weather_range.assert_called_once_with(
         start_time=window.fetch_start_time,
         end_time=window.end_time,
-        location=window.location,
+        reference_point="Taipei",
     )
 
 
@@ -100,9 +101,12 @@ def test_build_feature_query_window_expands_start_by_lookback(
     taipower_raw_df: pd.DataFrame,
 ) -> None:
     """Training windows derive an explicit fetch start that includes lag lookback."""
-    window = build_feature_query_window(taipower_raw_df, location="Taipei", lookback_hours=24)
+    window = build_feature_query_window(
+        taipower_raw_df, subject="nationwide", weather_reference_point="Taipei", lookback_hours=24
+    )
 
-    assert window.location == "Taipei"
+    assert window.subject == "nationwide"
+    assert window.weather_reference_point == "Taipei"
     assert window.lookback_hours == 24
     assert window.fetch_start_time == window.start_time - pd.Timedelta(hours=24)
     assert window.start_time == pd.Timestamp(taipower_raw_df["datetime"].min())
@@ -132,7 +136,7 @@ def test_transform_feature_source_data_drops_weather_gaps_after_two_hour_forward
     load = pd.DataFrame(
         {
             "datetime": times,
-            "location": "Taipei",
+            "subject": "nationwide",
             "load_mw": range(31),
         }
     )
@@ -155,10 +159,10 @@ def test_feast_export_lag_features_do_not_use_future_load() -> None:
     """Feast export warm-up lags must use a non-leaking sentinel, not later load values."""
     load_df = pd.DataFrame(
         [
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 02:00:00", "load_mw": 300.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 03:00:00", "load_mw": 8888.0, "location": "Taipei"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "subject": "nationwide"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "subject": "nationwide"},
+            {"datetime": "2026-08-20 02:00:00", "load_mw": 300.0, "subject": "nationwide"},
+            {"datetime": "2026-08-20 03:00:00", "load_mw": 8888.0, "subject": "nationwide"},
         ]
     )
     weather_df = pd.DataFrame(
@@ -180,3 +184,26 @@ def test_feast_export_lag_features_do_not_use_future_load() -> None:
     assert exported.iloc[1]["load_mw_lag_1"] == 100.0
     assert exported.iloc[0]["load_mw_lag_24"] == 0.0
     assert exported.iloc[0]["load_mw_rolling_mean_24"] == 0.0
+
+
+def test_feast_exports_key_both_frozen_views_by_prediction_subject() -> None:
+    """Feast 凍結 schema 保留 location entity，值為預測對象而非氣象代表點。"""
+    times = pd.date_range("2026-08-20 00:00:00", periods=4, freq="h")
+    load = pd.DataFrame({"datetime": times, "subject": "nationwide", "load_mw": 100.0})
+    weather = pd.DataFrame(
+        {"datetime": times, "location": "Taipei", "temperature": 30.0, "relative_humidity": 70.0}
+    )
+
+    features = transform_feature_source_data(FeatureSourceData(load, weather))
+    frames = build_feast_feature_frames(features, weather)
+
+    assert list(frames.taipower.columns[:2]) == ["datetime", "location"]
+    assert "subject" not in frames.taipower.columns
+    assert set(frames.taipower["location"]) == {"nationwide"}
+    assert list(frames.weather.columns) == [
+        "datetime",
+        "location",
+        "temperature",
+        "relative_humidity",
+    ]
+    assert set(frames.weather["location"]) == {"nationwide"}
