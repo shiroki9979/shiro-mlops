@@ -21,6 +21,8 @@ def now_taiwan() -> datetime:
 def parse_api_time(value: datetime | str) -> datetime:
     """Parse an API timestamp as Taiwan local time."""
     timestamp = pd.Timestamp(value)
+    if pd.isna(timestamp):
+        raise ValueError("Timestamp is required")
     if timestamp.tzinfo is None:
         return timestamp.to_pydatetime()
     return timestamp.tz_convert(TAIWAN).tz_localize(None).to_pydatetime()

@@ -82,6 +82,19 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     assert client.get("/features/latest").status_code == 404
 
 
+@pytest.mark.parametrize("field", ["issued_at", "source_updated_at"])
+@pytest.mark.parametrize("value", ["not-a-date", "NaT"])
+def test_invalid_forecast_version_time_returns_validation_error(
+    explorer_client, field, value
+) -> None:
+    client, _ = explorer_client
+
+    response = client.get("/data/weather/forecasts", params={field: value})
+
+    assert response.status_code == 422
+    assert field in response.json()["detail"]
+
+
 def test_data_explorer_does_not_allow_cross_origin_browser_access(explorer_client) -> None:
     """Data Explorer 不得透過 wildcard CORS 提供跨來源讀取。"""
     client, _ = explorer_client

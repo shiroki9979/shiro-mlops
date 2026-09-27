@@ -114,7 +114,10 @@ def _forecast_filters(query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
     for name in ("issued_at", "source_updated_at"):
         if query.filters.get(name):
             clauses.append(f"{name} = :{name}")
-            params[name] = to_sql_utc(query.filters[name])
+            try:
+                params[name] = to_sql_utc(query.filters[name])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ExplorerQueryError(f"{name} must be a valid RFC 3339 timestamp") from exc
     return clauses, params
 
 

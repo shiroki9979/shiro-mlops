@@ -75,15 +75,18 @@ def _point_value(
     if points.empty:
         return None, None
     exact = points[points["valid_from"] == moment]
-    if not exact.empty and pd.notna(exact.iloc[-1].get(column)):
-        return exact.iloc[-1][column], exact.iloc[-1]
+    if not exact.empty:
+        row = exact.iloc[-1]
+        return (row[column], row) if pd.notna(row[column]) else (None, None)
     if column in NON_INTERPOLATED_FORECAST_FIELDS:
         return None, None
-    before = points[(points["valid_from"] < moment) & points[column].notna()].tail(1)
-    after = points[(points["valid_from"] > moment) & points[column].notna()].head(1)
+    before = points[points["valid_from"] < moment].tail(1)
+    after = points[points["valid_from"] > moment].head(1)
     if before.empty or after.empty:
         return None, None
     left, right = before.iloc[0], after.iloc[0]
+    if pd.isna(left[column]) or pd.isna(right[column]):
+        return None, None
     span = (right["valid_from"] - left["valid_from"]).total_seconds()
     ratio = (moment - left["valid_from"]).total_seconds() / span
     return float(left[column]) + (float(right[column]) - float(left[column])) * ratio, right
