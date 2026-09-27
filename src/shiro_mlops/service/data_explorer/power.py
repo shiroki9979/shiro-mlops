@@ -11,8 +11,8 @@ from shiro_mlops.service.data_explorer.completeness import (
     ten_minute_gaps,
 )
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
+from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.pagination import apply_cursor
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import optional_time, to_float, to_mw, to_taiwan
@@ -28,7 +28,7 @@ NATIONAL_SUPPLY_DEMAND_SQL = """
            real_hr_peak_time, created_at
     FROM raw_taipower_supply_demand_snapshot
     WHERE {where}
-    ORDER BY observed_at DESC
+    ORDER BY {order}
     LIMIT :limit
 """
 
@@ -36,17 +36,9 @@ REGIONAL_SUPPLY_DEMAND_SQL = """
     SELECT observed_at, region, source_time, generation_wan_kw, load_wan_kw, created_at
     FROM raw_taipower_regional_supply_demand_snapshot
     WHERE {where}
-    ORDER BY observed_at DESC, region DESC
+    ORDER BY {order}
     LIMIT :limit
 """
-
-
-def _time_window(query: ExplorerQuery, column: str) -> tuple[list[str], dict[str, Any]]:
-    start_time, end_time = query.window.as_utc()
-    return [f"{column} >= :start_time", f"{column} <= :end_time"], {
-        "start_time": start_time,
-        "end_time": end_time,
-    }
 
 
 def _national_item(row: dict[str, Any]) -> dict[str, Any]:
@@ -90,7 +82,7 @@ def _validate_completeness(value: Any) -> str | None:
     return value
 
 
-def _completeness_clause(completeness: str, sql_params: dict[str, Any]) -> str:
+def _completeness_clause(db: ExplorerDb, completeness: str, sql_params: dict[str, Any]) -> str:
     placeholders = []
     for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS):
         name = f"expected_region_{index}"
@@ -98,18 +90,21 @@ def _completeness_clause(completeness: str, sql_params: dict[str, Any]) -> str:
         sql_params[name] = region
     sql_params["expected_region_count"] = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
     comparison = "=" if completeness == "complete" else "<"
+    same_slot = (
+        f"{db.time_operand('completeness_row.observed_at')} = "
+        f"{db.time_operand('raw_taipower_regional_supply_demand_snapshot.observed_at')}"
+    )
     return (
         "(SELECT COUNT(DISTINCT completeness_row.region) "
         "FROM raw_taipower_regional_supply_demand_snapshot AS completeness_row "
-        "WHERE completeness_row.observed_at = "
-        "raw_taipower_regional_supply_demand_snapshot.observed_at "
+        f"WHERE {same_slot} "
         f"AND completeness_row.region IN ({', '.join(placeholders)})) "
         f"{comparison} :expected_region_count"
     )
 
 
-def _regional_filters(query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-    clauses, sql_params = _time_window(query, "observed_at")
+def _regional_filters(db: ExplorerDb, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+    clauses, sql_params = db.time_window("observed_at", query.window)
     region = query.filters.get("region")
     if region:
         if region not in REGIONAL_SUPPLY_DEMAND_REGIONS:
@@ -118,7 +113,7 @@ def _regional_filters(query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         sql_params["region"] = region
     completeness = _validate_completeness(query.filters.get("completeness"))
     if completeness:
-        clauses.append(_completeness_clause(completeness, sql_params))
+        clauses.append(_completeness_clause(db, completeness, sql_params))
     return clauses, sql_params
 
 
@@ -151,38 +146,29 @@ class NationalSupplyDemandReader(DatasetReader):
     """List persisted national supply-demand snapshots newest first."""
 
     dataset = "national_supply_demand"
+    select_sql = NATIONAL_SUPPLY_DEMAND_SQL
 
-    def fetch_page(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+        return self.db.time_window("observed_at", query.window)
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        clauses, sql_params = _time_window(query, "observed_at")
-        where, cursor_params = apply_cursor(clauses, cursor, ("observed_at",))
-        sql_params.update(cursor_params)
-        sql_params["limit"] = limit
-        rows = self.db.fetch(NATIONAL_SUPPLY_DEMAND_SQL.format(where=where), sql_params)
-        items = [_national_item(row) for row in rows]
-        return items, ten_minute_gaps(self.db, query.window)
+        return [_national_item(row) for row in rows], ten_minute_gaps(self.db, query.window)
 
 
 class RegionalSupplyDemandReader(DatasetReader):
     """List persisted regional snapshots newest first."""
 
     dataset = "regional_supply_demand"
+    select_sql = REGIONAL_SUPPLY_DEMAND_SQL
 
-    def fetch_page(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+        return _regional_filters(self.db, query)
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        clauses, sql_params = _regional_filters(query)
-        where, cursor_params = apply_cursor(clauses, cursor, ("observed_at", "region"))
-        sql_params.update(cursor_params)
-        sql_params["limit"] = limit
-        rows = self.db.fetch(REGIONAL_SUPPLY_DEMAND_SQL.format(where=where), sql_params)
         slot_regions = regional_slot_map(self.db, query.window)
         items = [
             _regional_item(row, slot_regions.get(to_taiwan(row["observed_at"]), set()))
@@ -195,39 +181,28 @@ class UnitGenerationReader(DatasetReader):
     """List persisted unit-generation snapshots newest first."""
 
     dataset = "unit_generation"
+    select_sql = """
+        SELECT observed_at, unit_type, unit_name, source_time, capacity_mw,
+               net_generation_mw, capacity_ratio_pct, remark, created_at
+        FROM raw_taipower_unit_generation_snapshot
+        WHERE {where}
+        ORDER BY {order}
+        LIMIT :limit
+    """
 
-    def fetch_page(
-        self,
-        query: ExplorerQuery,
-        cursor: dict[str, Any] | None,
-        limit: int,
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
+        clauses, sql_params = self.db.time_window("observed_at", query.window)
+        for name in ("unit_type", "unit_name"):
+            if query.filters.get(name):
+                clauses.append(f"{name} = :{name}")
+                sql_params[name] = query.filters[name]
+        return clauses, sql_params
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        clauses = ["observed_at >= :start_time", "observed_at <= :end_time"]
-        sql_params: dict[str, Any] = {
-            "start_time": query.window.as_utc()[0],
-            "end_time": query.window.as_utc()[1],
-        }
-        if query.filters.get("unit_type"):
-            clauses.append("unit_type = :unit_type")
-            sql_params["unit_type"] = query.filters["unit_type"]
-        if query.filters.get("unit_name"):
-            clauses.append("unit_name = :unit_name")
-            sql_params["unit_name"] = query.filters["unit_name"]
-        where, cursor_params = apply_cursor(
-            clauses, cursor, ("observed_at", "unit_type", "unit_name")
-        )
-        sql_params.update(cursor_params)
-        sql = f"""
-            SELECT observed_at, unit_type, unit_name, source_time, capacity_mw,
-                   net_generation_mw, capacity_ratio_pct, remark, created_at
-            FROM raw_taipower_unit_generation_snapshot
-            WHERE {where}
-            ORDER BY observed_at DESC, unit_type DESC, unit_name DESC
-            LIMIT :limit
-        """
-        sql_params["limit"] = limit
         items = []
-        for row in self.db.fetch(sql, sql_params):
+        for row in rows:
             items.append(
                 {
                     "observed_at": format_taiwan_time(to_taiwan(row["observed_at"])),

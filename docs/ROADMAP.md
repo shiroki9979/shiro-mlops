@@ -24,9 +24,11 @@
 
 ## 架構改善評估
 
-[2026-09-27 架構檢視紀錄](explanation/2026-09-27-architecture-review.md) 保存三項待評估候選：
+[2026-09-27 架構檢視紀錄](explanation/2026-09-27-architecture-review.md) 保存三項架構改善候選：
 集中營運資料檢視器分頁規則、集中預報版本選取與降級解析，以及收攏營運資料檢視器查詢生命週期。
-優先建議深入分頁規則；各項尚未選定實作方案或排入里程碑，證據、取捨與測試基線詳見紀錄。
+分頁規則已完成 Q1 至 Q8 的設計討論，並依 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 實作 v2 cursor、精確閉區間與八資料集共用查詢路徑。
+五張工單已確認並發布為 [#73](https://github.com/shiroki9979/shiro-mlops/issues/73)、[#74](https://github.com/shiroki9979/shiro-mlops/issues/74)、[#75](https://github.com/shiroki9979/shiro-mlops/issues/75)、[#76](https://github.com/shiroki9979/shiro-mlops/issues/76)、[#77](https://github.com/shiroki9979/shiro-mlops/issues/77)，依序為共用流程與觀測批次、預報、逐時資料、供需與機組、精確窗口及舊流程退場。
+實作順序為 #73 → #74／#75／#76 → #77；SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-data-explorer-pagination.md)。其餘兩項候選維持待評估，證據與取捨詳見架構檢視紀錄。
 
 ---
 

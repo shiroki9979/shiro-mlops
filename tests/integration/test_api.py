@@ -292,6 +292,7 @@ def test_task_predict_answers_503_when_serving_inputs_are_unavailable(
 ) -> None:
     """負載歷史缺失、負載起點過舊與天氣不可用皆無替代來源，通用端點與別名同樣回 503。"""
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
+    monkeypatch.setattr("shiro_mlops.service.api.repository_store", MagicMock())
 
     def unavailable(*args, **kwargs):
         raise error
