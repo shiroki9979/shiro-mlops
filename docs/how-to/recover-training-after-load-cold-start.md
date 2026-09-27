@@ -34,6 +34,8 @@
 | `cwa_forecast_ingestion_job_schedule` | 每小時第 40 分鐘保存 CWA 鄉鎮預報版本 |
 | `dynamic_horizon_forecast__training_schedule` | 台灣時間 00:00 訓練；門檻未達時略過 |
 | `dynamic_horizon_forecast__monitoring_schedule` | 每小時整點產生監控報告；門檻未達或尚無模型時略過 |
+| `load_pattern_anomaly__training_schedule` | 台灣時間 00:30 訓練用電型態異常偵測模型；門檻未達時略過 |
+| `load_pattern_anomaly__monitoring_schedule` | 每小時整點產生監控報告；門檻未達或尚無模型時略過 |
 
 任務的訓練與監控排程可以在冷啟動當天就開啟，不需等待累積完成。
 
@@ -93,9 +95,9 @@ Summary: 9 pass, 3 wait, 0 fail
    ```
 
    `dynamic_horizon_forecast load accumulation` 與 `tick dynamic_horizon_forecast__training_schedule` 應轉為 `PASS`，此時 `tick dynamic_horizon_forecast__monitoring_schedule` 仍為 `WAIT`（原因為尚無 `dynamic_horizon_forecast__model` materialization），因此結束碼仍為 `1`。
-2. 依 [全地端環境指南第 4 節](run-full-local-stack.md#4-準備資料並訓練模型) 手動啟動 `dynamic_horizon_forecast__training_job`，不需等待台灣時間 00:00 的排程自然觸發。
+2. 依 [全地端環境指南第 4 節](run-full-local-stack.md#4-準備資料並訓練模型) 手動啟動 `dynamic_horizon_forecast__training_job` 與 `load_pattern_anomaly__training_job`，不需等待排程自然觸發。smoke check 逐一列出每個已部署任務的項目，兩個任務的 `tick ...__monitoring_schedule` 都要有模型才會轉為 `PASS`。
 3. 訓練成功後重跑 `make smoke-check ARGS=--require-ready`，預期所有項目皆為 `PASS` 且結束碼為 `0`。下一個整點起 `dynamic_horizon_forecast__monitoring_job` 會自動觸發。
-4. 執行 `docker compose -f docker/docker-compose.yml restart api` 載入 `data/models/dynamic_horizon_forecast/` 的新模型，再以 `curl -i http://localhost:8000/ready` 確認回傳 HTTP 200。既有的 `data/model.joblib` 已失效且不再載入（ADR-0010），因此第一次訓練完成前 `/ready` 一律為 `not_ready`。
+4. 執行 `docker compose -f docker/docker-compose.yml restart api` 載入 `data/models/<task_id>/` 的新模型，再以 `curl -i http://localhost:8000/ready` 與 `curl -i http://localhost:8000/tasks/load_pattern_anomaly/ready` 確認回傳 HTTP 200。既有的 `data/model.joblib` 已失效且不再載入（ADR-0010），因此第一次訓練完成前 `/ready` 一律為 `not_ready`。
 
 ---
 
