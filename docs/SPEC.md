@@ -276,7 +276,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **請求 Body**：`horizon_hours`（整數 1–168，預設 24）；不接受 `location`。語意依任務的天氣輸入而定：
   - 預報天氣任務（`FORECAST`）：負載起點之後預測的小時數（預測視界）。
   - 觀測天氣任務（`OBSERVED`）：評分最近幾個時間窗結束小時，由負載起點往回算，即結束小時落在 `(anchor - horizon_hours, anchor]`；不預測未來。資料有缺口的時間窗不評分，因此回傳筆數可能少於 `horizon_hours`，但不以常數補值。
-- **回應 Body**：共通欄位 `status`（固定為 `success`）、`task_id`、`task_type`、`subject`、`mode`，以及 `predictions`；`predictions` 的 item schema 由任務類型的 `prediction_item` 與任務設定的 `weather.fields` 共同決定（§5.2），OpenAPI 以每個任務的 `<TaskId>TaskPredictionResponse`（item 為 `<TaskId>PredictionItem`，未附帶天氣者直接沿用任務類型的 item）逐一描述，並以 `task_type` 常數區分；回應模型於建構時驗證，端點不再以聯集重驗。
+- **回應 Body**：共通欄位 `status`（固定為 `success`）、`task_id`、`task_type`、`subject`、`mode`，以及 `predictions`；`predictions` 的 item schema 由任務類型的 `prediction_item` 與任務設定的 `weather.fields` 共同決定（§5.2），OpenAPI 以每個任務的 `<TaskId>TaskPredictionResponse`（item 為 `<TaskId>PredictionItem`，未附帶天氣者直接沿用任務類型的 item）逐一描述，並以 `task_id` 常數區分；回應模型於建構時驗證，端點不再以聯集重驗。
 - **Item 組成**：runner 回傳的預測列、天氣列（`weather.fields`）與 `weather_sources` 依位置一一對應合併後，以該任務的 item 驗證；`datetime` 以字串輸出（`YYYY-MM-DD HH:MM:SS`）。觀測天氣任務的天氣列與來源由 runner 對齊至被評分的結束小時（該小時以前最新一筆測站觀測，來源為 `{"source": "station_observation", "observed_at": ...}`），因此依位置合併的契約同樣成立。
 - **錯誤對應**：
 
@@ -566,7 +566,7 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 
 ### 5.4 模型保存（`tasks/model_store.py`）
 
-- `save_model(root, task_id, model) -> Path`：模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗，僅程序於兩次 rename 之間中止時任務會暫時沒有模型。每任務檔案鎖保護交換與讀取；交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
+- `save_model(root, task_id, model) -> Path`：模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗；僅程序於兩次 rename 之間中止時，任務於下次訓練成功前沒有模型，遺留的舊目錄 `.<task_id>.previous` 於下次替換時清除。每任務檔案鎖保護交換與讀取；交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
 - `load_model(root, task) -> TaskModel | None`：在同一把鎖下讀取 `root/<task_id>`，替換期間只會載入完整的前一版或新模型；目錄不存在時回傳 `None`（任務尚未訓練）；既有 `model.joblib` 不載入。
 - 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）；`direct_classification` 同為 `model.txt`（二元分類 Booster 文字格式）與 `metadata.json`（格式版本、任務類型、完整 `[params]`、`max_lead_hours`、特徵名稱、氣象欄位）；`unsupervised_reconstruction` 為 `model.npz`（`coef_{i}`、`intercept_{i}` 各層權重與偏差，`scaler_mean`、`scaler_scale` 標準化參數；以 `allow_pickle=False` 讀取）與 `metadata.json`（格式版本、任務類型、激活函數、層數、`window_hours`、氣象欄位、特徵名稱、`threshold`），推論以 numpy 前向計算，不重建 sklearn 物件。
 - `src/` 不得 import `pickle` 或 `joblib`，由測試強制。

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 預測 item 的天氣欄位改依任務設定 `weather.fields` 產生，不再由任務類型寫死氣溫與濕度；通用端點 OpenAPI 改以每個任務的 `<TaskId>TaskPredictionResponse`（以 `task_id` 常數區分）取代 `<TaskType>TaskPredictionResponse`，`/predict` 的 `PredictionItem` 契約不變（#69）。
 - 將儀表板與 Data Explorer 新增的預測對象標籤改為英文，與程式內字串規範一致（#65）。
 - 引入 ML 任務抽象（ADR-0009）：動態視界預報改由 `tasks/dynamic_horizon_forecast.toml` 任務設定與 `recursive_regression` 任務類型描述，Dagster 與 API 只經 task runner 訓練與預測；`TRAINING_MIN_LOAD_HOURS`、`LOAD_ANCHOR_MAX_LAG_HOURS` 環境變數改為任務設定 `[policies]`，lag／rolling 配方以任務設定為唯一來源，serving 依 `lookback_hours` 有界讀取負載歷史（#66）。
 - 模型改以 LightGBM 原生文字格式加 JSON metadata 保存於 `DATA_DIR/models/<task_id>/`（ADR-0010）；既有 `DATA_DIR/model.joblib` 不再載入，首次重新訓練前 `/ready` 維持 not_ready（#66）。
@@ -42,7 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 以原子目錄交換修復模型替換中斷時舊模型遺失、讀取期間短暫無模型，以及異常偵測缺少完整評分窗卻回報就緒的問題（#66、#68）。
 - 高負載預警僅在門檻窗的 28 日逐時負載完整時訓練與預測，避免缺值改變 P90 門檻（#69）。
-- 預測 item 的天氣欄位改依任務設定 `weather.fields` 產生，不再由任務類型寫死氣溫與濕度；通用端點 OpenAPI 改以每個任務的 `<TaskId>TaskPredictionResponse` 描述，`/predict` 的 `PredictionItem` 契約不變（#69）。
 - 核心或檔案系統不支援 `renameat2(RENAME_EXCHANGE)` 時，模型替換改於排他鎖內以 rename 完成，非 Linux 環境不再於第二次訓練保存時失敗（#66）。
 - 暫緩需歷史逐時負載的訓練與 drift 排程，讓 Dagster 明確顯示來源待補原因，並維持 CWA 與台電即時快照排程運作（#61）。
 - 改由 CWA 原始 XML 預報檔取得 `IssueTime`／`Update`，並限制無憑證下載 redirect 的 HTTPS 儲存目標，避免 flattened REST 回應缺少版本時間而使 forecast ingestion 永久重試。

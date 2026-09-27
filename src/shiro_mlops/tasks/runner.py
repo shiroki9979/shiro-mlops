@@ -10,7 +10,7 @@ Taiwan-local naive time.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import cached_property
 
@@ -313,9 +313,8 @@ class _WeatherPath:
 def _readiness_request(
     task: TaskDefinition, runtime: TaskRuntime, as_of: datetime
 ) -> _ServingRequest:
-    requirements = get_task_type(task.task_type).requirements(task.params)
-    horizon_hours = _WEATHER_PATHS[requirements.weather].readiness_horizon_hours
-    return _ServingRequest(task, runtime, as_of, horizon_hours)
+    request = _ServingRequest(task, runtime, as_of, horizon_hours=None)
+    return replace(request, horizon_hours=request.weather_path.readiness_horizon_hours)
 
 
 def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeatherResolution]:
@@ -323,8 +322,7 @@ def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, Weath
     anchor = _fresh_load_anchor(task, request.repository, request.as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
     history = _fetch_target(task, request.repository, start=history_start, end=anchor)
-    if requirements.history_coverage is not None:
-        _require_history_coverage(request, history, anchor)
+    _require_history_coverage(request, history, anchor)
     weather = request.weather_path.read(request, history_start, anchor)
     data = PredictionData(
         anchor=anchor,
@@ -354,6 +352,8 @@ def _require_history_coverage(
 ) -> None:
     """Refuse rather than let the task type fail: missing past load has no substitute."""
     coverage = request.requirements.history_coverage
+    if coverage is None:
+        return
     window_start = anchor - timedelta(hours=coverage.window_hours)
     times = pd.to_datetime(history.loc[history[LOAD_MW_COL].notna(), DATETIME_COL])
     valid_hours = times[(times > window_start) & (times <= anchor)].nunique()
