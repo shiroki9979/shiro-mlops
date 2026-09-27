@@ -2,7 +2,16 @@
 
 import pandas as pd
 
+from shiro_mlops.core.constants import DATETIME_COL, STORAGE_TIME_COL
+
 TAIWAN_TZ = "Asia/Taipei"
+
+
+def with_datetime_column(frame: pd.DataFrame) -> pd.DataFrame:
+    """Persisted tables name their instant column ``time``; in-memory frames use ``datetime``."""
+    if DATETIME_COL not in frame.columns and STORAGE_TIME_COL in frame.columns:
+        return frame.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
+    return frame
 
 
 def standardize_taiwan_datetime(s: pd.Series) -> pd.Series:

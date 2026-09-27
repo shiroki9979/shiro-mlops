@@ -15,10 +15,10 @@ from shiro_mlops.core.constants import (
     LOCATION_COL,
     NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
-    STORAGE_TIME_COL,
     SUBJECT_COL,
     TEMPERATURE_COL,
 )
+from shiro_mlops.core.datetime_utils import with_datetime_column
 
 TAIPOWER_EXPORT_LAG_HOURS = (1, 2, 24)
 TAIPOWER_EXPORT_ROLLING_WINDOWS = (6, 24)
@@ -33,14 +33,6 @@ class FeastFeatureFrames:
 
     taipower: pd.DataFrame
     weather: pd.DataFrame
-
-
-def _normalize_export_frame(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure an export frame has the event-time column Feast reads."""
-    result = df.copy()
-    if DATETIME_COL not in result.columns and STORAGE_TIME_COL in result.columns:
-        result = result.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
-    return result
 
 
 def _fill_load_history_without_leakage(series: pd.Series) -> pd.Series:
@@ -61,7 +53,7 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
     The frozen Feast schema keeps its ``location`` entity (ADR-0009); its values
     are prediction subjects.
     """
-    result = _normalize_export_frame(_with_subject(load_df))
+    result = with_datetime_column(_with_subject(load_df))
     result = result.drop(columns=[LOCATION_COL], errors="ignore").rename(
         columns={SUBJECT_COL: LOCATION_COL}
     )
@@ -123,7 +115,7 @@ def _build_weather_export(weather_df: pd.DataFrame, subjects: list[str]) -> pd.D
     Weather rows are keyed by the subjects they represent, so both frozen Feast
     views join on the same ``location`` entity values.
     """
-    base = _normalize_export_frame(weather_df).drop(columns=[LOCATION_COL], errors="ignore")
+    base = with_datetime_column(weather_df).drop(columns=[LOCATION_COL], errors="ignore")
     result = pd.concat(
         [base.assign(**{LOCATION_COL: subject}) for subject in subjects], ignore_index=True
     )

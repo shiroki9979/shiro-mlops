@@ -121,13 +121,9 @@ class Settings(BaseSettings):
 
     def weather_reference_point(self, alias: str) -> CWALocation:
         """Resolve a weather reference point alias against the CWA ingestion catalog."""
-        catalog = self.cwa_locations
-        if alias not in catalog:
-            raise ValueError(
-                f"Weather reference point {alias!r} is not in the CWA ingestion catalog; "
-                f"known aliases: {sorted(catalog)}"
-            )
-        return catalog[alias]
+        from shiro_mlops.data.cwa_client import resolve_cwa_location
+
+        return resolve_cwa_location(self.cwa_locations, alias)
 
     @property
     def timescale_uri(self) -> str:

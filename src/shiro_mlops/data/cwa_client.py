@@ -1,6 +1,7 @@
 """Client for fetching Central Weather Administration (CWA) observations and forecasts."""
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -28,6 +29,16 @@ class CWALocation:
     alias: str
     station_id: str
     geocode: str
+
+
+def resolve_cwa_location(catalog: Mapping[str, CWALocation], alias: str) -> CWALocation:
+    """Look a weather reference point alias up in a CWA ingestion catalog."""
+    if alias not in catalog:
+        raise ValueError(
+            f"Weather reference point {alias!r} is not in the CWA ingestion catalog; "
+            f"known aliases: {sorted(catalog)}"
+        )
+    return catalog[alias]
 
 
 DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
