@@ -12,8 +12,9 @@ from shiro_mlops.service.data_explorer.completeness import (
 )
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.pagination import apply_cursor
+from shiro_mlops.service.data_explorer.pagination import apply_cursor, sort_order
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import optional_time, to_float, to_mw, to_taiwan
 
@@ -28,7 +29,7 @@ NATIONAL_SUPPLY_DEMAND_SQL = """
            real_hr_peak_time, created_at
     FROM raw_taipower_supply_demand_snapshot
     WHERE {where}
-    ORDER BY observed_at DESC
+    ORDER BY {order}
     LIMIT :limit
 """
 
@@ -36,7 +37,7 @@ REGIONAL_SUPPLY_DEMAND_SQL = """
     SELECT observed_at, region, source_time, generation_wan_kw, load_wan_kw, created_at
     FROM raw_taipower_regional_supply_demand_snapshot
     WHERE {where}
-    ORDER BY observed_at DESC, region DESC
+    ORDER BY {order}
     LIMIT :limit
 """
 
@@ -151,38 +152,53 @@ class NationalSupplyDemandReader(DatasetReader):
     """List persisted national supply-demand snapshots newest first."""
 
     dataset = "national_supply_demand"
+    raw_pagination = True
 
-    def fetch_page(
+    def fetch_rows(
         self,
         query: ExplorerQuery,
         cursor: dict[str, Any] | None,
         limit: int,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> list[dict[str, Any]]:
         clauses, sql_params = _time_window(query, "observed_at")
-        where, cursor_params = apply_cursor(clauses, cursor, ("observed_at",))
+        sort = DATASET_SPECS[self.dataset]["sort"]
+        where, cursor_params = apply_cursor(clauses, cursor, sort)
         sql_params.update(cursor_params)
         sql_params["limit"] = limit
-        rows = self.db.fetch(NATIONAL_SUPPLY_DEMAND_SQL.format(where=where), sql_params)
-        items = [_national_item(row) for row in rows]
-        return items, ten_minute_gaps(self.db, query.window)
+        return self.db.fetch(
+            NATIONAL_SUPPLY_DEMAND_SQL.format(where=where, order=sort_order(sort)), sql_params
+        )
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        return [_national_item(row) for row in rows], ten_minute_gaps(self.db, query.window)
 
 
 class RegionalSupplyDemandReader(DatasetReader):
     """List persisted regional snapshots newest first."""
 
     dataset = "regional_supply_demand"
+    raw_pagination = True
 
-    def fetch_page(
+    def fetch_rows(
         self,
         query: ExplorerQuery,
         cursor: dict[str, Any] | None,
         limit: int,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> list[dict[str, Any]]:
         clauses, sql_params = _regional_filters(query)
-        where, cursor_params = apply_cursor(clauses, cursor, ("observed_at", "region"))
+        sort = DATASET_SPECS[self.dataset]["sort"]
+        where, cursor_params = apply_cursor(clauses, cursor, sort)
         sql_params.update(cursor_params)
         sql_params["limit"] = limit
-        rows = self.db.fetch(REGIONAL_SUPPLY_DEMAND_SQL.format(where=where), sql_params)
+        return self.db.fetch(
+            REGIONAL_SUPPLY_DEMAND_SQL.format(where=where, order=sort_order(sort)), sql_params
+        )
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         slot_regions = regional_slot_map(self.db, query.window)
         items = [
             _regional_item(row, slot_regions.get(to_taiwan(row["observed_at"]), set()))
@@ -195,39 +211,40 @@ class UnitGenerationReader(DatasetReader):
     """List persisted unit-generation snapshots newest first."""
 
     dataset = "unit_generation"
+    raw_pagination = True
 
-    def fetch_page(
+    def fetch_rows(
         self,
         query: ExplorerQuery,
         cursor: dict[str, Any] | None,
         limit: int,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        clauses = ["observed_at >= :start_time", "observed_at <= :end_time"]
-        sql_params: dict[str, Any] = {
-            "start_time": query.window.as_utc()[0],
-            "end_time": query.window.as_utc()[1],
-        }
+    ) -> list[dict[str, Any]]:
+        clauses, sql_params = _time_window(query, "observed_at")
         if query.filters.get("unit_type"):
             clauses.append("unit_type = :unit_type")
             sql_params["unit_type"] = query.filters["unit_type"]
         if query.filters.get("unit_name"):
             clauses.append("unit_name = :unit_name")
             sql_params["unit_name"] = query.filters["unit_name"]
-        where, cursor_params = apply_cursor(
-            clauses, cursor, ("observed_at", "unit_type", "unit_name")
-        )
+        sort = DATASET_SPECS[self.dataset]["sort"]
+        where, cursor_params = apply_cursor(clauses, cursor, sort)
         sql_params.update(cursor_params)
         sql = f"""
             SELECT observed_at, unit_type, unit_name, source_time, capacity_mw,
                    net_generation_mw, capacity_ratio_pct, remark, created_at
             FROM raw_taipower_unit_generation_snapshot
             WHERE {where}
-            ORDER BY observed_at DESC, unit_type DESC, unit_name DESC
+            ORDER BY {sort_order(sort)}
             LIMIT :limit
         """
         sql_params["limit"] = limit
+        return self.db.fetch(sql, sql_params)
+
+    def project_page(
+        self, query: ExplorerQuery, rows: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         items = []
-        for row in self.db.fetch(sql, sql_params):
+        for row in rows:
             items.append(
                 {
                     "observed_at": format_taiwan_time(to_taiwan(row["observed_at"])),
