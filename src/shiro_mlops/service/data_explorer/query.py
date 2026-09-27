@@ -30,11 +30,7 @@ class TimeWindow:
     end: datetime
 
     def as_utc(self) -> tuple[datetime, datetime]:
-        # SQLite 對 aware/naive 時間字串比較會漏掉邊界列，因此將閉區間略為放寬。
-        return (
-            to_sql_utc(self.start) - timedelta(seconds=1),
-            to_sql_utc(self.end) + timedelta(seconds=1),
-        )
+        return to_sql_utc(self.start), to_sql_utc(self.end)
 
 
 @dataclass(frozen=True)
