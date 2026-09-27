@@ -43,10 +43,10 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     defaultHours: 24,
     columns: [
       { key: 'datetime', label: '時間' },
-      { key: 'subject', label: '預測對象' },
+      { key: 'subject', label: 'Prediction subject' },
       { key: 'load_mw', label: '負載 (MW)' },
     ],
-    filters: [{ key: 'subject', label: '預測對象', placeholder: 'nationwide' }],
+    filters: [{ key: 'subject', label: 'Prediction subject', placeholder: 'nationwide' }],
   },
   {
     id: 'national_supply_demand',

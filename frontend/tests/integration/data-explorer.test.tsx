@@ -72,7 +72,7 @@ describe('Data Explorer routes', () => {
     await waitFor(() => {
       expect(screen.getByText('32100.5')).toBeInTheDocument()
     })
-    expect(screen.getAllByText('預測對象').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Prediction subject').length).toBeGreaterThan(0)
     expect(screen.getByPlaceholderText('nationwide')).toHaveValue('nationwide')
     expect(screen.getAllByText('nationwide').length).toBeGreaterThan(0)
     expect(screen.getByText(/查詢區間缺口/)).toBeInTheDocument()

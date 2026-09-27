@@ -50,7 +50,7 @@ export function HorizonControls() {
         {/* The model forecasts nationwide load only, so the subject is fixed rather than selectable. */}
         <div className="flex items-center gap-2 text-xs text-slate-300">
           <MapPin className="h-3.5 w-3.5 text-slate-400" />
-          <span>預測對象：全台</span>
+          <span>Prediction subject: Nationwide</span>
         </div>
 
         <div className="h-4 w-px bg-slate-800" />
