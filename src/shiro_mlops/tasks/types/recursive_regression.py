@@ -73,11 +73,22 @@ class RecursiveRegressionParams(BaseModel):
         return max(*self.lags, *self.rolling_windows)
 
 
+class RecursiveRegressionPrediction(BaseModel):
+    """One served forecast hour: the predicted load with the weather that drove it."""
+
+    datetime: str
+    predicted_load_mw: float
+    temperature: float
+    relative_humidity: float
+    weather_sources: dict[str, dict[str, str]]
+
+
 class RecursiveRegression:
     """Task type adapter for recursive multi-step regression."""
 
     name: ClassVar[str] = TASK_TYPE_NAME
     params_model: ClassVar[type[RecursiveRegressionParams]] = RecursiveRegressionParams
+    prediction_item: ClassVar[type[RecursiveRegressionPrediction]] = RecursiveRegressionPrediction
 
     def requirements(self, params: RecursiveRegressionParams) -> InputRequirements:
         return InputRequirements(

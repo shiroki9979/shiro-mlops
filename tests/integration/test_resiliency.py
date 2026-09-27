@@ -125,7 +125,7 @@ def serving_repo(
 ) -> TimeSeriesRepository:
     """A loaded model reading persisted nationwide load history, with no weather yet."""
     test_repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
-    monkeypatch.setattr(model_store, "model", fitted_task_model)
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     return test_repo
 
@@ -328,7 +328,7 @@ def test_newer_legacy_rows_never_anchor_serving(
     insert_legacy_load_row(
         legacy_upgraded_engine, STALE_REQUEST_TIME.floor("h").to_pydatetime(), load_mw=26500.0
     )
-    monkeypatch.setattr(model_store, "model", fitted_task_model)
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
     _request_at(monkeypatch, STALE_REQUEST_TIME)
 

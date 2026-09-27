@@ -81,6 +81,9 @@ class TaskType(Protocol[P]):
 
     name: ClassVar[str]
     params_model: ClassVar[type[P]]
+    # 回應 schema 依任務類型而定（ADR-0009）：服務層以此組成 /tasks/{task_id}/predict 的
+    # 回應與 OpenAPI。每個 item 由同位置的預測列、天氣列與 weather_sources 合併後驗證。
+    prediction_item: ClassVar[type[BaseModel]]
 
     def requirements(self, params: P) -> InputRequirements: ...
 
