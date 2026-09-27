@@ -13,6 +13,39 @@ from shiro_mlops.data.weather_resolution import resolve_weather
 from tests.helpers import forecast_release, township_forecast
 
 
+@pytest.mark.parametrize("hour", [14, 15, 16])
+def test_resolver_falls_back_to_weekly_around_a_missing_forecast_point(
+    test_repo: TimeSeriesRepository, hour: int
+) -> None:
+    points = tuple(
+        replace(
+            township_forecast(datetime(2026, 8, 20, time), temperature),
+            geocode=settings.cwa_locations["Taipei"].geocode,
+        )
+        for time, temperature in ((12, 30.0), (15, None), (18, 36.0))
+    )
+    test_repo.upsert_cwa_forecast_release(forecast_release(datetime(2026, 8, 20, 10), points))
+    weekly = replace(
+        township_forecast(datetime(2026, 8, 20, 12), 22.0),
+        valid_to=datetime(2026, 8, 20, 19),
+        geocode=settings.cwa_locations["Taipei"].geocode,
+    )
+    test_repo.upsert_cwa_forecast_release(
+        replace(forecast_release(datetime(2026, 8, 20, 10), (weekly,)), dataset_id="F-D0047-091")
+    )
+
+    result = resolve_weather(
+        test_repo,
+        start_time=datetime(2026, 8, 20, hour),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 14),
+        fields=("temperature",),
+    )
+
+    assert result.dataframe.loc[0, "temperature"] == 22.0
+    assert result.sources[0]["temperature"]["source"] == "weekly"
+
+
 def test_resolver_interpolates_short_horizon_between_persisted_forecast_points(
     test_repo: TimeSeriesRepository,
 ) -> None:

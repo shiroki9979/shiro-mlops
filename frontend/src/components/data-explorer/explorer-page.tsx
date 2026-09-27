@@ -43,7 +43,10 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         filterValues={filterValues}
         fetchedAt={fetchedAt}
         items={listQuery.data?.items ?? []}
-        onRefresh={() => void listQuery.refetch()}
+        onRefresh={() => {
+          void listQuery.refetch()
+          void statusQuery.refetch()
+        }}
         onSearchChange={updateSearch}
       />
       <ExplorerResults

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
@@ -13,6 +13,49 @@ function renderPath(path: string) {
 }
 
 describe('Data Explorer routes', () => {
+  it('keeps the default time window when opening a detail later', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-09-09T12:00:00Z'))
+      const user = userEvent.setup()
+      renderPath('/data/power/load')
+      await screen.findByText('32100.5')
+
+      vi.setSystemTime(new Date('2026-09-09T12:02:00Z'))
+      await user.click(screen.getByText('32100.5'))
+      await screen.findByText('Typed detail')
+
+      expect(screen.getByLabelText('開始時間')).toHaveValue('2026-09-08T20:00')
+      expect(screen.getByLabelText('結束時間')).toHaveValue('2026-09-09T20:00')
+      await user.click(screen.getByText('下一頁'))
+      await screen.findByText('30100')
+      expect(screen.getByLabelText('結束時間')).toHaveValue('2026-09-09T20:00')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refreshes operational status alongside the current data page', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    await screen.findByText('32100.5')
+    await screen.findByText('freshness: fresh')
+    server.use(http.get('*/data/status', () => HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      datasets: [{
+        id: 'hourly_load', label: 'Hourly load', href: '/data/power/load',
+        availability: 'available', freshness: 'warning', completeness: 'complete',
+        overall: 'warning', ingestion_age_seconds: 9000,
+      }],
+    })))
+
+    await user.click(screen.getByText('Refresh'))
+
+    expect(await screen.findByText('freshness: warning')).toBeInTheDocument()
+    expect(screen.getByText('Ingestion age：9000 秒')).toBeInTheDocument()
+    expect(screen.getByText('32100.5')).toBeInTheDocument()
+  })
+
   it('shows hourly load status and deep link on the overview', async () => {
     renderPath('/data')
     await waitFor(() => {

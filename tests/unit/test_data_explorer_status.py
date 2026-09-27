@@ -1,5 +1,6 @@
 """Dataset status dimensions stay independent and explainable."""
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -11,7 +12,31 @@ from shiro_mlops.service.data_explorer.status import (
     derive_overall,
     evaluate_freshness,
 )
-from tests.helpers import derived_hourly_load
+from tests.helpers import derived_hourly_load, forecast_release
+
+
+def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    catalog = DatasetStatusCatalog(test_repo.engine)
+    for hour, missing, completeness in ((10, ("63000000",), "incomplete"), (11, (), "complete")):
+        test_repo.upsert_cwa_forecast_release(
+            replace(
+                forecast_release(datetime(2026, 9, 20, hour), ()),
+                status=completeness,
+                missing_geocodes=missing,
+            )
+        )
+
+        statuses = catalog.status(datetime(2026, 9, 20, 12)).datasets
+        forecasts = next(item for item in statuses if item.id == "cwa_forecasts")
+        audits = next(item for item in statuses if item.id == "cwa_forecast_audits")
+
+        assert forecasts.completeness == audits.completeness == completeness
+        assert forecasts.missing_identifiers == audits.missing_identifiers == list(missing)
+        assert forecasts.source_age_seconds == audits.source_age_seconds == (12 - hour) * 3600
+        assert forecasts.serving_stale is False
+        assert audits.serving_stale is None
 
 
 @pytest.mark.parametrize("minute", [0, 15])
