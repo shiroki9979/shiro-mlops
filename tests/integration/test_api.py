@@ -1,13 +1,23 @@
 """Integration tests for FastAPI endpoints."""
 
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.weather_resolution import WeatherResolution
 from shiro_mlops.service.api import app, model_store
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.model_store import model_directory, save_model
+from shiro_mlops.tasks.runner import (
+    MissingLoadHistoryError,
+    StaleLoadAnchorError,
+    WeatherUnavailableError,
+)
 from shiro_mlops.tasks.types.base import TaskModel
 
 
@@ -37,7 +47,7 @@ def test_app_startup_skips_timescale_initialization_in_test_environment(monkeypa
 
 def test_api_ready_reports_cold_start_without_constructing_a_cwa_client(monkeypatch) -> None:
     """An empty database is live but not ready until ingestion and training complete."""
-    model_store.model = None
+    monkeypatch.setattr(model_store, "models", {})
 
     with TestClient(app) as client:
         response = client.get("/ready")
@@ -64,7 +74,7 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-20 13:00")
     )
-    model_store.model = MagicMock()
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
     weather = WeatherResolution(
         dataframe=pd.DataFrame(
             {
@@ -93,8 +103,17 @@ def _serve_fitted_forecaster(
     monkeypatch,
 ) -> MagicMock:
     """Attach a fitted model and a repository holding fresh load and forecast rows."""
-    model_store.model = fitted_task_model
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
+    return _serve_fresh_inputs(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
 
+
+def _serve_fresh_inputs(
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    cwa_forecast_df: pd.DataFrame,
+    monkeypatch,
+) -> MagicMock:
+    """Attach a repository holding fresh load and forecast rows, and a matching request clock."""
     repository = MagicMock()
     repository.fetch_latest_load.return_value = taipower_raw_df.tail(1)
     repository.fetch_load_range.return_value = taipower_raw_df
@@ -196,3 +215,150 @@ def test_openapi_marks_predict_location_as_optional_and_deprecated() -> None:
     assert request_schema["properties"]["location"]["deprecated"] is True
     assert "subject" in schemas["PredictionResponse"]["properties"]
     assert "location" not in schemas["PredictionResponse"]["properties"]
+
+
+def test_task_predict_matches_the_predict_alias(
+    fitted_task_model: TaskModel,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    cwa_forecast_df: pd.DataFrame,
+    monkeypatch,
+) -> None:
+    """ADR-0009：/predict 是動態視界預報任務的別名，兩者對同一請求給出相同預測。"""
+    _serve_fitted_forecaster(
+        fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
+    client = TestClient(app)
+
+    alias = client.post("/predict", json={"horizon_hours": 12}).json()
+    task = client.post(
+        f"/tasks/{DYNAMIC_HORIZON_FORECAST}/predict", json={"horizon_hours": 12}
+    ).json()
+
+    assert task["status"] == "success"
+    assert task["task_id"] == DYNAMIC_HORIZON_FORECAST
+    assert task["task_type"] == "recursive_regression"
+    assert task["subject"] == alias["subject"] == "nationwide"
+    assert task["mode"] == alias["mode"]
+    assert len(task["predictions"]) == 12
+    assert task["predictions"] == alias["predictions"]
+
+
+def test_task_endpoints_answer_404_for_an_unknown_task() -> None:
+    client = TestClient(app)
+
+    predict = client.post("/tasks/no_such_task/predict", json={"horizon_hours": 1})
+    ready = client.get("/tasks/no_such_task/ready")
+
+    assert predict.status_code == 404
+    assert "no_such_task" in predict.json()["detail"]
+    assert ready.status_code == 404
+
+
+def test_task_predict_answers_503_when_the_task_model_is_not_loaded(monkeypatch) -> None:
+    monkeypatch.setattr(model_store, "models", {})
+
+    response = TestClient(app).post(
+        f"/tasks/{DYNAMIC_HORIZON_FORECAST}/predict", json={"horizon_hours": 1}
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Model is not loaded or trained yet."
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MissingLoadHistoryError("No persisted nationwide load history is available."),
+        StaleLoadAnchorError("Stale load anchor: latest actual load lags request time."),
+        WeatherUnavailableError("Weather coverage is unavailable."),
+    ],
+)
+def test_task_predict_answers_503_when_serving_inputs_are_unavailable(
+    error: Exception, monkeypatch
+) -> None:
+    """負載歷史缺失、負載起點過舊與天氣不可用皆無替代來源，通用端點與別名同樣回 503。"""
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
+
+    def unavailable(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr("shiro_mlops.service.api.predict_task", unavailable)
+    client = TestClient(app)
+
+    task = client.post(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/predict", json={"horizon_hours": 1})
+    alias = client.post("/predict", json={"horizon_hours": 1})
+
+    assert task.status_code == alias.status_code == 503
+    assert task.json()["detail"] == alias.json()["detail"] == str(error)
+
+
+def test_task_ready_matches_the_ready_alias(
+    fitted_task_model: TaskModel,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    cwa_forecast_df: pd.DataFrame,
+    monkeypatch,
+) -> None:
+    _serve_fitted_forecaster(
+        fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
+    client = TestClient(app)
+
+    alias = client.get("/ready")
+    task = client.get(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/ready")
+
+    assert task.status_code == alias.status_code
+    assert task.json() == alias.json()
+
+
+def test_startup_loads_each_task_model_independently(
+    fitted_task_model: TaskModel,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    cwa_forecast_df: pd.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """單一任務的模型損毀或缺失時，其餘任務照常載入並提供預測。"""
+    tasks = deployed_tasks()
+    other = replace(tasks[DYNAMIC_HORIZON_FORECAST], task_id="other_forecast")
+    monkeypatch.setitem(tasks, other.task_id, other)
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(model_store, "models", {})
+    save_model(settings.models_dir, other.task_id, fitted_task_model)
+    corrupt = model_directory(settings.models_dir, DYNAMIC_HORIZON_FORECAST)
+    corrupt.mkdir(parents=True)
+    (corrupt / "metadata.json").write_text("not json", encoding="utf-8")
+    _serve_fresh_inputs(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
+
+    with TestClient(app) as client:
+        health = client.get("/health").json()
+        other_predict = client.post(f"/tasks/{other.task_id}/predict", json={"horizon_hours": 3})
+        alias_predict = client.post("/predict", json={"horizon_hours": 3})
+
+    assert health["model_loaded"] is False
+    assert health["tasks"] == {
+        DYNAMIC_HORIZON_FORECAST: {"task_type": "recursive_regression", "model_loaded": False},
+        other.task_id: {"task_type": "recursive_regression", "model_loaded": True},
+    }
+    assert other_predict.status_code == 200
+    assert len(other_predict.json()["predictions"]) == 3
+    assert alias_predict.status_code == 503
+
+
+def test_openapi_describes_task_predictions_with_the_task_type_item_schema() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    item_properties = schemas["PredictionItem"]["properties"]
+
+    task_response = next(
+        schema
+        for name, schema in schemas.items()
+        if name.endswith("TaskPredictionResponse")
+        and schema["properties"]["task_type"].get("const") == "recursive_regression"
+    )
+    item_ref = task_response["properties"]["predictions"]["items"]["$ref"]
+    task_item = schemas[item_ref.rsplit("/", 1)[-1]]
+
+    assert task_item["properties"] == item_properties
+    assert set(task_item["required"]) == set(schemas["PredictionItem"]["required"])
