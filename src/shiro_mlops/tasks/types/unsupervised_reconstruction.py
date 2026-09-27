@@ -27,7 +27,14 @@ from numpy.lib.stride_tricks import sliding_window_view
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, PositiveFloat, PositiveInt
 from sklearn.neural_network import MLPRegressor
 
-from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, MAX_HORIZON_HOURS
+from shiro_mlops.core.constants import (
+    DATETIME_COL,
+    DAYS_PER_WEEK,
+    HOURS_PER_DAY,
+    LOAD_MW_COL,
+    MAX_HORIZON_HOURS,
+    SATURDAY,
+)
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
     HealthStatus,
@@ -447,7 +454,7 @@ def _hourly_frame(
         weather, on=DATETIME_COL, how="left"
     )
     hourly[weather_columns] = hourly[weather_columns].ffill(limit=WEATHER_FILL_LIMIT_HOURS)
-    hourly[IS_WEEKEND_COL] = (hourly[DATETIME_COL].dt.dayofweek >= 5).astype(float)
+    hourly[IS_WEEKEND_COL] = (hourly[DATETIME_COL].dt.dayofweek >= SATURDAY).astype(float)
     return hourly
 
 
@@ -462,8 +469,8 @@ def _by_time(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _calendar_encoding(end_times: pd.DatetimeIndex) -> np.ndarray:
-    hour = 2 * np.pi * end_times.hour.to_numpy() / 24.0
-    day = 2 * np.pi * end_times.dayofweek.to_numpy() / 7.0
+    hour = 2 * np.pi * end_times.hour.to_numpy() / HOURS_PER_DAY
+    day = 2 * np.pi * end_times.dayofweek.to_numpy() / DAYS_PER_WEEK
     return np.column_stack([np.sin(hour), np.cos(hour), np.sin(day), np.cos(day)])
 
 
