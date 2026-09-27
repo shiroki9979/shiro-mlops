@@ -9,7 +9,6 @@ LightGBM's native text format plus JSON metadata (ADR-0010).
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
@@ -37,8 +36,8 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
     split_at_validation,
 )
+from shiro_mlops.tasks.types.lightgbm_params import LightGBMParams
 from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
-from shiro_mlops.tasks.types.recursive_regression import LightGBMParams
 
 TASK_TYPE_NAME = "direct_classification"
 MODEL_FILE = "model.txt"
@@ -51,9 +50,6 @@ LABEL_COL = "is_high_load"
 PROBABILITY_COL = "probability"
 # 視界上限與 API 接受的最長 horizon 一致，單一模型才能涵蓋任何請求的每個小時。
 MAX_LEAD_HOURS = MAX_HORIZON_HOURS
-# 門檻窗內至少九成小時有實際負載才計算門檻；推算序列偶有上游中斷缺口，要求全滿會讓
-# 單一缺漏小時使預警停擺 28 日，缺漏過多則分位數不再代表該窗的負載分布。
-MIN_THRESHOLD_WINDOW_COVERAGE = 0.9
 # 以機率 0.5 判定是否預警，與 LightGBM 二元分類的預設決策界線一致。
 ALERT_PROBABILITY = 0.5
 METRIC_NAMES = ("precision", "recall", "f1")
@@ -77,10 +73,6 @@ class HighLoadThresholdParams(BaseModel):
     @property
     def window_hours(self) -> int:
         return self.window_days * HOURS_PER_DAY
-
-    @property
-    def min_valid_hours(self) -> int:
-        return math.ceil(self.window_hours * MIN_THRESHOLD_WINDOW_COVERAGE)
 
 
 class DirectClassificationParams(BaseModel):
@@ -134,7 +126,7 @@ class DirectClassification:
         return InputRequirements(
             weather=WeatherInput.FORECAST,
             lookback_hours=params.lookback_hours,
-            history_coverage=HistoryCoverage(threshold.window_hours, threshold.min_valid_hours),
+            history_coverage=HistoryCoverage(threshold.window_hours, threshold.window_hours),
         )
 
     def train(self, params: DirectClassificationParams, data: TrainingData) -> Trained:
@@ -225,7 +217,7 @@ class DirectClassificationModel:
         known = _anchor_features(self.params, _load_series(data.load_history)).loc[[anchor]]
         if known[THRESHOLD_COL].isna().any():
             raise ValueError(
-                f"Load history has fewer than {self.params.threshold.min_valid_hours} hours in "
+                f"Load history has fewer than {self.params.threshold.window_hours} hours in "
                 f"the {self.params.threshold.window_days}-day high-load threshold window "
                 f"ending at anchor {anchor.isoformat()}"
             )
@@ -301,7 +293,7 @@ def _anchor_features(params: DirectClassificationParams, load: pd.Series) -> pd.
     """Everything known at each anchor hour; time-based windows never look past the anchor.
 
     The threshold covers the window (anchor - window_days, anchor]; anchors with
-    fewer than ``min_valid_hours`` load hours in that window get no threshold.
+    fewer than ``window_hours`` load hours in that window get no threshold.
     """
     features = pd.DataFrame({ANCHOR_LOAD_COL: load}, index=load.index)
     for lag in params.lags:
@@ -312,7 +304,7 @@ def _anchor_features(params: DirectClassificationParams, load: pd.Series) -> pd.
         features[f"{LOAD_MW_COL}_rolling_mean_{window}"] = rolling.mean()
         features[f"{LOAD_MW_COL}_rolling_std_{window}"] = rolling.std().fillna(0.0)
     window = load.rolling(f"{params.threshold.window_hours}h")
-    covered = window.count() >= params.threshold.min_valid_hours
+    covered = window.count() >= params.threshold.window_hours
     features[THRESHOLD_COL] = window.quantile(params.threshold.quantile).where(covered)
     features.index.name = ANCHOR_COL
     return features

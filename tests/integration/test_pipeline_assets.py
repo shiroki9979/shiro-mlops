@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from dagster import AssetKey, Definitions, Failure, build_asset_context, materialize
+from dagster import Definitions, Failure, build_asset_context, load_assets_from_modules, materialize
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import (
@@ -19,26 +19,30 @@ from shiro_mlops.data.cwa_client import (
     CWAStationObservation,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.assets import (
     feast_feature_export,
     raw_cwa_station_observation,
     raw_cwa_township_forecast,
 )
-from shiro_mlops.pipelines.definitions import all_assets
-from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.pipelines.task_pipelines import (
+    TaskPipelineNames,
+    build_task_pipeline,
+    build_task_pipelines,
+)
 from shiro_mlops.pipelines.tracking import TrackedRun
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST
-from tests.helpers import derived_hourly_load, override_task_policies, task_jobs
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from tests.helpers import derived_hourly_load, override_task_policies
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
-FEATURES_ASSET = next(asset for asset in all_assets if AssetKey(NAMES.features) in asset.keys)
 
 
 def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
     """Invoke the task's features asset the way a training run does."""
+    features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
     with build_asset_context(resources={"time_series_repo": repository}) as context:
-        return FEATURES_ASSET(context).value
+        return features_asset(context).value
 
 
 def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
@@ -213,8 +217,9 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
         return_value=observation_batch,
     ):
+        features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
         res = materialize(
-            assets=[FEATURES_ASSET, feast_feature_export],
+            assets=[features_asset, feast_feature_export],
             resources={
                 "time_series_repo": test_repo,
                 "feast_io_manager": get_feast_parquet_io_manager(
@@ -254,9 +259,13 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     test_repo.upsert_taipower_load(taipower_raw_df)
     test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    pipelines = build_task_pipelines(deployed_tasks())
     job_defs = Definitions(
-        assets=all_assets,
-        jobs=task_jobs(),
+        assets=[
+            *load_assets_from_modules([assets_module]),
+            *(asset for pipeline in pipelines for asset in pipeline.assets),
+        ],
+        jobs=[job for pipeline in pipelines for job in pipeline.jobs],
         resources={
             "time_series_repo": test_repo,
             "io_manager": get_parquet_io_manager("local", "unused", tmp_path),

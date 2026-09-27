@@ -22,10 +22,9 @@ from shiro_mlops.features.definitions import (
 )
 from shiro_mlops.features.feast_export import build_feast_feature_frames
 from shiro_mlops.pipelines.assets import feast_feature_export, raw_cwa_station_observation
-from shiro_mlops.pipelines.definitions import task_pipelines
-from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.pipelines.tracking import TrackedRun
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, load_training_data
 from shiro_mlops.tasks.types.base import TrainingData
 from tests.helpers import canonical_observation_batch, override_task_policies
@@ -45,11 +44,7 @@ def _training_data(
 
 
 def _dynamic_horizon_forecast_assets():
-    return next(
-        pipeline.assets
-        for pipeline in task_pipelines
-        if pipeline.names.task_id == DYNAMIC_HORIZON_FORECAST
-    )
+    return build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets
 
 
 def _feast_frames(repository: TimeSeriesRepository, monkeypatch):

@@ -33,6 +33,7 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
     split_at_validation,
 )
+from shiro_mlops.tasks.types.lightgbm_params import LightGBMParams
 from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
 
 TASK_TYPE_NAME = "recursive_regression"
@@ -48,16 +49,6 @@ FIXED_LIGHTGBM_PARAMS = {
     "random_state": 42,
     "verbose": -1,
 }
-
-
-class LightGBMParams(BaseModel):
-    """Tunable LightGBM hyperparameters; objective and seed stay fixed for this task type."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    n_estimators: PositiveInt
-    learning_rate: PositiveFloat
-    num_leaves: int = Field(ge=2)
 
 
 class RecursiveRegressionParams(BaseModel):

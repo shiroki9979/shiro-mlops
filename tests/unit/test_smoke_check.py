@@ -25,7 +25,7 @@ from shiro_mlops.pipelines.smoke_check import (
     run_smoke_check,
     running_schedule_names,
 )
-from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipelines
 from shiro_mlops.tasks.deployed import deployed_tasks
 from tests.helpers import derived_hourly_load
 
@@ -151,9 +151,18 @@ def test_recovered_stack_reports_both_ticks_triggering(
             AssetMaterialization(TaskPipelineNames(task_id).model)
         )
 
-    results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
+    pipelines = build_task_pipelines(deployed_tasks())
+    refreshed = Definitions(
+        assets=all_assets,
+        jobs=[job for pipeline in pipelines for job in pipeline.jobs],
+        schedules=[schedule for pipeline in pipelines for schedule in pipeline.schedules],
+        resources=defs.resources,
+    )
+    results = check_downstream_readiness(Deployment(refreshed, test_repo, dagster_instance, NOW))
 
-    assert {result.status for result in results} == {CheckStatus.PASS}
+    assert {result.status for result in results} == {CheckStatus.PASS}, [
+        (result.name, result.detail) for result in results if result.status is not CheckStatus.PASS
+    ]
     assert exit_code(results, require_ready=True) == 0
 
 

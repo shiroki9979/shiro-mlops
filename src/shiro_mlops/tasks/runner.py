@@ -10,7 +10,7 @@ Taiwan-local naive time.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -234,10 +234,13 @@ def check_task_ready(
     """Whether a loaded model, a fresh load anchor, and full-horizon weather are all available."""
     if model is None:
         return Readiness(ready=False, reason=MODEL_NOT_LOADED_REASON)
+    request = _ServingRequest.of(task, runtime, as_of, MAX_HORIZON_HOURS)
+    if request.requirements.weather is WeatherInput.OBSERVED:
+        request = replace(request, horizon_hours=1)
     try:
-        _, weather = _prepare_prediction(
-            _ServingRequest.of(task, runtime, as_of, MAX_HORIZON_HOURS)
-        )
+        data, weather = _prepare_prediction(request)
+        if request.requirements.weather is WeatherInput.OBSERVED:
+            weather = request.weather_path.align(model.predict(data), weather)
     except TaskUnavailableError as error:
         return Readiness(ready=False, reason=str(error))
     return Readiness(ready=True, mode=weather.mode)

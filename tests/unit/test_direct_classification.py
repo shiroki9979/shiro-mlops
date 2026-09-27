@@ -77,24 +77,23 @@ def test_requirements_cover_the_threshold_window_plus_the_longest_lag() -> None:
     assert requirements.lookback_hours == WINDOW_DAYS * 24 + 168
 
 
-def test_requirements_ask_for_nine_tenths_of_the_threshold_window() -> None:
-    """門檻窗 168 小時至少需 ceil(0.9 * 168) = 152 個有效小時，runner 才交付預測資料。"""
+def test_requirements_need_every_hour_of_the_threshold_window() -> None:
+    """A 7-day threshold needs all 168 hourly loads before serving."""
     coverage = task_type.requirements(PARAMS).history_coverage
 
-    assert coverage == HistoryCoverage(window_hours=WINDOW_DAYS * 24, min_valid_hours=152)
+    assert coverage == HistoryCoverage(window_hours=WINDOW_DAYS * 24, min_valid_hours=168)
 
 
-def test_anchors_whose_threshold_window_misses_too_many_hours_get_no_training_rows() -> None:
+def test_anchors_whose_threshold_window_misses_one_hour_get_no_training_rows() -> None:
     data = _training_data()
-    gap_start = data.load["datetime"].min() + pd.Timedelta(hours=200)
-    gap_end = gap_start + pd.Timedelta(hours=23)
-    gapped = data.load[~data.load["datetime"].between(gap_start, gap_end)]
+    gap = data.load["datetime"].min() + pd.Timedelta(hours=200)
+    gapped = data.load[data.load["datetime"] != gap]
 
     anchors = training_rows(PARAMS, replace(data, load=gapped))["anchor"]
 
     window = pd.Timedelta(hours=WINDOW_DAYS * 24 - 1)
-    assert not anchors.between(gap_end, gap_start + window).any()
-    assert (anchors == gap_end + window + pd.Timedelta(hours=1)).any()
+    assert not anchors.between(gap, gap + window).any()
+    assert (anchors == gap + window + pd.Timedelta(hours=1)).any()
 
 
 def test_threshold_is_the_configured_quantile_of_the_window_ending_at_the_anchor(
@@ -130,12 +129,12 @@ def test_training_threshold_uses_no_load_after_the_anchor() -> None:
 
 
 def test_training_rows_start_at_the_first_anchor_with_enough_threshold_window_hours() -> None:
-    """第一個錨點之前需累積 152 個有效小時（門檻窗 168 小時的九成）。"""
+    """The first anchor follows a complete 168-hour threshold window."""
     data = _training_data()
 
     rows = training_rows(PARAMS, data)
 
-    assert rows["anchor"].min() == data.load["datetime"].min() + pd.Timedelta(hours=151)
+    assert rows["anchor"].min() == data.load["datetime"].min() + pd.Timedelta(hours=167)
 
 
 def test_training_rows_describe_the_target_hour_by_its_lead_from_the_anchor() -> None:
