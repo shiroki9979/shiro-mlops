@@ -188,10 +188,10 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     assert isinstance(engineered_df, pd.DataFrame)
     assert not engineered_df.empty
 
-    persisted_load = test_repo.fetch_load_range(location="Taipei")
+    persisted_load = test_repo.fetch_load_range(subject="nationwide")
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.fetch_weather_range(location="Taipei")
+    persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
     assert len(persisted_weather) == len(cwa_obs_df)
 
 

@@ -17,8 +17,10 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
     DEFAULT_EXPERIMENT_NAME,
-    DEFAULT_LOCATION,
+    DEFAULT_WEATHER_REFERENCE_POINT,
     LOAD_MW_COL,
+    LOCATION_COL,
+    NATIONWIDE_SUBJECT,
     STORAGE_TIME_COL,
 )
 from shiro_mlops.data.cwa_client import (
@@ -88,10 +90,13 @@ TAIPOWER_REGIONAL_SNAPSHOT_RETRY_POLICY = RetryPolicy(
 def compute_engineered_feature_outputs(
     repository: TimeSeriesRepository,
     fallbacks: FallbackFeatureSources,
-    location: str | None = DEFAULT_LOCATION,
+    subject: str | None = NATIONWIDE_SUBJECT,
+    weather_reference_point: str | None = DEFAULT_WEATHER_REFERENCE_POINT,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """計算模型訓練特徵矩陣與 Feast 資料合約，儲存目標交由 I/O Manager 決定。"""
-    query_window = build_feature_query_window(fallbacks.load, location=location)
+    query_window = build_feature_query_window(
+        fallbacks.load, subject=subject, weather_reference_point=weather_reference_point
+    )
     source_data = fetch_feature_source_data(
         repository,
         fallbacks,
@@ -129,8 +134,9 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
 )
 def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFrame:
     """Asset: repository-only weather source consumed by feature engineering."""
+    reference_point = settings.weather_reference_point(DEFAULT_WEATHER_REFERENCE_POINT)
     observations = _get_time_series_repo(context).fetch_cwa_station_observations(
-        station_id="466920"
+        station_id=reference_point.station_id
     )
     if observations.empty:
         raise RuntimeError("No canonical CWA station observations available for training")
@@ -141,7 +147,7 @@ def cwa_observation_feature_source(context: AssetExecutionContext) -> pd.DataFra
             "relative_humidity_pct": "relative_humidity",
         }
     )
-    result["location"] = "Taipei"
+    result[LOCATION_COL] = reference_point.alias
     return result
 
 
@@ -288,7 +294,7 @@ def taipower_load_feature_source(context: AssetExecutionContext) -> pd.DataFrame
     readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
     context.log.info(readiness.reason)
     load = repository.fetch_load_range(
-        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+        subject=NATIONWIDE_SUBJECT, source=REGIONAL_SNAPSHOT_SUM_SOURCE
     )
     return load.rename(columns={STORAGE_TIME_COL: DATETIME_COL})
 
@@ -407,7 +413,7 @@ def drift_monitoring_report(
     repository = _get_time_series_repo(context)
     readiness = require_training_load_readiness(repository, settings.TRAINING_MIN_LOAD_HOURS)
     latest_actual = repository.fetch_latest_load(
-        location=DEFAULT_LOCATION, source=REGIONAL_SNAPSHOT_SUM_SOURCE
+        subject=NATIONWIDE_SUBJECT, source=REGIONAL_SNAPSHOT_SUM_SOURCE
     ).iloc[-1]
     metrics = trained_forecaster_model.get("metrics", {})
     report = {

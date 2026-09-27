@@ -89,7 +89,9 @@ def test_feature_source_data_excludes_other_load_provenance(
     other["load_mw"] = 99999.0
     test_repo.upsert_taipower_load(other, source="other_source")
     test_repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
-    window = build_feature_query_window(derived, location="Taipei")
+    window = build_feature_query_window(
+        derived, subject="nationwide", weather_reference_point="Taipei"
+    )
 
     source_data = fetch_feature_source_data(
         test_repo, FallbackFeatureSources(derived, cwa_obs_df), window
@@ -99,96 +101,94 @@ def test_feature_source_data_excludes_other_load_provenance(
     assert 99999.0 not in source_data.load["load_mw"].tolist()
 
 
-def test_engineered_features_multi_location_isolation_and_export(
+def test_engineered_features_multi_subject_isolation_and_export(
     sqlite_engine: Engine,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     tmp_path: Path,
     monkeypatch,
 ):
-    """Verify multi-location isolation and unique Feast composite keys via I/O Manager."""
+    """Subjects stay isolated, weather comes only from the reference point, Feast keys unique."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     repo = TimeSeriesRepository(engine=sqlite_engine)
 
-    repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
 
-    kh_taipower = taipower_raw_df.copy()
-    kh_taipower["load_mw"] = kh_taipower["load_mw"] * 0.6
-    kh_taipower["location"] = "Kaohsiung"
-    repo.upsert_taipower_load(kh_taipower, default_location="Kaohsiung")
+    north_load = taipower_raw_df.copy()
+    north_load["load_mw"] = north_load["load_mw"] * 0.6
+    repo.upsert_taipower_load(north_load, default_subject="north")
 
     kh_weather = cwa_obs_df.copy()
-    kh_weather["temperature"] = kh_weather["temperature"] + 3.0
+    kh_weather["temperature"] = kh_weather["temperature"] + 30.0
     kh_weather["location"] = "Kaohsiung"
     repo.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
 
     features_df, taipower, weather = compute_engineered_feature_outputs(
-        repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), location=None
+        repo,
+        FallbackFeatureSources(taipower_raw_df, cwa_obs_df),
+        subject=None,
+        weather_reference_point="Taipei",
     )
     _publish_feast_frames(tmp_path, taipower, weather)
 
-    assert set(features_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert set(features_df["subject"]) == {"nationwide", "north"}
+    assert features_df["temperature"].max() <= cwa_obs_df["temperature"].max()
 
     tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
-    assert set(tp_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert set(tp_df["location"]) == {"nationwide", "north"}
     assert not tp_df.duplicated(subset=["datetime", "location"]).any()
 
     w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
-    assert set(w_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert set(w_df["location"]) == {"nationwide", "north"}
     assert not w_df.duplicated(subset=["datetime", "location"]).any()
 
 
-def test_feature_computation_isolates_requested_location_and_training_window(
+def test_feature_computation_isolates_requested_subject_and_training_window(
     sqlite_engine: Engine,
 ) -> None:
-    """Feature computation excludes other locations and observations after each training window."""
+    """Feature computation excludes other subjects and observations after each training window."""
     repository = TimeSeriesRepository(engine=sqlite_engine)
     source_load = pd.DataFrame(
         [
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
-            {"datetime": "2026-08-21 00:00:00", "load_mw": 9999.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 500.0, "location": "Kaohsiung"},
-            {"datetime": "2026-08-21 00:00:00", "load_mw": 600.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "subject": "nationwide"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "subject": "nationwide"},
+            {"datetime": "2026-08-21 00:00:00", "load_mw": 9999.0, "subject": "nationwide"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 500.0, "subject": "north"},
+            {"datetime": "2026-08-21 00:00:00", "load_mw": 600.0, "subject": "north"},
         ]
     )
     source_weather = pd.DataFrame(
         [
             {
-                "datetime": row["datetime"],
+                "datetime": moment,
                 "temperature": 30.0,
                 "relative_humidity": 70.0,
-                "location": row["location"],
+                "location": "Taipei",
             }
-            for row in source_load.to_dict("records")
+            for moment in source_load["datetime"].unique()
         ]
     )
     repository.upsert_taipower_load(source_load)
     repository.upsert_cwa_observation_batch(canonical_observation_batch(source_weather))
 
-    taipei_reference = source_load.iloc[[1]].copy()
-    taipei_weather = source_weather.iloc[[1]].copy()
-    taipei_features, _, _ = compute_engineered_feature_outputs(
+    nationwide_features, _, _ = compute_engineered_feature_outputs(
         repository,
-        FallbackFeatureSources(taipei_reference, taipei_weather),
-        location="Taipei",
+        FallbackFeatureSources(source_load.iloc[[1]].copy(), source_weather.iloc[[1]].copy()),
+        subject="nationwide",
+    )
+    north_features, _, _ = compute_engineered_feature_outputs(
+        repository,
+        FallbackFeatureSources(source_load.iloc[[4]].copy(), source_weather.iloc[[2]].copy()),
+        subject="north",
     )
 
-    kaohsiung_reference = source_load.iloc[[4]].copy()
-    kaohsiung_weather = source_weather.iloc[[4]].copy()
-    kaohsiung_features, _, _ = compute_engineered_feature_outputs(
-        repository,
-        FallbackFeatureSources(kaohsiung_reference, kaohsiung_weather),
-        location="Kaohsiung",
-    )
-
-    assert set(taipei_features["location"]) == {"Taipei"}
-    assert taipei_features["datetime"].max() == pd.Timestamp("2026-08-20 01:00:00")
-    assert 9999.0 not in taipei_features["load_mw"].tolist()
-    assert set(kaohsiung_features["location"]) == {"Kaohsiung"}
-    assert kaohsiung_features["datetime"].max() == pd.Timestamp("2026-08-21 00:00:00")
-    assert 9999.0 not in kaohsiung_features["load_mw"].tolist()
+    assert set(nationwide_features["subject"]) == {"nationwide"}
+    assert nationwide_features["datetime"].max() == pd.Timestamp("2026-08-20 01:00:00")
+    assert 9999.0 not in nationwide_features["load_mw"].tolist()
+    assert set(north_features["subject"]) == {"north"}
+    assert north_features["datetime"].max() == pd.Timestamp("2026-08-21 00:00:00")
+    assert 9999.0 not in north_features["load_mw"].tolist()
 
 
 def test_short_dataset_feast_parquet_schema_contract(
@@ -204,7 +204,7 @@ def test_short_dataset_feast_parquet_schema_contract(
         {
             "datetime": pd.date_range("2026-08-20", periods=5, freq="h"),
             "load_mw": [100.0, 110.0, 105.0, 120.0, 115.0],
-            "location": ["Taipei"] * 5,
+            "subject": ["nationwide"] * 5,
         }
     )
     short_weather = pd.DataFrame(
@@ -277,7 +277,7 @@ def test_feast_offline_feature_retrieval(
 
     entity_df = pd.DataFrame(
         {
-            "location": ["Taipei", "Taipei"],
+            "location": ["nationwide", "nationwide"],
             "datetime": [
                 pd.Timestamp("2026-08-21 12:00:00"),
                 pd.Timestamp("2026-08-21 13:00:00"),
@@ -415,7 +415,7 @@ def test_publish_parquet_feature_local_and_s3(tmp_path):
         [
             {
                 "datetime": pd.Timestamp("2026-08-20 14:00:00"),
-                "location": "Taipei",
+                "location": "nationwide",
                 "load_mw": 35000.0,
             }
         ]
@@ -527,7 +527,7 @@ def test_feast_retrieves_s3_published_features_offline(
 
         entity_df = pd.DataFrame(
             {
-                "location": ["Taipei"],
+                "location": ["nationwide"],
                 "datetime": [pd.Timestamp("2026-08-21 12:00:00")],
             }
         )

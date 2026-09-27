@@ -182,14 +182,40 @@ def create_legacy_load_table(engine: Engine) -> None:
         )
 
 
+def create_location_keyed_load_table(engine: Engine) -> None:
+    """模擬 ADR-0009 之前的資料庫：全台負載以 location='Taipei' 保存。"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE raw_taipower_load (
+                    time TIMESTAMP NOT NULL,
+                    location VARCHAR(64) NOT NULL,
+                    load_mw DOUBLE PRECISION NOT NULL,
+                    source VARCHAR(32) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (time, location)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, location, load_mw, source) VALUES "
+                "('2026-08-20 00:00:00', 'Taipei', 26500.0, 'regional_snapshot_sum'), "
+                "('2026-08-20 01:00:00', 'Taipei', 26600.0, 'regional_snapshot_sum')"
+            )
+        )
+
+
 def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
     """以 d015046 時期的寫法（不帶 source）插入一列；需先完成 schema 升級使 source 可為 NULL。"""
     utc_time = pd.Timestamp(taiwan_local_to_utc(pd.Series([taiwan_time])).iloc[0])
     with engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO raw_taipower_load (time, location, load_mw) "
-                "VALUES (:time, 'Taipei', :load_mw)"
+                "INSERT INTO raw_taipower_load (time, subject, load_mw) "
+                "VALUES (:time, 'nationwide', :load_mw)"
             ),
             {"time": utc_time.to_pydatetime(), "load_mw": load_mw},
         )

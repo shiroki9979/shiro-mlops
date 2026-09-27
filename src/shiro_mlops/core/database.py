@@ -10,8 +10,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.constants import NATIONWIDE_SUBJECT, SUBJECT_COL
 
 logger = logging.getLogger(__name__)
+
+# ADR-0009 之前全台負載借用氣象代表點名稱保存；只用於辨識待遷移的舊值。
+LEGACY_NATIONWIDE_SUBJECT = "Taipei"
 
 INIT_SQL_PATH = (
     Path(__file__).resolve().parents[3] / "docker" / "init-db" / "01_init_hypertables.sql"
@@ -118,6 +122,14 @@ def _isolate_legacy_cwa_weather(engine: Engine) -> None:
         connection.execute(text("DROP TABLE raw_cwa_weather"))
 
 
+def _taipower_load_columns(engine: Engine, purpose: str) -> set[str]:
+    try:
+        columns = inspect(engine).get_columns("raw_taipower_load")
+    except NoInspectionAvailable as error:
+        raise RuntimeError(f"Cannot inspect raw_taipower_load schema for {purpose}") from error
+    return {column["name"] for column in columns}
+
+
 def _add_taipower_load_source_column(engine: Engine) -> None:
     """Add the derivation provenance column to load tables created before ADR-0008.
 
@@ -126,13 +138,7 @@ def _add_taipower_load_source_column(engine: Engine) -> None:
     (docs/how-to/remove-legacy-d015046-load-rows.md). Existing rows are never
     rewritten here because relabelling them would mix incompatible load semantics.
     """
-    try:
-        columns = {column["name"] for column in inspect(engine).get_columns("raw_taipower_load")}
-    except NoInspectionAvailable as error:
-        raise RuntimeError(
-            "Cannot inspect raw_taipower_load schema for source migration"
-        ) from error
-    if "source" in columns:
+    if "source" in _taipower_load_columns(engine, "source migration"):
         return
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE raw_taipower_load ADD COLUMN source VARCHAR(32)"))
@@ -140,6 +146,34 @@ def _add_taipower_load_source_column(engine: Engine) -> None:
         "Added nullable raw_taipower_load.source; rows with NULL source predate the "
         "regional snapshot derivation and must be removed by an operator."
     )
+
+
+def _migrate_taipower_load_subject(engine: Engine) -> None:
+    """Identify load series by prediction subject instead of a place name (ADR-0009).
+
+    Rename and relabel share one transaction, so an interrupted upgrade never leaves
+    a renamed column still holding the legacy value. The relabel is a no-op once
+    migrated, which keeps every restart safe to repeat.
+    """
+    columns = _taipower_load_columns(engine, "subject migration")
+    with engine.begin() as connection:
+        if SUBJECT_COL not in columns:
+            connection.execute(
+                text(f"ALTER TABLE raw_taipower_load RENAME COLUMN location TO {SUBJECT_COL}")
+            )
+        relabelled = connection.execute(
+            text(
+                f"UPDATE raw_taipower_load SET {SUBJECT_COL} = :subject WHERE {SUBJECT_COL} = :legacy"
+            ),
+            {"subject": NATIONWIDE_SUBJECT, "legacy": LEGACY_NATIONWIDE_SUBJECT},
+        ).rowcount
+    if relabelled:
+        logger.warning(
+            "Relabelled %s raw_taipower_load rows from subject %r to %r.",
+            relabelled,
+            LEGACY_NATIONWIDE_SUBJECT,
+            NATIONWIDE_SUBJECT,
+        )
 
 
 def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
@@ -209,6 +243,7 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
         _execute_sql_statements(db_engine, statements)
         _isolate_legacy_cwa_weather(db_engine)
         _add_taipower_load_source_column(db_engine)
+        _migrate_taipower_load_subject(db_engine)
         return
 
     # PostgreSQL / TimescaleDB
@@ -216,6 +251,7 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
     _execute_sql_statements(db_engine, split_sql_statements(ddl))
     _isolate_legacy_cwa_weather(db_engine)
     _add_taipower_load_source_column(db_engine)
+    _migrate_taipower_load_subject(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
 

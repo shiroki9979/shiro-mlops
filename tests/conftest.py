@@ -92,7 +92,7 @@ def populated_repo(
 ) -> TimeSeriesRepository:
     """Create and populate TimeSeriesRepository with fixture data."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
-    repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     repo.upsert_cwa_observation_batch(cwa_observation_batch)
     return repo
 

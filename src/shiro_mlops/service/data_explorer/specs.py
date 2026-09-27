@@ -11,7 +11,7 @@ DATASET_SPECS: dict[str, dict[str, Any]] = {
         "cadence": 3600,
         "max_days": 31,
         "href": "/data/power/load",
-        "sort": ("time", "location"),
+        "sort": ("time", "subject"),
     },
     "national_supply_demand": {
         "label": "全台供需",
