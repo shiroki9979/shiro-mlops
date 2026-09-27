@@ -265,6 +265,47 @@ def test_parse_observation_batch_preserves_raw_and_normalizes_special_values() -
     assert observation.wind_direction_deg is None
 
 
+@pytest.mark.parametrize("value", ["upstream-schema-changed", "NaN", "Infinity"])
+def test_observation_parser_rejects_invalid_numbers_with_source_context(value: str) -> None:
+    payload = _observation_payload()
+    payload["records"]["Station"][0]["WeatherElement"]["AirTemperature"] = value
+
+    with pytest.raises(ValueError, match="466920.*temperature_c"):
+        parse_observation_batch(payload)
+
+
+def test_forecast_parser_rejects_invalid_numbers_with_source_context() -> None:
+    payload = {
+        "records": {
+            "IssueTime": "2026-08-20T11:00:00+08:00",
+            "Update": "2026-08-20T11:20:00+08:00",
+            "locations": [
+                {
+                    "location": [
+                        {
+                            "geocode": "63000000",
+                            "weatherElement": [
+                                {
+                                    "elementName": "T",
+                                    "time": [
+                                        {
+                                            "DataTime": "2026-08-20T12:00:00+08:00",
+                                            "elementValue": [{"value": "invalid-temperature"}],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(ValueError, match="F-D0047-089.*63000000.*temperature_c"):
+        parse_forecast_release(payload, dataset_id="F-D0047-089")
+
+
 def test_repository_persists_canonical_observation_batch(test_repo: TimeSeriesRepository) -> None:
     batch = parse_observation_batch(_observation_payload(), fetched_at=datetime(2026, 8, 20, 14, 5))
 

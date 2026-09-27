@@ -26,6 +26,23 @@ def _upsert_hours(
     repo.upsert_taipower_load(frame, default_subject=subject)
 
 
+@pytest.mark.parametrize("hours, missing", [([10, 11], []), ([11], ["2026-09-20T10:00:00+08:00"])])
+def test_hourly_load_gaps_only_include_completed_hours_inside_the_window(
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch, hours, missing
+) -> None:
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        lambda: datetime(2026, 9, 20, 12, 15),
+    )
+    _upsert_hours(test_repo, [datetime(2026, 9, 20, hour) for hour in hours])
+
+    page = HourlyLoadReader(test_repo.engine).list(
+        {"start": "2026-09-20T09:15:00+08:00", "end": "2026-09-20T13:15:00+08:00"}
+    )
+
+    assert page.missing_slots == missing
+
+
 def test_hourly_load_reader_filters_subject_and_traverses_next_page(
     test_repo: TimeSeriesRepository,
 ) -> None:

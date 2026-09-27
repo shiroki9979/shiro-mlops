@@ -8,7 +8,10 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    recent_completed_hours,
+)
 from shiro_mlops.service.data_explorer.completeness import (
     audit_missing_identifiers,
     hourly_gaps,
@@ -88,17 +91,19 @@ class DatasetStatusCatalog:
         """Compute independent status dimensions for every v1 dataset."""
         clock = as_of or now_taiwan()
         try:
-            builders = (
-                self._hourly_load,
-                self._national,
-                self._regional,
-                self._units,
-                self._observations,
-                self._forecasts,
-                self._observation_audits,
-                self._forecast_audits,
+            forecasts, forecast_audits = self._forecast_statuses(clock)
+            return StatusResponse(
+                datasets=[
+                    self._hourly_load(clock),
+                    self._national(clock),
+                    self._regional(clock),
+                    self._units(clock),
+                    self._observations(clock),
+                    forecasts,
+                    self._observation_audits(clock),
+                    forecast_audits,
+                ]
             )
-            return StatusResponse(datasets=[builder(clock) for builder in builders])
         except SQLAlchemyError as exc:
             raise DatabaseUnavailableError(str(exc)) from exc
 
@@ -108,7 +113,8 @@ class DatasetStatusCatalog:
             "WHERE source = :source ORDER BY time DESC LIMIT 1",
             {"source": REGIONAL_SNAPSHOT_SUM_SOURCE},
         )
-        window = TimeWindow(as_of - timedelta(hours=24), as_of)
+        completed = recent_completed_hours(as_of, 24)
+        window = TimeWindow(completed.start, completed.end - timedelta(hours=1))
         missing = hourly_gaps(self.db, window, None) if latest else []
         return compose_dataset_status("hourly_load", as_of, latest, missing)
 
@@ -177,21 +183,24 @@ class DatasetStatusCatalog:
         )
         return compose_dataset_status("cwa_observations", as_of, latest, missing)
 
-    def _forecasts(self, as_of: datetime) -> DatasetStatus:
+    def _forecast_statuses(self, as_of: datetime) -> tuple[DatasetStatus, DatasetStatus]:
         latest = self.db.fetch_one(
-            "SELECT issued_at AS source_at, fetched_at AS ingested_at "
+            "SELECT issued_at AS source_at, fetched_at AS ingested_at, status, missing_geocodes "
             "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
         )
+        if latest:
+            latest["missing_geocodes"] = json_list(latest["missing_geocodes"])
         missing = audit_missing_identifiers(
-            self._latest_forecast_audit(),
+            latest,
             "missing_geocodes",
             incomplete_placeholder="incomplete_release",
         )
-        status = compose_dataset_status("cwa_forecasts", as_of, latest, missing)
+        forecasts = compose_dataset_status("cwa_forecasts", as_of, latest, missing)
+        audits = compose_dataset_status("cwa_forecast_audits", as_of, latest, missing)
         if latest:
             source_at = to_taiwan(latest["source_at"])
-            status.serving_stale = (as_of - source_at) > FORECAST_SERVING_STALE
-        return status
+            forecasts.serving_stale = (as_of - source_at) > FORECAST_SERVING_STALE
+        return forecasts, audits
 
     def _observation_audits(self, as_of: datetime) -> DatasetStatus:
         latest = self.db.fetch_one(
@@ -205,18 +214,6 @@ class DatasetStatusCatalog:
         )
         return compose_dataset_status("cwa_observation_audits", as_of, latest, missing)
 
-    def _forecast_audits(self, as_of: datetime) -> DatasetStatus:
-        latest = self.db.fetch_one(
-            "SELECT issued_at AS source_at, fetched_at AS ingested_at "
-            "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
-        )
-        missing = audit_missing_identifiers(
-            self._latest_forecast_audit(),
-            "missing_geocodes",
-            incomplete_placeholder="incomplete_release",
-        )
-        return compose_dataset_status("cwa_forecast_audits", as_of, latest, missing)
-
     def _latest_observation_audit(self) -> dict[str, Any] | None:
         row = self.db.fetch_one(
             "SELECT fetched_at, status, missing_station_ids FROM raw_cwa_observation_batch "
@@ -228,16 +225,4 @@ class DatasetStatusCatalog:
             "fetched_at": to_taiwan(row["fetched_at"]),
             "status": row["status"],
             "missing_station_ids": [str(item) for item in json_list(row["missing_station_ids"])],
-        }
-
-    def _latest_forecast_audit(self) -> dict[str, Any] | None:
-        row = self.db.fetch_one(
-            "SELECT dataset_id, issued_at, fetched_at, status, missing_geocodes "
-            "FROM raw_cwa_forecast_release ORDER BY issued_at DESC, source_updated_at DESC LIMIT 1"
-        )
-        if row is None:
-            return None
-        return {
-            "status": row["status"],
-            "missing_geocodes": [str(item) for item in json_list(row["missing_geocodes"])],
         }

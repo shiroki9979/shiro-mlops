@@ -321,3 +321,65 @@ def test_weather_gap_forward_fills_at_most_two_hours_and_drops_remaining_rows() 
         pd.Timestamp("2026-08-20 04:00"),
     ]
     assert list(features["temperature"]) == [30.0, 30.0, 34.0]
+
+
+def test_strict_weather_drops_stale_values_across_missing_load_hours() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 00:00", "2026-09-20 02:00", "2026-09-20 05:00", "2026-09-20 06:00"]
+            ),
+            "load_mw": [100.0, 110.0, 120.0, 130.0],
+        }
+    )
+    weather = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-09-20 00:00"]),
+            "temperature": [28.0],
+            "relative_humidity": [70.0],
+        }
+    )
+
+    features = build_feature_pipeline(
+        load, weather, lags=[1, 2, 24], windows=[2], strict_weather=True
+    )
+
+    assert features["datetime"].tolist() == [
+        pd.Timestamp("2026-09-20 00:00"),
+        pd.Timestamp("2026-09-20 02:00"),
+    ]
+    assert features["temperature"].tolist() == [28.0, 28.0]
+
+
+def test_strict_weather_matches_each_field_to_past_observations_per_location() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": ["2026-09-20 03:00", "2026-09-20 03:00"],
+            "load_mw": [100.0, 200.0],
+            "location": ["Taipei", "Taichung"],
+        }
+    )
+    weather = pd.DataFrame(
+        {
+            "datetime": [
+                "2026-09-20 01:00",
+                "2026-09-20 03:00",
+                "2026-09-20 04:00",
+                "2026-09-20 01:00",
+            ],
+            "location": ["Taipei", "Taipei", "Taipei", "Taichung"],
+            "temperature": [30.0, 32.0, 99.0, 20.0],
+            "relative_humidity": [70.0, None, 99.0, 80.0],
+        }
+    )
+
+    features = build_feature_pipeline(
+        load, weather, lags=[1, 2, 24], windows=[2], strict_weather=True
+    )
+
+    assert features.set_index("location")[["temperature", "relative_humidity"]].to_dict(
+        "index"
+    ) == {
+        "Taipei": {"temperature": 32.0, "relative_humidity": 70.0},
+        "Taichung": {"temperature": 20.0, "relative_humidity": 80.0},
+    }
