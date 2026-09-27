@@ -9,6 +9,7 @@ import pytest
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.tasks import runner
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import (
@@ -260,6 +261,25 @@ def test_rows_persisted_after_as_of_never_anchor_the_forecast(
     outcome = predict_task(task, model, runtime, as_of=earlier_as_of, horizon_hours=1)
 
     assert outcome.predictions["datetime"].tolist() == [ANCHOR - pd.Timedelta(hours=1)]
+
+
+def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
+    task: TaskDefinition, runtime: TaskRuntime, model: TaskModel, monkeypatch
+) -> None:
+    """就緒代表可服務最長視界：預報天氣任務須以 168 小時解析天氣（SPEC §5.3）。"""
+    requested_horizons: list[int] = []
+    resolve = runner.resolve_weather
+
+    def recording_resolve(*args, **kwargs):
+        requested_horizons.append(kwargs["horizon_hours"])
+        return resolve(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "resolve_weather", recording_resolve)
+
+    readiness = check_task_ready(task, model, runtime, as_of=FRESH_AS_OF)
+
+    assert readiness.ready
+    assert requested_horizons == [168]
 
 
 def test_missing_model_is_not_ready(task: TaskDefinition, runtime: TaskRuntime) -> None:

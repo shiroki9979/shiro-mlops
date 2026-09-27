@@ -10,7 +10,7 @@ Taiwan-local naive time.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
 
@@ -285,7 +285,7 @@ class _ServingRequest:
 
     @cached_property
     def requirements(self) -> InputRequirements:
-        return get_task_type(self.task.task_type).requirements(self.task.params)
+        return _requirements_of(self.task)
 
     @property
     def repository(self) -> TimeSeriesRepository:
@@ -293,7 +293,7 @@ class _ServingRequest:
 
     @property
     def weather_path(self) -> _WeatherPath:
-        return _WEATHER_PATHS[self.requirements.weather]
+        return _weather_path(self.requirements)
 
 
 @dataclass(frozen=True)
@@ -310,11 +310,20 @@ class _WeatherPath:
     probe: Callable[[TaskModel, PredictionData, WeatherResolution], WeatherResolution]
 
 
+def _requirements_of(task: TaskDefinition) -> InputRequirements:
+    return get_task_type(task.task_type).requirements(task.params)
+
+
+def _weather_path(requirements: InputRequirements) -> _WeatherPath:
+    return _WEATHER_PATHS[requirements.weather]
+
+
 def _readiness_request(
     task: TaskDefinition, runtime: TaskRuntime, as_of: datetime
 ) -> _ServingRequest:
-    request = _ServingRequest(task, runtime, as_of, horizon_hours=None)
-    return replace(request, horizon_hours=request.weather_path.readiness_horizon_hours)
+    """Readiness proves the horizon its weather path requires, so that horizon sets the request."""
+    horizon_hours = _weather_path(_requirements_of(task)).readiness_horizon_hours
+    return _ServingRequest(task, runtime, as_of, horizon_hours)
 
 
 def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeatherResolution]:
