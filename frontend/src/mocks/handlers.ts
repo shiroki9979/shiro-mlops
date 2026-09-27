@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 
-export function generateMockPredictions(horizon = 24, location = 'Taipei') {
+export function generateMockPredictions(horizon = 24) {
   const baseTime = new Date()
   baseTime.setMinutes(0, 0, 0)
   const predictions = []
@@ -24,7 +24,7 @@ export function generateMockPredictions(horizon = 24, location = 'Taipei') {
   return {
     status: 'success',
     horizon_hours: horizon,
-    location,
+    subject: 'nationwide',
     predictions,
   }
 }
@@ -131,7 +131,7 @@ const loadEnvelope = {
   items: [
     {
       datetime: '2026-09-09T20:00:00+08:00',
-      location: 'Taipei',
+      subject: 'nationwide',
       load_mw: 32100.5,
       ingested_at: '2026-09-09T20:01:00+08:00',
     },
@@ -155,11 +155,9 @@ export const handlers = [
   http.post('*/predict', async ({ request }) => {
     const body = (await request.json()) as {
       horizon_hours?: number
-      location?: string
     }
     const horizon = body?.horizon_hours || 24
-    const location = body?.location || 'Taipei'
-    return HttpResponse.json(generateMockPredictions(horizon, location))
+    return HttpResponse.json(generateMockPredictions(horizon))
   }),
 
   http.get('*/data/status', () => HttpResponse.json(statusPayload)),
@@ -172,7 +170,7 @@ export const handlers = [
         items: [
           {
             datetime: '2026-09-09T18:00:00+08:00',
-            location: 'Taipei',
+            subject: 'nationwide',
             load_mw: 30100.0,
             ingested_at: '2026-09-09T18:01:00+08:00',
           },

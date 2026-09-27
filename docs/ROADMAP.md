@@ -18,6 +18,7 @@
 | **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
 | **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 (已完成) |
 | **M6: 全台逐時實際負載重建** | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
+| **M7: ML 任務解耦** | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
 
 ---
 
@@ -65,6 +66,8 @@
 ---
 
 ### Milestone 3: 多測站與節假日特徵工程深化
+
+> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md)，於 M7 完成後以任務設定（氣象代表點權重、日曆特徵開關）實作。
 
 #### [TICKET-301] 擴充全台三區測站溫度加權與行事曆特徵
 
@@ -176,3 +179,39 @@
 
 - **目標**：負載入庫恢復後，每日訓練與每小時 drift 回到可操作驗證狀態。
 - **完成標準 (DoD)**：排程不再固定暫停；有效逐時觀測少於 672 小時時訓練明確拒絕；container smoke check 與操作文件完成。
+
+---
+
+### Milestone 7: ML 任務解耦 (ML Task Decoupling) ([GitHub #64](https://github.com/shiroki9979/shiro-mlops/issues/64))
+
+> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md) 與 [ADR-0010](adr/0010-persist-models-in-native-non-executable-formats.md)；M6 累積 28 日期間進行，完成後接續 M3。
+
+#### [TICKET-701] 拆分預測對象與氣象代表點 ([GitHub #65](https://github.com/shiroki9979/shiro-mlops/issues/65))
+
+- **目標**：全台逐時實際負載的預測對象由 `Taipei` 遷移為 `nationwide`，天氣改以氣象代表點取得。
+- **完成標準 (DoD)**：`raw_taipower_load` 以 `subject` 識別且遷移可重複執行；測站與鄉鎮代碼只存在於擷取目錄；`/predict` 的 `location` 標示 deprecated 並回傳 `subject`；Data Explorer 與前端配合調整。
+
+#### [TICKET-702] 建立任務設定與任務類型，搬入動態視界預報 ([GitHub #66](https://github.com/shiroki9979/shiro-mlops/issues/66))
+
+- **目標**：以 `tasks/<task_id>.toml` 與任務類型 registry 描述現行任務，對外行為不變；模型改存 LightGBM 原生文字格式。
+- **完成標準 (DoD)**：任務設定載入錯誤於啟動時失敗；特徵配方單一來源；`src/` 不 import `joblib`／`pickle`；對外行為測試除識別碼與模型格式外不修改斷言，內部模組測試改寫至新介面。
+
+#### [TICKET-703] 以資產工廠產生每任務 Dagster 資產與 MLflow experiment ([GitHub #67](https://github.com/shiroki9979/shiro-mlops/issues/67))
+
+- **目標**：由任務設定產生 `{task_id}__*` 資產、排程與監控規則，擷取資產跨任務共用。
+- **完成標準 (DoD)**：新增一份任務設定即產生對應資產與排程；每任務獨立 MLflow experiment 與模型目錄；健康判定門檻來自任務設定。
+
+#### [TICKET-704] 通用推論端點 ([GitHub #68](https://github.com/shiroki9979/shiro-mlops/issues/68))
+
+- **目標**：提供 `POST /tasks/{task_id}/predict` 與 `GET /tasks/{task_id}/ready`，`/predict`、`/ready` 保留為動態視界預報別名。
+- **完成標準 (DoD)**：未知任務回 404；單一任務模型缺失不影響其他任務；別名與通用端點結果一致。
+
+#### [TICKET-705] 高負載預警任務 ([GitHub #69](https://github.com/shiroki9979/shiro-mlops/issues/69))
+
+- **目標**：以直接策略 `LGBMClassifier` 判定未來各小時是否超過高負載門檻（錨點前 28 日 P90）。
+- **完成標準 (DoD)**：門檻計算無未來資料洩漏；precision、recall、F1 記錄於 MLflow；端點回傳 `is_high_load`、`probability`、`threshold_mw`。
+
+#### [TICKET-706] 用電型態異常偵測任務 ([GitHub #70](https://github.com/shiroki9979/shiro-mlops/issues/70))
+
+- **目標**：以淺層 MLP AutoEncoder 對 24 小時滑動窗評分，偵測用電型態異常。
+- **完成標準 (DoD)**：numpy 前向計算與 sklearn 輸出一致；合成異常注入的召回率與誤報率記錄於 MLflow；不新增相依。

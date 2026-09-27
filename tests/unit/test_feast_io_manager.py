@@ -7,20 +7,14 @@ import pandas as pd
 from dagster import AssetKey, build_output_context
 
 from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
-from shiro_mlops.pipelines.feature_pipeline import (
-    FeatureSourceData,
-    build_feast_feature_frames,
-    transform_feature_source_data,
-)
+from shiro_mlops.features.feast_export import build_feast_feature_frames
 
 
 def test_build_feast_feature_frames_returns_contracts_without_storage_side_effects(
     tmp_path: Path, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
 ) -> None:
     """Feature calculation emits Feast frames and never writes Feast Parquet artifacts."""
-    features = transform_feature_source_data(FeatureSourceData(taipower_raw_df, cwa_obs_df))
-
-    frames = build_feast_feature_frames(features, cwa_obs_df)
+    frames = build_feast_feature_frames(taipower_raw_df, cwa_obs_df)
 
     assert list(frames.taipower.columns) == [
         "datetime",
@@ -52,10 +46,7 @@ def test_feast_parquet_io_manager_writes_identical_contracts_for_file_and_s3(
     tmp_path: Path, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
 ) -> None:
     """Local and S3 Feast I/O managers persist the same Parquet contract."""
-    frames = build_feast_feature_frames(
-        transform_feature_source_data(FeatureSourceData(taipower_raw_df, cwa_obs_df)),
-        cwa_obs_df,
-    )
+    frames = build_feast_feature_frames(taipower_raw_df, cwa_obs_df)
     local_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
     mock_s3 = MagicMock()
     s3_manager = get_feast_parquet_io_manager(

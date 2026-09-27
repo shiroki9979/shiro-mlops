@@ -2,14 +2,15 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 
 -- 1. Raw Taipower Load Table & Hypertable
--- 既有資料庫由 shiro_mlops.core.database 補上 nullable source，NULL 標示 d015046 時期舊列。
+-- 既有資料庫由 shiro_mlops.core.database 補上 nullable source，NULL 標示 d015046 時期舊列；
+-- 並將 location 改名為 subject（預測對象），全台負載由 'Taipei' 遷移為 'nationwide'（ADR-0009）。
 CREATE TABLE IF NOT EXISTS raw_taipower_load (
     time TIMESTAMPTZ NOT NULL,
-    location VARCHAR(64) NOT NULL,
+    subject VARCHAR(64) NOT NULL,
     load_mw DOUBLE PRECISION NOT NULL,
     source VARCHAR(32) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (time, location)
+    PRIMARY KEY (time, subject)
 );
 
 SELECT create_hypertable(

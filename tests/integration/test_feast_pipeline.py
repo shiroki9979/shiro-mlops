@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 from dagster import AssetKey, build_asset_context, build_output_context, materialize
 from feast import FeatureStore
 from sqlalchemy.engine import Engine
@@ -19,22 +20,36 @@ from shiro_mlops.features.definitions import (
     create_weather_source,
     location_entity,
 )
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
-from shiro_mlops.pipelines.assets import (
-    compute_engineered_feature_outputs,
-    cwa_observation_feature_source,
-    drift_monitoring_report,
-    engineered_feature_set,
-    raw_cwa_station_observation,
-    taipower_load_feature_source,
-    trained_forecaster_model,
-)
-from shiro_mlops.pipelines.feature_pipeline import (
-    FallbackFeatureSources,
-    build_feature_query_window,
-    fetch_feature_source_data,
-)
-from tests.helpers import canonical_observation_batch
+from shiro_mlops.features.feast_export import build_feast_feature_frames
+from shiro_mlops.pipelines.assets import feast_feature_export, raw_cwa_station_observation
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
+from shiro_mlops.pipelines.tracking import TrackedRun
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
+from shiro_mlops.tasks.runner import TaskRuntime, load_training_data
+from shiro_mlops.tasks.types.base import TrainingData
+from tests.helpers import canonical_observation_batch, override_task_policies
+
+# 夾具最後一筆負載為 2026-08-21 23:00；以明確 as_of 使訓練資料時間點可重現。
+FIXTURE_AS_OF = pd.Timestamp("2026-08-22 00:00").to_pydatetime()
+
+
+def _training_data(
+    repository: TimeSeriesRepository, monkeypatch, as_of=FIXTURE_AS_OF
+) -> TrainingData:
+    """Read training data through the runner with a threshold the fixture satisfies."""
+    override_task_policies(monkeypatch, min_training_hours=1)
+    return load_training_data(
+        deployed_task(DYNAMIC_HORIZON_FORECAST), TaskRuntime(repository=repository), as_of=as_of
+    )
+
+
+def _dynamic_horizon_forecast_assets():
+    return build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets
+
+
+def _feast_frames(repository: TimeSeriesRepository, monkeypatch):
+    data = _training_data(repository, monkeypatch)
+    return build_feast_feature_frames(data.load, data.weather)
 
 
 def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.DataFrame) -> None:
@@ -50,23 +65,17 @@ def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.Da
     )
 
 
-def test_engineered_features_extracts_db_and_materializes_feast_parquet(
+def test_training_data_from_db_materializes_feast_parquet(
     populated_repo: TimeSeriesRepository,
-    taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
     tmp_path: Path,
     monkeypatch,
 ):
-    """Verify feature calculation extracts from DB and Feast I/O Manager writes Parquet files."""
+    """Runner training data from the DB feeds the Feast export the I/O Manager writes."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
 
-    features_df, taipower, weather = compute_engineered_feature_outputs(
-        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
-    )
-    _publish_feast_frames(tmp_path, taipower, weather)
+    frames = _feast_frames(populated_repo, monkeypatch)
+    _publish_feast_frames(tmp_path, frames.taipower, frames.weather)
 
-    assert isinstance(features_df, pd.DataFrame)
-    assert not features_df.empty
     assert (tmp_path / "taipower_features.parquet").exists()
     assert (tmp_path / "weather_features.parquet").exists()
 
@@ -77,10 +86,11 @@ def test_engineered_features_extracts_db_and_materializes_feast_parquet(
     assert {"datetime", "location", "temperature", "relative_humidity"}.issubset(w_df.columns)
 
 
-def test_feature_source_data_excludes_other_load_provenance(
+def test_training_data_excludes_other_load_provenance(
     test_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
+    monkeypatch,
 ) -> None:
     derived = taipower_raw_df.iloc[:3].copy()
     test_repo.upsert_taipower_load(derived)
@@ -89,122 +99,104 @@ def test_feature_source_data_excludes_other_load_provenance(
     other["load_mw"] = 99999.0
     test_repo.upsert_taipower_load(other, source="other_source")
     test_repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
-    window = build_feature_query_window(derived, location="Taipei")
 
-    source_data = fetch_feature_source_data(
-        test_repo, FallbackFeatureSources(derived, cwa_obs_df), window
-    )
+    data = _training_data(test_repo, monkeypatch)
 
-    assert len(source_data.load) == 3
-    assert 99999.0 not in source_data.load["load_mw"].tolist()
+    assert len(data.load) == 3
+    assert 99999.0 not in data.load["load_mw"].tolist()
 
 
-def test_engineered_features_multi_location_isolation_and_export(
+def test_training_data_isolates_subject_and_weather_reference_point(
     sqlite_engine: Engine,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
-    tmp_path: Path,
     monkeypatch,
 ):
-    """Verify multi-location isolation and unique Feast composite keys via I/O Manager."""
-    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    """Only the task's subject trains, and weather comes only from its reference point."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
-
-    repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
 
-    kh_taipower = taipower_raw_df.copy()
-    kh_taipower["load_mw"] = kh_taipower["load_mw"] * 0.6
-    kh_taipower["location"] = "Kaohsiung"
-    repo.upsert_taipower_load(kh_taipower, default_location="Kaohsiung")
+    north_load = taipower_raw_df.copy()
+    north_load["load_mw"] = north_load["load_mw"] * 0.6
+    repo.upsert_taipower_load(north_load, default_subject="north")
 
     kh_weather = cwa_obs_df.copy()
-    kh_weather["temperature"] = kh_weather["temperature"] + 3.0
+    kh_weather["temperature"] = kh_weather["temperature"] + 30.0
     kh_weather["location"] = "Kaohsiung"
     repo.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
 
-    features_df, taipower, weather = compute_engineered_feature_outputs(
-        repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df), location=None
-    )
-    _publish_feast_frames(tmp_path, taipower, weather)
+    data = _training_data(repo, monkeypatch)
 
-    assert set(features_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert set(data.load["subject"]) == {"nationwide"}
+    assert data.load["load_mw"].tolist() == taipower_raw_df["load_mw"].tolist()
+    assert data.weather["temperature"].max() <= cwa_obs_df["temperature"].max()
+
+
+def test_feast_export_keeps_multiple_subjects_isolated_with_unique_keys(
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    tmp_path: Path,
+):
+    """Both frozen views keep one row per (datetime, subject) when several subjects export."""
+    nationwide = taipower_raw_df.assign(subject="nationwide")
+    north = taipower_raw_df.assign(subject="north", load_mw=taipower_raw_df["load_mw"] * 0.6)
+
+    frames = build_feast_feature_frames(pd.concat([nationwide, north]), cwa_obs_df)
+    _publish_feast_frames(tmp_path, frames.taipower, frames.weather)
 
     tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
-    assert set(tp_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert set(tp_df["location"]) == {"nationwide", "north"}
     assert not tp_df.duplicated(subset=["datetime", "location"]).any()
+    north_lags = tp_df[tp_df["location"] == "north"].sort_values("datetime")["load_mw_lag_1"]
+    assert north_lags.iloc[1] == pytest.approx(taipower_raw_df["load_mw"].iloc[0] * 0.6)
 
     w_df = pd.read_parquet(tmp_path / "weather_features.parquet")
-    assert set(w_df["location"]) == {"Taipei", "Kaohsiung"}
+    assert set(w_df["location"]) == {"nationwide", "north"}
     assert not w_df.duplicated(subset=["datetime", "location"]).any()
 
 
-def test_feature_computation_isolates_requested_location_and_training_window(
-    sqlite_engine: Engine,
-) -> None:
-    """Feature computation excludes other locations and observations after each training window."""
+def test_training_data_excludes_rows_after_as_of(sqlite_engine: Engine, monkeypatch) -> None:
+    """Training reads only target rows known at ``as_of`` and derives its window from them."""
     repository = TimeSeriesRepository(engine=sqlite_engine)
     source_load = pd.DataFrame(
         [
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "location": "Taipei"},
-            {"datetime": "2026-08-21 00:00:00", "load_mw": 9999.0, "location": "Taipei"},
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 500.0, "location": "Kaohsiung"},
-            {"datetime": "2026-08-21 00:00:00", "load_mw": 600.0, "location": "Kaohsiung"},
+            {"datetime": "2026-08-20 00:00:00", "load_mw": 100.0, "subject": "nationwide"},
+            {"datetime": "2026-08-20 01:00:00", "load_mw": 200.0, "subject": "nationwide"},
+            {"datetime": "2026-08-21 00:00:00", "load_mw": 9999.0, "subject": "nationwide"},
         ]
     )
     source_weather = pd.DataFrame(
         [
             {
-                "datetime": row["datetime"],
+                "datetime": moment,
                 "temperature": 30.0,
                 "relative_humidity": 70.0,
-                "location": row["location"],
+                "location": "Taipei",
             }
-            for row in source_load.to_dict("records")
+            for moment in source_load["datetime"]
         ]
     )
     repository.upsert_taipower_load(source_load)
     repository.upsert_cwa_observation_batch(canonical_observation_batch(source_weather))
 
-    taipei_reference = source_load.iloc[[1]].copy()
-    taipei_weather = source_weather.iloc[[1]].copy()
-    taipei_features, _, _ = compute_engineered_feature_outputs(
-        repository,
-        FallbackFeatureSources(taipei_reference, taipei_weather),
-        location="Taipei",
-    )
+    data = _training_data(repository, monkeypatch, as_of=pd.Timestamp("2026-08-20 12:00"))
 
-    kaohsiung_reference = source_load.iloc[[4]].copy()
-    kaohsiung_weather = source_weather.iloc[[4]].copy()
-    kaohsiung_features, _, _ = compute_engineered_feature_outputs(
-        repository,
-        FallbackFeatureSources(kaohsiung_reference, kaohsiung_weather),
-        location="Kaohsiung",
-    )
-
-    assert set(taipei_features["location"]) == {"Taipei"}
-    assert taipei_features["datetime"].max() == pd.Timestamp("2026-08-20 01:00:00")
-    assert 9999.0 not in taipei_features["load_mw"].tolist()
-    assert set(kaohsiung_features["location"]) == {"Kaohsiung"}
-    assert kaohsiung_features["datetime"].max() == pd.Timestamp("2026-08-21 00:00:00")
-    assert 9999.0 not in kaohsiung_features["load_mw"].tolist()
+    assert data.load["datetime"].max() == pd.Timestamp("2026-08-20 01:00:00")
+    assert 9999.0 not in data.load["load_mw"].tolist()
+    assert data.weather["datetime"].max() == pd.Timestamp("2026-08-20 01:00:00")
 
 
 def test_short_dataset_feast_parquet_schema_contract(
-    sqlite_engine: Engine,
     tmp_path: Path,
-    monkeypatch,
 ):
     """Verify Feast Parquet output maintains strict schema even on small sample datasets."""
-    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
-    repo = TimeSeriesRepository(engine=sqlite_engine)
 
     short_load = pd.DataFrame(
         {
             "datetime": pd.date_range("2026-08-20", periods=5, freq="h"),
             "load_mw": [100.0, 110.0, 105.0, 120.0, 115.0],
-            "location": ["Taipei"] * 5,
+            "subject": ["nationwide"] * 5,
         }
     )
     short_weather = pd.DataFrame(
@@ -216,15 +208,9 @@ def test_short_dataset_feast_parquet_schema_contract(
         }
     )
 
-    repo.upsert_taipower_load(short_load)
-    repo.upsert_cwa_observation_batch(canonical_observation_batch(short_weather))
+    frames = build_feast_feature_frames(short_load, short_weather)
+    _publish_feast_frames(tmp_path, frames.taipower, frames.weather)
 
-    features_df, taipower, weather = compute_engineered_feature_outputs(
-        repo, FallbackFeatureSources(short_load, short_weather)
-    )
-    _publish_feast_frames(tmp_path, taipower, weather)
-
-    assert len(features_df) == 5
     tp_df = pd.read_parquet(tmp_path / "taipower_features.parquet")
     assert len(tp_df) == 5
 
@@ -256,15 +242,12 @@ def test_short_dataset_feast_parquet_schema_contract(
 
 def test_feast_offline_feature_retrieval(
     populated_repo: TimeSeriesRepository,
-    taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
     tmp_path: Path,
+    monkeypatch,
 ):
-    """Verify Feast get_historical_features retrieves features and trains forecaster without error."""
-    _, taipower, weather = compute_engineered_feature_outputs(
-        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
-    )
-    _publish_feast_frames(tmp_path, taipower, weather)
+    """Verify Feast get_historical_features retrieves the frozen exported features."""
+    frames = _feast_frames(populated_repo, monkeypatch)
+    _publish_feast_frames(tmp_path, frames.taipower, frames.weather)
 
     store = FeatureStore(repo_path=str(settings.FEAST_REPO_PATH))
     load_view = create_taipower_load_feature_view(
@@ -277,7 +260,7 @@ def test_feast_offline_feature_retrieval(
 
     entity_df = pd.DataFrame(
         {
-            "location": ["Taipei", "Taipei"],
+            "location": ["nationwide", "nationwide"],
             "datetime": [
                 pd.Timestamp("2026-08-21 12:00:00"),
                 pd.Timestamp("2026-08-21 13:00:00"),
@@ -312,18 +295,11 @@ def test_feast_offline_feature_retrieval(
     assert "relative_humidity" in training_df.columns
     assert "load_mw_lag_1" in training_df.columns
 
-    forecaster = LightGBMRecursiveForecaster(
-        params={"n_estimators": 5, "min_child_samples": 1, "verbose": -1}
-    )
-    forecaster.fit(training_df)
-    assert forecaster.model is not None
-
 
 def test_full_dagster_mlops_pipeline_materialization(
     sqlite_engine: Engine,
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
-    lightweight_forecaster: LightGBMRecursiveForecaster,
     dagster_instance,
     tmp_path: Path,
     monkeypatch,
@@ -358,7 +334,7 @@ def test_full_dagster_mlops_pipeline_materialization(
         raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": repository}))
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     # fixture 只有 48 小時；降低訓練最低累積門檻以驗證完整鏈路。
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     repo = TimeSeriesRepository(engine=sqlite_engine)
     feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
 
@@ -369,40 +345,34 @@ def test_full_dagster_mlops_pipeline_materialization(
             "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
             return_value=observation_batch,
         ),
-        patch("shiro_mlops.pipelines.assets.mlflow") as mock_mlflow,
+        patch(
+            "shiro_mlops.pipelines.task_pipelines.log_training_run",
+            return_value=TrackedRun(run_id="test_run_123", model_version="1"),
+        ),
     ):
-        mock_run = MagicMock()
-        mock_run.info.run_id = "test_run_123"
-        mock_mlflow.start_run.return_value.__enter__.return_value = mock_run
-
         res = materialize(
-            assets=[
-                taipower_load_feature_source,
-                cwa_observation_feature_source,
-                engineered_feature_set,
-                trained_forecaster_model,
-                drift_monitoring_report,
-            ],
+            assets=[*_dynamic_horizon_forecast_assets(), feast_feature_export],
             resources={
                 "time_series_repo": repo,
                 "feast_io_manager": feast_io_manager,
-                "forecaster": lightweight_forecaster,
             },
             instance=dagster_instance,
         )
 
     assert res.success
-    assert (tmp_path / "model.joblib").exists()
+    model_dir = tmp_path / "models" / "dynamic_horizon_forecast"
+    assert sorted(path.name for path in model_dir.iterdir()) == ["metadata.json", "model.txt"]
+    assert not (tmp_path / "model.joblib").exists()
     assert (tmp_path / "taipower_features.parquet").exists()
     assert (tmp_path / "weather_features.parquet").exists()
 
-    report = res.output_for_node("drift_monitoring_report")
-    assert "status" in report
+    report = res.output_for_node(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).monitoring)
     assert report["status"] in {"HEALTHY", "WARNING"}
-    assert report["feature_count"] > 0
-    assert report["actual_load_hours"] == len(taipower_raw_df)
-    assert report["latest_actual_load_time"] == "2026-08-21T23:00:00"
-    assert report["latest_actual_load_mw"] == 29100.0
+    assert "max_mape=10.0" in report["health_reason"]
+    assert report["training_rows"] == len(taipower_raw_df)
+    assert report["target_hours"] == len(taipower_raw_df)
+    assert report["latest_target_time"] == "2026-08-21T23:00:00"
+    assert report["latest_target_value"] == 29100.0
 
 
 def test_publish_parquet_feature_local_and_s3(tmp_path):
@@ -415,7 +385,7 @@ def test_publish_parquet_feature_local_and_s3(tmp_path):
         [
             {
                 "datetime": pd.Timestamp("2026-08-20 14:00:00"),
-                "location": "Taipei",
+                "location": "nationwide",
                 "load_mw": 35000.0,
             }
         ]
@@ -442,14 +412,11 @@ def test_publish_parquet_feature_local_and_s3(tmp_path):
 
 def test_engineered_features_publishes_to_s3_via_io_manager(
     populated_repo: TimeSeriesRepository,
-    taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
-    tmp_path: Path,
+    monkeypatch,
 ):
     """Verify Feast I/O Manager publishes feature files to S3 when configured."""
-    _, taipower, weather = compute_engineered_feature_outputs(
-        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
-    )
+    frames = _feast_frames(populated_repo, monkeypatch)
+    taipower, weather = frames.taipower, frames.weather
     mock_s3 = MagicMock()
     feast_manager = get_feast_parquet_io_manager(
         FeastPublicationTarget.s3("my-s3-feast-bucket", "features", s3_client=mock_s3)
@@ -471,9 +438,6 @@ def test_engineered_features_publishes_to_s3_via_io_manager(
 
 def test_feast_retrieves_s3_published_features_offline(
     populated_repo: TimeSeriesRepository,
-    taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
-    tmp_path: Path,
     monkeypatch,
 ):
     """Feast retrieves feature contracts from S3 after the I/O Manager publishes them."""
@@ -495,9 +459,8 @@ def test_feast_retrieves_s3_published_features_offline(
         prefix = "features"
         s3_client.create_bucket(Bucket=bucket)
 
-        _, taipower, weather = compute_engineered_feature_outputs(
-            populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
-        )
+        frames = _feast_frames(populated_repo, monkeypatch)
+        taipower, weather = frames.taipower, frames.weather
         feast_manager = get_feast_parquet_io_manager(
             FeastPublicationTarget.s3(bucket, prefix, s3_client=s3_client)
         )
@@ -527,7 +490,7 @@ def test_feast_retrieves_s3_published_features_offline(
 
         entity_df = pd.DataFrame(
             {
-                "location": ["Taipei"],
+                "location": ["nationwide"],
                 "datetime": [pd.Timestamp("2026-08-21 12:00:00")],
             }
         )
@@ -541,26 +504,22 @@ def test_feast_retrieves_s3_published_features_offline(
     finally:
         moto_server.stop()
 
-    assert result.loc[0, "load_mw"] == 25400.0
+    # 匯出直接由目標負載計算，不再隨訓練氣象缺口刪列，故取得 12:00 當時的實際負載。
+    assert result.loc[0, "load_mw"] == 38500.0
     assert result.loc[0, "temperature"] == 28.0
 
 
 def test_feature_calculation_is_decoupled_from_storage_target(
     populated_repo: TimeSeriesRepository,
-    taipower_raw_df: pd.DataFrame,
-    cwa_obs_df: pd.DataFrame,
+    monkeypatch,
 ):
     """Feature calculation returns identical Feast contracts regardless of storage settings."""
-    features_a, taipower_a, weather_a = compute_engineered_feature_outputs(
-        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
-    )
-    features_b, taipower_b, weather_b = compute_engineered_feature_outputs(
-        populated_repo, FallbackFeatureSources(taipower_raw_df, cwa_obs_df)
-    )
+    frames_a = _feast_frames(populated_repo, monkeypatch)
+    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
+    frames_b = _feast_frames(populated_repo, monkeypatch)
 
-    pd.testing.assert_frame_equal(features_a, features_b)
-    pd.testing.assert_frame_equal(taipower_a, taipower_b)
-    pd.testing.assert_frame_equal(weather_a, weather_b)
+    pd.testing.assert_frame_equal(frames_a.taipower, frames_b.taipower)
+    pd.testing.assert_frame_equal(frames_a.weather, frames_b.weather)
 
 
 def test_feast_feature_view_source_switching(monkeypatch):

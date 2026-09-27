@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from dagster import Definitions, Failure, build_asset_context, materialize
+from dagster import Definitions, Failure, build_asset_context, load_assets_from_modules, materialize
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import (
@@ -19,18 +19,30 @@ from shiro_mlops.data.cwa_client import (
     CWAStationObservation,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.assets import (
-    cwa_observation_feature_source,
-    engineered_feature_set,
+    feast_feature_export,
     raw_cwa_station_observation,
     raw_cwa_township_forecast,
-    taipower_load_feature_source,
 )
-from shiro_mlops.pipelines.definitions import all_assets
-from shiro_mlops.pipelines.schedules import daily_training_job, hourly_drift_job
-from tests.helpers import derived_hourly_load
+from shiro_mlops.pipelines.task_pipelines import (
+    TaskPipelineNames,
+    build_task_pipeline,
+    build_task_pipelines,
+)
+from shiro_mlops.pipelines.tracking import TrackedRun
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from tests.helpers import derived_hourly_load, override_task_policies
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
+NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
+
+
+def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
+    """Invoke the task's features asset the way a training run does."""
+    features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        return features_asset(context).value
 
 
 def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
@@ -70,79 +82,95 @@ def test_canonical_cwa_forecast_asset_persists_both_products(
     repository.upsert_cwa_forecast_releases.assert_called_once_with(releases)
 
 
-def test_training_weather_source_uses_configured_taipei_station(
-    monkeypatch: pytest.MonkeyPatch,
+def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository) -> None:
+    """尚無推算負載時任務特徵必須明確失敗，不得改抓外部來源。"""
+    with pytest.raises(Failure, match="0 valid hourly observations"):
+        _features(test_repo)
+
+
+def test_task_features_read_weather_from_configured_reference_station(
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """氣象代表點的測站須取自執行期 CWA 設定，而非寫死的臺北測站代碼。"""
     monkeypatch.setattr(
         settings,
         "CWA_LOCATION_ALLOWLIST",
         '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
     )
-    repository = MagicMock(spec=TimeSeriesRepository)
-    observation = pd.DataFrame([{"observed_at": datetime(2026, 8, 20, 12), "temperature_c": 30.0}])
-    repository.fetch_cwa_station_observations.side_effect = lambda station_id: (
-        observation if station_id == "999999" else pd.DataFrame()
+    override_task_policies(monkeypatch, min_training_hours=2)
+    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
+    test_repo.upsert_cwa_observation_batch(
+        CWAObservationBatch(
+            fetched_at=LAST_LOAD_HOUR,
+            status="complete",
+            missing_station_ids=(),
+            raw_payload={},
+            observations=tuple(
+                _station_observation(station_id, temperature)
+                for station_id, temperature in (("999999", 30.0), ("466920", 10.0))
+            ),
+        )
     )
 
-    with build_asset_context(resources={"time_series_repo": repository}) as context:
-        result = cwa_observation_feature_source(context)
+    table = _features(test_repo)
 
-    assert result.loc[0, "temperature"] == 30.0
-    assert result.loc[0, "location"] == "Taipei"
+    assert (
+        table.loc[table["datetime"] == pd.Timestamp(LAST_LOAD_HOUR), "temperature"].item() == 30.0
+    )
 
 
-def test_taipower_load_feature_source_fails_without_derived_load(
+def _station_observation(station_id: str, temperature: float) -> CWAStationObservation:
+    return CWAStationObservation(
+        observed_at=LAST_LOAD_HOUR,
+        station_id=station_id,
+        station_name=station_id,
+        town_code=None,
+        temperature_c=temperature,
+        relative_humidity_pct=70.0,
+        air_pressure_hpa=None,
+        precipitation_mm=None,
+        wind_speed_m_s=None,
+        wind_direction_deg=None,
+    )
+
+
+def test_task_features_refuse_training_below_minimum_accumulation(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """尚無推算負載時訓練特徵來源必須明確失敗，不得改抓外部來源。"""
-    with (
-        build_asset_context(resources={"time_series_repo": test_repo}) as context,
-        pytest.raises(Failure, match="0 valid hourly observations"),
-    ):
-        taipower_load_feature_source(context)
-
-
-def test_taipower_load_feature_source_refuses_training_below_minimum_accumulation(
-    test_repo: TimeSeriesRepository,
-) -> None:
-    """預設 TRAINING_MIN_LOAD_HOURS=672：差一小時也不得進入訓練，並揭露差距。"""
+    """預設 policies.min_training_hours=672：差一小時也不得進入訓練，並揭露差距。"""
     test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_LOAD_HOUR))
-    with (
-        build_asset_context(resources={"time_series_repo": test_repo}) as context,
-        pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error,
-    ):
-        taipower_load_feature_source(context)
+    with pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error:
+        _features(test_repo)
 
     assert error.value.metadata["valid_hours"].value == 671
     assert error.value.metadata["required_hours"].value == 672
 
 
-def test_taipower_load_feature_source_returns_load_once_minimum_accumulation_is_met(
+def test_task_features_return_target_rows_once_minimum_accumulation_is_met(
     test_repo: TimeSeriesRepository,
 ) -> None:
     test_repo.upsert_taipower_load(derived_hourly_load(672, LAST_LOAD_HOUR))
-    with build_asset_context(resources={"time_series_repo": test_repo}) as context:
-        load = taipower_load_feature_source(context)
 
-    assert len(load) == 672
-    assert load["datetime"].max() == pd.Timestamp(LAST_LOAD_HOUR)
+    table = _features(test_repo)
+
+    assert len(table) == 672
+    assert table["datetime"].max() == pd.Timestamp(LAST_LOAD_HOUR)
 
 
 def test_training_load_source_excludes_other_provenance(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", 2)
+    override_task_policies(monkeypatch, min_training_hours=2)
     test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
     test_repo.upsert_taipower_load(
         pd.DataFrame([{"datetime": "2026-09-26 11:00", "load_mw": 99999.0}]),
         source="other_source",
     )
 
-    with build_asset_context(resources={"time_series_repo": test_repo}) as context:
-        load = taipower_load_feature_source(context)
+    table = _features(test_repo)
 
-    assert len(load) == 2
-    assert 99999.0 not in load["load_mw"].tolist()
+    assert len(table) == 2
+    assert 99999.0 not in table["load_mw"].tolist()
 
 
 def test_dagster_materialize_ingestion_and_feature_pipeline(
@@ -154,7 +182,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
 ):
     """Verify Dagster materialize reads persisted load and weather through feature engineering."""
     # fixture 只有 48 小時；降低門檻以驗證特徵鏈路，門檻本身由上方測試涵蓋。
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     observation_batch = CWAObservationBatch(
         fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
         status="complete",
@@ -189,12 +217,9 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
         return_value=observation_batch,
     ):
+        features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
         res = materialize(
-            assets=[
-                taipower_load_feature_source,
-                cwa_observation_feature_source,
-                engineered_feature_set,
-            ],
+            assets=[features_asset, feast_feature_export],
             resources={
                 "time_series_repo": test_repo,
                 "feast_io_manager": get_feast_parquet_io_manager(
@@ -205,18 +230,23 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         )
 
     assert res.success
-    engineered_df = res.output_for_node("engineered_feature_set", "engineered_features")
-    assert isinstance(engineered_df, pd.DataFrame)
-    assert not engineered_df.empty
+    training_table = res.output_for_node(NAMES.features)
+    assert list(training_table.columns) == [
+        "datetime",
+        "subject",
+        "load_mw",
+        "temperature",
+        "relative_humidity",
+    ]
 
-    persisted_load = test_repo.fetch_load_range(location="Taipei")
+    persisted_load = test_repo.fetch_load_range(subject="nationwide")
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.fetch_weather_range(location="Taipei")
+    persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
     assert len(persisted_weather) == len(cwa_obs_df)
 
 
-def test_training_then_hourly_drift_jobs_read_latest_persisted_actual_load(
+def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     test_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
     cwa_observation_batch: CWAObservationBatch,
@@ -224,14 +254,18 @@ def test_training_then_hourly_drift_jobs_read_latest_persisted_actual_load(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """drift 以最新入庫的逐時實際負載對照前次訓練產物，且不執行任何擷取資產。"""
+    """監控以最新入庫的逐時實際負載對照前次訓練產物，且不執行任何擷取資產。"""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(settings, "TRAINING_MIN_LOAD_HOURS", len(taipower_raw_df))
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     test_repo.upsert_taipower_load(taipower_raw_df)
     test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    pipelines = build_task_pipelines(deployed_tasks())
     job_defs = Definitions(
-        assets=all_assets,
-        jobs=[daily_training_job, hourly_drift_job],
+        assets=[
+            *load_assets_from_modules([assets_module]),
+            *(asset for pipeline in pipelines for asset in pipeline.assets),
+        ],
+        jobs=[job for pipeline in pipelines for job in pipeline.jobs],
         resources={
             "time_series_repo": test_repo,
             "io_manager": get_parquet_io_manager("local", "unused", tmp_path),
@@ -241,24 +275,31 @@ def test_training_then_hourly_drift_jobs_read_latest_persisted_actual_load(
         },
     )
 
-    with patch("shiro_mlops.pipelines.assets.mlflow") as mock_mlflow:
-        mock_mlflow.start_run.return_value.__enter__.return_value.info.run_id = "run-1"
-        training = job_defs.resolve_job_def("daily_training_job").execute_in_process(
+    with patch(
+        "shiro_mlops.pipelines.task_pipelines.log_training_run",
+        return_value=TrackedRun(run_id="run-1", model_version="1"),
+    ) as log_training_run:
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
             instance=dagster_instance
         )
     next_hour = taipower_raw_df["datetime"].max() + pd.Timedelta(hours=1)
     test_repo.upsert_taipower_load(derived_hourly_load(1, next_hour.to_pydatetime()))
 
     def refuse_full_history(*_: object, **__: object) -> None:
-        raise AssertionError("Hourly drift must not read the full load history")
+        raise AssertionError("Hourly monitoring must not read the full load history")
 
     monkeypatch.setattr(test_repo, "fetch_load_range", refuse_full_history)
-    drift = job_defs.resolve_job_def("hourly_drift_job").execute_in_process(
+    monitoring = job_defs.resolve_job_def(NAMES.monitoring_job).execute_in_process(
         instance=dagster_instance
     )
 
     assert training.success
-    assert drift.success
-    report = drift.output_for_node("drift_monitoring_report")
-    assert report["latest_actual_load_time"] == next_hour.isoformat()
-    assert report["actual_load_hours"] == len(taipower_raw_df) + 1
+    assert monitoring.success
+    assert log_training_run.call_count == 1
+    model = training.output_for_node(NAMES.model)
+    assert (model["run_id"], model["model_version"]) == ("run-1", "1")
+    report = monitoring.output_for_node(NAMES.monitoring)
+    assert report["task_id"] == DYNAMIC_HORIZON_FORECAST
+    assert report["latest_target_time"] == next_hour.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df) + 1
+    assert report["training_rows"] == len(taipower_raw_df)

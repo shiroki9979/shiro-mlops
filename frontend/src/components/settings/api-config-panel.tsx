@@ -7,7 +7,6 @@ import { CheckCircle2, Play, RefreshCw, Server, XCircle } from 'lucide-react'
 
 export function ApiConfigPanel() {
   const [testHorizon, setTestHorizon] = useState(24)
-  const [testLocation, setTestLocation] = useState('Taipei')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [isSuccess, setIsSuccess] = useState<boolean | null>(null)
@@ -19,7 +18,6 @@ export function ApiConfigPanel() {
     try {
       const response = await apiClient.predict({
         horizon_hours: testHorizon,
-        location: testLocation,
       })
       setIsSuccess(true)
       setResult(JSON.stringify(response, null, 2))
@@ -115,18 +113,6 @@ export function ApiConfigPanel() {
                 onChange={(e) => setTestHorizon(Number(e.target.value))}
                 className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 font-mono"
               />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">Location</label>
-              <select
-                value={testLocation}
-                onChange={(e) => setTestLocation(e.target.value)}
-                className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 font-mono"
-              >
-                <option value="Taipei">Taipei</option>
-                <option value="Taichung">Taichung</option>
-                <option value="Kaohsiung">Kaohsiung</option>
-              </select>
             </div>
           </div>
 
