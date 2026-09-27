@@ -9,7 +9,6 @@ LightGBM's native text format plus JSON metadata (ADR-0010).
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping
 from pathlib import Path
@@ -38,12 +37,12 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
     split_at_validation,
 )
+from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
 from shiro_mlops.tasks.types.recursive_regression import LightGBMParams
 
 TASK_TYPE_NAME = "direct_classification"
 MODEL_FILE = "model.txt"
-METADATA_FILE = "metadata.json"
-FORMAT_VERSION = 1
+MODEL_FORMAT = ModelFormat(TASK_TYPE_NAME, version=1)
 ANCHOR_COL = "anchor"
 ANCHOR_LOAD_COL = f"anchor_{LOAD_MW_COL}"
 LEAD_HOURS_COL = "lead_hours"
@@ -252,28 +251,16 @@ class DirectClassificationModel:
         directory.mkdir(parents=True, exist_ok=True)
         self.booster.save_model(str(directory / MODEL_FILE))
         metadata = {
-            "format_version": FORMAT_VERSION,
-            "task_type": TASK_TYPE_NAME,
             "params": self.params.model_dump(),
             "max_lead_hours": MAX_LEAD_HOURS,
             "feature_names": self.feature_names,
             "weather_columns": self.weather_columns,
         }
-        (directory / METADATA_FILE).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        write_metadata(directory, MODEL_FORMAT, metadata)
 
     @classmethod
     def load(cls, directory: Path) -> DirectClassificationModel:
-        metadata = json.loads((directory / METADATA_FILE).read_text(encoding="utf-8"))
-        if metadata.get("task_type") != TASK_TYPE_NAME:
-            raise ValueError(
-                f"Model in {directory} belongs to task type {metadata.get('task_type')!r}, "
-                f"not {TASK_TYPE_NAME!r}"
-            )
-        if metadata.get("format_version") != FORMAT_VERSION:
-            raise ValueError(
-                f"Unsupported model format version {metadata.get('format_version')!r} "
-                f"in {directory}"
-            )
+        metadata = read_metadata(directory, MODEL_FORMAT)
         return cls(
             lgb.Booster(model_file=str(directory / MODEL_FILE)),
             params=DirectClassificationParams.model_validate(metadata["params"]),

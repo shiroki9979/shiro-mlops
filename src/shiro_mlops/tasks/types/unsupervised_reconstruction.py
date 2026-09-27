@@ -15,7 +15,6 @@ served by a numpy forward pass (ADR-0010).
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,11 +43,11 @@ from shiro_mlops.tasks.types.base import (
     TrainingData,
     WeatherInput,
 )
+from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
 
 TASK_TYPE_NAME = "unsupervised_reconstruction"
 ARRAYS_FILE = "model.npz"
-METADATA_FILE = "metadata.json"
-FORMAT_VERSION = 1
+MODEL_FORMAT = ModelFormat(TASK_TYPE_NAME, version=1)
 # ADR-0010：numpy 前向計算只實作這兩種激活函數，訓練時固定之。
 HIDDEN_ACTIVATION = "relu"
 OUTPUT_ACTIVATION = "identity"
@@ -333,8 +332,6 @@ class UnsupervisedReconstructionModel:
         directory.mkdir(parents=True, exist_ok=True)
         np.savez(directory / ARRAYS_FILE, **self._arrays())
         metadata = {
-            "format_version": FORMAT_VERSION,
-            "task_type": TASK_TYPE_NAME,
             "hidden_activation": HIDDEN_ACTIVATION,
             "output_activation": OUTPUT_ACTIVATION,
             "layers": len(self.network.coefs),
@@ -343,7 +340,7 @@ class UnsupervisedReconstructionModel:
             "feature_names": _feature_names(self.window_hours, self.weather_columns),
             "threshold": self.threshold,
         }
-        (directory / METADATA_FILE).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        write_metadata(directory, MODEL_FORMAT, metadata)
 
     def _arrays(self) -> dict[str, np.ndarray]:
         layers = {}
@@ -356,8 +353,8 @@ class UnsupervisedReconstructionModel:
 
     @classmethod
     def load(cls, directory: Path) -> UnsupervisedReconstructionModel:
-        metadata = json.loads((directory / METADATA_FILE).read_text(encoding="utf-8"))
-        _check_metadata(directory, metadata)
+        metadata = read_metadata(directory, MODEL_FORMAT)
+        _require_supported_activations(directory, metadata)
         with np.load(directory / ARRAYS_FILE, allow_pickle=False) as arrays:
             layers = range(metadata["layers"])
             network = NumpyMLP(
@@ -387,16 +384,7 @@ def _load_reconstruction_errors(
     return np.mean((reconstructed[:, load] - scaled[:, load]) ** 2, axis=1)
 
 
-def _check_metadata(directory: Path, metadata: Mapping[str, object]) -> None:
-    if metadata.get("task_type") != TASK_TYPE_NAME:
-        raise ValueError(
-            f"Model in {directory} belongs to task type {metadata.get('task_type')!r}, "
-            f"not {TASK_TYPE_NAME!r}"
-        )
-    if metadata.get("format_version") != FORMAT_VERSION:
-        raise ValueError(
-            f"Unsupported model format version {metadata.get('format_version')!r} in {directory}"
-        )
+def _require_supported_activations(directory: Path, metadata: Mapping[str, object]) -> None:
     activations = (metadata.get("hidden_activation"), metadata.get("output_activation"))
     if activations != (HIDDEN_ACTIVATION, OUTPUT_ACTIVATION):
         raise ValueError(f"Unsupported activations {activations} in {directory}")

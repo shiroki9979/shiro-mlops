@@ -6,7 +6,6 @@ persisted as LightGBM's native text format plus JSON metadata (ADR-0010).
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
@@ -34,12 +33,12 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
     split_at_validation,
 )
+from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
 
 TASK_TYPE_NAME = "recursive_regression"
 PREDICTION_COL = f"predicted_{LOAD_MW_COL}"
 MODEL_FILE = "model.txt"
-METADATA_FILE = "metadata.json"
-FORMAT_VERSION = 1
+MODEL_FORMAT = ModelFormat(TASK_TYPE_NAME, version=1)
 HEALTH_METRIC = "mape"
 NON_FEATURE_COLUMNS = frozenset({DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL})
 FIXED_LIGHTGBM_PARAMS = {
@@ -211,28 +210,16 @@ class RecursiveRegressionModel:
         directory.mkdir(parents=True, exist_ok=True)
         self.booster.save_model(str(directory / MODEL_FILE))
         metadata = {
-            "format_version": FORMAT_VERSION,
-            "task_type": TASK_TYPE_NAME,
             "lags": self.lags,
             "rolling_windows": self.rolling_windows,
             "feature_names": self.feature_names,
             "weather_columns": self.weather_columns,
         }
-        (directory / METADATA_FILE).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        write_metadata(directory, MODEL_FORMAT, metadata)
 
     @classmethod
     def load(cls, directory: Path) -> RecursiveRegressionModel:
-        metadata = json.loads((directory / METADATA_FILE).read_text(encoding="utf-8"))
-        if metadata.get("task_type") != TASK_TYPE_NAME:
-            raise ValueError(
-                f"Model in {directory} belongs to task type {metadata.get('task_type')!r}, "
-                f"not {TASK_TYPE_NAME!r}"
-            )
-        if metadata.get("format_version") != FORMAT_VERSION:
-            raise ValueError(
-                f"Unsupported model format version {metadata.get('format_version')!r} "
-                f"in {directory}"
-            )
+        metadata = read_metadata(directory, MODEL_FORMAT)
         return cls(
             lgb.Booster(model_file=str(directory / MODEL_FILE)),
             lags=metadata["lags"],
