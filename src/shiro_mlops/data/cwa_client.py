@@ -1,6 +1,7 @@
 """Client for fetching Central Weather Administration (CWA) observations and forecasts."""
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -155,7 +156,9 @@ def _find_element_value(elements: Any, names: set[str]) -> Any:
     return None
 
 
-def _coerce_number(value: Any, *, zero_markers: set[str] | None = None) -> float | None:
+def _coerce_number(
+    value: Any, context: str, *, zero_markers: set[str] | None = None
+) -> float | None:
     """Normalize CWA numeric values and documented missing markers."""
     if value is None:
         return None
@@ -165,9 +168,12 @@ def _coerce_number(value: Any, *, zero_markers: set[str] | None = None) -> float
     if zero_markers and raw in zero_markers:
         return 0.0
     try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
+        number = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid CWA numeric value for {context}: {raw!r}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"Non-finite CWA numeric value for {context}: {raw!r}")
+    return number
 
 
 def _observation_datetime(value: Any) -> pd.Timestamp | None:
@@ -222,7 +228,8 @@ def parse_observation_batch(
         if isinstance(elements, dict) and isinstance(elements.get("Now"), dict):
             precipitation = elements["Now"].get("Precipitation", precipitation)
         wind_direction = _coerce_number(
-            _find_element_value(elements, {"WindDirection", "WD", "WindDir"})
+            _find_element_value(elements, {"WindDirection", "WD", "WindDir"}),
+            f"station {station_id} wind_direction_deg",
         )
         if wind_direction == 990:
             wind_direction = None
@@ -233,17 +240,25 @@ def parse_observation_batch(
                 station_name=station.get("StationName") or station.get("stationName"),
                 town_code=str(station.get("TownCode") or station.get("townCode") or "") or None,
                 temperature_c=_coerce_number(
-                    _find_element_value(elements, {"AirTemperature", "TEMP", "T"})
+                    _find_element_value(elements, {"AirTemperature", "TEMP", "T"}),
+                    f"station {station_id} temperature_c",
                 ),
                 relative_humidity_pct=_coerce_number(
-                    _find_element_value(elements, {"RelativeHumidity", "HUMD", "RH"})
+                    _find_element_value(elements, {"RelativeHumidity", "HUMD", "RH"}),
+                    f"station {station_id} relative_humidity_pct",
                 ),
                 air_pressure_hpa=_coerce_number(
-                    _find_element_value(elements, {"AirPressure", "PRES", "Pressure"})
+                    _find_element_value(elements, {"AirPressure", "PRES", "Pressure"}),
+                    f"station {station_id} air_pressure_hpa",
                 ),
-                precipitation_mm=_coerce_number(precipitation, zero_markers={"T", "t", "-98"}),
+                precipitation_mm=_coerce_number(
+                    precipitation,
+                    f"station {station_id} precipitation_mm",
+                    zero_markers={"T", "t", "-98"},
+                ),
                 wind_speed_m_s=_coerce_number(
-                    _find_element_value(elements, {"WindSpeed", "WDSD", "WS"})
+                    _find_element_value(elements, {"WindSpeed", "WDSD", "WS"}),
+                    f"station {station_id} wind_speed_m_s",
                 ),
                 wind_direction_deg=wind_direction,
             )
@@ -403,10 +418,10 @@ def _forecast_element_rows(
     return rows
 
 
-def _forecast_numeric(values: dict[str, Any], names: set[str]) -> float | None:
+def _forecast_numeric(values: dict[str, Any], names: set[str], context: str) -> float | None:
     """Normalize a numeric forecast element from its aliases."""
     raw = _find_element_value(values, names)
-    return _coerce_number(raw, zero_markers={"-98", "T", "t"})
+    return _coerce_number(raw, context, zero_markers={"-98", "T", "t"})
 
 
 def _forecast_text(values: dict[str, Any], names: set[str]) -> str | None:
@@ -464,18 +479,14 @@ def parse_forecast_release(
                     valid_to=valid_to,
                     geocode=geocode,
                     location_name=location.get("locationName") or location.get("LocationName"),
-                    temperature_c=_forecast_numeric(values, aliases["temperature_c"]),
-                    dew_point_c=_forecast_numeric(values, aliases["dew_point_c"]),
-                    apparent_temperature_c=_forecast_numeric(
-                        values, aliases["apparent_temperature_c"]
-                    ),
-                    relative_humidity_pct=_forecast_numeric(
-                        values, aliases["relative_humidity_pct"]
-                    ),
-                    probability_of_precipitation_pct=_forecast_numeric(
-                        values, aliases["probability_of_precipitation_pct"]
-                    ),
-                    wind_speed_m_s=_forecast_numeric(values, aliases["wind_speed_m_s"]),
+                    **{
+                        field: _forecast_numeric(
+                            values,
+                            names,
+                            f"dataset {dataset_id} geocode {geocode} {valid_from} {field}",
+                        )
+                        for field, names in aliases.items()
+                    },
                     wind_direction=_forecast_text(values, {"WD", "WindDirection", "風向"}),
                 )
             )

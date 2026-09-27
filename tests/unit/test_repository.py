@@ -1,15 +1,23 @@
 """Unit tests for TimeSeriesRepository and batch upsert operations."""
 
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
-from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.repository import (
+    TaipowerRegionalSupplyDemandRepository,
+    TaipowerSupplyDemandRepository,
+    TaipowerUnitGenerationRepository,
+    TimeSeriesRepository,
+)
 from shiro_mlops.features.transformers import merge_weather_features
 from tests.helpers import canonical_observation_batch, derived_hourly_load, insert_legacy_load_row
 
@@ -31,9 +39,27 @@ def test_repository_initialization(sqlite_engine: Engine):
     with patch("shiro_mlops.data.repository.get_timescale_engine") as mock_get_engine:
         mock_engine = MagicMock(spec=Engine)
         mock_get_engine.return_value = mock_engine
-        repo_default = TimeSeriesRepository()
+        repo_default = TimeSeriesRepository(auto_init=False)
         assert repo_default.engine is mock_engine
         mock_get_engine.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "repository_type",
+    [
+        TimeSeriesRepository,
+        TaipowerSupplyDemandRepository,
+        TaipowerRegionalSupplyDemandRepository,
+        TaipowerUnitGenerationRepository,
+    ],
+)
+def test_repository_initialization_reports_database_failure(repository_type, tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'missing' / 'database.db'}")
+    try:
+        with pytest.raises(SQLAlchemyError, match="unable to open database file"):
+            repository_type(engine=engine)
+    finally:
+        engine.dispose()
 
 
 def test_upsert_taipower_load_insert_and_fetch(
@@ -199,6 +225,28 @@ def test_fetch_weather_range_keeps_canonical_station_identity(
     weather = repository.fetch_weather_range(reference_point="Taipei")
 
     assert set(weather["station_id"]) == {"466920"}
+
+
+def test_fetch_weather_range_uses_configured_taipei_station(
+    repository: TimeSeriesRepository,
+    cwa_observation_batch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "CWA_LOCATION_ALLOWLIST",
+        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    )
+    observation = replace(cwa_observation_batch.observations[0], station_id="999999")
+    repository.upsert_cwa_observation_batch(
+        replace(cwa_observation_batch, observations=(observation,))
+    )
+
+    weather = repository.fetch_weather_range(reference_point="Taipei")
+
+    assert len(weather) == 1
+    assert weather.iloc[0]["station_id"] == "999999"
+    assert weather.iloc[0]["location"] == "Taipei"
 
 
 def test_upsert_cwa_weather_idempotency_and_update(repository: TimeSeriesRepository):

@@ -84,6 +84,52 @@ def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository
         _features(test_repo)
 
 
+def test_task_features_read_weather_from_configured_reference_station(
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """氣象代表點的測站須取自執行期 CWA 設定，而非寫死的臺北測站代碼。"""
+    monkeypatch.setattr(
+        settings,
+        "CWA_LOCATION_ALLOWLIST",
+        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    )
+    override_task_policies(monkeypatch, min_training_hours=2)
+    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
+    test_repo.upsert_cwa_observation_batch(
+        CWAObservationBatch(
+            fetched_at=LAST_LOAD_HOUR,
+            status="complete",
+            missing_station_ids=(),
+            raw_payload={},
+            observations=tuple(
+                _station_observation(station_id, temperature)
+                for station_id, temperature in (("999999", 30.0), ("466920", 10.0))
+            ),
+        )
+    )
+
+    table = _features(test_repo)
+
+    assert (
+        table.loc[table["datetime"] == pd.Timestamp(LAST_LOAD_HOUR), "temperature"].item() == 30.0
+    )
+
+
+def _station_observation(station_id: str, temperature: float) -> CWAStationObservation:
+    return CWAStationObservation(
+        observed_at=LAST_LOAD_HOUR,
+        station_id=station_id,
+        station_name=station_id,
+        town_code=None,
+        temperature_c=temperature,
+        relative_humidity_pct=70.0,
+        air_pressure_hpa=None,
+        precipitation_mm=None,
+        wind_speed_m_s=None,
+        wind_direction_deg=None,
+    )
+
+
 def test_task_features_refuse_training_below_minimum_accumulation(
     test_repo: TimeSeriesRepository,
 ) -> None:

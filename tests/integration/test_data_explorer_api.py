@@ -15,6 +15,7 @@ from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
+from shiro_mlops.service.data_explorer.cursor import encode_cursor
 from tests.helpers import (
     TAIWAN,
     create_legacy_load_table,
@@ -81,6 +82,19 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     assert client.get("/features/latest").status_code == 404
 
 
+@pytest.mark.parametrize("field", ["issued_at", "source_updated_at"])
+@pytest.mark.parametrize("value", ["not-a-date", "NaT"])
+def test_invalid_forecast_version_time_returns_validation_error(
+    explorer_client, field, value
+) -> None:
+    client, _ = explorer_client
+
+    response = client.get("/data/weather/forecasts", params={field: value})
+
+    assert response.status_code == 422
+    assert field in response.json()["detail"]
+
+
 def test_data_explorer_does_not_allow_cross_origin_browser_access(explorer_client) -> None:
     """Data Explorer 不得透過 wildcard CORS 提供跨來源讀取。"""
     client, _ = explorer_client
@@ -138,9 +152,10 @@ def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
         ensure_timescale_hypertables(engine)
         repo = TimeSeriesRepository(engine=engine, auto_init=False)
         current_hour = _now().replace(minute=0)
+        legacy_hour = current_hour - timedelta(hours=1)
         derived_hour = current_hour - timedelta(hours=3)
         _upsert_hours(repo, [derived_hour])
-        insert_legacy_load_row(engine, current_hour, 99999.0)
+        insert_legacy_load_row(engine, legacy_hour, 99999.0)
         monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
         monkeypatch.setattr("shiro_mlops.service.api.repository_store", repo)
 
@@ -151,7 +166,8 @@ def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
 
         assert page.status_code == 200
         assert [item["datetime"] for item in page.json()["items"]] == [rfc3339(derived_hour)]
-        assert rfc3339(current_hour) in page.json()["missing_slots"]
+        assert rfc3339(legacy_hour) in page.json()["missing_slots"]
+        assert rfc3339(current_hour) not in page.json()["missing_slots"]
         load_status = next(
             item for item in status.json()["datasets"] if item["id"] == "hourly_load"
         )
@@ -209,6 +225,14 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
     )
     assert mismatched.status_code == 400
     assert client.get("/data/power/load", params={"cursor": "not-a-cursor"}).status_code == 400
+    invalid_window_cursor = encode_cursor(
+        dataset="hourly_load",
+        filters={"start": "not-a-time", "end": rfc3339(latest), "dataset": "hourly_load"},
+        key={"time": rfc3339(latest), "location": "Taipei"},
+    )
+    assert (
+        client.get("/data/power/load", params={"cursor": invalid_window_cursor}).status_code == 400
+    )
 
     missing_key = _replace_cursor_key(cursor, {})
     malformed = client.get(
@@ -252,6 +276,30 @@ def test_hourly_load_pagination_and_hourly_gaps(explorer_client) -> None:
         },
     )
     assert rfc3339(gap_start + timedelta(hours=1)) in gapped_page.json()["missing_slots"]
+
+
+def test_default_window_cursor_stays_valid_after_clock_advances(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, repo = explorer_client
+    latest = _now().replace(minute=0)
+    _upsert_hours(repo, [latest - timedelta(hours=1), latest])
+    clock = latest + timedelta(minutes=1)
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.query.now_taiwan", lambda: clock)
+    first = client.get("/data/power/load", params={"limit": 1})
+    assert first.status_code == 200
+    assert first.json()["next_cursor"]
+
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.query.now_taiwan",
+        lambda: clock + timedelta(seconds=1),
+    )
+    second = client.get(
+        "/data/power/load", params={"limit": 1, "cursor": first.json()["next_cursor"]}
+    )
+
+    assert second.status_code == 200
+    assert second.json()["items"][0]["datetime"] == rfc3339(latest - timedelta(hours=1))
 
 
 def test_status_returns_503_when_database_unavailable(explorer_client) -> None:

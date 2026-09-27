@@ -8,11 +8,14 @@ from typing import Any
 import pandas as pd
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    recent_completed_hours,
+)
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
-from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
+from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
 from shiro_mlops.service.data_explorer.values import floor_ten_minutes, to_taiwan
 
 
@@ -32,8 +35,9 @@ def hourly_gaps(db: ExplorerDb, window: TimeWindow, subject: str | None) -> list
         params,
     )
     present = {to_taiwan(row["time"]).replace(minute=0, second=0, microsecond=0) for row in rows}
-    start = window.start.replace(minute=0, second=0, microsecond=0)
-    expected = pd.date_range(start, window.end, freq="h")
+    start = pd.Timestamp(window.start).ceil("h")
+    last_completed = recent_completed_hours(now_taiwan(), 1).start
+    expected = pd.date_range(start, min(window.end, last_completed), freq="h")
     return [
         format_taiwan_time(ts.to_pydatetime())
         for ts in expected

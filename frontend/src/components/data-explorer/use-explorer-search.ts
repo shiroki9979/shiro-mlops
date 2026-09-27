@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { defaultWindow, toRfc3339 } from '@/lib/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
@@ -6,7 +7,10 @@ export function useExplorerSearch(dataset: ExplorerDatasetConfig) {
   const router = useRouterState()
   const navigate = useNavigate()
   const search = router.location.search as Record<string, string | undefined>
-  const windowDefaults = defaultWindow(dataset.defaultHours, dataset.lookAheadHours ?? 0)
+  const windowDefaults = useMemo(
+    () => defaultWindow(dataset.defaultHours, dataset.lookAheadHours ?? 0),
+    [dataset.defaultHours, dataset.lookAheadHours],
+  )
   const start = search.start || toRfc3339(windowDefaults.start)
   const end = search.end || toRfc3339(windowDefaults.end)
   const filterValues = Object.fromEntries(

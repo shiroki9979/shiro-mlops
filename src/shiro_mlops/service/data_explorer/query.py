@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from shiro_mlops.service.data_explorer.cursor import decode_cursor
+from shiro_mlops.service.data_explorer.cursor import (
+    CursorError,
+    decode_cursor,
+    decode_cursor_filters,
+)
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS, DEFAULT_LIMIT, MAX_LIMIT
 from shiro_mlops.service.data_explorer.timefmt import (
@@ -47,10 +51,21 @@ class ExplorerQuery:
     def from_params(cls, dataset: str, params: Mapping[str, Any]) -> ExplorerQuery:
         """Build a typed query from the HTTP parameter clump used by unmigrated paths."""
         spec = DATASET_SPECS[dataset]
-        window = resolve_window(params.get("start"), params.get("end"), spec["max_days"])
+        cursor = params.get("cursor")
+        start, end = params.get("start"), params.get("end")
+        if cursor not in (None, "") and (start is None or end is None):
+            cursor_filters = decode_cursor_filters(str(cursor), dataset=dataset)
+            try:
+                cursor_window = resolve_window(
+                    cursor_filters["start"], cursor_filters["end"], spec["max_days"]
+                )
+            except (KeyError, ExplorerQueryError) as exc:
+                raise CursorError("Invalid cursor window") from exc
+            start = start if start is not None else cursor_window.start
+            end = end if end is not None else cursor_window.end
+        window = resolve_window(start, end, spec["max_days"])
         limit = resolve_limit(params.get("limit"))
         filters = bound_filters(dataset, dict(params), window)
-        cursor = params.get("cursor")
         if cursor in (None, ""):
             cursor = None
         return cls(
@@ -106,8 +121,8 @@ def resolve_limit(limit: int | str | None) -> int:
 def bound_filters(dataset: str, params: dict[str, Any], window: TimeWindow) -> dict[str, Any]:
     """Canonical filter payload stored inside a keyset cursor."""
     filters = {
-        "start": format_taiwan_time(window.start),
-        "end": format_taiwan_time(window.end),
+        "start": format_taiwan_time(window.start, timespec="auto"),
+        "end": format_taiwan_time(window.end, timespec="auto"),
     }
     for key in (
         "subject",

@@ -42,10 +42,7 @@ class TaipowerRegionalSupplyDemandRepository:
         """
         self.engine = engine if engine is not None else get_timescale_engine()
         if auto_init:
-            try:
-                ensure_timescale_hypertables(self.engine)
-            except Exception as e:
-                logger.warning("Could not auto-initialize hypertables: %s", e)
+            ensure_timescale_hypertables(self.engine)
 
     def upsert(self, snapshots: list[TaipowerRegionalSupplyDemandSnapshot]) -> int:
         """Upsert regional supply-demand snapshots keyed by (observed_at, region)."""
