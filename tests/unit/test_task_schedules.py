@@ -9,8 +9,8 @@ from dagster import AssetMaterialization, Definitions, build_schedule_context
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import defs
 from shiro_mlops.pipelines.schedules import CWA_INGESTION_ASSETS, TAIPOWER_REALTIME_SNAPSHOT_ASSETS
-from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST
+from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 from tests.helpers import derived_hourly_load, selected_asset_names, task_jobs
 
 TICK = datetime(2026, 9, 27, 0, 0, tzinfo=ZoneInfo("Asia/Taipei"))
@@ -26,7 +26,12 @@ def _tick(schedule_name: str, repository: TimeSeriesRepository, instance):
         scheduled_execution_time=TICK,
         resources={"time_series_repo": repository},
     )
-    return defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
+    return _schedule(schedule_name).evaluate_tick(context)
+
+
+def _schedule(name: str):
+    pipeline = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST)
+    return next(schedule for schedule in pipeline.schedules if schedule.name == name)
 
 
 @pytest.mark.parametrize("job", task_jobs(), ids=lambda job: job.name)
@@ -89,7 +94,7 @@ def test_training_without_tick_time_requests_an_undeduplicated_run(
         instance=dagster_instance, resources={"time_series_repo": test_repo}
     )
 
-    execution = defs.resolve_schedule_def(NAMES.training_schedule).evaluate_tick(context)
+    execution = _schedule(NAMES.training_schedule).evaluate_tick(context)
 
     assert [request.run_key for request in execution.run_requests] == [None]
 

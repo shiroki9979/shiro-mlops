@@ -113,8 +113,8 @@ def _drop_load_hours(
 @pytest.mark.parametrize(
     ("gap_start", "gap_hours"),
     [
-        # 門檻窗中段缺一日：窗內 144 < 152 個有效小時。
-        (ANCHOR - pd.Timedelta(hours=72), 24),
+        # A single missing hour leaves the threshold window incomplete.
+        (ANCHOR - pd.Timedelta(hours=72), 1),
         # 只剩錨點前 101 小時：歷史未涵蓋門檻窗。
         (ANCHOR - pd.Timedelta(days=20), 24 * 20 - 100),
     ],

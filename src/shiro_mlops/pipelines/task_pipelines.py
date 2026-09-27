@@ -7,7 +7,7 @@ so no task ever triggers an external API or reads snapshot tables. Assets only
 talk to the runner; task types never see Dagster.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -60,8 +60,6 @@ TIME_SERIES_REPO = "time_series_repo"
 TARGET_SOURCE_ASSETS = {HOURLY_ACTUAL_LOAD_TARGET: HOURLY_ACTUAL_LOAD_ASSET}
 # MLflow 不可用時訓練仍保存模型，run 以此標示未被追蹤。
 UNTRACKED_RUN_ID = "local_run"
-
-TaskLookup = Callable[[], TaskDefinition]
 
 
 @dataclass(frozen=True)
@@ -116,17 +114,9 @@ def build_task_pipelines(tasks: Mapping[str, TaskDefinition]) -> tuple[TaskPipel
 
 
 def build_task_pipeline(tasks: Mapping[str, TaskDefinition], task_id: str) -> TaskPipeline:
-    """Generate one task's assets, jobs, and schedules.
-
-    Runs look the definition up in ``tasks`` by id instead of capturing it, so
-    every asset and schedule of the task sees the same definition, including any
-    replacement made in that mapping after the graph was built.
-    """
+    """Generate one task's assets, jobs, and schedules from its validated definition."""
     names = TaskPipelineNames(task_id)
     task = tasks[task_id]
-
-    def current() -> TaskDefinition:
-        return tasks[task_id]
 
     # downstream() 讓只掛在特定任務的資產（如 Feast 匯出）隨該任務訓練，不需另列。
     training_job = define_asset_job(
@@ -142,14 +132,14 @@ def build_task_pipeline(tasks: Mapping[str, TaskDefinition], task_id: str) -> Ta
     return TaskPipeline(
         names=names,
         assets=(
-            _features_asset(names, task, current),
-            _model_asset(names, current),
-            _monitoring_asset(names, task, current),
+            _features_asset(names, task),
+            _model_asset(names, task),
+            _monitoring_asset(names, task),
         ),
         jobs=(training_job, monitoring_job),
         schedules=(
-            _training_schedule(names, task.schedule.training, training_job, current),
-            _monitoring_schedule(names, task.schedule.monitoring, monitoring_job, current),
+            _training_schedule(names, task.schedule.training, training_job, task),
+            _monitoring_schedule(names, task.schedule.monitoring, monitoring_job, task),
         ),
     )
 
@@ -157,9 +147,7 @@ def build_task_pipeline(tasks: Mapping[str, TaskDefinition], task_id: str) -> Ta
 # --- Assets --------------------------------------------------------------------------------
 
 
-def _features_asset(
-    names: TaskPipelineNames, task: TaskDefinition, current: TaskLookup
-) -> AssetsDefinition:
+def _features_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefinition:
     @asset(
         name=names.features,
         group_name=names.task_id,
@@ -170,7 +158,7 @@ def _features_asset(
     def features(context: AssetExecutionContext) -> Output[pd.DataFrame]:
         """Read and gate training data once; the model asset trains from this table."""
         try:
-            data = load_training_data(current(), _runtime(context), as_of=_taiwan_now())
+            data = load_training_data(task, _runtime(context), as_of=_taiwan_now())
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         table = training_table(data)
@@ -185,7 +173,7 @@ def _features_asset(
     return features
 
 
-def _model_asset(names: TaskPipelineNames, current: TaskLookup) -> AssetsDefinition:
+def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefinition:
     @asset(
         name=names.model,
         group_name=names.task_id,
@@ -193,7 +181,6 @@ def _model_asset(names: TaskPipelineNames, current: TaskLookup) -> AssetsDefinit
         ins={"features": AssetIn(key=AssetKey(names.features))},
     )
     def model(context: AssetExecutionContext, features: pd.DataFrame) -> Output[dict]:
-        task = current()
         trained = fit_task(task, training_data_from_table(task, features))
         metrics = {name: float(value) for name, value in trained.metrics.items()}
         model_dir = save_model(settings.models_dir, task.task_id, trained.model)
@@ -213,9 +200,7 @@ def _model_asset(names: TaskPipelineNames, current: TaskLookup) -> AssetsDefinit
     return model
 
 
-def _monitoring_asset(
-    names: TaskPipelineNames, task: TaskDefinition, current: TaskLookup
-) -> AssetsDefinition:
+def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefinition:
     @asset(
         name=names.monitoring,
         group_name=names.task_id,
@@ -227,9 +212,7 @@ def _monitoring_asset(
     def monitoring(context: AssetExecutionContext, model: dict) -> dict:
         """Hourly report: bounded reads only, so the full history is never re-read."""
         try:
-            report = monitor_task(
-                current(), _runtime(context), model["metrics"], as_of=_taiwan_now()
-            )
+            report = monitor_task(task, _runtime(context), model["metrics"], as_of=_taiwan_now())
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         context.log.info(
@@ -272,7 +255,7 @@ def _track(
 
 
 def _training_schedule(
-    names: TaskPipelineNames, cron: str, job: Any, current: TaskLookup
+    names: TaskPipelineNames, cron: str, job: Any, task: TaskDefinition
 ) -> ScheduleDefinition:
     @schedule(
         name=names.training_schedule,
@@ -283,7 +266,7 @@ def _training_schedule(
         required_resource_keys={TIME_SERIES_REPO},
     )
     def training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-        readiness = _schedule_readiness(context, current())
+        readiness = _schedule_readiness(context, task)
         if not readiness.ready:
             return SkipReason(readiness.reason)
         return RunRequest(run_key=tick_run_key(context))
@@ -292,7 +275,7 @@ def _training_schedule(
 
 
 def _monitoring_schedule(
-    names: TaskPipelineNames, cron: str, job: Any, current: TaskLookup
+    names: TaskPipelineNames, cron: str, job: Any, task: TaskDefinition
 ) -> ScheduleDefinition:
     no_model_reason = (
         f"No {names.model} materialization yet; {names.monitoring_schedule} waits for "
@@ -308,7 +291,7 @@ def _monitoring_schedule(
         required_resource_keys={TIME_SERIES_REPO},
     )
     def monitoring_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-        readiness = _schedule_readiness(context, current())
+        readiness = _schedule_readiness(context, task)
         if not readiness.ready:
             return SkipReason(readiness.reason)
         if context.instance.get_latest_materialization_event(AssetKey(names.model)) is None:

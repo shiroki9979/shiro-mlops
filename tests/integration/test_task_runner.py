@@ -397,3 +397,7 @@ def test_observed_prediction_with_no_scorable_window_is_unavailable(
 
     with pytest.raises(ObservedInputsIncompleteError, match="No complete observed window"):
         predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
+
+    readiness = check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF)
+    assert not readiness.ready
+    assert "No complete observed window" in readiness.reason
