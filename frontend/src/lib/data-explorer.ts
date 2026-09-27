@@ -4,9 +4,9 @@ export function exportCsv(filename: string, rows: Array<Record<string, unknown>>
   if (rows.length === 0) return
   const headers = Object.keys(rows[0])
   const csv = [
-    headers.join(','),
-    ...rows.map((row) => headers.map((header) => JSON.stringify(row[header] ?? '')).join(',')),
-  ].join('\n')
+    headers.map(csvCell).join(','),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(',')),
+  ].join('\r\n')
   if (typeof URL.createObjectURL !== 'function') return
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
@@ -17,6 +17,11 @@ export function exportCsv(filename: string, rows: Array<Record<string, unknown>>
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+function csvCell(value: unknown): string {
+  const text = value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')
+  return `"${text.replaceAll('"', '""')}"`
 }
 
 export function toRfc3339(localValue: string): string {

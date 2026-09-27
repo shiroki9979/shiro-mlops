@@ -227,6 +227,16 @@ def test_fetch_weather_range_keeps_canonical_station_identity(
     assert set(weather["station_id"]) == {"466920"}
 
 
+def test_fetch_weather_range_preserves_database_failure(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'missing' / 'database.db'}")
+    repository = TimeSeriesRepository(engine=engine, auto_init=False)
+    try:
+        with pytest.raises(SQLAlchemyError, match="unable to open database file"):
+            repository.fetch_weather_range(location="Taipei")
+    finally:
+        engine.dispose()
+
+
 def test_fetch_weather_range_uses_configured_taipei_station(
     repository: TimeSeriesRepository,
     cwa_observation_batch,

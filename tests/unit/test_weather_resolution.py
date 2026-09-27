@@ -1,5 +1,6 @@
 """Tests for point-in-time CWA forecast resolution."""
 
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -7,7 +8,42 @@ import pandas as pd
 import pytest
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import resolve_weather
+from tests.helpers import forecast_release, township_forecast
+
+
+def test_resolver_interpolates_short_horizon_between_persisted_forecast_points(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    geocode = settings.cwa_locations["Taipei"].geocode
+    points = tuple(
+        replace(
+            township_forecast(datetime(2026, 8, 20, hour), temperature, relative_humidity_pct=70.0),
+            geocode=geocode,
+        )
+        for hour, temperature in ((12, 30.0), (15, 33.0))
+    )
+    test_repo.upsert_cwa_forecast_release(forecast_release(datetime(2026, 8, 20, 9), points))
+    # A future release must not supply either interpolation endpoint.
+    test_repo.upsert_cwa_forecast_release(
+        forecast_release(
+            datetime(2026, 8, 20, 14),
+            tuple(replace(point, temperature_c=99.0) for point in points),
+        )
+    )
+
+    result = resolve_weather(
+        test_repo,
+        start_time=datetime(2026, 8, 20, 13),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 13),
+    )
+
+    assert result.mode == "normal"
+    assert result.dataframe["temperature"].tolist() == [31.0]
+    assert result.dataframe["relative_humidity"].tolist() == [70.0]
+    assert result.sources[0]["temperature"]["source"] == "three_day"
 
 
 def test_resolver_prefers_three_day_and_falls_back_to_weekly_per_field() -> None:

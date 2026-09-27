@@ -163,6 +163,7 @@ def resolve_weather(
             source_updated_before=cutoff,
             valid_start=start,
             valid_end=end,
+            include_adjacent_points=True,
         )
     )
     observations = repository.fetch_cwa_station_observations(
