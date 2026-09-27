@@ -55,8 +55,10 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         error={listQuery.error}
         isError={listQuery.isError}
         isLoading={listQuery.isLoading}
+        canRestart={Boolean(params.cursor)}
         onSelect={setSelected}
         onNextPage={(cursor) => updateSearch({ cursor })}
+        onRestart={() => updateSearch({ cursor: undefined })}
       />
       <ExplorerDetail selected={selected} onClose={() => setSelected(null)} />
     </div>
