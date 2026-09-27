@@ -4,14 +4,14 @@ import pytest
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
-from tests.unit.test_data_explorer_audit_pagination import assert_observation_audit_pages
-from tests.unit.test_data_explorer_exact_window import (
-    assert_all_dataset_windows,
-    assert_completeness_windows,
-)
-from tests.unit.test_data_explorer_forecast_pagination import (
+from tests.scenarios.data_explorer_audit import assert_observation_audit_pages
+from tests.scenarios.data_explorer_forecast import (
     assert_forecast_audit_pages_keep_complete_sort_key,
     assert_forecast_pages_pin_microsecond_vintage,
+)
+from tests.scenarios.data_explorer_windows import (
+    assert_all_dataset_windows,
+    assert_completeness_windows,
 )
 
 

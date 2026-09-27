@@ -190,3 +190,40 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
     )
     assert {item["issued_at"] for item in audits.items} == {rfc3339(older), rfc3339(newer)}
     assert "raw_payload" not in audits.items[0]
+
+
+def test_forecast_reader_picks_latest_vintage_across_mixed_sqlite_time_storage(
+    sqlite_engine: Engine,
+) -> None:
+    """同一發布時間以不同格式儲存時，最新版本仍由 source_updated_at 決定。"""
+    releases = (
+        ("2026-09-27 04:00:00+00:00", "2026-09-27 04:10:00+00:00", 20.0),
+        ("2026-09-27 04:00:00", "2026-09-27 04:20:00", 30.0),
+    )
+    with sqlite_engine.begin() as connection:
+        for issued_at, source_updated_at, temperature in releases:
+            version = {"issued": issued_at, "source": source_updated_at}
+            connection.execute(
+                text(
+                    "INSERT INTO raw_cwa_forecast_release (dataset_id, issued_at, "
+                    "source_updated_at, fetched_at, status, missing_geocodes, raw_payload) "
+                    "VALUES ('F-D0047-089', :issued, :source, :source, 'complete', '[]', '{}')"
+                ),
+                version,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO raw_cwa_township_forecast (dataset_id, issued_at, "
+                    "source_updated_at, valid_from, valid_to, geocode, temperature_c) "
+                    "VALUES ('F-D0047-089', :issued, :source, '2026-09-27 06:00:00+00:00', "
+                    "'2026-09-27 07:00:00+00:00', '63000000', :temperature)"
+                ),
+                {**version, "temperature": temperature},
+            )
+
+    page = ForecastReader(sqlite_engine).list(
+        {"start": "2026-09-27T14:00:00+08:00", "end": "2026-09-27T14:00:00+08:00"}
+    )
+
+    assert [item["temperature_c"] for item in page.items] == [30.0]
+    assert page.items[0]["source_updated_at"] == "2026-09-27T12:20:00+08:00"

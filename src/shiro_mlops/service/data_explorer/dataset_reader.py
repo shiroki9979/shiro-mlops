@@ -16,28 +16,42 @@ from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 
 
 class DatasetReader:
-    """Typed-query adapter reused by migrated Data Explorer dataset readers."""
+    """Typed-query adapter reused by every Data Explorer dataset reader."""
 
     dataset: str
+    # Trusted SELECT template; {where} and {order} come from filters() and the sort spec.
+    select_sql: str
 
     def __init__(self, engine: Engine) -> None:
         self.db = ExplorerDb(engine)
 
     def list(self, params: dict[str, Any]) -> ListEnvelope:
-        if params.get("cursor"):
-            decode_cursor_filters(str(params["cursor"]), dataset=self.dataset)
-        query = self.build_query(params)
+        cursor_filters = self._decode_cursor_filters(params)
+        query = self.build_query(params, cursor_filters)
         try:
             return paginate_raw_list(query, self.fetch_rows, self.project_page)
         except SQLAlchemyError as exc:
             raise DatabaseUnavailableError(str(exc)) from exc
 
-    def build_query(self, params: dict[str, Any]) -> ExplorerQuery:
-        return ExplorerQuery.from_params(self.dataset, params)
+    def _decode_cursor_filters(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        """Reject malformed or incompatible cursors before any database access."""
+        cursor = params.get("cursor")
+        return decode_cursor_filters(str(cursor), dataset=self.dataset) if cursor else None
+
+    def build_query(
+        self, params: dict[str, Any], cursor_filters: dict[str, Any] | None
+    ) -> ExplorerQuery:
+        return ExplorerQuery.from_params(self.dataset, params, cursor_filters=cursor_filters)
 
     def fetch_rows(
         self, query: ExplorerQuery, cursor: dict[str, Any] | None, limit: int
     ) -> list[dict[str, Any]]:
+        clauses, params = self.filters(query)
+        where, order, cursor_params = self.db.page_sql(clauses, cursor, query.sort_columns)
+        sql = self.select_sql.format(where=where, order=order)
+        return self.db.fetch(sql, {**params, **cursor_params, "limit": limit})
+
+    def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         raise NotImplementedError
 
     def project_page(

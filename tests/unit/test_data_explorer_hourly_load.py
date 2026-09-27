@@ -194,3 +194,18 @@ def test_hourly_load_reader_rejects_nonscalar_cursor_key(
 
     with pytest.raises(CursorError, match="Invalid cursor key"):
         HourlyLoadReader(test_repo.engine).list({**params, "cursor": cursor})
+
+
+@pytest.mark.parametrize("time_key", [0, 1758499200.5, True])
+def test_hourly_load_reader_rejects_non_string_cursor_time_key(
+    test_repo: TimeSeriesRepository, time_key
+) -> None:
+    params = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    cursor = encode_cursor(
+        dataset="hourly_load",
+        filters=ExplorerQuery.from_params("hourly_load", params).filters,
+        key={"time": time_key, "location": "Taipei"},
+    )
+
+    with pytest.raises(CursorError, match="Invalid cursor key"):
+        HourlyLoadReader(test_repo.engine).list({**params, "cursor": cursor})

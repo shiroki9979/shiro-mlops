@@ -3,7 +3,7 @@
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
-from tests.unit.test_data_explorer_power import (
+from tests.scenarios.data_explorer_power import (
     assert_national_reader_pages,
     assert_regional_reader_pages,
     assert_unit_reader_pages,
