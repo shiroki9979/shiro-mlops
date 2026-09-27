@@ -245,6 +245,6 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     assert (model["run_id"], model["model_version"]) == ("run-1", "1")
     report = monitoring.output_for_node(NAMES.monitoring)
     assert report["task_id"] == DYNAMIC_HORIZON_FORECAST
-    assert report["latest_actual_load_time"] == next_hour.isoformat()
-    assert report["actual_load_hours"] == len(taipower_raw_df) + 1
+    assert report["latest_target_time"] == next_hour.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df) + 1
     assert report["training_rows"] == len(taipower_raw_df)

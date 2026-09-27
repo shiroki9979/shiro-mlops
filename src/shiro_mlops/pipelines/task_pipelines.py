@@ -247,9 +247,9 @@ def _report_payload(report: MonitoringReport, *, training_rows: int | None) -> d
         "health_reason": report.health.reason,
         "metrics": dict(report.metrics),
         "training_rows": training_rows,
-        "actual_load_hours": report.target_hours,
-        "latest_actual_load_time": report.latest_target_time.isoformat(),
-        "latest_actual_load_mw": report.latest_target_value,
+        "target_hours": report.target_hours,
+        "latest_target_time": report.latest_target_time.isoformat(),
+        "latest_target_value": report.latest_target_value,
     }
 
 
