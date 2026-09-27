@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from dagster import load_assets_from_modules
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -33,7 +32,6 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
-from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 
@@ -226,9 +224,17 @@ def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float
 
 
 def selected_asset_names(job) -> set[str]:
-    """以正式資產模組解析 job selection，讓各測試對同一份資產圖斷言。"""
-    assets = load_assets_from_modules([assets_module])
-    return {key.to_user_string() for key in job.selection.resolve(assets)}
+    """以正式部署的資產圖解析 job selection，讓各測試對同一份資產圖斷言。"""
+    from shiro_mlops.pipelines.definitions import all_assets
+
+    return {key.to_user_string() for key in job.selection.resolve(all_assets)}
+
+
+def task_jobs() -> list:
+    """資產工廠為所有已部署任務產生的訓練與監控 job。"""
+    from shiro_mlops.pipelines.definitions import task_pipelines
+
+    return [job for pipeline in task_pipelines for job in pipeline.jobs]
 
 
 def hourly_load_with_weather(hours: int, last_hour: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:

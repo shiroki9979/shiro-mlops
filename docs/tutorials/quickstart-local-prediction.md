@@ -14,7 +14,7 @@
 本教學將帶領您啟動本地容器化服務、將必要資料寫入 TimescaleDB、訓練模型，並發送第一個動態視界負載預測請求。
 
 > [!IMPORTANT]
-> `daily_training_job` 需要資料庫中已有與台電逐時負載時間重疊的 canonical CWA 測站觀測歷史。全新空資料庫目前沒有歷史 bootstrap 指令；單次 observation materialization 可能不足以訓練模型，此時只能完成服務與資料擷取驗證，`/ready` 會維持 HTTP 503。
+> `dynamic_horizon_forecast__training_job` 需要資料庫中已有與台電逐時負載時間重疊的 canonical CWA 測站觀測歷史。全新空資料庫目前沒有歷史 bootstrap 指令；單次 observation materialization 可能不足以訓練模型，此時只能完成服務與資料擷取驗證，`/ready` 會維持 HTTP 503。
 
 ---
 
@@ -68,7 +68,7 @@ make compose-up
 1. 開啟 `http://localhost:3000` 進入 Dagster UI。
 2. materialize `raw_cwa_station_observation`。
 3. materialize `raw_cwa_township_forecast`。
-4. 確認已有足夠且時間重疊的 CWA 觀測歷史後，啟動 `daily_training_job`；此工作會讀取已入庫的台電逐時負載、訓練模型並產生任務模型目錄 `data/models/dynamic_horizon_forecast/`。若因無可用訓練列而失敗，保留 503 狀態並繼續由排程累積正式觀測資料。
+4. 確認已有足夠且時間重疊的 CWA 觀測歷史後，啟動 `dynamic_horizon_forecast__training_job`；此工作會讀取已入庫的台電逐時負載、訓練模型並產生任務模型目錄 `data/models/dynamic_horizon_forecast/`。若因無可用訓練列而失敗，保留 503 狀態並繼續由排程累積正式觀測資料。
 5. 訓練完成後，重新啟動 API 以載入模型：
 
    ```bash

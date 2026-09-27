@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 引入 ML 任務抽象（ADR-0009）：動態視界預報改由 `tasks/dynamic_horizon_forecast.toml` 任務設定與 `recursive_regression` 任務類型描述，Dagster 與 API 只經 task runner 訓練與預測；`TRAINING_MIN_LOAD_HOURS`、`LOAD_ANCHOR_MAX_LAG_HOURS` 環境變數改為任務設定 `[policies]`，lag／rolling 配方以任務設定為唯一來源，serving 依 `lookback_hours` 有界讀取負載歷史（#66）。
 - 模型改以 LightGBM 原生文字格式加 JSON metadata 保存於 `DATA_DIR/models/<task_id>/`（ADR-0010）；既有 `DATA_DIR/model.joblib` 不再載入，首次重新訓練前 `/ready` 維持 not_ready（#66）。
+- Dagster 改以資產工廠依任務設定產生每個任務的 `{task_id}__features`／`__model`／`__monitoring` 資產、訓練與監控 job 及 Asia/Taipei 排程（cron 來自任務設定 `[schedule]`）；`daily_training_job`／`hourly_drift_job` 與其排程、`trained_forecaster_model` 等資產鍵由 `dynamic_horizon_forecast__*` 取代，舊鍵 materialization 歷史不轉移，新排程需重新開啟並先完成一次訓練。每個任務以 `task_id` 命名獨立的 MLflow experiment 與 registered model；監控健康判定改由任務類型依任務設定 `[health]` 門檻決定，取代寫死的 `mape < 10.0`；Feast 匯出只掛在動態視界預報任務（#67）。
 
 - 拆分預測對象與氣象代表點（ADR-0009）：`raw_taipower_load.location` 改名為 `subject`，全台負載由 `Taipei` 遷移為 `nationwide`（服務啟動時自動且可重複遷移，操作順序見 `docs/how-to/migrate-load-subject-to-nationwide.md`）；天氣解析與訓練天氣改以 CWA 擷取目錄的氣象代表點 alias 取值；`/predict` 回應以 `subject` 取代 `location`；Data Explorer 逐時負載改以 `subject` 顯示與篩選，儀表板移除地點選單（#65）。
 - 將 Data Explorer 列表查詢抽出為 typed `ExplorerQuery`，並讓逐時負載改走共用 cursor／keyset 分頁 seam（#52）。
@@ -32,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- 移除 `MLFLOW_EXPERIMENT_NAME` 設定：MLflow experiment 名稱改由任務 id 推導（#67）。
 - 移除 `FallbackFeatureSources` 與特徵查詢窗等訓練備援路徑，以及 `predict_recursive` 的固定氣象預設值（#66）。
 - 移除誤標為 Feast 的 Monitoring Feature Store Snapshot 與 `GET /features/latest` 過渡端點（#50）。
 
