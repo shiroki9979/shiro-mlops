@@ -1,5 +1,4 @@
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useDashboardStore } from '@/store/dashboard-store'
 import { Clock, Eye, MapPin, RefreshCw } from 'lucide-react'
@@ -11,18 +10,10 @@ const HORIZON_PRESETS = [
   { label: '7 天 (168h)', value: 168 },
 ]
 
-const LOCATIONS = [
-  { label: '台北 (北部區域)', value: 'Taipei' },
-  { label: '台中 (中部區域)', value: 'Taichung' },
-  { label: '高雄 (南部區域)', value: 'Kaohsiung' },
-]
-
 export function HorizonControls() {
   const {
     horizonHours,
     setHorizonHours,
-    location,
-    setLocation,
     showTemperature,
     setShowTemperature,
     showHumidity,
@@ -54,25 +45,12 @@ export function HorizonControls() {
         </div>
       </div>
 
-      {/* Location and Series Toggles */}
+      {/* Prediction subject and Series Toggles */}
       <div className="flex flex-wrap items-center gap-4">
-        {/* Location selector */}
-        <div className="flex items-center gap-2">
+        {/* The model forecasts nationwide load only, so the subject is fixed rather than selectable. */}
+        <div className="flex items-center gap-2 text-xs text-slate-300">
           <MapPin className="h-3.5 w-3.5 text-slate-400" />
-          <div className="w-40">
-            <Select value={location} onValueChange={(val) => setLocation(val)}>
-              <SelectTrigger className="h-8 text-xs bg-slate-900 border-slate-700">
-                <SelectValue placeholder="選擇地區" />
-              </SelectTrigger>
-              <SelectContent>
-                {LOCATIONS.map((loc) => (
-                  <SelectItem key={loc.value} value={loc.value} className="text-xs">
-                    {loc.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <span>預測對象：全台</span>
         </div>
 
         <div className="h-4 w-px bg-slate-800" />
