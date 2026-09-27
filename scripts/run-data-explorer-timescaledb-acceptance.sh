@@ -21,4 +21,5 @@ docker exec "$container" pg_isready -U postgres -d pagination_acceptance >/dev/n
 
 port="$(docker port "$container" 5432/tcp | sed 's/.*://')"
 DATA_EXPLORER_TIMESCALE_URI="postgresql+psycopg2://postgres:postgres@127.0.0.1:${port}/pagination_acceptance" \
-  uv run pytest tests/integration/test_data_explorer_timescaledb.py -q
+TIMESCALE_INTEGRATION_URI="postgresql+psycopg2://postgres:postgres@127.0.0.1:${port}/pagination_acceptance" \
+  uv run pytest tests/integration/test_data_explorer_timescaledb*.py -q

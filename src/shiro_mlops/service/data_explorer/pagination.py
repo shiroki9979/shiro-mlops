@@ -9,7 +9,7 @@ from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
-from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_naive_sql_utc
+from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql_utc
 from shiro_mlops.service.data_explorer.values import to_taiwan
 
 CURSOR_TIME_COLS = {
@@ -23,10 +23,6 @@ CURSOR_TIME_COLS = {
     "ingested_at",
 }
 
-PageFetcher = Callable[
-    [ExplorerQuery, dict[str, Any] | None, int],
-    tuple[list[dict[str, Any]], list[str]],
-]
 RowFetcher = Callable[[ExplorerQuery, dict[str, Any] | None, int], list[dict[str, Any]]]
 PageProjector = Callable[
     [ExplorerQuery, list[dict[str, Any]]], tuple[list[dict[str, Any]], list[str]]
@@ -70,27 +66,9 @@ def raw_cursor_key(row: dict[str, Any], columns: tuple[str, ...]) -> dict[str, A
     }
 
 
-def sort_order(columns: tuple[str, ...]) -> str:
+def sort_order(columns: tuple[str, ...], dialect_name: str | None = None) -> str:
     """Build newest-first ordering from the same trusted key declaration."""
-    return ", ".join(f"{column} DESC" for column in columns)
-
-
-def paginate_list(query: ExplorerQuery, fetch_page: PageFetcher) -> ListEnvelope:
-    """Decode the cursor, fetch one extra row, and encode the next opaque cursor."""
-    cursor_key = query.cursor_key()
-    rows, missing = fetch_page(query, cursor_key, query.limit + 1)
-    has_more = len(rows) > query.limit
-    items = rows[: query.limit]
-    next_cursor = None
-    if has_more and items:
-        next_cursor = encode_cursor(
-            dataset=query.dataset,
-            filters=query.filters,
-            key=public_cursor_key(items[-1], DATASET_SPECS[query.dataset]["sort"]),
-        )
-    return ListEnvelope(
-        items=items, next_cursor=next_cursor, has_more=has_more, missing_slots=missing
-    )
+    return ", ".join(f"{_cursor_operand(column, column, dialect_name)} DESC" for column in columns)
 
 
 def apply_cursor(
@@ -145,20 +123,8 @@ def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, A
         value = key[column]
         try:
             converted[column] = (
-                to_naive_sql_utc(value)
-                if column in CURSOR_TIME_COLS or column.endswith("_at")
-                else value
+                to_sql_utc(value) if column in CURSOR_TIME_COLS or column.endswith("_at") else value
             )
         except (TypeError, ValueError, OverflowError) as exc:
             raise CursorError("Invalid cursor key") from exc
     return converted
-
-
-def public_cursor_key(item: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
-    """Project a response row onto the dataset's public sort key."""
-    mapping = {"time": "datetime"}
-    public = {}
-    for column in columns:
-        field = mapping.get(column, column)
-        public[column] = item[field]
-    return public

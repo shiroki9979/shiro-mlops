@@ -5,7 +5,6 @@ from datetime import datetime
 from shiro_mlops.data.cwa_client import CWAObservationBatch
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.weather import ObservationAuditReader
-from tests.helpers import rfc3339
 
 
 def assert_observation_audit_pages(repo: TimeSeriesRepository) -> None:
@@ -24,8 +23,8 @@ def assert_observation_audit_pages(repo: TimeSeriesRepository) -> None:
 
     reader = ObservationAuditReader(repo.engine)
     params = {
-        "start": rfc3339(second.replace(microsecond=100)),
-        "end": rfc3339(second.replace(microsecond=900)),
+        "start": second.replace(microsecond=100).isoformat(timespec="microseconds") + "+08:00",
+        "end": second.replace(microsecond=900).isoformat(timespec="microseconds") + "+08:00",
         "status": "incomplete",
         "limit": 1,
     }
