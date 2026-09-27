@@ -9,7 +9,6 @@ talk to the runner; task types never see Dagster.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,7 @@ from dagster import (
 )
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
 from shiro_mlops.pipelines.schedules import (
     CWA_OBSERVATION_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
@@ -138,8 +137,8 @@ def build_task_pipeline(tasks: Mapping[str, TaskDefinition], task_id: str) -> Ta
         ),
         jobs=(training_job, monitoring_job),
         schedules=(
-            _training_schedule(names, task.schedule.training, training_job, task),
-            _monitoring_schedule(names, task.schedule.monitoring, monitoring_job, task),
+            _training_schedule(names, training_job, task),
+            _monitoring_schedule(names, monitoring_job, task),
         ),
     )
 
@@ -158,7 +157,7 @@ def _features_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDef
     def features(context: AssetExecutionContext) -> Output[pd.DataFrame]:
         """Read and gate training data once; the model asset trains from this table."""
         try:
-            data = load_training_data(task, _runtime(context), as_of=_taiwan_now())
+            data = load_training_data(task, _runtime(context), as_of=taiwan_now())
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         table = training_table(data)
@@ -212,7 +211,7 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
     def monitoring(context: AssetExecutionContext, model: dict) -> dict:
         """Hourly report: bounded reads only, so the full history is never re-read."""
         try:
-            report = monitor_task(task, _runtime(context), model["metrics"], as_of=_taiwan_now())
+            report = monitor_task(task, _runtime(context), model["metrics"], as_of=taiwan_now())
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         context.log.info(
@@ -255,12 +254,12 @@ def _track(
 
 
 def _training_schedule(
-    names: TaskPipelineNames, cron: str, job: Any, task: TaskDefinition
+    names: TaskPipelineNames, job: Any, task: TaskDefinition
 ) -> ScheduleDefinition:
     @schedule(
         name=names.training_schedule,
         job=job,
-        cron_schedule=cron,
+        cron_schedule=task.schedule.training,
         execution_timezone=TAIWAN_TZ,
         description=f"Retrain {names.task_id} once its minimum accumulation is met",
         required_resource_keys={TIME_SERIES_REPO},
@@ -275,7 +274,7 @@ def _training_schedule(
 
 
 def _monitoring_schedule(
-    names: TaskPipelineNames, cron: str, job: Any, task: TaskDefinition
+    names: TaskPipelineNames, job: Any, task: TaskDefinition
 ) -> ScheduleDefinition:
     no_model_reason = (
         f"No {names.model} materialization yet; {names.monitoring_schedule} waits for "
@@ -285,7 +284,7 @@ def _monitoring_schedule(
     @schedule(
         name=names.monitoring_schedule,
         job=job,
-        cron_schedule=cron,
+        cron_schedule=task.schedule.monitoring,
         execution_timezone=TAIWAN_TZ,
         description=f"Report {names.task_id} health once a trained model exists",
         required_resource_keys={TIME_SERIES_REPO},
@@ -312,11 +311,6 @@ def _schedule_readiness(
     context: ScheduleEvaluationContext, task: TaskDefinition
 ) -> TrainingLoadReadiness:
     return check_training_readiness(task, _runtime(context))
-
-
-def _taiwan_now() -> datetime:
-    """Training decisions are point-in-time at the run's start, in Taiwan-local naive time."""
-    return pd.Timestamp.now(tz=TAIWAN_TZ).tz_localize(None).to_pydatetime()
 
 
 def _not_ready_failure(readiness: TrainingLoadReadiness) -> Failure:

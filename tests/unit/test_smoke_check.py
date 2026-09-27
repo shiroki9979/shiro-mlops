@@ -169,7 +169,7 @@ def test_recovered_stack_reports_both_ticks_triggering(
 def test_stalled_accumulation_fails(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    """最新推算小時落後超過 LOAD_ANCHOR_MAX_LAG_HOURS 表示擷取或推算排程停擺。"""
+    """最新推算小時落後超過任務設定 policies.stale_anchor_max_lag_hours 表示擷取或推算排程停擺。"""
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 20, 0)))
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))

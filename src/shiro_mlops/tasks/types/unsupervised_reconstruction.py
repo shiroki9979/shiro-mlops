@@ -61,6 +61,7 @@ CALENDAR_FEATURES = ("hour_sin", "hour_cos", "dayofweek_sin", "dayofweek_cos")
 SCORE_COL = "anomaly_score"
 IS_ANOMALY_COL = "is_anomaly"
 THRESHOLD_COL = "threshold"
+THRESHOLD_METRIC = "threshold"
 RECALL_METRIC = "recall"
 FALSE_POSITIVE_RATE_METRIC = "false_positive_rate"
 # 合成異常強度以常態負載的比例表示；對應颱風停班停課、大規模停電等用電型態異常的量級。
@@ -143,7 +144,7 @@ class UnsupervisedReconstruction:
         halves spread over the same weekdays and weekends when validation is
         shorter than a week.
         """
-        weather_columns = [column for column in data.weather.columns if column != DATETIME_COL]
+        weather_columns = data.weather_columns
         windows = _build_windows(data.load, data.weather, weather_columns, params.window_hours)
         is_validation = windows.end_times >= data.validation_start
         training = windows.features[~is_validation]
@@ -296,9 +297,9 @@ class UnsupervisedReconstructionModel:
         Without clean windows only the threshold is reported, so health warns.
         """
         if len(clean) == 0:
-            return {THRESHOLD_COL: self.threshold}
+            return {THRESHOLD_METRIC: self.threshold}
         metrics = {
-            THRESHOLD_COL: self.threshold,
+            THRESHOLD_METRIC: self.threshold,
             FALSE_POSITIVE_RATE_METRIC: self._flagged_fraction(clean),
         }
         recalls = {

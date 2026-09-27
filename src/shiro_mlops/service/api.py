@@ -17,7 +17,7 @@ from starlette.responses import JSONResponse
 from shiro_mlops import __version__
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, DEFAULT_HORIZON_HOURS, MAX_HORIZON_HOURS
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
@@ -53,14 +53,9 @@ class ModelStore:
         self.models: dict[str, TaskModel] = {}
 
 
-def _taiwan_now() -> pd.Timestamp:
-    """Return the current instant as Taiwan-local naive time, matching persisted load time."""
-    return pd.Timestamp.now(tz=TAIWAN_TZ).tz_localize(None)
-
-
 model_store = ModelStore()
 repository_store: TimeSeriesRepository | None = None
-request_clock: Callable[[], pd.Timestamp] = _taiwan_now
+request_clock: Callable[[], pd.Timestamp] = taiwan_now
 logger = logging.getLogger(__name__)
 WEATHER_SOURCES_FIELD = "weather_sources"
 

@@ -119,12 +119,6 @@ class Settings(BaseSettings):
             raise ValueError("CWA_LOCATION_ALLOWLIST cannot be empty")
         return locations
 
-    def weather_reference_point(self, alias: str) -> CWALocation:
-        """Resolve a weather reference point alias against the CWA ingestion catalog."""
-        from shiro_mlops.data.cwa_client import resolve_cwa_location
-
-        return resolve_cwa_location(self.cwa_locations, alias)
-
     @property
     def timescale_uri(self) -> str:
         """Return the PostgreSQL/TimescaleDB connection URI."""

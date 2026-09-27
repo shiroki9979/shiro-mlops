@@ -21,7 +21,11 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
-from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
+from shiro_mlops.data.cwa_client import (
+    CWAForecastRelease,
+    CWAObservationBatch,
+    resolve_cwa_location,
+)
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
@@ -705,7 +709,7 @@ class TimeSeriesRepository:
             Sorted DataFrame of weather observation records.
         """
         station_id = (
-            settings.weather_reference_point(reference_point).station_id
+            resolve_cwa_location(settings.cwa_locations, reference_point).station_id
             if reference_point is not None
             else None
         )
