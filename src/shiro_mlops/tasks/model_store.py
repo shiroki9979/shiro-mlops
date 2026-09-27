@@ -81,11 +81,19 @@ def _swap_by_renames(staging: Path, target: Path) -> None:
     previous.rename(staging)
 
 
+def _clear_previous_left_by_a_crash(target: Path) -> None:
+    """A crash inside ``_swap_by_renames`` strands the old model; nothing else removes it."""
+    previous = _previous_directory(target)
+    if previous.exists():
+        shutil.rmtree(previous)
+
+
 def _install(staging: Path, target: Path) -> None:
-    """Leave the new model at ``target`` and any previous model at ``staging``."""
-    stranded = _previous_directory(target)
-    if stranded.exists():
-        shutil.rmtree(stranded)
+    """Leave the new model at ``target`` and any previous model at ``staging``.
+
+    Runs under the task's exclusive lock, so clearing a stranded old model races no reader.
+    """
+    _clear_previous_left_by_a_crash(target)
     if not target.exists():
         staging.rename(target)
         return
