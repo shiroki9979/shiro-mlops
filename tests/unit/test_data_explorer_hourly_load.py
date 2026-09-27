@@ -9,9 +9,10 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.service.data_explorer.cursor import CursorError
+from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
+from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from tests.helpers import TAIWAN, rfc3339
 
 
@@ -178,3 +179,18 @@ def test_hourly_load_reader_rejects_invalid_window_and_cursor(
         reader.list({**params, "location": "Kaohsiung", "cursor": first.next_cursor})
     with pytest.raises(CursorError):
         reader.list({**params, "cursor": "not-a-cursor"})
+
+
+@pytest.mark.parametrize("location", [["Taipei"], {"name": "Taipei"}])
+def test_hourly_load_reader_rejects_nonscalar_cursor_key(
+    test_repo: TimeSeriesRepository, location
+) -> None:
+    params = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    cursor = encode_cursor(
+        dataset="hourly_load",
+        filters=ExplorerQuery.from_params("hourly_load", params).filters,
+        key={"time": "2026-08-01T12:00:00+08:00", "location": location},
+    )
+
+    with pytest.raises(CursorError, match="Invalid cursor key"):
+        HourlyLoadReader(test_repo.engine).list({**params, "cursor": cursor})

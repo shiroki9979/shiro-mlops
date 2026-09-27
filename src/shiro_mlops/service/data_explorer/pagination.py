@@ -121,10 +121,11 @@ def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, A
         if column not in key or key[column] is None:
             raise CursorError("Invalid cursor key")
         value = key[column]
+        is_time = column in CURSOR_TIME_COLS or column.endswith("_at")
+        if not is_time and not isinstance(value, str):
+            raise CursorError("Invalid cursor key")
         try:
-            converted[column] = (
-                to_sql_utc(value) if column in CURSOR_TIME_COLS or column.endswith("_at") else value
-            )
+            converted[column] = to_sql_utc(value) if is_time else value
         except (TypeError, ValueError, OverflowError) as exc:
             raise CursorError("Invalid cursor key") from exc
     return converted
