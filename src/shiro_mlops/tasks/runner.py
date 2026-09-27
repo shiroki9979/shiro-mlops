@@ -1,4 +1,4 @@
-"""Task runner: the single entry point Dagster and the API use to train and serve ML tasks.
+"""Task runner: the single entry point Dagster and the API use to train, monitor, and serve tasks.
 
 The runner owns I/O and the shared components (ADR-0009): the minimum
 accumulation gate, bounded data retrieval, the stale load anchor rule, and
@@ -33,6 +33,7 @@ from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
+    HealthAssessment,
     InputRequirements,
     PredictionData,
     TaskModel,
@@ -96,6 +97,18 @@ class PredictionOutcome:
     weather_sources: tuple[Mapping[str, Mapping[str, str]], ...]
 
 
+@dataclass(frozen=True)
+class MonitoringReport:
+    """The task type's health verdict on training metrics beside the newest persisted target."""
+
+    task_id: str
+    health: HealthAssessment
+    metrics: Mapping[str, float]
+    target_hours: int
+    latest_target_time: pd.Timestamp
+    latest_target_value: float
+
+
 # --- Training ------------------------------------------------------------------------------
 
 
@@ -129,8 +142,32 @@ def load_training_data(
 
 def train_task(task: TaskDefinition, runtime: TaskRuntime, *, as_of: datetime) -> Trained:
     """Train the task's type on data known at ``as_of``; raises ``TaskNotReady`` first."""
-    data = load_training_data(task, runtime, as_of=as_of)
+    return fit_task(task, load_training_data(task, runtime, as_of=as_of))
+
+
+def fit_task(task: TaskDefinition, data: TrainingData) -> Trained:
+    """Train the task's type on training data that was already read and gated."""
     return get_task_type(task.task_type).train(task.params, data)
+
+
+def training_table(data: TrainingData) -> pd.DataFrame:
+    """One frame per target hour with its observed weather, for persisting between runs."""
+    return data.load.merge(data.weather, on=DATETIME_COL, how="left")
+
+
+def training_data_from_table(task: TaskDefinition, table: pd.DataFrame) -> TrainingData:
+    """Invert ``training_table``: hours without any observed weather stay absent, not NaN.
+
+    ``validation_start`` is recomputed with the same shared split, so it matches
+    the value ``load_training_data`` derived from the same target hours.
+    """
+    fields = list(task.weather.fields)
+    weather = table[[DATETIME_COL, *fields]].dropna(subset=fields, how="all")
+    return TrainingData(
+        load=table[TARGET_COLUMNS].reset_index(drop=True),
+        weather=weather.reset_index(drop=True),
+        validation_start=_validation_start(table[DATETIME_COL], task.policies.validation_fraction),
+    )
 
 
 def load_observed_weather(
@@ -146,6 +183,41 @@ def load_observed_weather(
     )
     observed = _with_datetime_column(observed)
     return observed[[DATETIME_COL, *task.weather.fields]].reset_index(drop=True)
+
+
+# --- Monitoring ----------------------------------------------------------------------------
+
+
+def monitor_task(
+    task: TaskDefinition, runtime: TaskRuntime, metrics: Mapping[str, float], *, as_of: datetime
+) -> MonitoringReport:
+    """Judge training metrics with the task type's health rule and the task's thresholds.
+
+    Reads only the accumulation summary and the newest target row, never the full
+    history, because monitoring runs hourly. Raises ``TaskNotReady`` while the
+    minimum accumulation is unmet.
+    """
+    readiness = check_training_readiness(task, runtime)
+    if not readiness.ready:
+        raise TaskNotReady(readiness)
+    latest = _with_datetime_column(
+        runtime.repository.fetch_latest_load(
+            subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE, at_or_before=as_of
+        )
+    )
+    if latest.empty:
+        raise MissingLoadHistoryError(
+            f"No persisted {task.subject} target at or before {as_of.isoformat()}."
+        )
+    newest = latest.sort_values(DATETIME_COL).iloc[-1]
+    return MonitoringReport(
+        task_id=task.task_id,
+        health=get_task_type(task.task_type).assess_health(task.health, metrics),
+        metrics=dict(metrics),
+        target_hours=readiness.valid_hours,
+        latest_target_time=pd.Timestamp(newest[DATETIME_COL]),
+        latest_target_value=float(newest[LOAD_MW_COL]),
+    )
 
 
 # --- Serving -------------------------------------------------------------------------------
