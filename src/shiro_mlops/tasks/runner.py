@@ -43,6 +43,8 @@ from shiro_mlops.tasks.types.base import (
 )
 
 MODEL_NOT_LOADED_REASON = "Model is not loaded or trained yet."
+OBSERVED_WEATHER_SOURCE = "station_observation"
+OBSERVED_AT_FIELD = "observed_at"
 TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
 
 
@@ -74,7 +76,14 @@ class StaleLoadAnchorError(TaskUnavailableError):
 
 
 class WeatherUnavailableError(TaskUnavailableError):
-    """Neither forecasts nor degraded fallbacks cover the requested horizon."""
+    """Neither forecasts nor degraded fallbacks cover the requested horizon.
+
+    For observed-weather tasks: no station observation exists in the lookback.
+    """
+
+
+class ObservedInputsIncompleteError(TaskUnavailableError):
+    """Gaps in observed load or weather leave no requested hour that can be scored."""
 
 
 @dataclass(frozen=True)
@@ -231,7 +240,7 @@ def check_task_ready(
         return Readiness(ready=False, reason=MODEL_NOT_LOADED_REASON)
     try:
         _, weather = _prepare_prediction(
-            task, runtime, as_of=as_of, horizon_hours=MAX_HORIZON_HOURS
+            task, runtime, _requirements(task), as_of=as_of, horizon_hours=MAX_HORIZON_HOURS
         )
     except TaskUnavailableError as error:
         return Readiness(ready=False, reason=str(error))
@@ -248,32 +257,49 @@ def predict_task(
 ) -> PredictionOutcome:
     """Predict from persisted data as known at ``as_of``.
 
-    Raises ``MissingLoadHistoryError``, ``StaleLoadAnchorError`` or
-    ``WeatherUnavailableError`` (all ``TaskUnavailableError``) instead of degrading
-    where no substitute exists.
+    Forecast-weather tasks predict ``horizon_hours`` hours after the load anchor;
+    observed-weather tasks score the latest ``horizon_hours`` hours up to the anchor.
+    Either way each outcome weather row and source belongs to the prediction row
+    at the same position. Raises ``MissingLoadHistoryError``,
+    ``StaleLoadAnchorError``, ``WeatherUnavailableError`` or
+    ``ObservedInputsIncompleteError`` (all ``TaskUnavailableError``) instead of
+    degrading where no substitute exists.
     """
-    data, weather = _prepare_prediction(task, runtime, as_of=as_of, horizon_hours=horizon_hours)
+    requirements = _requirements(task)
+    data, weather = _prepare_prediction(
+        task, runtime, requirements, as_of=as_of, horizon_hours=horizon_hours
+    )
+    predictions = model.predict(data)
+    if requirements.weather is WeatherInput.OBSERVED:
+        weather = _observed_weather_at(predictions, weather)
     return PredictionOutcome(
         subject=task.subject,
         mode=weather.mode,
-        predictions=model.predict(data),
-        weather=data.weather,
+        predictions=predictions,
+        weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],
         weather_sources=weather.sources,
     )
 
 
+def _requirements(task: TaskDefinition) -> InputRequirements:
+    return get_task_type(task.task_type).requirements(task.params)
+
+
 def _prepare_prediction(
-    task: TaskDefinition, runtime: TaskRuntime, *, as_of: datetime, horizon_hours: int | None
+    task: TaskDefinition,
+    runtime: TaskRuntime,
+    requirements: InputRequirements,
+    *,
+    as_of: datetime,
+    horizon_hours: int | None,
 ) -> tuple[PredictionData, WeatherResolution]:
-    requirements = get_task_type(task.task_type).requirements(task.params)
     anchor = _fresh_load_anchor(task, runtime.repository, as_of)
-    history = _fetch_target(
-        task,
-        runtime.repository,
-        start=anchor - timedelta(hours=requirements.lookback_hours),
-        end=anchor,
-    )
-    weather = _resolve_future_weather(task, runtime, requirements, anchor, as_of, horizon_hours)
+    history_start = anchor - timedelta(hours=requirements.lookback_hours)
+    history = _fetch_target(task, runtime.repository, start=history_start, end=anchor)
+    if requirements.weather is WeatherInput.OBSERVED:
+        weather = _observed_weather_until(task, runtime, start=history_start, anchor=anchor)
+    else:
+        weather = _resolve_future_weather(task, runtime, anchor, as_of, horizon_hours)
     data = PredictionData(
         anchor=anchor,
         load_history=history,
@@ -307,16 +333,12 @@ def _fresh_load_anchor(
 def _resolve_future_weather(
     task: TaskDefinition,
     runtime: TaskRuntime,
-    requirements: InputRequirements,
     anchor: pd.Timestamp,
     as_of: datetime,
     horizon_hours: int | None,
 ) -> WeatherResolution:
-    if requirements.weather is not WeatherInput.FORECAST or horizon_hours is None:
-        raise NotImplementedError(
-            "Only forecast weather over an explicit horizon is served; observed-weather "
-            "prediction arrives with the first task type that needs it."
-        )
+    if horizon_hours is None:
+        raise ValueError("Forecast-weather prediction needs an explicit horizon_hours")
     weather = resolve_weather(
         runtime.repository,
         reference_point=task.weather.reference_point,
@@ -328,6 +350,66 @@ def _resolve_future_weather(
     if weather.mode == "unavailable" or weather.dataframe.empty:
         raise WeatherUnavailableError(weather.reason or "Weather coverage is unavailable.")
     return weather
+
+
+def _observed_weather_until(
+    task: TaskDefinition, runtime: TaskRuntime, *, start: pd.Timestamp, anchor: pd.Timestamp
+) -> WeatherResolution:
+    """Station observations over the load history; observed tasks never degrade (mode normal).
+
+    Observations are already known at the anchor, so no forecast release or
+    fallback applies; each row's source records when it was observed.
+    """
+    observed = load_observed_weather(task, runtime, start=start, end=anchor)
+    observed = observed.dropna(subset=list(task.weather.fields), how="all")
+    if observed.empty:
+        raise WeatherUnavailableError(
+            f"No observed weather at {task.weather.reference_point.alias} between "
+            f"{start.isoformat()} and {anchor.isoformat()}."
+        )
+    observed = observed.assign(
+        **{DATETIME_COL: pd.to_datetime(observed[DATETIME_COL]).astype("datetime64[ns]")}
+    ).sort_values(DATETIME_COL, ignore_index=True)
+    sources = tuple(
+        _observation_source(task, observed_at) for observed_at in observed[DATETIME_COL]
+    )
+    return WeatherResolution(dataframe=observed, sources=sources, mode="normal")
+
+
+def _observed_weather_at(
+    predictions: pd.DataFrame, observed: WeatherResolution
+) -> WeatherResolution:
+    """Keep, for each scored hour, the latest observation at or before it.
+
+    That is the observation the task type's window used for its end hour, and it
+    gives the service one weather row and source per prediction row, in order.
+    """
+    if predictions.empty:
+        raise ObservedInputsIncompleteError(
+            "No complete observed window ends within the requested hours; "
+            "observed load or weather has gaps."
+        )
+    scored = pd.DataFrame(
+        {DATETIME_COL: pd.to_datetime(predictions[DATETIME_COL]).astype("datetime64[ns]")}
+    )
+    positions = observed.dataframe[[DATETIME_COL]].assign(_position=range(len(observed.dataframe)))
+    matched = pd.merge_asof(scored, positions, on=DATETIME_COL, direction="backward")
+    if matched["_position"].isna().any():
+        raise ObservedInputsIncompleteError("A scored hour precedes every delivered observation.")
+    rows = matched["_position"].astype(int).tolist()
+    aligned = observed.dataframe.iloc[rows].assign(**{DATETIME_COL: scored[DATETIME_COL].values})
+    return WeatherResolution(
+        dataframe=aligned.reset_index(drop=True),
+        sources=tuple(observed.sources[row] for row in rows),
+        mode=observed.mode,
+    )
+
+
+def _observation_source(
+    task: TaskDefinition, observed_at: pd.Timestamp
+) -> dict[str, dict[str, str]]:
+    source = {"source": OBSERVED_WEATHER_SOURCE, OBSERVED_AT_FIELD: observed_at.isoformat()}
+    return {field: dict(source) for field in task.weather.fields}
 
 
 # --- Shared I/O ----------------------------------------------------------------------------
