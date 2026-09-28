@@ -80,6 +80,20 @@ def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
     )
 
 
+@pytest.mark.parametrize("reader_type", [ObservationReader, ForecastReader])
+def test_weather_readers_answer_an_empty_last_page_without_matching_rows(
+    sqlite_engine: Engine, reader_type: type
+) -> None:
+    """無符合資料時回傳正常空結果並停止翻頁，以分辨沒有資料與查詢失敗（#72）。"""
+    reader = reader_type(sqlite_engine)
+
+    page = reader.list({"start": "2026-09-20T10:00:00+08:00", "end": "2026-09-20T12:00:00+08:00"})
+
+    assert page.items == []
+    assert page.has_more is False
+    assert page.next_cursor is None
+
+
 def test_observation_and_audit_readers_keep_station_and_missing_id_filters(
     test_repo: TimeSeriesRepository,
 ) -> None:
