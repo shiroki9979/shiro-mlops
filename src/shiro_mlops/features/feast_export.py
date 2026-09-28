@@ -21,6 +21,11 @@ from shiro_mlops.core.constants import (
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.datetime_utils import with_datetime_column
+from shiro_mlops.features.transformers import (
+    create_lag_features,
+    create_rolling_features,
+    fill_load_warmup,
+)
 
 TAIPOWER_EXPORT_LAG_HOURS = (1, 2, 24)
 TAIPOWER_EXPORT_ROLLING_WINDOWS = (6, 24)
@@ -35,11 +40,6 @@ class FeastFeatureFrames:
 
     taipower: pd.DataFrame
     weather: pd.DataFrame
-
-
-def _fill_load_history_without_leakage(series: pd.Series) -> pd.Series:
-    """Fill lag/rolling warm-up gaps without borrowing later load observations."""
-    return series.ffill().fillna(NON_LEAKING_LOAD_FILL)
 
 
 def _with_subject(load: pd.DataFrame) -> pd.DataFrame:
@@ -68,19 +68,11 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
     result["hour_sin"] = np.sin(2 * np.pi * result["hour"] / HOURS_PER_DAY)
     result["hour_cos"] = np.cos(2 * np.pi * result["hour"] / HOURS_PER_DAY)
 
-    by_subject = result.groupby(LOCATION_COL)[LOAD_MW_COL]
-    for lag in TAIPOWER_EXPORT_LAG_HOURS:
-        result[f"load_mw_lag_{lag}"] = by_subject.transform(
-            lambda values, lag_hours=lag: _fill_load_history_without_leakage(
-                values.shift(lag_hours)
-            )
-        )
-    for window in TAIPOWER_EXPORT_ROLLING_WINDOWS:
-        result[f"load_mw_rolling_mean_{window}"] = by_subject.transform(
-            lambda values, rolling_window=window: _fill_load_history_without_leakage(
-                values.shift(1).rolling(window=rolling_window, min_periods=1).mean()
-            )
-        )
+    result = create_lag_features(result, lags=TAIPOWER_EXPORT_LAG_HOURS)
+    result = create_rolling_features(result, windows=TAIPOWER_EXPORT_ROLLING_WINDOWS)
+    result = fill_load_warmup(
+        result, lags=TAIPOWER_EXPORT_LAG_HOURS, windows=TAIPOWER_EXPORT_ROLLING_WINDOWS
+    )
 
     float_columns = [
         "load_mw",
@@ -94,11 +86,10 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
     ]
     int_columns = ["hour", "dayofweek", "is_weekend"]
     for column in float_columns:
-        result[column] = (
-            pd.to_numeric(result[column], errors="coerce")
-            .fillna(NON_LEAKING_LOAD_FILL)
-            .astype("float32")
-        )
+        values = pd.to_numeric(result[column], errors="coerce")
+        if column in (LOAD_MW_COL, "hour_sin", "hour_cos"):
+            values = values.fillna(NON_LEAKING_LOAD_FILL)
+        result[column] = values.astype("float32")
     for column in int_columns:
         result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0).astype("int64")
 
