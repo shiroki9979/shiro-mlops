@@ -1,7 +1,7 @@
 # ADR-0009：以任務設定與任務類型解耦單一負載預報任務
 
 > - Created: 2026-09-27
-> - Last Updated: 2026-09-27
+> - Last Updated: 2026-09-28
 > - Author: White Huang
 > - Status: 已接受
 > - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[CONTEXT.md](../../CONTEXT.md)
@@ -71,3 +71,4 @@
 - 本 ADR 未取代 ADR-0002、ADR-0003，僅縮小其適用範圍，兩者維持已接受。
 - 實作追蹤：[ROADMAP M7](../ROADMAP.md)、[GitHub #64](https://github.com/shiroki9979/shiro-mlops/issues/64)（切片 #65–#70）。
 - 決策經 2026-09-26 至 2026-09-27 的設計訪談定案。
+- 2026-09-28 實作註記：「共用元件由任務設定宣告是否啟用」在 #66 落實為兩層。天氣輸入種類（預報含降級，或僅測站觀測）由任務類型的 `requirements().weather` 宣告，因為它取決於模型的輸入語意而非部署參數；任務設定只能選擇氣象代表點與 `weather.fields`，不能改變天氣輸入種類。負載起點過舊與最低累積門檻對所有任務皆啟用，任務設定只調整 `[policies]` 參數而不提供停用開關，因為兩者保護的是無替代來源的推算序列（ADR-0008）。任務類型仍不得自行重寫這些共用元件的行為。
