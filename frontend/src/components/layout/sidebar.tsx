@@ -58,28 +58,17 @@ const explorerGroups = EXPLORER_NAV_GROUPS.map((group) => ({
   datasets: EXPLORER_DATASETS.filter((dataset) => dataset.navGroup === group.id),
 }))
 
-function searchType(search: unknown): string | null {
-  if (typeof search === 'object' && search && 'type' in search) {
-    const type = (search as { type?: unknown }).type
-    return typeof type === 'string' ? type : null
-  }
-  if (typeof search === 'string' && search) {
-    return new URLSearchParams(search.startsWith('?') ? search : `?${search}`).get('type')
-  }
-  return null
-}
-
 function isDatasetActive(
   dataset: ExplorerDatasetConfig,
   pathname: string,
-  search: unknown,
+  search: Record<string, unknown>,
 ): boolean {
   if (pathname !== dataset.path) return false
   if (!dataset.search?.type) return true
-  return searchType(search) === dataset.search.type
+  return search.type === dataset.search.type
 }
 
-function ExplorerNavigation({ pathname, search }: { pathname: string; search: unknown }) {
+function ExplorerNavigation({ pathname, search }: { pathname: string; search: Record<string, unknown> }) {
   return (
     <div className="ml-4 border-l border-slate-800 pl-2 space-y-2">
       {explorerGroups.map((group) => (
@@ -114,7 +103,7 @@ function SidebarNavigation({
   explorerEnabled,
 }: {
   pathname: string
-  search: unknown
+  search: Record<string, unknown>
   explorerEnabled: boolean
 }) {
   const items = navItems.filter((item) => item.to !== '/data' || explorerEnabled)
