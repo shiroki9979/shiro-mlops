@@ -19,13 +19,15 @@ docker run --rm -d --name "$container" \
   timescale/timescaledb:latest-pg15 >/dev/null
 container_started=true
 
+# The image's init step runs a temporary server on the Unix socket only, then restarts;
+# probing over TCP waits for the final server instead of the temporary one.
 for attempt in {1..30}; do
-  if docker exec "$container" pg_isready -U postgres -d pagination_acceptance >/dev/null 2>&1; then
+  if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d pagination_acceptance >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-docker exec "$container" pg_isready -U postgres -d pagination_acceptance >/dev/null
+docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d pagination_acceptance >/dev/null
 
 port="$(docker port "$container" 5432/tcp | sed 's/.*://')"
 DATA_EXPLORER_TIMESCALE_URI="postgresql+psycopg2://postgres:postgres@127.0.0.1:${port}/pagination_acceptance" \
