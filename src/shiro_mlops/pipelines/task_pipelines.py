@@ -10,7 +10,7 @@ talk to the runner; task types never see Dagster.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pandas as pd
 from dagster import (
@@ -172,6 +172,21 @@ def _features_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDef
     return features
 
 
+class TrainedModelRecord(TypedDict):
+    """Model asset value; the IO manager stores it as JSON, so it loads back as a plain dict.
+
+    Asset signatures keep ``dict``: Dagster type-checks annotations with ``isinstance``,
+    which ``TypedDict`` does not support.
+    """
+
+    task_id: str
+    metrics: dict[str, float]
+    run_id: str | None
+    model_version: str | None
+    model_path: str
+    training_rows: int
+
+
 def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefinition:
     @asset(
         name=names.model,
@@ -185,14 +200,14 @@ def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefini
         model_dir = save_model(settings.models_dir, task.task_id, trained.model)
         run_id, model_version = _track(context, task, metrics, model_dir)
         return Output(
-            value={
-                "task_id": task.task_id,
-                "metrics": metrics,
-                "run_id": run_id,
-                "model_version": model_version,
-                "model_path": str(model_dir),
-                "training_rows": len(features),
-            },
+            value=TrainedModelRecord(
+                task_id=task.task_id,
+                metrics=metrics,
+                run_id=run_id,
+                model_version=model_version,
+                model_path=str(model_dir),
+                training_rows=len(features),
+            ),
             metadata={name: MetadataValue.float(value) for name, value in metrics.items()},
         )
 
@@ -210,19 +225,20 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
     )
     def monitoring(context: AssetExecutionContext, model: dict) -> dict:
         """Hourly report: bounded reads only, so the full history is never re-read."""
+        record = TrainedModelRecord(**model)
         try:
-            report = monitor_task(task, _runtime(context), model["metrics"], as_of=taiwan_now())
+            report = monitor_task(task, _runtime(context), record["metrics"], as_of=taiwan_now())
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         context.log.info(
             "%s health: %s (%s)", names.task_id, report.health.status, report.health.reason
         )
-        return _report_payload(report, training_rows=model.get("training_rows"))
+        return _report_payload(report, training_rows=record["training_rows"])
 
     return monitoring
 
 
-def _report_payload(report: MonitoringReport, *, training_rows: int | None) -> dict:
+def _report_payload(report: MonitoringReport, *, training_rows: int) -> dict:
     return {
         "task_id": report.task_id,
         "status": report.health.status.value,

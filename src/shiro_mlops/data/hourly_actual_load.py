@@ -10,12 +10,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import fmean
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.taipower_regional_supply_demand import (
     REGIONAL_SUPPLY_DEMAND_REGIONS,
     TaipowerRegionalSupplyDemandSnapshot,
@@ -70,7 +69,7 @@ def recent_completed_hours(now: datetime, hours: int) -> HourWindow:
 def resolve_evaluation_time(evaluated_at: str | None = None) -> datetime:
     """Resolve a schedule tick (Taiwan-local ISO string) or the current Taiwan-local time."""
     if evaluated_at is None:
-        return datetime.now(tz=ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
+        return taiwan_now().to_pydatetime()
     return datetime.fromisoformat(evaluated_at)
 
 

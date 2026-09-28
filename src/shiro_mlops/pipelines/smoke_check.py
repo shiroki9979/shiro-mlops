@@ -24,7 +24,7 @@ from dagster import DagsterInstance, Definitions, ScheduleDefinition, build_sche
 # Dagster 未公開排程狀態型別；僅此處依賴內部路徑，升級時由離線測試揭露破壞。
 from dagster._core.scheduler.instigation import InstigatorType
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
 from shiro_mlops.data.hourly_actual_load import is_stale_load_anchor
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.schedules import (
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from shiro_mlops.pipelines.definitions import defs
 
-    now = datetime.now(tz=ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
+    now = taiwan_now().to_pydatetime()
     with DagsterInstance.get() as instance:
         deployment = Deployment(defs, TimeSeriesRepository(auto_init=False), instance, now)
         results = run_smoke_check(deployment)

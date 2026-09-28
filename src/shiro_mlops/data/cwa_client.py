@@ -12,6 +12,9 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
+
+# 預報 XML 來自網路下載且 redirect 目標不受控；標準函式庫 ElementTree 不防範
+# entity expansion（billion laughs）等 XML 攻擊，故以 defusedxml 解析。
 from defusedxml import ElementTree
 
 from shiro_mlops.core.constants import (
