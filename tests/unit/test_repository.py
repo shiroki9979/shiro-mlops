@@ -164,7 +164,7 @@ def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepos
 def test_upsert_taipower_load_marks_regional_snapshot_source(
     repository: TimeSeriesRepository,
 ) -> None:
-    """推算值寫入時標記來源，覆寫同一小時也一併更新來源。"""
+    """Upserting derived load records its source and updates that source when replacing an hour."""
     load_df = pd.DataFrame([{"datetime": "2026-09-26 13:00:00", "load_mw": 30550.0}])
 
     repository.upsert_taipower_load(load_df)
@@ -326,7 +326,7 @@ def test_upsert_empty_dataframe(repository: TimeSeriesRepository):
 
 
 def test_fetch_load_range_by_source_excludes_legacy_rows(legacy_upgraded_engine: Engine):
-    """ADR-0008：指定推算來源時，source 為 NULL 的 d015046 舊列不得混入序列。"""
+    """Under ADR-0008, source filtering excludes legacy d015046 rows with NULL source."""
     repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
     repository.upsert_taipower_load(derived_hourly_load(2, datetime(2026, 8, 21, 1, 0)))
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
@@ -338,7 +338,7 @@ def test_fetch_load_range_by_source_excludes_legacy_rows(legacy_upgraded_engine:
 
 
 def test_fetch_latest_load_returns_newest_derived_row_only(legacy_upgraded_engine: Engine):
-    """逐時 drift 只需最新一列；較新的舊列不得被當成最新實際負載。"""
+    """Hourly drift reads only the newest derived row; newer legacy rows cannot stand in for actual load."""
     repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
     repository.upsert_taipower_load(derived_hourly_load(3, datetime(2026, 8, 21, 1, 0)))
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
@@ -413,7 +413,7 @@ def test_fetch_weather_range_filters_and_sorting(repository: TimeSeriesRepositor
 def test_fetch_weather_range_propagates_database_errors(
     repository: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """資料庫中斷不得偽裝成「沒有觀測天氣」，否則呼叫端會誤判為資料缺口。"""
+    """A database outage must not appear as missing observed weather to callers."""
 
     def unavailable(**_: object) -> pd.DataFrame:
         raise OperationalError("SELECT", {}, Exception("connection refused"))

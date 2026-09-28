@@ -80,7 +80,7 @@ def test_shipped_definition_describes_the_dynamic_horizon_forecast() -> None:
 
 
 def test_shipped_definition_describes_the_high_load_alert() -> None:
-    """門檻為錨點前 28 日的 P90；每筆標籤前都需完整門檻窗，故最低累積為兩倍門檻窗。"""
+    """The P90 threshold needs a complete prior 28-day window for each label, so training needs twice that span."""
     task = load_task_definitions(TASK_DEFINITIONS_DIR, DEFAULT_CWA_LOCATIONS)["high_load_alert"]
 
     assert task.task_type == "direct_classification"
@@ -98,7 +98,7 @@ def test_shipped_definition_describes_the_high_load_alert() -> None:
 
 
 def test_shipped_tasks_train_at_distinct_times() -> None:
-    """各任務訓練都讀完整歷史，同一時刻啟動會互搶資料庫與 CPU。"""
+    """Stagger task training because each run reads full history and competes for database and CPU capacity."""
     tasks = load_task_definitions(TASK_DEFINITIONS_DIR, DEFAULT_CWA_LOCATIONS)
 
     crons = {task_id: task.schedule.training for task_id, task in tasks.items()}
@@ -124,7 +124,7 @@ def test_missing_task_type_param_names_the_params_field(tmp_path: Path) -> None:
 
 
 def test_a_task_may_declare_a_subset_of_the_weather_fields(tmp_path: Path) -> None:
-    """預測 item 的天氣欄位跟隨 weather.fields，任務類型不強制特定天氣欄位。"""
+    """Prediction weather fields follow weather.fields without a fixed task-type field set."""
     only_temperature = _definition().replace(
         'fields = ["temperature", "relative_humidity"]', 'fields = ["temperature"]'
     )
@@ -164,7 +164,7 @@ def test_task_id_must_match_the_file_name(tmp_path: Path) -> None:
 
 
 def test_non_positive_stale_anchor_lag_is_rejected(tmp_path: Path) -> None:
-    """零或負值會讓每個起點都過舊，服務將無聲地永久拒絕預報。"""
+    """A nonpositive stale-anchor lag would silently reject every forecast."""
     path = _write(tmp_path, _definition(stale_lag="0"))
 
     with pytest.raises(TaskDefinitionError, match="policies.stale_anchor_max_lag_hours"):

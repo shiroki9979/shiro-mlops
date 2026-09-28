@@ -150,13 +150,13 @@ def test_training_records_synthetic_anomaly_recall_and_clean_false_positive_rate
 
 
 def _holdout_days(validation_start: pd.Timestamp) -> list[pd.Timestamp]:
-    """驗證窗依結束小時的日期由第一個驗證日起交錯分組：奇數位置的日期為保留日。"""
+    """Alternate validation windows by end-hour date, reserving odd-indexed days for holdout."""
     days = pd.date_range(validation_start.normalize(), ANCHOR.normalize(), freq="D")
     return list(days[1::2])
 
 
 def test_false_positive_rate_is_measured_on_days_the_threshold_never_saw(trained) -> None:
-    """保留日 00:00 驟降只出現在結束於保留日的時間窗：門檻不變，誤報率必須反映出來。"""
+    """A holdout-day midnight drop affects only holdout windows and must change false positive rate, not threshold."""
     data = _training_data()
     holdout_midnights = data.load["datetime"].isin(_holdout_days(data.validation_start))
     spiked = data.load.assign(
@@ -170,7 +170,7 @@ def test_false_positive_rate_is_measured_on_days_the_threshold_never_saw(trained
 
 
 def test_validation_within_a_single_day_measures_nothing_so_health_warns() -> None:
-    """只有校準日時沒有保留窗可量測誤報率與召回率，不得回報看似健康的指標。"""
+    """Calibration days alone provide no holdout for false positive rate or recall; do not report healthy metrics."""
     thresholds = task_type.health_model.model_validate(THRESHOLDS)
 
     result = task_type.train(PARAMS, _training_data(validation_start=ANCHOR.normalize()))
@@ -222,7 +222,7 @@ def test_a_sudden_drop_ending_at_the_anchor_is_flagged(trained) -> None:
 
 
 def test_windows_touching_a_weather_gap_beyond_two_hours_are_not_scored(trained) -> None:
-    """觀測天氣最多向前補兩小時；缺三小時則含最後一個缺口小時的時間窗不評分，不以常數補值。"""
+    """Weather fills at most two past hours; windows touching a three-hour gap are not scored with constants."""
     data = _prediction_data(horizon_hours=12)
     gap = data.weather["datetime"].isin(_hours_before_anchor(10, 9, 8))
 

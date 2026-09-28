@@ -99,7 +99,7 @@ def test_failed_atomic_exchange_keeps_the_previous_model(
 def test_resaving_without_atomic_exchange_support_still_replaces_the_model(
     root: Path, monkeypatch: pytest.MonkeyPatch, unsupported: int
 ) -> None:
-    """非 Linux 核心或不支援 RENAME_EXCHANGE 的檔案系統仍須能重新訓練。"""
+    """Retraining still replaces models on non-Linux or filesystems without RENAME_EXCHANGE."""
     save_model(root, "sample_task", _RecordingModel("v1"))
     _stub_renameat2(monkeypatch, _failing_renameat2(unsupported))
 
@@ -112,7 +112,7 @@ def test_resaving_without_atomic_exchange_support_still_replaces_the_model(
 def test_saving_after_an_interrupted_swap_installs_the_model_and_clears_the_old_one(
     root: Path,
 ) -> None:
-    """兩次 rename 之間中止時正式目錄已不存在，下次保存須安裝新模型並清除遺留的舊目錄。"""
+    """Saving after an interrupted two-rename swap restores the model and removes the orphaned old directory."""
     leftover = root / ".sample_task.previous"
     leftover.mkdir()
     (leftover / "version.txt").write_text("v1", encoding="utf-8")
@@ -124,7 +124,7 @@ def test_saving_after_an_interrupted_swap_installs_the_model_and_clears_the_old_
 
 
 def test_reader_waits_for_model_replacement(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """寫入端持有排他鎖期間（此處暫停於交換嘗試中），讀取端須等待並讀到新模型。"""
+    """A reader waits for the writer's exclusive lock and then reads the replacement model."""
     save_model(root, "sample_task", _RecordingModel("v1"))
     swapping = Event()
     resume = Event()
@@ -166,7 +166,7 @@ def test_reader_waits_for_model_replacement(root: Path, monkeypatch: pytest.Monk
 
 
 def test_untrained_task_loads_no_model_even_beside_a_legacy_joblib(root: Path) -> None:
-    """ADR-0010：既有 model.joblib 不提供相容載入，首次重新訓練前任務沒有模型。"""
+    """Under ADR-0010, legacy model.joblib files do not count as models before retraining."""
     (root / "model.joblib").write_bytes(b"legacy pickle bytes")
 
     assert load_model(root, deployed_task(DYNAMIC_HORIZON_FORECAST)) is None

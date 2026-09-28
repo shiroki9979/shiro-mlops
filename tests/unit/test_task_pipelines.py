@@ -147,7 +147,7 @@ def test_feast_export_hangs_only_off_the_dynamic_horizon_forecast(
 
 
 def test_monitoring_job_reruns_only_the_monitoring_asset() -> None:
-    """監控每小時執行，只讀最新一列與有效時數，不得重跑讀取完整歷史的特徵資產。"""
+    """Hourly monitoring reads the latest row and valid-hour count without rerunning full-history feature assets."""
     names = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 
     assert _selected(defs, names.monitoring_job) == {names.monitoring}

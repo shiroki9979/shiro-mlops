@@ -279,7 +279,7 @@ def test_resolver_does_not_interpolate_wind_direction() -> None:
 
 
 def test_resolver_reads_forecasts_and_observations_of_the_weather_reference_point() -> None:
-    """天氣以氣象代表點的鄉鎮預報區與測站取值，而非固定的臺北代碼。"""
+    """Resolve weather from the reference point's forecast geocode and station, not a fixed Taipei code."""
     repository = MagicMock()
     repository.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
     repository.fetch_cwa_station_observations.return_value = pd.DataFrame(

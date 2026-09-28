@@ -219,7 +219,7 @@ def test_loading_another_task_types_model_fails(tmp_path: Path) -> None:
 
 
 def test_validation_split_after_all_rows_reports_no_metrics_so_health_warns() -> None:
-    """沒有驗證列就沒有量測過的指標；回報 0.0 會掩蓋未經驗證的模型。"""
+    """No validation rows means no measured metrics; reporting zero would hide an unvalidated model."""
     after_last_row = pd.Timestamp(LAST_HOUR) + pd.Timedelta(hours=1)
     thresholds = task_type.health_model.model_validate(HEALTH)
 

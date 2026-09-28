@@ -42,7 +42,7 @@ HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
 
 
 def tick_run_key(context: ScheduleEvaluationContext) -> str | None:
-    """同一 tick 重複評估時以 run_key 去重，避免重跑同一 slot 的 run。"""
+    """Deduplicate repeated evaluations of the same tick with a run key."""
     tick = _scheduled_tick(context)
     if tick is None:
         return None
@@ -108,7 +108,7 @@ taipower_supply_demand_snapshot_job = build_taipower_supply_demand_snapshot_job(
 
 
 def _to_taiwan_local(scheduled_execution_time: datetime) -> datetime:
-    """將排程 tick 轉為無時區的台灣本地時間。"""
+    """Convert a schedule tick to naive Taiwan-local time."""
     if scheduled_execution_time.tzinfo is None:
         return scheduled_execution_time
     return scheduled_execution_time.astimezone(ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
@@ -155,9 +155,10 @@ hourly_actual_load_job = define_asset_job(
     execution_timezone=TAIWAN_TZ,
 )
 def hourly_actual_load_schedule(context: ScheduleEvaluationContext) -> RunRequest:
-    """每小時以 tick 時間重算最近已結束的小時，使重跑同一 tick 得到相同窗口。
+    """Use the tick to make each hourly recompute window stable across retries.
 
-    無 tick 的手動評估不去重，也不帶 evaluated_at，由 run 以執行當下決定窗口。
+    Manual evaluations have no tick, run key, or evaluated_at; the run chooses
+    its window from the current time.
     """
     evaluated_at = tick_run_key(context)
     if evaluated_at is None:

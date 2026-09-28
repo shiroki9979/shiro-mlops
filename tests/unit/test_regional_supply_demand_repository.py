@@ -132,7 +132,7 @@ def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
 def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """推算逐時負載以來源時間 [start, end) 讀取快照，不受觀測 slot 影響。"""
+    """Hourly-load derivation reads snapshots by source time in [start, end), independently of observation slots."""
     for observed_at in (
         datetime(2026, 9, 5, 16, 50),
         datetime(2026, 9, 5, 17, 0),
@@ -159,7 +159,7 @@ def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
 
 
 def test_fetch_by_source_time_rejects_rows_without_observed_at() -> None:
-    """觀測 slot 不可由查詢窗口起點代填；缺值代表資料毀損，須附上下文明確失敗。"""
+    """A missing observation slot signals corrupt data and cannot be replaced with the query start."""
     engine = MagicMock(spec=Engine)
     connection = engine.connect.return_value.__enter__.return_value
     connection.execute.return_value.mappings.return_value.all.return_value = [

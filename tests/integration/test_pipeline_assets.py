@@ -83,7 +83,7 @@ def test_canonical_cwa_forecast_asset_persists_both_products(
 
 
 def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository) -> None:
-    """尚無推算負載時任務特徵必須明確失敗，不得改抓外部來源。"""
+    """Task features fail clearly without derived load instead of fetching an external source."""
     with pytest.raises(Failure, match="0 valid hourly observations"):
         _features(test_repo)
 
@@ -91,7 +91,7 @@ def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository
 def test_task_features_read_weather_from_configured_reference_station(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """氣象代表點的測站須取自執行期 CWA 設定，而非寫死的臺北測站代碼。"""
+    """The weather reference station comes from runtime CWA settings rather than a fixed Taipei code."""
     monkeypatch.setattr(
         settings,
         "CWA_LOCATION_ALLOWLIST",
@@ -137,7 +137,7 @@ def _station_observation(station_id: str, temperature: float) -> CWAStationObser
 def test_task_features_refuse_training_below_minimum_accumulation(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """預設 policies.min_training_hours=672：差一小時也不得進入訓練，並揭露差距。"""
+    """With min_training_hours=672, even one missing hour blocks training and reports the gap."""
     test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_LOAD_HOUR))
     with pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error:
         _features(test_repo)
@@ -254,7 +254,7 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """監控以最新入庫的逐時實際負載對照前次訓練產物，且不執行任何擷取資產。"""
+    """Monitoring uses the latest persisted actual load and prior model without running ingestion assets."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     test_repo.upsert_taipower_load(taipower_raw_df)

@@ -383,7 +383,7 @@ def test_parse_forecast_release_preserves_vintage_and_typed_elements() -> None:
 
 
 def test_parse_forecast_release_rejects_live_opendata_json_without_source_vintage() -> None:
-    """來源未提供版本時間時，不得以擷取時間偽造預報版本。"""
+    """A missing source vintage cannot be replaced with the fetch time."""
     payload = {
         "success": "true",
         "records": {
@@ -441,7 +441,7 @@ def test_parse_forecast_release_rejects_live_opendata_json_without_source_vintag
 
 
 def test_parse_forecast_release_rejects_invalid_source_vintage() -> None:
-    """來源存在但無法解析的版本時間必須被拒絕。"""
+    """Reject a source vintage that is present but cannot be parsed."""
     payload = {
         "records": {
             "IssueTime": "not-a-timestamp",

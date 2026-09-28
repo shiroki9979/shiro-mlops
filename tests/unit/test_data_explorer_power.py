@@ -145,7 +145,7 @@ def test_unit_reader_paginates_full_composite_key_and_preserves_nulls(
 def test_regional_completeness_filter_matches_mixed_sqlite_time_storage(
     sqlite_engine: Engine,
 ) -> None:
-    """同一 slot 的 aware 與 naive UTC 列必須視為同一時間點，才能判定四區齊全。"""
+    """Aware and naive UTC rows for one slot count as the same instant for four-region completeness."""
     stored = {
         "北部": "2026-09-20 04:00:00",
         "中部": "2026-09-20 04:00:00",

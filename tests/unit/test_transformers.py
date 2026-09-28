@@ -86,7 +86,7 @@ def test_rolling_features_use_elapsed_hours_when_a_load_hour_is_missing() -> Non
 
 
 def test_merge_weather_features(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> None:
-    """觀測只涵蓋 8/20：該日與其後兩小時帶入天氣，其餘小時保留缺值。"""
+    """Weather observed on August 20 fills that hour and the next two; later hours remain missing."""
     res = merge_weather_features(taipower_raw_df, cwa_obs_df)
     assert "relative_humidity" in res.columns
     assert len(res) == len(taipower_raw_df)
@@ -476,7 +476,7 @@ def test_weather_fields_match_past_observations_per_location() -> None:
 
 
 def test_merge_weather_leaves_hours_without_recent_observations_missing() -> None:
-    """缺少兩小時內觀測的小時保留缺值，不以常數或未來觀測補值（#66）。"""
+    """Hours without observations in the past two hours stay missing, with no constants or future values."""
     load_df = pd.DataFrame(
         {
             "datetime": pd.date_range("2026-08-20 00:00", periods=4, freq="h"),

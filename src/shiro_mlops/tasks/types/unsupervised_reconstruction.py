@@ -4,7 +4,7 @@ Each window holds ``window_hours`` consecutive hours of actual load and observed
 weather plus the calendar position of its end hour. The AutoEncoder reconstructs
 its own input; the reconstruction error of the load part is the anomaly score, so
 weather and calendar only describe the conditions a load shape is judged against
-(CONTEXT.md, 用電型態異常). Training needs no labels: validation windows alternate
+(CONTEXT.md, load-pattern anomaly). Training needs no labels: validation windows alternate
 by calendar day between calibration, whose error quantile is the decision
 threshold, and holdout, where the clean false positive rate and the recall on
 injected synthetic anomalies are measured.

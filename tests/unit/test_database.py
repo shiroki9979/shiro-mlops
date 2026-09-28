@@ -157,7 +157,7 @@ def test_init_db_executes_ddl(tmp_path):
 
 
 def test_init_db_executes_create_table_after_comment_with_semicolon(tmp_path):
-    """SQL 單行註解中的分號不得中斷 schema 初始化或略過下一張表。"""
+    """A semicolon in a SQL line comment cannot split schema initialization or skip the next table."""
     custom_ddl = """
     -- 僅為稽核保留；canonical 消費端使用下方的測站觀測資料。
     CREATE TABLE IF NOT EXISTS raw_cwa_forecast_release (
@@ -291,7 +291,7 @@ def test_ensure_timescale_hypertables_moves_old_weather_rows_to_legacy_storage(t
 
 
 def test_fresh_schema_requires_taipower_load_source(tmp_path) -> None:
-    """新建資料庫的 raw_taipower_load 每列都必須標記推算來源。"""
+    """Every load row in a fresh database records its derivation source."""
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
     engine = create_engine(f"sqlite:///{tmp_path / 'fresh_load.db'}")
@@ -309,7 +309,7 @@ def test_fresh_schema_requires_taipower_load_source(tmp_path) -> None:
 def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
     tmp_path,
 ) -> None:
-    """既有資料庫升級後保留舊列，且舊列 source 為 NULL 以供操作人員辨識 d015046 時期資料。"""
+    """Schema migration preserves legacy rows with NULL source so operators can identify d015046 data."""
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy_load.db'}")
@@ -333,7 +333,7 @@ def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
 
 
 def test_fresh_schema_keys_taipower_load_by_prediction_subject(tmp_path) -> None:
-    """新建資料庫直接以預測對象識別負載序列，不再有 location 欄。"""
+    """A fresh load table keys the series by prediction subject without a location column."""
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
     engine = create_engine(f"sqlite:///{tmp_path / 'fresh_subject.db'}")
@@ -353,7 +353,7 @@ def test_fresh_schema_keys_taipower_load_by_prediction_subject(tmp_path) -> None
 def test_existing_location_keyed_load_migrates_to_nationwide_subject_repeatably(
     tmp_path,
 ) -> None:
-    """既有以 location='Taipei' 保存的全台負載，重複套用升級後皆為 subject='nationwide'。"""
+    """Repeated migration converts legacy location='Taipei' load to subject='nationwide'."""
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
     engine = create_engine(f"sqlite:///{tmp_path / 'location_keyed_load.db'}")
@@ -381,7 +381,7 @@ def test_existing_location_keyed_load_migrates_to_nationwide_subject_repeatably(
 
 
 def test_pre_provenance_load_table_gains_source_and_subject_together(tmp_path) -> None:
-    """d015046 時期的舊表同時補上 source 並改以預測對象識別，舊列仍以 NULL source 標示。"""
+    """Migration adds source and subject to d015046-era tables while marking legacy rows with NULL source."""
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
     engine = create_engine(f"sqlite:///{tmp_path / 'pre_provenance.db'}")

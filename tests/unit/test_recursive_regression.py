@@ -115,7 +115,7 @@ def test_saved_model_reloads_with_identical_predictions(trained, tmp_path: Path)
 
 
 def test_validation_split_after_all_rows_reports_no_metrics_so_health_warns() -> None:
-    """沒有驗證列就沒有量測過的指標；回報 0.0 會讓 MAPE 看似健康。"""
+    """Without validation rows, reporting zero MAPE would make an unmeasured model appear healthy."""
     after_last_row = pd.Timestamp(LAST_HOUR) + pd.Timedelta(hours=1)
     thresholds = task_type.health_model.model_validate({"max_mape": 10.0})
 
@@ -133,7 +133,7 @@ def test_validation_split_before_all_rows_refuses_to_train() -> None:
 
 
 def test_rows_beyond_a_two_hour_weather_gap_are_dropped_not_synthesized() -> None:
-    """觀測天氣只能向前補兩小時；驗證期全無天氣時不得以常數或未來值補出驗證列。"""
+    """Observed weather can fill at most two past hours; missing validation weather cannot use constants or future values."""
     data = _training_data()
     weather_until = data.validation_start - pd.Timedelta(hours=3)
     gapped = TrainingData(

@@ -169,7 +169,7 @@ def test_recovered_stack_reports_both_ticks_triggering(
 def test_stalled_accumulation_fails(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    """最新推算小時落後超過任務設定 policies.stale_anchor_max_lag_hours 表示擷取或推算排程停擺。"""
+    """A derived-load anchor older than the configured lag signals stalled ingestion or derivation."""
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 20, 0)))
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
@@ -180,7 +180,7 @@ def test_stalled_accumulation_fails(
 
 def test_unreachable_store_fails_instead_of_raising(dagster_instance) -> None:
     class UnreachableRepository:
-        def summarize_hourly_load_accumulation(self, subject: str):
+        def summarize_hourly_load_accumulation(self, subject: str, at_or_before=None):
             raise ConnectionError("TimescaleDB unreachable")
 
     results = check_downstream_readiness(
