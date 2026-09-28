@@ -21,7 +21,7 @@ FIXTURE_TOTAL_MW = 32540.0
 
 
 def _store_samples(repo: TimeSeriesRepository, start: datetime, count: int) -> None:
-    """以十分鐘間隔寫入四區快照；fixture 來源時間固定，故改寫為各 slot 以模擬來源逐筆更新。"""
+    """Write four-region snapshots every ten minutes, varying fixture source times to model updates."""
     for index in range(count):
         slot = start + timedelta(minutes=10 * index)
         snapshots = [

@@ -84,7 +84,7 @@ def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
 def test_weather_readers_answer_an_empty_last_page_without_matching_rows(
     sqlite_engine: Engine, reader_type: type
 ) -> None:
-    """無符合資料時回傳正常空結果並停止翻頁，以分辨沒有資料與查詢失敗（#72）。"""
+    """No matching data returns an empty last page so absence differs from a query failure."""
     reader = reader_type(sqlite_engine)
 
     page = reader.list({"start": "2026-09-20T10:00:00+08:00", "end": "2026-09-20T12:00:00+08:00"})
@@ -209,7 +209,7 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
 def test_forecast_reader_picks_latest_vintage_across_mixed_sqlite_time_storage(
     sqlite_engine: Engine,
 ) -> None:
-    """同一發布時間以不同格式儲存時，最新版本仍由 source_updated_at 決定。"""
+    """The latest forecast vintage still follows source_updated_at across mixed timestamp formats."""
     releases = (
         ("2026-09-27 04:00:00+00:00", "2026-09-27 04:10:00+00:00", 20.0),
         ("2026-09-27 04:00:00", "2026-09-27 04:20:00", 30.0),

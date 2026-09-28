@@ -33,7 +33,7 @@ def test_cwa_jobs_use_bounded_exponential_retry_policy() -> None:
 
 
 def test_cwa_schedules_continue_to_request_independent_runs() -> None:
-    """CWA ingestion 不受台電逐時負載累積狀態影響，須持續請求獨立 run。"""
+    """CWA ingestion remains independent of load accumulation and continues requesting its own runs."""
     context = build_schedule_context(
         scheduled_execution_time=datetime(2026, 9, 17, 8, 10, tzinfo=ZoneInfo("Asia/Taipei"))
     )

@@ -322,7 +322,7 @@ def test_newer_legacy_rows_never_anchor_serving(
     fitted_task_model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ADR-0008：較新的 d015046 舊列不得讓過舊的推算負載看似新鮮而混用口徑。"""
+    """Under ADR-0008, newer legacy rows cannot mask a stale derived-load anchor."""
     repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
     repository.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     insert_legacy_load_row(

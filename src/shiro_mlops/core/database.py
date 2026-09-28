@@ -63,12 +63,12 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
 
 
 def _strip_line_comments(sql: str) -> str:
-    """移除整行 SQL 註解，避免其內容被當成可執行語句。"""
+    """Remove full-line SQL comments before splitting executable statements."""
     return "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
 
 
 def split_sql_statements(ddl: str) -> list[str]:
-    """將 DDL 切分為可執行語句，略過純註解片段。"""
+    """Split DDL into executable statements while skipping comment-only segments."""
     statements: list[str] = []
     for chunk in _strip_line_comments(ddl).split(";"):
         cleaned = chunk.strip()

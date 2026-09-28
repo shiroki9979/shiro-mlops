@@ -88,7 +88,7 @@ def test_training_triggers_once_accumulation_is_sufficient(
 def test_training_without_tick_time_requests_an_undeduplicated_run(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    """手動評估（無 tick 時間）不得崩潰；沒有 tick 可供 run_key 去重。"""
+    """Manual schedule evaluation has no tick for run-key deduplication and must still succeed."""
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
     context = build_schedule_context(
         instance=dagster_instance, resources={"time_series_repo": test_repo}
@@ -134,7 +134,7 @@ def test_monitoring_triggers_after_training_materialized_a_model(
 def test_a_materialization_under_the_pre_factory_key_does_not_count(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    """資產更名後舊鍵的 materialization 不再代表可用模型，監控須等新鍵首次訓練。"""
+    """Materialization under the old asset key cannot unblock monitoring before the renamed model is trained."""
     test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
     dagster_instance.report_runless_asset_event(AssetMaterialization("trained_forecaster_model"))
 

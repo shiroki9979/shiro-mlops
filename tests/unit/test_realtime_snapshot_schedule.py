@@ -20,7 +20,7 @@ def test_realtime_job_selects_exactly_three_snapshot_assets() -> None:
 
 
 def test_task_jobs_exclude_realtime_snapshot_assets() -> None:
-    """任務的訓練與監控工作不得包含三個即時快照資產。"""
+    """Training and monitoring jobs exclude all three realtime snapshot assets."""
     for job in task_jobs():
         assert selected_asset_names(job).isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS), job.name
 

@@ -63,7 +63,7 @@ class SnapshotObservationConfig(Config):
 
 
 class HourlyActualLoadConfig(Config):
-    """提供選用的排程 tick，讓重算窗口不受 run 實際啟動延遲影響。"""
+    """Carry an optional schedule tick so run delays do not shift the recompute window."""
 
     evaluated_at: str | None = None
 

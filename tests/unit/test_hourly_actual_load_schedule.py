@@ -30,7 +30,7 @@ def test_hourly_actual_load_job_selects_only_derivation_asset() -> None:
 
 
 def test_task_jobs_do_not_run_the_snapshot_derivation() -> None:
-    """任務的訓練與監控不得讀取快照表，因此也不得包含由快照推算的資產。"""
+    """Task training and monitoring cannot include snapshot-derived assets or read snapshot tables."""
     for job in task_jobs():
         assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(job), job.name
 
@@ -53,7 +53,7 @@ def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> 
 
 
 def test_hourly_actual_load_schedule_without_tick_time_lets_the_run_use_current_time() -> None:
-    """手動評估（無 tick 時間）不得崩潰；run 不去重，重算窗口改以執行當下為準。"""
+    """Manual evaluation without a tick uses current time for its window and does not deduplicate runs."""
     execution = hourly_actual_load_schedule.evaluate_tick(build_schedule_context())
 
     assert execution.run_requests is not None
@@ -63,7 +63,7 @@ def test_hourly_actual_load_schedule_without_tick_time_lets_the_run_use_current_
 
 
 def test_regional_snapshot_retries_with_exponential_backoff_while_others_keep_job_policy() -> None:
-    """區域快照為逐時負載唯一來源，重試較久；全台與機組快照沿用原本 job 政策。"""
+    """Regional snapshots alone feed hourly load and use longer retries; other snapshots retain their job policy."""
     regional = assets_module.raw_taipower_regional_supply_demand_snapshot.op.retry_policy
 
     assert regional is not None

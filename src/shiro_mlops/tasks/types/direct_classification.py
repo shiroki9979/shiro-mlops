@@ -1,6 +1,6 @@
 """Direct classification task type: one LightGBM classifier answers every lead hour at once.
 
-Used by the high-load alert (高負載預警): each row pairs what is known at an
+Used by the high-load alert: each row pairs what is known at an
 anchor hour (its load, load lags and rolling statistics, and the high-load
 threshold) with one target hour's calendar, weather and lead time. Unlike the
 recursive strategy, no forecast output is fed back in. Models are persisted as

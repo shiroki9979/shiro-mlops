@@ -185,7 +185,7 @@ def test_api_predict_ignores_legacy_location_and_reads_nationwide_subject(
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> None:
-    """舊客戶端傳入的 location 不影響預測對象，負載一律以 nationwide 讀取。"""
+    """A legacy location request cannot change the nationwide load subject."""
     repository = _serve_fitted_forecaster(
         fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
     )
@@ -205,7 +205,7 @@ def test_api_predict_reads_weather_from_the_weather_reference_point(
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> None:
-    """天氣取自擷取目錄中的氣象代表點，而非預測對象。"""
+    """Weather comes from the catalog's reference point, independently of the prediction subject."""
     repository = _serve_fitted_forecaster(
         fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
     )
@@ -237,7 +237,7 @@ def test_task_predict_matches_the_predict_alias(
     cwa_forecast_df: pd.DataFrame,
     monkeypatch,
 ) -> None:
-    """ADR-0009：/predict 是動態視界預報任務的別名，兩者對同一請求給出相同預測。"""
+    """Under ADR-0009, /predict and the dynamic-horizon task endpoint return the same forecast."""
     _serve_fitted_forecaster(
         fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
     )
@@ -290,7 +290,7 @@ def test_task_predict_answers_503_when_the_task_model_is_not_loaded(monkeypatch)
 def test_task_predict_answers_503_when_serving_inputs_are_unavailable(
     error: Exception, monkeypatch
 ) -> None:
-    """負載歷史缺失、負載起點過舊與天氣不可用皆無替代來源，通用端點與別名同樣回 503。"""
+    """The task endpoint and alias both return 503 when load history, anchor freshness, or weather is unavailable."""
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", MagicMock())
 
@@ -308,7 +308,7 @@ def test_task_predict_answers_503_when_serving_inputs_are_unavailable(
 
 
 def test_unexpected_task_errors_are_logged_with_their_traceback(monkeypatch, caplog) -> None:
-    """非預期錯誤轉成 not_ready 或 HTTP 500 時，堆疊須留在 log 以追查真因。"""
+    """Unexpected errors retain their traceback in logs when returned as not_ready or HTTP 500."""
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", MagicMock())
 
@@ -359,7 +359,7 @@ def test_startup_loads_each_task_model_independently(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """單一任務的模型損毀或缺失時，其餘任務照常載入並提供預測。"""
+    """A missing or corrupt model for one task cannot prevent other tasks from serving predictions."""
     tasks = deployed_tasks()
     other = replace(tasks[DYNAMIC_HORIZON_FORECAST], task_id="other_forecast")
     monkeypatch.setitem(tasks, other.task_id, other)
@@ -389,7 +389,7 @@ def test_startup_loads_each_task_model_independently(
 
 
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
-    """#68：/predict 契約不變，且動態視界預報任務的 item 與 /predict 的 PredictionItem 一致。"""
+    """Issue #68 keeps the /predict item contract aligned with the dynamic-horizon task item."""
     expected_fields = {
         "datetime",
         "predicted_load_mw",
@@ -455,7 +455,7 @@ def test_high_load_alert_predicts_each_hour_with_verdict_probability_and_thresho
 def test_prediction_items_repeat_only_the_weather_fields_the_task_declares(
     cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
 ) -> None:
-    """預測 item 的天氣欄位跟隨任務設定 weather.fields，而非任務類型寫死的欄位。"""
+    """Prediction items follow task weather.fields instead of fixed task-type fields."""
     tasks = deployed_tasks()
     shipped = tasks[HIGH_LOAD_ALERT]
     temperature_only = replace(
@@ -488,7 +488,7 @@ def test_prediction_items_repeat_only_the_weather_fields_the_task_declares(
 def test_high_load_alert_refuses_a_stale_load_anchor(
     cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
 ) -> None:
-    """負載起點過舊時高負載預警與動態視界預報一樣不降級，回 503。"""
+    """A stale load anchor makes both high-load alert and dynamic-horizon prediction return 503."""
     model, load = _fitted_high_load_alert(pd.Timestamp("2026-08-21 12:00"))
     monkeypatch.setitem(model_store.models, HIGH_LOAD_ALERT, model)
     _serve_fresh_inputs(load, cwa_obs_df, cwa_forecast_df, monkeypatch)
@@ -502,7 +502,7 @@ def test_high_load_alert_refuses_a_stale_load_anchor(
 def test_high_load_alert_without_threshold_window_history_answers_503(
     cwa_obs_df: pd.DataFrame, cwa_forecast_df: pd.DataFrame, monkeypatch
 ) -> None:
-    """門檻窗歷史不足是服務輸入暫時不可用，predict 與 ready 都回 503 而非 500 或 ready。"""
+    """An incomplete threshold window makes predict and ready return 503 rather than 500 or ready."""
     model, load = _fitted_high_load_alert(pd.Timestamp("2026-08-21 23:00"))
     monkeypatch.setitem(model_store.models, HIGH_LOAD_ALERT, model)
     _serve_fresh_inputs(load.tail(24 * 20), cwa_obs_df, cwa_forecast_df, monkeypatch)
@@ -540,7 +540,7 @@ def serve_anomaly_task(test_repo, monkeypatch) -> None:
 
 
 def test_anomaly_task_scores_the_latest_window_end_hours(serve_anomaly_task) -> None:
-    """horizon_hours 對觀測任務表示評分最近幾個時間窗結束小時，往回算到負載起點為止。"""
+    """For observed-weather tasks, horizon_hours selects recent window-end hours back from the load anchor."""
     response = TestClient(app).post(f"/tasks/{ANOMALY_TASK}/predict", json={"horizon_hours": 3})
 
     assert response.status_code == 200

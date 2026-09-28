@@ -323,12 +323,12 @@ _FORECAST_VALUE_KEYS = (
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
-    """將 payload 片段正規化為 mapping。"""
+    """Normalize a payload fragment to a mapping."""
     return value if isinstance(value, dict) else {}
 
 
 def _first_present(*values: Any) -> Any:
-    """取得第一個非空的 CWA 欄位候選值。"""
+    """Return the first nonempty candidate CWA field."""
     for value in values:
         if value not in (None, ""):
             return value
@@ -336,7 +336,7 @@ def _first_present(*values: Any) -> Any:
 
 
 def _forecast_value(value: Any) -> Any:
-    """從預報氣象因子值物件取得實際值。"""
+    """Extract the value from a forecast weather element."""
     if isinstance(value, list):
         value = value[0] if value else None
     if isinstance(value, dict):
@@ -353,12 +353,12 @@ def _forecast_metadata_value(
     sources: tuple[dict[str, Any], ...],
     field_names: tuple[str, str],
 ) -> Any:
-    """依 CWA payload 的常見層級取得預報版本欄位。"""
+    """Find a forecast vintage field across common CWA payload levels."""
     return _first_present(*(source.get(name) for source in sources for name in field_names))
 
 
 def _forecast_release_timestamps(payload: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """讀取來源 IssueTime 與 Update 作為預報版本身分。"""
+    """Use source IssueTime and Update as the forecast vintage identity."""
     records = _as_mapping(payload.get("records") if isinstance(payload, dict) else None)
     dataset_info = _as_mapping(records.get("datasetInfo") or records.get("DatasetInfo"))
     containers = records.get("Locations") or records.get("locations") or []

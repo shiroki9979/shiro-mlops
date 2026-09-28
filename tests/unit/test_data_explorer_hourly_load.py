@@ -124,7 +124,7 @@ def test_hourly_load_gaps_only_include_completed_hours_inside_the_window(
 def test_hourly_load_reader_filters_subject_and_traverses_next_page(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """逐時負載 reader 必須套用預測對象篩選，並以 cursor 走到下一頁。"""
+    """The hourly-load reader filters by subject and follows the next-page cursor."""
     latest = datetime.now(TAIWAN).replace(tzinfo=None, minute=0, second=0, microsecond=0)
     hours = [latest - timedelta(hours=offset) for offset in (2, 1, 0)]
     _upsert_hours(test_repo, hours)

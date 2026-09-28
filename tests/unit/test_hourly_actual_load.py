@@ -25,7 +25,7 @@ def _sample(
     observed_at: datetime | None = None,
     regions: tuple[str, ...] = REGIONAL_SUPPLY_DEMAND_REGIONS,
 ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
-    """建立同一來源時間的區域快照；預設四區加總 3040 萬瓩（30400 MW）。"""
+    """Build regional snapshots for one source time, totaling 30,400 MW by default."""
     return [
         TaipowerRegionalSupplyDemandSnapshot(
             observed_at=observed_at or source_time,
