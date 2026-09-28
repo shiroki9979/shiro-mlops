@@ -2,7 +2,7 @@
 
 - 建立日期：2026-08-23
 - 最後更新：2026-09-28
-- 專案版本：`0.3.0`
+- 專案版本：`0.4.0`
 
 ---
 
@@ -187,7 +187,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   ```json
   {
     "status": "ok",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "environment": "local",
     "model_loaded": true,
     "tasks": {

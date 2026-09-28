@@ -8,11 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-28
+
 ### Added
 
 - 新增可追溯的 CWA 觀測與預報版本本機資料服務，供訓練與推論讀取 canonical TimescaleDB 資料（#30）。
-- 新增唯讀營運資料檢視器（Data Explorer）：六個 typed datasets、CWA ingestion audits、共用狀態契約與 cursor 分頁，並在 Monitoring 顯示 Data Source Status（#40–#49）。
-- 側邊欄在 Data Explorer 啟用時列出六個 typed datasets 與 CWA audits nested routes。
+- 新增唯讀營運資料檢視器（Data Explorer）：六個資料集、兩個 CWA ingestion audits、狀態摘要與 cursor 分頁；側邊欄提供各資料集導覽，Monitoring 顯示 Data Source Status（#40–#49）。
 - 新增由台電區域供需快照推算的全台逐時實際負載與每小時 `hourly_actual_load_job`，取代已失效的 d015046 歷史來源；只往前累積、不回補歷史（#59，ADR-0008）。
 - 新增負載起點過舊防護：最新推算負載落後請求時間超過任務設定 `stale_anchor_max_lag_hours`（預設 3 小時）時，`/ready` 與 `/predict` 回傳 HTTP 503；氣象過期時依來源標示降級（#62）。
 - 新增 `make smoke-check` 排程與下游就緒檢查，以及 d015046 舊列清除與冷啟動恢復操作指南（#59、#60）。
@@ -32,11 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CWA 觀測與預報擷取、台電區域快照改為有限次數的指數退避重試（#59、#62）。
 - 天氣預報 staleness 判定改以請求時間為 `as_of`，serving 只使用推算口徑的逐時負載（#62）。
 - Data Explorer 八個資料集統一分頁規則：依每個資料集宣告的完整複合排序鍵（最新優先）翻頁，cursor 升為 v2 並保留資料庫原始微秒精度，時間窗口嚴格採用閉區間 `[start, end]`，預報最新版本於第一頁解析後跨頁固定；缺口計算的預期 slot 自窗口內第一個整點／十分鐘 slot 起算，窗口起點前的 slot 不再列入 `missing_slots`（#72–#77）。
-- 將 Data Explorer 列表查詢抽出為 typed `ExplorerQuery`，並讓逐時負載改走共用 cursor／keyset 分頁 seam（#52）。
-- 將 CWA 觀測、鄉鎮預報與 audit 列表遷移至 typed query 上的 focused readers，保留 vintage 與 missing-identifier 契約（#53）。
-- 將全台／區域供需與機組發電列表遷移至 typed query readers，保留 MW 轉換、完整度與 nullable 欄位契約（#54）。
-- 將 Data Explorer 狀態彙總抽成 focused collaborators，並移除單體 `DataExplorerStore`（#55）。
-- 簡化 Data Explorer 電力與預報 reader 的查詢、映射與測試資料 seam，讓列表契約可獨立維護與驗證。
+- Data Explorer 列表改由 typed query 與各資料集 reader 執行，共用 cursor 分頁，維持預報版本、完整度、單位轉換與缺值契約；狀態彙總改由專責元件處理（#52–#55）。
 
 ### Deprecated
 
@@ -55,20 +52,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 修正訓練與監控的最低負載累積檢查：只計入 `as_of` 以前的逐時負載，且全表任何 legacy 負載列仍阻擋訓練，避免過去時間點誤判就緒（#59、#66）。
 - 修正推算負載缺漏小時造成遞迴預報與 Feast 匯出 lag／rolling 特徵時距錯位，改依實際小時時間戳計算；僅起始 warm-up 缺值補零，避免中段缺漏被相鄰負載冒充（#59、#66）。
-- 修正 Data Explorer 翻頁以整秒顯示時間重建 cursor，導致同秒不同微秒的觀測批次、預報版本跨頁遺漏；並修正窗口放寬一秒時列表與完整度混入窗外資料（#73–#77）。
+- 修正 Data Explorer 翻頁時同秒不同微秒的觀測批次與預報版本遺漏，以及列表與完整度混入時間窗外資料（#73–#77）。
 - 確保 CWA 兩種預報產品先完成擷取再於單一交易入庫，避免第二種產品失敗後留下不完整的新版本（#62）。
 - 訓練、特徵擷取與 Data Explorer 逐時負載列表、缺口及狀態僅讀取推算口徑的逐時負載，忽略尚未清除的 d015046 舊列；資料庫升級無法檢查 schema 時明確回報失敗（#59、#60）。
 - 就緒檢查與預測遇到非預期錯誤時記錄完整堆疊，不再只把錯誤訊息轉成 not_ready 或 HTTP 500 而遺失真因。
 - 資料庫中斷時觀測天氣推論回傳 HTTP 503（Persistence unavailable），不再吞下錯誤而誤報為缺少觀測天氣（#70）。
-- 改由 CWA 原始 XML 預報檔取得 `IssueTime`／`Update`，並限制無憑證下載 redirect 的 HTTPS 儲存目標，避免 flattened REST 回應缺少版本時間而使 forecast ingestion 永久重試。
+- 改由 CWA 原始 XML 預報檔取得 `IssueTime`／`Update`，避免 flattened REST 回應缺少版本時間而使 forecast ingestion 永久重試。
 - 讓 `make compose-up` 以根目錄 `.env` 做 Compose 插值，把 `CWA_API_KEY` 注入 Dagster／API 容器，避免空授權碼導致 CWA 入庫 401。
-- 拒絕缺少或無法解析 `IssueTime`／`Update` 的 CWA 預報回應，避免以擷取時間偽造版本而破壞冪等與 stale 判定。
+- 拒絕缺少或無法解析 `IssueTime`／`Update` 的 CWA 預報回應，避免以擷取時間冒充來源版本而破壞冪等與 stale 判定。
 - 修正 Timescale schema 初始化把 SQL 註解裡的分號當成語句分隔，導致既有 volume 建不出 `raw_cwa_forecast_release`。
 - 讓 Dagster `ParquetIOManager` 能把 CWA 預報 dataclass 序列化成 JSON artifact，避免入庫成功後仍因無法寫出資產而失敗。
 - 拒絕 Data Explorer audit 非陣列 missing-identifier payload；keyset cursor 改以 naive UTC 比對，避免 SQLite 重複回傳當前列；並補齊電力列表空結果／非法查詢／分頁與預報 `issued_at` 契約測試。
 - 修正區域完整度在分頁截斷後才篩選、預報最新版本跨頁漂移與遺漏 `valid_to` cursor key 的問題；incomplete audit 即使未列出缺失識別碼也能正確呈現狀態。
 - 隔離缺乏可信 StationId provenance 的舊版 CWA 氣象資料，並禁止 legacy 寫入混入 canonical 觀測資料。
 - 修正 point-in-time 預報版本選取、風向插值與訓練氣象缺口處理，避免未來資料洩漏及固定值回填。
+
+### Security
+
+- CWA 預報檔無憑證下載的 redirect 僅允許 HTTPS 儲存目標，避免降級至不安全傳輸。
 
 ## [0.3.0] - 2026-09-06
 
@@ -127,7 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 實作 FastAPI 隨需推論服務（`/predict`、`/health`、`/features/latest`）。
 - 建立 AWS Terraform 基礎設施配置（S3、ECR、App Runner、IAM OIDC）。
 
-[Unreleased]: https://github.com/shiroki9979/shiro-mlops/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/shiroki9979/shiro-mlops/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shiroki9979/shiro-mlops/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/shiroki9979/shiro-mlops/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.2.0
-[0.1.0]: https://github.com/shiroki9979/shiro-mlops/releases/tag/v0.1.0
+[0.1.0]: https://github.com/shiroki9979/shiro-mlops/commit/80c7b2d0c4d2f67a03930b1c5c7bcf36bda10362
