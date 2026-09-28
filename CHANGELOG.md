@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 新增通用任務端點 `POST /tasks/{task_id}/predict` 與 `GET /tasks/{task_id}/ready`，逐任務載入模型；`/predict`、`/ready` 保留為動態視界預報任務的別名（#68）。
 - 新增高負載預警任務 `high_load_alert`（`direct_classification` 任務類型，`LGBMClassifier`），以錨點前 28 日逐時負載的 P90 為門檻；門檻窗負載不完整時拒絕訓練，預測回傳 HTTP 503（#69）。
 - 新增用電型態異常偵測任務 `load_pattern_anomaly`（`unsupervised_reconstruction` 任務類型，MLP AutoEncoder 以 `.npz` 保存並以 numpy 前向計算），推論改用觀測天氣，誤報率以交錯日期的保留窗評估；缺少完整評分窗時 `/ready` 不回報就緒（#70）。
-- Data Explorer 在翻頁 cursor 失效（HTTP 400）時提供「回到第一頁」操作，保留目前的時間窗口與篩選；明確指定的預報版本亦保留（#73、#77）。
+- Data Explorer 在翻頁 cursor 失效（HTTP 400）時提供「Back to first page」操作，保留目前的時間窗口與篩選；明確指定的預報版本亦保留（#73、#77）。
 
 ### Changed
 
@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修正 Data Explorer 翻頁以整秒顯示時間重建 cursor，導致同秒不同微秒的觀測批次、預報版本跨頁遺漏；並修正窗口放寬一秒時列表與完整度混入窗外資料（#73–#77）。
 - 確保 CWA 兩種預報產品先完成擷取再於單一交易入庫，避免第二種產品失敗後留下不完整的新版本（#62）。
 - 訓練、特徵擷取與 Data Explorer 逐時負載列表、缺口及狀態僅讀取推算口徑的逐時負載，忽略尚未清除的 d015046 舊列；資料庫升級無法檢查 schema 時明確回報失敗（#59、#60）。
+- 就緒檢查與預測遇到非預期錯誤時記錄完整堆疊，不再只把錯誤訊息轉成 not_ready 或 HTTP 500 而遺失真因。
 - 資料庫中斷時觀測天氣推論回傳 HTTP 503（Persistence unavailable），不再吞下錯誤而誤報為缺少觀測天氣（#70）。
 - 改由 CWA 原始 XML 預報檔取得 `IssueTime`／`Update`，並限制無憑證下載 redirect 的 HTTPS 儲存目標，避免 flattened REST 回應缺少版本時間而使 forecast ingestion 永久重試。
 - 讓 `make compose-up` 以根目錄 `.env` 做 Compose 插值，把 `CWA_API_KEY` 注入 Dagster／API 容器，避免空授權碼導致 CWA 入庫 401。

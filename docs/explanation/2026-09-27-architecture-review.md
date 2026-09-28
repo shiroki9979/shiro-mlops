@@ -2,7 +2,7 @@
 # 架構檢視：module 加深候選紀錄
 
 - 建立日期：2026-09-27
-- 最後更新：2026-09-27
+- 最後更新：2026-09-28
 - 文件類型：Explanation（架構現況與取捨分析）
 - 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估
 - 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)
@@ -151,30 +151,10 @@ After ：畫面操作 → 查詢 module〔窗口／cursor 有效性／URL〕→ 
 全台逐時實際負載推算，以及排程、asset 與 smoke check 共用的訓練就緒檢查。
 本次尚無需要重開 ADR 的衝突；候選 1 的 interface 方向與交付要求記錄於後續設計討論。
 
-## 檢視時的驗證紀錄
+## 檢視證據的範圍
 
-2026-09-27 架構檢視時，下列後端 50 項測試通過：
-
-```bash
-uv run --no-sync pytest \
-  tests/unit/test_weather_resolution.py \
-  tests/unit/test_cwa_ingestion.py \
-  tests/unit/test_data_explorer_cursor.py \
-  tests/unit/test_data_explorer_query.py \
-  tests/unit/test_data_explorer_hourly_load.py \
-  tests/unit/test_data_explorer_weather.py \
-  tests/unit/test_data_explorer_power.py -q
-```
-
-前端 13 項操作測試通過，另有圖表零尺寸警告：
-
-```bash
-# Working directory: frontend/
-pnpm exec vitest run tests/integration/data-explorer.test.tsx
-```
-
-引用的 `test_data_explorer_api.py` 案例已閱讀，未包含於上述執行範圍。
-本次未執行完整測試套件或 PostgreSQL 實機驗證；通過的既有測試不代表候選重構已完成。
+2026-09-27 架構檢視時，只執行資料檢視器與天氣解析相關的後端單元測試，以及資料檢視器前端操作測試；`test_data_explorer_api.py` 案例僅閱讀。
+當時未執行完整測試套件或 PostgreSQL 實機驗證；通過的既有測試不代表候選重構已完成。
 
 ## 候選 1 設計方案（規格已發布）
 
@@ -189,11 +169,11 @@ pnpm exec vitest run tests/integration/data-explorer.test.tsx
 | Q3：資料列時間精度 | A | 本次納入精度修正，先建立重現測試；排序與 cursor 保留原始時間精度，畫面可維持整秒顯示。 |
 | Q4：真實資料庫驗收 | A | 交付須通過隔離的本機 PostgreSQL／TimescaleDB 分頁測試；日常 CI 維持現有離線流程。 |
 | Q5：舊 cursor 相容策略 | A | 全部 datasets 統一升為 v2；v1 cursor 一律回傳 HTTP 400，使用者重新查詢第一頁。 |
-| Q6：舊 cursor 的畫面恢復操作 | A | 新增「回到第一頁」按鈕，清除 cursor，保留目前畫面的時間窗口與篩選條件。 |
+| Q6：舊 cursor 的畫面恢復操作 | A | 新增「Back to first page」按鈕，清除 cursor，保留目前畫面的時間窗口與篩選條件。 |
 | Q7：分頁 module 的 interface | C | 加深既有 `DatasetReader.list(params)`，統一分頁生命週期；reader 提供資料選取、filters 與整頁 projection。 |
 | Q8：精確時間窗口 | A | 本次移除起訖各放寬一秒的補償，使用精確閉區間 `[start, end]`；同步驗證列表與完整度查詢在兩種資料庫的端點、微秒及缺口判斷。 |
 
-以上八項選擇均已確認；2026-09-27 發布規格 #72 與工單 #73 至 #77，並完成實作。驗收結果與重跑指令見 [操作文件](../how-to/verify-data-explorer-pagination.md)。
+以上八項選擇均已確認；2026-09-27 發布規格 #72 與工單 #73 至 #77，並完成實作。重跑方式見[操作文件](../how-to/verify-data-explorer-pagination.md)。
 
 ### 候選 1：相容性與時間精度的查證
 
@@ -242,33 +222,8 @@ reader 的 internal interface 由資料集識別、可信 `SELECT ... FROM`、
 沿用逐次請求讀取與既有 keyset 行為；跨頁完整性驗收採固定 fixture，
 時間窗口與預報版本釘選不新增資料庫 snapshot 隔離。
 
-### 候選 1：交付切片與驗收
+### 候選 1：交付範圍
 
-1. 以觀測批次審計的同秒不同微秒資料建立失敗案例，確認原始排序鍵在投影前保留；先加深共用分頁流程，再以複合鍵最多的鄉鎮預報驗證版本釘選。
-2. 遷移全部 8 個 readers，移除各自重複的排序欄位、keyset 比較與方言選擇；資料集篩選、整頁投影及全窗口缺口語意維持既有責任。
-3. 統一 v2 cursor，保留時間窗口與預報版本釘選、filters 綁定及最新優先順序；v1、格式錯誤或不相容 cursor 維持 HTTP 400。
-4. 在 HTTP 400 且存在 cursor 時提供「回到第一頁」，透過既有 search 更新流程清除 cursor。保留畫面目前的時間與明確篩選；未明確指定預報版本時重新套用既有最新版本規則。
-5. 將時間窗口改為精確閉區間，同步驗證全部列表與四個完整度查詢；上下界恰好相等的列納入，窗口外一微秒的列排除，`start = end` 仍合法。
-6. 透過 `list(params)` 驗證八個 datasets 的跨頁完整性，涵蓋同時間複合鍵切頁、原始微秒精度、最後一頁，以及區域完整度篩選先於分頁截斷。
-7. 保留原有時間窗口固定、預報版本固定與缺口測試；以新的 list 行為測試取代綁定 `query.cursor_key()` 或已格式化 item 抽鍵等舊 implementation 的測試。仍有獨立契約的 cursor codec 測試保留。
-8. 在 SQLite 與隔離的本機 PostgreSQL／TimescaleDB 驗證相同排序、跨頁及時間範圍契約；前端操作測試驗證 v1 失效後恢復查詢及保留篩選。日常 CI 不新增資料庫相依。
-9. 使用獨立的測試容器與暫存資料，保留可重跑的驗證方式；執行後只清理此次建立的資源。依改動執行 Python 測試與 Ruff，以及前端相關測試、型別建置與 lint，並同步更新 SPEC 的 v2、精度與恢復操作契約。
-
-具體函式命名、SQL 組裝與微秒比較 implementation 在上述責任內選擇最小可行方案，
-並以 Red → Green → Refactor 驗證。設計選擇與工單拆分已確認；#73 至 #77 已依阻擋關係完成於同一交付分支。
-若需修訂既有 ADR，應另行記錄決策理由。
-本文件保存候選與證據，後續狀態可由 [ROADMAP.md](../ROADMAP.md) 追蹤。
-
-### 候選 1：已發布工單
-
-正式需求以 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 為準；下表保留五張工單的原始阻擋關係。
-
-| 工單 | 交付行為 | 阻擋來源 |
-| :--- | :--- | :--- |
-| [#73](https://github.com/shiroki9979/shiro-mlops/issues/73) | 擴充共用生命週期，完成觀測批次審計微秒分頁、全域 v2 與畫面失效恢復。 | 無 |
-| [#74](https://github.com/shiroki9979/shiro-mlops/issues/74) | 遷移鄉鎮預報與預報版本審計，保留完整複合鍵及微秒版本釘選。 | #73 |
-| [#75](https://github.com/shiroki9979/shiro-mlops/issues/75) | 遷移逐時負載與測站觀測，保留來源隔離及全窗口缺口。 | #73 |
-| [#76](https://github.com/shiroki9979/shiro-mlops/issues/76) | 遷移全台、區域與機組快照，保留完整度先篩後分頁。 | #73 |
-| [#77](https://github.com/shiroki9979/shiro-mlops/issues/77) | 八列表與四完整度查詢使用精確閉區間，移除舊內部流程，完成交付驗收及文件同步。 | #74、#75、#76 |
-
-工單 #73 先擴充既有流程；#74 至 #76 分批遷移；#77 收斂共同時間窗口與過渡流程。八個列表與四種完整度已在 SQLite 與隔離本機 TimescaleDB 驗收；v2 拒絕 v1，且無 v1 相容層。驗收命令與結果見[操作文件](../how-to/verify-data-explorer-pagination.md)。
+交付切片、驗收條件與工單阻擋關係以 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 及 #73 至 #77 為準，本文件不重複保存。
+八個列表與四種完整度已在 SQLite 與隔離本機 TimescaleDB 驗收；v2 拒絕 v1，且無 v1 相容層。
+重跑方式見[操作文件](../how-to/verify-data-explorer-pagination.md)；若需修訂既有 ADR，應另行記錄決策理由。
