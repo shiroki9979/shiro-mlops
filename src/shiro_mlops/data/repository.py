@@ -111,6 +111,7 @@ FORECAST_ROW_COLUMNS = [
     "valid_from",
     "valid_to",
     "geocode",
+    "location_name",
     "temperature_c",
     "dew_point_c",
     "apparent_temperature_c",
@@ -124,7 +125,7 @@ FORECAST_TIME_COLUMNS = ("issued_at", "source_updated_at", "valid_from", "valid_
 
 
 class ForecastVersion(NamedTuple):
-    """Identity of one forecast vintage: dataset plus its issue and source update instants."""
+    """Identity of one forecast vintage; both instants are naive UTC, as stored."""
 
     dataset_id: str
     issued_at: pd.Timestamp
@@ -142,8 +143,20 @@ class _WindowBound:
     neighbor_operator: str
 
 
-_VALID_START = _WindowBound("valid_start", "valid_to", ">=", "MAX", "<")
-_VALID_END = _WindowBound("valid_end", "valid_from", "<=", "MIN", ">")
+_VALID_START = _WindowBound(
+    param="valid_start",
+    column="valid_to",
+    operator=">=",
+    neighbor_aggregate="MAX",
+    neighbor_operator="<",
+)
+_VALID_END = _WindowBound(
+    param="valid_end",
+    column="valid_from",
+    operator="<=",
+    neighbor_aggregate="MIN",
+    neighbor_operator=">",
+)
 
 
 @dataclass(frozen=True)
