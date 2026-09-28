@@ -1,47 +1,48 @@
 """Integration tests for Dagster ingestion assets and database persistence."""
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from dagster import build_asset_context, materialize
+from dagster import Definitions, Failure, build_asset_context, load_assets_from_modules, materialize
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
+from shiro_mlops.core.io_managers import (
+    FeastPublicationTarget,
+    get_feast_parquet_io_manager,
+    get_parquet_io_manager,
+)
 from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
     CWAObservationBatch,
     CWAStationObservation,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.assets import (
-    cwa_observation_feature_source,
-    engineered_feature_set,
+    feast_feature_export,
     raw_cwa_station_observation,
     raw_cwa_township_forecast,
-    raw_taipower_load_data,
 )
+from shiro_mlops.pipelines.task_pipelines import (
+    TaskPipelineNames,
+    build_task_pipeline,
+    build_task_pipelines,
+)
+from shiro_mlops.pipelines.tracking import TrackedRun
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from tests.helpers import derived_hourly_load, override_task_policies
+
+LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
+NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 
 
-def test_raw_taipower_load_data_persists_to_db(
-    test_repo: TimeSeriesRepository, taipower_raw_df: pd.DataFrame
-):
-    """Verify raw_taipower_load_data fetches from client, upserts to repository, and returns df."""
-    context = build_asset_context(resources={"time_series_repo": test_repo})
-
-    with patch(
-        "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
-        return_value=taipower_raw_df,
-    ):
-        result_df = raw_taipower_load_data(context)
-
-    assert isinstance(result_df, pd.DataFrame)
-    assert len(result_df) == len(taipower_raw_df)
-
-    # Verify rows were persisted into the repository's SQLite database
-    persisted = test_repo.fetch_load_range(location="Taipei")
-    assert len(persisted) == len(taipower_raw_df)
-    assert persisted.iloc[0]["load_mw"] == pytest.approx(taipower_raw_df.iloc[0]["load_mw"])
+def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
+    """Invoke the task's features asset the way a training run does."""
+    features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        return features_asset(context).value
 
 
 def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
@@ -55,9 +56,8 @@ def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
         lambda *args, **kwargs: batch,
     )
     repository = MagicMock(spec=TimeSeriesRepository)
-    context = build_asset_context(resources={"time_series_repo": repository})
-
-    result = raw_cwa_station_observation(context)
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        result = raw_cwa_station_observation(context)
 
     assert result is batch
     repository.upsert_cwa_observation_batch.assert_called_once_with(batch)
@@ -75,51 +75,102 @@ def test_canonical_cwa_forecast_asset_persists_both_products(
         lambda self, dataset_id, locations: releases[0 if dataset_id.endswith("089") else 1],
     )
     repository = MagicMock(spec=TimeSeriesRepository)
-    context = build_asset_context(resources={"time_series_repo": repository})
-
-    result = raw_cwa_township_forecast(context)
+    with build_asset_context(resources={"time_series_repo": repository}) as context:
+        result = raw_cwa_township_forecast(context)
 
     assert result == releases
-    assert repository.upsert_cwa_forecast_release.call_count == 2
+    repository.upsert_cwa_forecast_releases.assert_called_once_with(releases)
 
 
-def test_raw_taipower_load_data_graceful_fallback_on_db_failure(
-    taipower_raw_df: pd.DataFrame,
-    monkeypatch,
-):
-    """Verify raw_taipower_load_data continues safely and returns df if database raises exception in test env."""
-    monkeypatch.setattr(settings, "ENVIRONMENT", "test")
-    failing_repo = MagicMock(spec=TimeSeriesRepository)
-    failing_repo.upsert_taipower_load.side_effect = RuntimeError("Database connection timed out")
-    context = build_asset_context(resources={"time_series_repo": failing_repo})
-
-    with patch(
-        "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
-        return_value=taipower_raw_df,
-    ):
-        result_df = raw_taipower_load_data(context)
-
-    # Pipeline does not throw in test mode; still returns DataFrame
-    assert isinstance(result_df, pd.DataFrame)
-    assert len(result_df) == len(taipower_raw_df)
+def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository) -> None:
+    """Task features fail clearly without derived load instead of fetching an external source."""
+    with pytest.raises(Failure, match="0 valid hourly observations"):
+        _features(test_repo)
 
 
-def test_raw_taipower_load_data_raises_in_production(
-    taipower_raw_df: pd.DataFrame,
-    monkeypatch,
-):
-    """Verify raw_taipower_load_data raises exception if database fails in non-test environment."""
-    monkeypatch.setattr(settings, "ENVIRONMENT", "local")
-    failing_repo = MagicMock(spec=TimeSeriesRepository)
-    failing_repo.upsert_taipower_load.side_effect = RuntimeError("Database connection timed out")
-    context = build_asset_context(resources={"time_series_repo": failing_repo})
+def test_task_features_read_weather_from_configured_reference_station(
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The weather reference station comes from runtime CWA settings rather than a fixed Taipei code."""
+    monkeypatch.setattr(
+        settings,
+        "CWA_LOCATION_ALLOWLIST",
+        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    )
+    override_task_policies(monkeypatch, min_training_hours=2)
+    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
+    test_repo.upsert_cwa_observation_batch(
+        CWAObservationBatch(
+            fetched_at=LAST_LOAD_HOUR,
+            status="complete",
+            missing_station_ids=(),
+            raw_payload={},
+            observations=tuple(
+                _station_observation(station_id, temperature)
+                for station_id, temperature in (("999999", 30.0), ("466920", 10.0))
+            ),
+        )
+    )
 
-    with patch(
-        "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
-        return_value=taipower_raw_df,
-    ):
-        with pytest.raises(RuntimeError, match="Database connection timed out"):
-            raw_taipower_load_data(context)
+    table = _features(test_repo)
+
+    assert (
+        table.loc[table["datetime"] == pd.Timestamp(LAST_LOAD_HOUR), "temperature"].item() == 30.0
+    )
+
+
+def _station_observation(station_id: str, temperature: float) -> CWAStationObservation:
+    return CWAStationObservation(
+        observed_at=LAST_LOAD_HOUR,
+        station_id=station_id,
+        station_name=station_id,
+        town_code=None,
+        temperature_c=temperature,
+        relative_humidity_pct=70.0,
+        air_pressure_hpa=None,
+        precipitation_mm=None,
+        wind_speed_m_s=None,
+        wind_direction_deg=None,
+    )
+
+
+def test_task_features_refuse_training_below_minimum_accumulation(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """With min_training_hours=672, even one missing hour blocks training and reports the gap."""
+    test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_LOAD_HOUR))
+    with pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error:
+        _features(test_repo)
+
+    assert error.value.metadata["valid_hours"].value == 671
+    assert error.value.metadata["required_hours"].value == 672
+
+
+def test_task_features_return_target_rows_once_minimum_accumulation_is_met(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    test_repo.upsert_taipower_load(derived_hourly_load(672, LAST_LOAD_HOUR))
+
+    table = _features(test_repo)
+
+    assert len(table) == 672
+    assert table["datetime"].max() == pd.Timestamp(LAST_LOAD_HOUR)
+
+
+def test_training_load_source_excludes_other_provenance(
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override_task_policies(monkeypatch, min_training_hours=2)
+    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
+    test_repo.upsert_taipower_load(
+        pd.DataFrame([{"datetime": "2026-09-26 11:00", "load_mw": 99999.0}]),
+        source="other_source",
+    )
+
+    table = _features(test_repo)
+
+    assert len(table) == 2
+    assert 99999.0 not in table["load_mw"].tolist()
 
 
 def test_dagster_materialize_ingestion_and_feature_pipeline(
@@ -127,8 +178,11 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     taipower_raw_df: pd.DataFrame,
     cwa_obs_df: pd.DataFrame,
     dagster_instance,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    """Verify Dagster materialize executes ingestion through feature engineering and persists to repository."""
+    """Verify Dagster materialize reads persisted load and weather through feature engineering."""
+    # fixture 只有 48 小時；降低門檻以驗證特徵鏈路，門檻本身由上方測試涵蓋。
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     observation_batch = CWAObservationBatch(
         fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
         status="complete",
@@ -150,23 +204,22 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         missing_station_ids=(),
         raw_payload={},
     )
-    with patch(
-        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-        return_value=observation_batch,
-    ):
-        raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": test_repo}))
+    test_repo.upsert_taipower_load(taipower_raw_df)
     with (
-        patch(
-            "shiro_mlops.pipelines.assets.TaipowerClient.fetch_load_data",
-            return_value=taipower_raw_df,
-        ),
         patch(
             "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
             return_value=observation_batch,
         ),
+        build_asset_context(resources={"time_series_repo": test_repo}) as context,
     ):
+        raw_cwa_station_observation(context)
+    with patch(
+        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
+        return_value=observation_batch,
+    ):
+        features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
         res = materialize(
-            assets=[raw_taipower_load_data, cwa_observation_feature_source, engineered_feature_set],
+            assets=[features_asset, feast_feature_export],
             resources={
                 "time_series_repo": test_repo,
                 "feast_io_manager": get_feast_parquet_io_manager(
@@ -177,13 +230,76 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         )
 
     assert res.success
-    engineered_df = res.output_for_node("engineered_feature_set", "engineered_features")
-    assert isinstance(engineered_df, pd.DataFrame)
-    assert not engineered_df.empty
+    training_table = res.output_for_node(NAMES.features)
+    assert list(training_table.columns) == [
+        "datetime",
+        "subject",
+        "load_mw",
+        "temperature",
+        "relative_humidity",
+    ]
 
-    # Assert persistence to repository during materialization
-    persisted_load = test_repo.fetch_load_range(location="Taipei")
+    persisted_load = test_repo.fetch_load_range(subject="nationwide")
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.fetch_weather_range(location="Taipei")
+    persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
     assert len(persisted_weather) == len(cwa_obs_df)
+
+
+def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Monitoring uses the latest persisted actual load and prior model without running ingestion assets."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
+    test_repo.upsert_taipower_load(taipower_raw_df)
+    test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    pipelines = build_task_pipelines(deployed_tasks())
+    job_defs = Definitions(
+        assets=[
+            *load_assets_from_modules([assets_module]),
+            *(asset for pipeline in pipelines for asset in pipeline.assets),
+        ],
+        jobs=[job for pipeline in pipelines for job in pipeline.jobs],
+        resources={
+            "time_series_repo": test_repo,
+            "io_manager": get_parquet_io_manager("local", "unused", tmp_path),
+            "feast_io_manager": get_feast_parquet_io_manager(
+                FeastPublicationTarget.local(tmp_path)
+            ),
+        },
+    )
+
+    with patch(
+        "shiro_mlops.pipelines.task_pipelines.log_training_run",
+        return_value=TrackedRun(run_id="run-1", model_version="1"),
+    ) as log_training_run:
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance
+        )
+    next_hour = taipower_raw_df["datetime"].max() + pd.Timedelta(hours=1)
+    test_repo.upsert_taipower_load(derived_hourly_load(1, next_hour.to_pydatetime()))
+
+    def refuse_full_history(*_: object, **__: object) -> None:
+        raise AssertionError("Hourly monitoring must not read the full load history")
+
+    monkeypatch.setattr(test_repo, "fetch_load_range", refuse_full_history)
+    monitoring = job_defs.resolve_job_def(NAMES.monitoring_job).execute_in_process(
+        instance=dagster_instance
+    )
+
+    assert training.success
+    assert monitoring.success
+    assert log_training_run.call_count == 1
+    model = training.output_for_node(NAMES.model)
+    assert (model["run_id"], model["model_version"]) == ("run-1", "1")
+    report = monitoring.output_for_node(NAMES.monitoring)
+    assert report["task_id"] == DYNAMIC_HORIZON_FORECAST
+    assert report["latest_target_time"] == next_hour.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df) + 1
+    assert report["training_rows"] == len(taipower_raw_df)

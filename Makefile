@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint format clean compose-up compose-down dagster mlflow api frontend frontend-test frontend-build
+.PHONY: help install dev test lint format clean compose-up compose-down smoke-check dagster mlflow api frontend frontend-test frontend-build
 
 help:
 	@echo "Available commands:"
@@ -13,6 +13,7 @@ help:
 	@echo "  make format        Format code with ruff"
 	@echo "  make compose-up    Start full local stack (Dagster, MLflow, Redis, TimescaleDB)"
 	@echo "  make compose-down  Stop full local stack"
+	@echo "  make smoke-check   Verify schedules and per-task training/monitoring readiness in the Dagster container"
 	@echo "  make clean         Clean temporary files and caches"
 
 install:
@@ -48,10 +49,15 @@ format:
 	uv run ruff check --fix .
 
 compose-up:
-	docker compose -f docker/docker-compose.yml up -d
+	docker compose --env-file .env -f docker/docker-compose.yml up -d
 
 compose-down:
 	docker compose -f docker/docker-compose.yml down
+
+# ARGS=--require-ready 會在冷啟動累積未完成時也回傳非零。
+smoke-check:
+	docker compose -f docker/docker-compose.yml exec dagster-webserver \
+		python -m shiro_mlops.pipelines.smoke_check $(ARGS)
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .coverage htmlcov dist build .dagster_home mlruns

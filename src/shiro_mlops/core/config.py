@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 if TYPE_CHECKING:
@@ -45,9 +46,13 @@ class Settings(BaseSettings):
             return f"s3://{self.S3_BUCKET_NAME}/{self.FEAST_S3_PREFIX}/weather_features.parquet"
         return str((self.DATA_DIR / "weather_features.parquet").resolve())
 
+    @property
+    def models_dir(self) -> Path:
+        """Root of the per-task model directories (ADR-0010)."""
+        return self.DATA_DIR / "models"
+
     # MLflow
     MLFLOW_TRACKING_URI: str = "http://localhost:5001"
-    MLFLOW_EXPERIMENT_NAME: str = "taipower_load_forecasting"
 
     # Feast Feature Store
     FEAST_REPO_PATH: Path = Path("src/shiro_mlops/features")
@@ -59,9 +64,6 @@ class Settings(BaseSettings):
     # External APIs
     CWA_API_KEY: str = ""
     CWA_LOCATION_ALLOWLIST: str = ""
-    TAIPOWER_API_URL: str = (
-        "https://data.taipower.com.tw/opendata/apply/file/d015046/台灣電力公司_過去電力供需資訊.csv"
-    )
     TAIPOWER_SUPPLY_DEMAND_API_URL: str = (
         "https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json"
     )
@@ -71,6 +73,10 @@ class Settings(BaseSettings):
     TAIPOWER_UNIT_GENERATION_API_URL: str = (
         "https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json"
     )
+
+    # Nationwide hourly actual load derived from regional snapshots (ADR-0008)
+    HOURLY_LOAD_MIN_SAMPLES: PositiveInt = 4
+    HOURLY_LOAD_RECOMPUTE_HOURS: PositiveInt = 3
 
     # API Serving
     API_HOST: str = "0.0.0.0"

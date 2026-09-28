@@ -1,6 +1,6 @@
 """Main Dagster Definitions entrypoint."""
 
-from dagster import Definitions, load_assets_from_modules
+from dagster import Definitions, load_assets_from_modules, resource
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import (
@@ -15,15 +15,21 @@ from shiro_mlops.pipelines.schedules import (
     cwa_forecast_schedule,
     cwa_observation_job,
     cwa_observation_schedule,
-    daily_training_job,
-    daily_training_schedule,
-    hourly_drift_job,
-    hourly_drift_schedule,
+    hourly_actual_load_job,
+    hourly_actual_load_schedule,
     taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
+from shiro_mlops.pipelines.task_pipelines import build_task_pipelines
+from shiro_mlops.tasks.deployed import deployed_tasks
 
-all_assets = load_assets_from_modules([assets])
+# 任務設定錯誤須在 code location 載入時失敗，而非等到第一次訓練 run。
+task_pipelines = build_task_pipelines(deployed_tasks())
+
+all_assets = [
+    *load_assets_from_modules([assets]),
+    *(asset for pipeline in task_pipelines for asset in pipeline.assets),
+]
 
 io_manager = get_parquet_io_manager(
     environment=settings.ENVIRONMENT,
@@ -32,25 +38,32 @@ io_manager = get_parquet_io_manager(
 )
 feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.from_settings(settings))
 
+
+@resource
+def time_series_repo_resource(_context):
+    """Open the database when a run needs it, not while loading definitions."""
+    return TimeSeriesRepository()
+
+
 defs = Definitions(
     assets=all_assets,
     schedules=[
-        daily_training_schedule,
-        hourly_drift_schedule,
+        *(schedule for pipeline in task_pipelines for schedule in pipeline.schedules),
         taipower_supply_demand_snapshot_schedule,
+        hourly_actual_load_schedule,
         cwa_observation_schedule,
         cwa_forecast_schedule,
     ],
     jobs=[
-        daily_training_job,
-        hourly_drift_job,
+        *(job for pipeline in task_pipelines for job in pipeline.jobs),
         taipower_supply_demand_snapshot_job,
+        hourly_actual_load_job,
         cwa_observation_job,
         cwa_forecast_job,
     ],
     resources={
         "io_manager": io_manager,
         "feast_io_manager": feast_io_manager,
-        "time_series_repo": TimeSeriesRepository(),
+        "time_series_repo": time_series_repo_resource,
     },
 )

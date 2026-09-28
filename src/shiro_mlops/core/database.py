@@ -10,8 +10,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.constants import NATIONWIDE_SUBJECT, SUBJECT_COL
 
 logger = logging.getLogger(__name__)
+
+# ADR-0009 之前全台負載借用氣象代表點名稱保存；只用於辨識待遷移的舊值。
+LEGACY_NATIONWIDE_SUBJECT = "Taipei"
 
 INIT_SQL_PATH = (
     Path(__file__).resolve().parents[3] / "docker" / "init-db" / "01_init_hypertables.sql"
@@ -56,6 +60,21 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
     engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
     engine_kwargs.update(kwargs)
     return create_engine(db_uri, **engine_kwargs)
+
+
+def _strip_line_comments(sql: str) -> str:
+    """Remove full-line SQL comments before splitting executable statements."""
+    return "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+
+
+def split_sql_statements(ddl: str) -> list[str]:
+    """Split DDL into executable statements while skipping comment-only segments."""
+    statements: list[str] = []
+    for chunk in _strip_line_comments(ddl).split(";"):
+        cleaned = chunk.strip()
+        if cleaned:
+            statements.append(cleaned)
+    return statements
 
 
 def _execute_sql_statements(engine: Engine, statements: list[str]) -> None:
@@ -103,6 +122,60 @@ def _isolate_legacy_cwa_weather(engine: Engine) -> None:
         connection.execute(text("DROP TABLE raw_cwa_weather"))
 
 
+def _taipower_load_columns(engine: Engine, purpose: str) -> set[str]:
+    try:
+        columns = inspect(engine).get_columns("raw_taipower_load")
+    except NoInspectionAvailable as error:
+        raise RuntimeError(f"Cannot inspect raw_taipower_load schema for {purpose}") from error
+    return {column["name"] for column in columns}
+
+
+def _add_taipower_load_source_column(engine: Engine) -> None:
+    """Add the derivation provenance column to load tables created before ADR-0008.
+
+    The column stays nullable on upgraded databases: NULL identifies d015046-era
+    rows so operators can review and remove them before NOT NULL is enforced
+    (docs/how-to/remove-legacy-d015046-load-rows.md). Existing rows are never
+    rewritten here because relabelling them would mix incompatible load semantics.
+    """
+    if "source" in _taipower_load_columns(engine, "source migration"):
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE raw_taipower_load ADD COLUMN source VARCHAR(32)"))
+    logger.warning(
+        "Added nullable raw_taipower_load.source; rows with NULL source predate the "
+        "regional snapshot derivation and must be removed by an operator."
+    )
+
+
+def _migrate_taipower_load_subject(engine: Engine) -> None:
+    """Identify load series by prediction subject instead of a place name (ADR-0009).
+
+    Rename and relabel share one transaction, so an interrupted upgrade never leaves
+    a renamed column still holding the legacy value. The relabel is a no-op once
+    migrated, which keeps every restart safe to repeat.
+    """
+    columns = _taipower_load_columns(engine, "subject migration")
+    with engine.begin() as connection:
+        if SUBJECT_COL not in columns:
+            connection.execute(
+                text(f"ALTER TABLE raw_taipower_load RENAME COLUMN location TO {SUBJECT_COL}")
+            )
+        relabelled = connection.execute(
+            text(
+                f"UPDATE raw_taipower_load SET {SUBJECT_COL} = :subject WHERE {SUBJECT_COL} = :legacy"
+            ),
+            {"subject": NATIONWIDE_SUBJECT, "legacy": LEGACY_NATIONWIDE_SUBJECT},
+        ).rowcount
+    if relabelled:
+        logger.warning(
+            "Relabelled %s raw_taipower_load rows from subject %r to %r.",
+            relabelled,
+            LEGACY_NATIONWIDE_SUBJECT,
+            NATIONWIDE_SUBJECT,
+        )
+
+
 def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
     """Convert TimescaleDB/PostgreSQL DDL script into executable SQLite DDL statements.
 
@@ -120,12 +193,7 @@ def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
         List of SQLite CREATE TABLE statement strings.
     """
     statements: list[str] = []
-    for chunk in ddl.split(";"):
-        cleaned = "\n".join(
-            line for line in chunk.splitlines() if not line.strip().startswith("--")
-        ).strip()
-        if not cleaned:
-            continue
+    for cleaned in split_sql_statements(ddl):
         if not re.match(r"^\s*CREATE\s+TABLE", cleaned, re.IGNORECASE):
             continue
         # Apply PostgreSQL to SQLite dialect conversions
@@ -174,12 +242,16 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
         statements = convert_timescale_ddl_to_sqlite(get_timescale_init_ddl())
         _execute_sql_statements(db_engine, statements)
         _isolate_legacy_cwa_weather(db_engine)
+        _add_taipower_load_source_column(db_engine)
+        _migrate_taipower_load_subject(db_engine)
         return
 
     # PostgreSQL / TimescaleDB
     ddl = get_timescale_init_ddl()
-    _execute_sql_statements(db_engine, ddl.split(";"))
+    _execute_sql_statements(db_engine, split_sql_statements(ddl))
     _isolate_legacy_cwa_weather(db_engine)
+    _add_taipower_load_source_column(db_engine)
+    _migrate_taipower_load_subject(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
 
@@ -199,5 +271,5 @@ def init_db(engine: Engine | None = None, sql_path: Path | None = None) -> None:
         return
 
     ddl = get_timescale_init_ddl(sql_path=sql_path)
-    _execute_sql_statements(db_engine, ddl.split(";"))
+    _execute_sql_statements(db_engine, split_sql_statements(ddl))
     logger.info("Database initialization completed successfully.")

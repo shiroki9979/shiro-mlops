@@ -33,14 +33,14 @@ describe('API Zod Schemas Validation', () => {
     const defaultData = {}
     const parsed = PredictionRequestSchema.parse(defaultData)
     expect(parsed.horizon_hours).toBe(24)
-    expect(parsed.location).toBe('Taipei')
+    expect(parsed).not.toHaveProperty('location')
   })
 
   it('validates PredictionResponse array schema', () => {
     const response = {
       status: 'success',
       horizon_hours: 2,
-      location: 'Taipei',
+      subject: 'nationwide',
       predictions: [
         {
           datetime: '2026-08-25T12:00:00Z',

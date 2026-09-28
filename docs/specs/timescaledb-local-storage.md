@@ -1,14 +1,14 @@
 # Feature Spec: TimescaleDB Local Time-Series Storage & Ingestion Pipeline
 
-**Status:** superseded for CWA by ADR-0007 and `docs/SPEC.md`
+**Status:** superseded for CWA by ADR-0007, for Taipower load by ADR-0008, and by `docs/SPEC.md`
 **Created:** 2026-08-26
-**Last Updated:** 2026-09-07
+**Last Updated:** 2026-09-26
 **Feature Slug:** `timescaledb-local-storage`
 
 ---
 
 > [!NOTE]
-> 本文件保留 TimescaleDB 初始導入的歷史設計。CWA canonical schema、scheduled ingestion 邊界與消費契約已由 [ADR-0007](../adr/0007-isolate-cwa-access-behind-scheduled-ingestion.md) 及 [系統規格](../SPEC.md) 取代；不得將本文的 `raw_cwa_weather`、`upsert_cwa_weather` 或 `raw_weather_obs_data` 視為現行介面。
+> 本文件保留 TimescaleDB 初始導入的歷史設計。CWA canonical schema、scheduled ingestion 邊界與消費契約已由 [ADR-0007](../adr/0007-isolate-cwa-access-behind-scheduled-ingestion.md) 及 [系統規格](../SPEC.md) 取代；不得將本文的 `raw_cwa_weather`、`upsert_cwa_weather` 或 `raw_weather_obs_data` 視為現行介面。台電負載來源已由 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md) 改為區域快照推算，本文的 `raw_taipower_load_data` 亦非現行介面。
 
 ---
 

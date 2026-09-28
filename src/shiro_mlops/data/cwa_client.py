@@ -1,13 +1,21 @@
 """Client for fetching Central Weather Administration (CWA) observations and forecasts."""
 
 import json
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlparse
+from xml.etree.ElementTree import Element
 from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
+
+# 預報 XML 來自網路下載且 redirect 目標不受控；標準函式庫 ElementTree 不防範
+# entity expansion（billion laughs）等 XML 攻擊，故以 defusedxml 解析。
+from defusedxml import ElementTree
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
@@ -27,13 +35,28 @@ class CWALocation:
     geocode: str
 
 
+def resolve_cwa_location(catalog: Mapping[str, CWALocation], alias: str) -> CWALocation:
+    """Look a weather reference point alias up in a CWA ingestion catalog."""
+    if alias not in catalog:
+        raise ValueError(
+            f"Weather reference point {alias!r} is not in the CWA ingestion catalog; "
+            f"known aliases: {sorted(catalog)}"
+        )
+    return catalog[alias]
+
+
 DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
-    "Taipei": CWALocation("Taipei", "466920", "63000050"),
-    "Taichung": CWALocation("Taichung", "467490", "66000050"),
-    "Kaohsiung": CWALocation("Kaohsiung", "467441", "64000040"),
+    "Taipei": CWALocation("Taipei", "466920", "63000000"),
+    "Taichung": CWALocation("Taichung", "467490", "66000000"),
+    "Kaohsiung": CWALocation("Kaohsiung", "467441", "64000000"),
 }
 
 CWAIngestionStatus = Literal["complete", "incomplete"]
+
+_CWA_FORECAST_FILE_API = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
+_CWA_FORECAST_FILE_API_HOST = "opendata.cwa.gov.tw"
+_CWA_FORECAST_FILE_HOST = "cwaopendata.s3.ap-northeast-1.amazonaws.com"
+_CWA_FORECAST_FILE_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -136,7 +159,9 @@ def _find_element_value(elements: Any, names: set[str]) -> Any:
     return None
 
 
-def _coerce_number(value: Any, *, zero_markers: set[str] | None = None) -> float | None:
+def _coerce_number(
+    value: Any, context: str, *, zero_markers: set[str] | None = None
+) -> float | None:
     """Normalize CWA numeric values and documented missing markers."""
     if value is None:
         return None
@@ -146,9 +171,12 @@ def _coerce_number(value: Any, *, zero_markers: set[str] | None = None) -> float
     if zero_markers and raw in zero_markers:
         return 0.0
     try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
+        number = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid CWA numeric value for {context}: {raw!r}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"Non-finite CWA numeric value for {context}: {raw!r}")
+    return number
 
 
 def _observation_datetime(value: Any) -> pd.Timestamp | None:
@@ -203,7 +231,8 @@ def parse_observation_batch(
         if isinstance(elements, dict) and isinstance(elements.get("Now"), dict):
             precipitation = elements["Now"].get("Precipitation", precipitation)
         wind_direction = _coerce_number(
-            _find_element_value(elements, {"WindDirection", "WD", "WindDir"})
+            _find_element_value(elements, {"WindDirection", "WD", "WindDir"}),
+            f"station {station_id} wind_direction_deg",
         )
         if wind_direction == 990:
             wind_direction = None
@@ -214,17 +243,25 @@ def parse_observation_batch(
                 station_name=station.get("StationName") or station.get("stationName"),
                 town_code=str(station.get("TownCode") or station.get("townCode") or "") or None,
                 temperature_c=_coerce_number(
-                    _find_element_value(elements, {"AirTemperature", "TEMP", "T"})
+                    _find_element_value(elements, {"AirTemperature", "TEMP", "T"}),
+                    f"station {station_id} temperature_c",
                 ),
                 relative_humidity_pct=_coerce_number(
-                    _find_element_value(elements, {"RelativeHumidity", "HUMD", "RH"})
+                    _find_element_value(elements, {"RelativeHumidity", "HUMD", "RH"}),
+                    f"station {station_id} relative_humidity_pct",
                 ),
                 air_pressure_hpa=_coerce_number(
-                    _find_element_value(elements, {"AirPressure", "PRES", "Pressure"})
+                    _find_element_value(elements, {"AirPressure", "PRES", "Pressure"}),
+                    f"station {station_id} air_pressure_hpa",
                 ),
-                precipitation_mm=_coerce_number(precipitation, zero_markers={"T", "t", "-98"}),
+                precipitation_mm=_coerce_number(
+                    precipitation,
+                    f"station {station_id} precipitation_mm",
+                    zero_markers={"T", "t", "-98"},
+                ),
                 wind_speed_m_s=_coerce_number(
-                    _find_element_value(elements, {"WindSpeed", "WDSD", "WS"})
+                    _find_element_value(elements, {"WindSpeed", "WDSD", "WS"}),
+                    f"station {station_id} wind_speed_m_s",
                 ),
                 wind_direction_deg=wind_direction,
             )
@@ -270,15 +307,80 @@ def _forecast_locations(payload: Any) -> list[dict[str, Any]]:
     return result
 
 
+_FORECAST_VALUE_KEYS = (
+    "value",
+    "Value",
+    "description",
+    "Temperature",
+    "DewPoint",
+    "DewPointTemperature",
+    "ApparentTemperature",
+    "RelativeHumidity",
+    "ProbabilityOfPrecipitation",
+    "WindSpeed",
+    "WindDirection",
+)
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """Normalize a payload fragment to a mapping."""
+    return value if isinstance(value, dict) else {}
+
+
+def _first_present(*values: Any) -> Any:
+    """Return the first nonempty candidate CWA field."""
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _forecast_value(value: Any) -> Any:
-    """Extract the value field from a forecast element value object."""
+    """Extract the value from a forecast weather element."""
     if isinstance(value, list):
         value = value[0] if value else None
     if isinstance(value, dict):
-        for key in ("value", "Value", "description"):
+        for key in _FORECAST_VALUE_KEYS:
             if key in value:
                 return value[key]
+        for nested in value.values():
+            if nested not in (None, ""):
+                return nested
     return value
+
+
+def _forecast_metadata_value(
+    sources: tuple[dict[str, Any], ...],
+    field_names: tuple[str, str],
+) -> Any:
+    """Find a forecast vintage field across common CWA payload levels."""
+    return _first_present(*(source.get(name) for source in sources for name in field_names))
+
+
+def _forecast_release_timestamps(payload: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Use source IssueTime and Update as the forecast vintage identity."""
+    records = _as_mapping(payload.get("records") if isinstance(payload, dict) else None)
+    dataset_info = _as_mapping(records.get("datasetInfo") or records.get("DatasetInfo"))
+    containers = records.get("Locations") or records.get("locations") or []
+    first_container = _as_mapping(
+        containers[0] if isinstance(containers, list) and containers else None
+    )
+    payload_map = _as_mapping(payload)
+    issued_at = _forecast_timestamp(
+        _forecast_metadata_value(
+            (records, dataset_info, first_container, payload_map),
+            ("IssueTime", "issueTime"),
+        )
+    )
+    source_updated_at = _forecast_timestamp(
+        _forecast_metadata_value(
+            (records, dataset_info, first_container, payload_map),
+            ("Update", "update"),
+        )
+    )
+    if issued_at is None or source_updated_at is None:
+        raise ValueError("CWA forecast response is missing or invalid IssueTime/Update")
+    return issued_at, source_updated_at
 
 
 def _forecast_element_rows(
@@ -319,10 +421,10 @@ def _forecast_element_rows(
     return rows
 
 
-def _forecast_numeric(values: dict[str, Any], names: set[str]) -> float | None:
+def _forecast_numeric(values: dict[str, Any], names: set[str], context: str) -> float | None:
     """Normalize a numeric forecast element from its aliases."""
     raw = _find_element_value(values, names)
-    return _coerce_number(raw, zero_markers={"-98", "T", "t"})
+    return _coerce_number(raw, context, zero_markers={"-98", "T", "t"})
 
 
 def _forecast_text(values: dict[str, Any], names: set[str]) -> str | None:
@@ -340,34 +442,30 @@ def parse_forecast_release(
     dataset_id: str,
     fetched_at: datetime | None = None,
     locations: dict[str, CWALocation] | None = None,
+    raw_payload: Any | None = None,
 ) -> CWAForecastRelease:
     """Parse a versioned CWA township forecast response."""
-    records = payload.get("records", {}) if isinstance(payload, dict) else {}
-    issued_at = _forecast_timestamp(
-        records.get("IssueTime")
-        or records.get("issueTime")
-        or (payload.get("IssueTime") if isinstance(payload, dict) else None)
-    )
-    source_updated_at = _forecast_timestamp(
-        records.get("Update")
-        or records.get("update")
-        or (payload.get("Update") if isinstance(payload, dict) else None)
-    )
     fetch_time = fetched_at or datetime.now(ZoneInfo("Asia/Taipei"))
-    if issued_at is None or source_updated_at is None:
-        raise ValueError("CWA forecast response is missing or invalid IssueTime/Update")
+    issued_at, source_updated_at = _forecast_release_timestamps(payload)
 
     catalog = locations or DEFAULT_CWA_LOCATIONS
     expected_geocodes = {location.geocode for location in catalog.values()}
     forecasts: list[CWATownshipForecast] = []
     seen_geocodes: set[str] = set()
     aliases = {
-        "temperature_c": {"T", "Temperature", "AirTemperature"},
-        "dew_point_c": {"Td", "DewPoint", "DewPointTemperature"},
-        "apparent_temperature_c": {"AT", "ApparentTemperature"},
-        "relative_humidity_pct": {"RH", "RelativeHumidity"},
-        "probability_of_precipitation_pct": {"PoP6h", "PoP12h", "PoP24h", "PoP"},
-        "wind_speed_m_s": {"WS", "WindSpeed"},
+        "temperature_c": {"T", "Temperature", "AirTemperature", "溫度", "平均溫度"},
+        "dew_point_c": {"Td", "DewPoint", "DewPointTemperature", "露點溫度", "平均露點溫度"},
+        "apparent_temperature_c": {"AT", "ApparentTemperature", "體感溫度", "最高體感溫度"},
+        "relative_humidity_pct": {"RH", "RelativeHumidity", "相對濕度", "平均相對濕度"},
+        "probability_of_precipitation_pct": {
+            "PoP6h",
+            "PoP12h",
+            "PoP24h",
+            "PoP",
+            "3小時降雨機率",
+            "12小時降雨機率",
+        },
+        "wind_speed_m_s": {"WS", "WindSpeed", "風速"},
     }
     for location in _forecast_locations(payload):
         geocode = str(location.get("geocode") or location.get("Geocode") or "").strip()
@@ -384,19 +482,15 @@ def parse_forecast_release(
                     valid_to=valid_to,
                     geocode=geocode,
                     location_name=location.get("locationName") or location.get("LocationName"),
-                    temperature_c=_forecast_numeric(values, aliases["temperature_c"]),
-                    dew_point_c=_forecast_numeric(values, aliases["dew_point_c"]),
-                    apparent_temperature_c=_forecast_numeric(
-                        values, aliases["apparent_temperature_c"]
-                    ),
-                    relative_humidity_pct=_forecast_numeric(
-                        values, aliases["relative_humidity_pct"]
-                    ),
-                    probability_of_precipitation_pct=_forecast_numeric(
-                        values, aliases["probability_of_precipitation_pct"]
-                    ),
-                    wind_speed_m_s=_forecast_numeric(values, aliases["wind_speed_m_s"]),
-                    wind_direction=_forecast_text(values, {"WD", "WindDirection"}),
+                    **{
+                        field: _forecast_numeric(
+                            values,
+                            names,
+                            f"dataset {dataset_id} geocode {geocode} {valid_from} {field}",
+                        )
+                        for field, names in aliases.items()
+                    },
+                    wind_direction=_forecast_text(values, {"WD", "WindDirection", "風向"}),
                 )
             )
     forecasts.sort(key=lambda row: (row.geocode, row.valid_from, row.valid_to))
@@ -408,9 +502,44 @@ def parse_forecast_release(
         fetched_at=fetch_time,
         status="complete" if not missing_geocodes else "incomplete",
         missing_geocodes=missing_geocodes,
-        raw_payload=payload,
+        raw_payload=payload if raw_payload is None else raw_payload,
         forecasts=tuple(forecasts),
     )
+
+
+def _xml_tag_name(tag: str) -> str:
+    """Remove an XML namespace from a CWA element name."""
+    return tag.rsplit("}", maxsplit=1)[-1]
+
+
+def _xml_value(element: Element) -> Any:
+    """Convert one CWA XML element into the JSON-like shape used by the parser."""
+    children = list(element)
+    if not children:
+        return (element.text or "").strip()
+
+    value: dict[str, Any] = {}
+    for child in children:
+        name = _xml_tag_name(child.tag)
+        child_value = _xml_value(child)
+        existing = value.get(name)
+        if existing is None:
+            value[name] = child_value
+        elif isinstance(existing, list):
+            existing.append(child_value)
+        else:
+            value[name] = [existing, child_value]
+    return value
+
+
+def _parse_forecast_file_payload(payload: str) -> dict[str, Any]:
+    """Adapt CWA's versioned XML file into the canonical forecast parser input."""
+    root = ElementTree.fromstring(payload)
+    document = _xml_value(root)
+    dataset = document.get("Dataset") if isinstance(document, dict) else None
+    if not isinstance(dataset, dict):
+        raise ValueError("CWA forecast file is missing Dataset")
+    return {"records": dataset}
 
 
 def _parse_cwa_observations_payload(data: Any, fallback_location: str = "Taipei") -> pd.DataFrame:
@@ -500,8 +629,8 @@ class CWAClient:
         self.api_key = api_key
         self.obs_url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0001-001"
         self.forecast_urls = {
-            "F-D0047-089": "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-089",
-            "F-D0047-091": "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-091",
+            "F-D0047-089": f"{_CWA_FORECAST_FILE_API}/F-D0047-089",
+            "F-D0047-091": f"{_CWA_FORECAST_FILE_API}/F-D0047-091",
         }
         self.forecast_url = self.forecast_urls["F-D0047-089"]
 
@@ -520,8 +649,14 @@ class CWAClient:
         """Fetch and parse one versioned township forecast dataset."""
         if dataset_id not in self.forecast_urls:
             raise ValueError(f"Unsupported CWA forecast dataset: {dataset_id}")
-        payload = self._fetch_json(self.forecast_urls[dataset_id])
-        return parse_forecast_release(payload, dataset_id=dataset_id, locations=locations)
+        raw_payload = self._fetch_forecast_file(self.forecast_urls[dataset_id])
+        payload = _parse_forecast_file_payload(raw_payload)
+        return parse_forecast_release(
+            payload,
+            dataset_id=dataset_id,
+            locations=locations,
+            raw_payload=raw_payload,
+        )
 
     def _fetch_json(self, url: str) -> Any:
         """Fetch one CWA source payload through the canonical ingestion boundary."""
@@ -530,3 +665,54 @@ class CWAClient:
             if hasattr(response, "raise_for_status"):
                 response.raise_for_status()
             return json.loads(response.text)
+
+    def _fetch_forecast_file(self, url: str) -> str:
+        """Fetch a versioned CWA forecast file without forwarding credentials to storage."""
+        file_api_url = self._validated_forecast_file_api_url(url)
+        with httpx.Client(timeout=_CWA_FORECAST_FILE_TIMEOUT_SECONDS) as client:
+            redirect = client.get(
+                file_api_url, params={"Authorization": self.api_key}, follow_redirects=False
+            )
+            if redirect.status_code != 302:
+                raise ValueError(
+                    f"CWA forecast file request expected HTTP 302, got {redirect.status_code}"
+                )
+            location = redirect.headers.get("location")
+            if location is None:
+                raise ValueError("CWA forecast file response is missing a download location")
+            file_url = self._validated_forecast_file_url(location)
+            response = client.get(file_url)
+            response.raise_for_status()
+            return response.text
+
+    @staticmethod
+    def _validated_forecast_file_api_url(url: str) -> str:
+        """Require the authorized CWA API origin before sending the membership key."""
+        target = urlparse(url)
+        if (
+            target.scheme != "https"
+            or target.hostname != _CWA_FORECAST_FILE_API_HOST
+            or target.port not in (None, 443)
+            or target.username is not None
+            or target.password is not None
+            or target.query
+            or target.fragment
+        ):
+            raise ValueError("CWA forecast file API URL is not an approved HTTPS target")
+        return url
+
+    @staticmethod
+    def _validated_forecast_file_url(location: str) -> str:
+        """Allow CWA's known HTTPS storage target and reject credential-forwarding redirects."""
+        target = urlparse(location)
+        if (
+            target.scheme != "https"
+            or target.hostname != _CWA_FORECAST_FILE_HOST
+            or target.port not in (None, 443)
+            or target.username is not None
+            or target.password is not None
+            or target.query
+            or target.fragment
+        ):
+            raise ValueError("CWA forecast file download location is not an approved HTTPS target")
+        return location

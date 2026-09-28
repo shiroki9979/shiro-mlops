@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from shiro_mlops.service.data_explorer.cursor import decode_cursor
+from shiro_mlops.service.data_explorer.cursor import (
+    CursorError,
+    decode_cursor,
+    decode_cursor_filters,
+)
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS, DEFAULT_LIMIT, MAX_LIMIT
 from shiro_mlops.service.data_explorer.timefmt import (
@@ -26,11 +30,7 @@ class TimeWindow:
     end: datetime
 
     def as_utc(self) -> tuple[datetime, datetime]:
-        # SQLite 對 aware/naive 時間字串比較會漏掉邊界列，因此將閉區間略為放寬。
-        return (
-            to_sql_utc(self.start) - timedelta(seconds=1),
-            to_sql_utc(self.end) + timedelta(seconds=1),
-        )
+        return to_sql_utc(self.start), to_sql_utc(self.end)
 
 
 @dataclass(frozen=True)
@@ -44,13 +44,31 @@ class ExplorerQuery:
     cursor: str | None
 
     @classmethod
-    def from_params(cls, dataset: str, params: Mapping[str, Any]) -> ExplorerQuery:
-        """Build a typed query from the HTTP parameter clump used by unmigrated paths."""
+    def from_params(
+        cls,
+        dataset: str,
+        params: Mapping[str, Any],
+        *,
+        cursor_filters: Mapping[str, Any] | None = None,
+    ) -> ExplorerQuery:
+        """Build a typed query from HTTP parameters and already-decoded cursor filters."""
         spec = DATASET_SPECS[dataset]
-        window = resolve_window(params.get("start"), params.get("end"), spec["max_days"])
+        cursor = params.get("cursor")
+        start, end = params.get("start"), params.get("end")
+        if cursor not in (None, "") and (start is None or end is None):
+            if cursor_filters is None:
+                cursor_filters = decode_cursor_filters(str(cursor), dataset=dataset)
+            try:
+                cursor_window = resolve_window(
+                    cursor_filters["start"], cursor_filters["end"], spec["max_days"]
+                )
+            except (KeyError, ExplorerQueryError) as exc:
+                raise CursorError("Invalid cursor window") from exc
+            start = start if start is not None else cursor_window.start
+            end = end if end is not None else cursor_window.end
+        window = resolve_window(start, end, spec["max_days"])
         limit = resolve_limit(params.get("limit"))
         filters = bound_filters(dataset, dict(params), window)
-        cursor = params.get("cursor")
         if cursor in (None, ""):
             cursor = None
         return cls(
@@ -61,6 +79,11 @@ class ExplorerQuery:
             cursor=None if cursor is None else str(cursor),
         )
 
+    @property
+    def sort_columns(self) -> tuple[str, ...]:
+        """Newest-first keyset columns declared once per dataset."""
+        return DATASET_SPECS[self.dataset]["sort"]
+
     def cursor_key(self) -> dict[str, Any] | None:
         """Decode the opaque cursor against this query's bound filters and sort key."""
         if self.cursor is None:
@@ -68,7 +91,7 @@ class ExplorerQuery:
         from shiro_mlops.service.data_explorer.pagination import sql_cursor_key
 
         raw_key = decode_cursor(self.cursor, dataset=self.dataset, filters=self.filters)
-        return sql_cursor_key(raw_key, DATASET_SPECS[self.dataset]["sort"])
+        return sql_cursor_key(raw_key, self.sort_columns)
 
 
 def resolve_window(
@@ -106,11 +129,11 @@ def resolve_limit(limit: int | str | None) -> int:
 def bound_filters(dataset: str, params: dict[str, Any], window: TimeWindow) -> dict[str, Any]:
     """Canonical filter payload stored inside a keyset cursor."""
     filters = {
-        "start": format_taiwan_time(window.start),
-        "end": format_taiwan_time(window.end),
+        "start": format_taiwan_time(window.start, timespec="auto"),
+        "end": format_taiwan_time(window.end, timespec="auto"),
     }
     for key in (
-        "location",
+        "subject",
         "region",
         "completeness",
         "unit_type",

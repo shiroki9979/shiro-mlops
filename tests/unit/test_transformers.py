@@ -40,6 +40,24 @@ def test_create_lag_features(taipower_raw_df: pd.DataFrame) -> None:
         assert res[col_name].iloc[lag] == taipower_raw_df[LOAD_MW_COL].iloc[0]
 
 
+def test_lag_features_use_elapsed_hours_when_a_load_hour_is_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0],
+        }
+    )
+
+    features = create_lag_features(load, lags=[1, 2])
+
+    assert pd.isna(features.loc[1, "load_mw_lag_1"])
+    assert features.loc[1, "load_mw_lag_2"] == 100.0
+    assert features.loc[2, "load_mw_lag_1"] == 120.0
+    assert pd.isna(features.loc[2, "load_mw_lag_2"])
+
+
 def test_create_rolling_features(taipower_raw_df: pd.DataFrame) -> None:
     """Test rolling window mean and standard deviation features."""
     windows = [6, 24]
@@ -50,13 +68,31 @@ def test_create_rolling_features(taipower_raw_df: pd.DataFrame) -> None:
         assert f"{LOAD_MW_COL}_rolling_std_{w}" in res.columns
 
 
+def test_rolling_features_use_elapsed_hours_when_a_load_hour_is_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0],
+        }
+    )
+
+    features = create_rolling_features(load, windows=[2])
+
+    assert features.loc[1, "load_mw_rolling_mean_2"] == 100.0
+    assert features.loc[2, "load_mw_rolling_mean_2"] == 120.0
+    assert features.loc[2, "load_mw_rolling_std_2"] == 0.0
+
+
 def test_merge_weather_features(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> None:
-    """Test merging load with weather data on datetime."""
+    """Weather observed on August 20 fills that hour and the next two; later hours remain missing."""
     res = merge_weather_features(taipower_raw_df, cwa_obs_df)
-    assert "temperature" in res.columns
     assert "relative_humidity" in res.columns
     assert len(res) == len(taipower_raw_df)
-    assert not res["temperature"].isna().any()
+    covered = res["datetime"] <= pd.Timestamp("2026-08-21 01:00")
+    assert res.loc[covered, "temperature"].notna().all()
+    assert res.loc[~covered, "temperature"].isna().all()
 
 
 def test_build_feature_pipeline(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> None:
@@ -77,6 +113,66 @@ def test_build_feature_pipeline(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.Da
     assert f"{LOAD_MW_COL}_rolling_mean_6" in features_df.columns
     assert "temperature" in features_df.columns
     assert not features_df.isna().any().any()
+
+
+def test_feature_pipeline_skips_training_hours_with_missing_lagged_load() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00", "2026-09-20 14:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0, 140.0],
+        }
+    )
+
+    features = build_feature_pipeline(load, lags=[1], windows=[2])
+
+    assert features["datetime"].tolist() == [
+        pd.Timestamp("2026-09-20 13:00"),
+        pd.Timestamp("2026-09-20 14:00"),
+    ]
+    assert features["load_mw_lag_1"].tolist() == [120.0, 130.0]
+    assert features["load_mw_rolling_mean_2"].tolist() == [120.0, 125.0]
+
+
+def test_feature_pipeline_preserves_internal_gaps_in_short_windows() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00", "2026-09-20 14:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0, 140.0],
+        }
+    )
+
+    features = build_feature_pipeline(load, lags=[1, 2, 24], windows=[2], drop_na=False)
+
+    assert features.loc[0, "load_mw_lag_1"] == 0.0
+    assert features.loc[0, "load_mw_rolling_mean_2"] == 0.0
+    assert pd.isna(features.loc[1, "load_mw_lag_1"])
+    assert pd.isna(features.loc[2, "load_mw_lag_2"])
+    assert features.loc[2, "load_mw_rolling_mean_2"] == 120.0
+
+    training = build_feature_pipeline(load, lags=[1, 2, 24], windows=[2])
+
+    assert training["datetime"].tolist() == [
+        pd.Timestamp("2026-09-20 10:00"),
+        pd.Timestamp("2026-09-20 14:00"),
+    ]
+
+
+def test_rolling_features_leave_elapsed_window_without_observations_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-09-20 10:00", "2026-09-20 14:00"]),
+            "load_mw": [100.0, 140.0],
+        }
+    )
+
+    features = create_rolling_features(load, windows=[2])
+
+    assert pd.isna(features.loc[1, "load_mw_rolling_mean_2"])
+    assert pd.isna(features.loc[1, "load_mw_rolling_std_2"])
 
 
 def test_multi_location_lag_and_rolling_isolation() -> None:
@@ -311,9 +407,7 @@ def test_weather_gap_forward_fills_at_most_two_hours_and_drops_remaining_rows() 
         }
     )
 
-    features = build_feature_pipeline(
-        load_df, weather_df, lags=[1], windows=[2], drop_na=True, strict_weather=True
-    )
+    features = build_feature_pipeline(load_df, weather_df, lags=[1], windows=[2], drop_na=True)
 
     assert list(features["datetime"]) == [
         pd.Timestamp("2026-08-20 01:00"),
@@ -321,3 +415,84 @@ def test_weather_gap_forward_fills_at_most_two_hours_and_drops_remaining_rows() 
         pd.Timestamp("2026-08-20 04:00"),
     ]
     assert list(features["temperature"]) == [30.0, 30.0, 34.0]
+
+
+def test_weather_older_than_two_hours_is_dropped_across_missing_load_hours() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 00:00", "2026-09-20 02:00", "2026-09-20 05:00", "2026-09-20 06:00"]
+            ),
+            "load_mw": [100.0, 110.0, 120.0, 130.0],
+        }
+    )
+    weather = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-09-20 00:00"]),
+            "temperature": [28.0],
+            "relative_humidity": [70.0],
+        }
+    )
+
+    features = build_feature_pipeline(load, weather, lags=[2, 24], windows=[2])
+
+    assert features["datetime"].tolist() == [
+        pd.Timestamp("2026-09-20 00:00"),
+        pd.Timestamp("2026-09-20 02:00"),
+    ]
+    assert features["temperature"].tolist() == [28.0, 28.0]
+
+
+def test_weather_fields_match_past_observations_per_location() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": ["2026-09-20 03:00", "2026-09-20 03:00"],
+            "load_mw": [100.0, 200.0],
+            "location": ["Taipei", "Taichung"],
+        }
+    )
+    weather = pd.DataFrame(
+        {
+            "datetime": [
+                "2026-09-20 01:00",
+                "2026-09-20 03:00",
+                "2026-09-20 04:00",
+                "2026-09-20 01:00",
+            ],
+            "location": ["Taipei", "Taipei", "Taipei", "Taichung"],
+            "temperature": [30.0, 32.0, 99.0, 20.0],
+            "relative_humidity": [70.0, None, 99.0, 80.0],
+        }
+    )
+
+    features = build_feature_pipeline(load, weather, lags=[1, 2, 24], windows=[2])
+
+    assert features.set_index("location")[["temperature", "relative_humidity"]].to_dict(
+        "index"
+    ) == {
+        "Taipei": {"temperature": 32.0, "relative_humidity": 70.0},
+        "Taichung": {"temperature": 20.0, "relative_humidity": 80.0},
+    }
+
+
+def test_merge_weather_leaves_hours_without_recent_observations_missing() -> None:
+    """Hours without observations in the past two hours stay missing, with no constants or future values."""
+    load_df = pd.DataFrame(
+        {
+            "datetime": pd.date_range("2026-08-20 00:00", periods=4, freq="h"),
+            "load_mw": [100.0, 110.0, 120.0, 130.0],
+        }
+    )
+    weather_df = pd.DataFrame(
+        {
+            "datetime": [pd.Timestamp("2026-08-20 03:00")],
+            "temperature": [31.0],
+            "relative_humidity": [66.0],
+        }
+    )
+
+    merged = merge_weather_features(load_df, weather_df)
+
+    assert merged["temperature"].iloc[:3].isna().all()
+    assert merged["relative_humidity"].iloc[:3].isna().all()
+    assert merged["temperature"].iloc[3] == 31.0

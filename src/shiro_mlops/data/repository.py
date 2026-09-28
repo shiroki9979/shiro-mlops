@@ -2,28 +2,34 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import pandas as pd
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.engine import Connection, Engine
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     DATETIME_COL,
-    DEFAULT_LOCATION,
     LOAD_MW_COL,
     LOCATION_COL,
+    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
+    SUBJECT_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
 from shiro_mlops.data.cwa_client import (
-    DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
     CWAObservationBatch,
+    resolve_cwa_location,
+)
+from shiro_mlops.data.hourly_actual_load import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    HourlyLoadAccumulation,
 )
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
@@ -53,15 +59,11 @@ def _taiwan_instant_to_utc(value: datetime | pd.Timestamp | None) -> datetime | 
 
 def _serialize_raw_payload(payload: Any) -> str:
     """Serialize a source payload for JSONB or SQLite TEXT storage."""
-    if isinstance(payload, str):
-        return payload
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _prepare_timeseries_df(
-    df: pd.DataFrame, default_location: str = DEFAULT_LOCATION
-) -> pd.DataFrame:
-    """Normalize timestamp, assign default location, and deduplicate records."""
+def _prepare_load_df(df: pd.DataFrame, default_subject: str) -> pd.DataFrame:
+    """Normalize timestamp, assign the default prediction subject, and deduplicate records."""
     if df.empty:
         return df
 
@@ -72,19 +74,18 @@ def _prepare_timeseries_df(
     if "time" not in work_df.columns:
         raise KeyError("DataFrame must contain 'time' or 'datetime' column.")
 
-    if LOCATION_COL not in work_df.columns:
-        work_df[LOCATION_COL] = default_location
+    if SUBJECT_COL not in work_df.columns:
+        work_df[SUBJECT_COL] = default_subject
     else:
-        work_df[LOCATION_COL] = work_df[LOCATION_COL].fillna(default_location)
+        work_df[SUBJECT_COL] = work_df[SUBJECT_COL].fillna(default_subject)
 
     work_df["time"] = taiwan_local_to_utc(work_df["time"])
-    return work_df.drop_duplicates(subset=["time", LOCATION_COL], keep="last")
+    return work_df.drop_duplicates(subset=["time", SUBJECT_COL], keep="last")
 
 
-def _build_time_location_filter(
+def _build_time_filter(
     start_time: datetime | str | None = None,
     end_time: datetime | str | None = None,
-    location: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Construct SQL WHERE clause conditions and parameter mappings."""
     clauses: list[str] = ["1=1"]
@@ -100,21 +101,138 @@ def _build_time_location_filter(
         dt_end = taiwan_local_to_utc(pd.Series([end_time])).iloc[0]
         params["end_time"] = pd.to_datetime(dt_end).to_pydatetime()
 
-    if location is not None:
-        clauses.append("location = :location")
-        params["location"] = str(location)
-
     return " AND ".join(clauses), params
 
 
-def _forecast_version_key(row: pd.Series) -> tuple[str, pd.Timestamp, pd.Timestamp]:
+FORECAST_ROW_COLUMNS = [
+    "dataset_id",
+    "issued_at",
+    "source_updated_at",
+    "valid_from",
+    "valid_to",
+    "geocode",
+    "location_name",
+    "temperature_c",
+    "dew_point_c",
+    "apparent_temperature_c",
+    "relative_humidity_pct",
+    "probability_of_precipitation_pct",
+    "wind_speed_m_s",
+    "wind_direction",
+    "created_at",
+]
+FORECAST_TIME_COLUMNS = ("issued_at", "source_updated_at", "valid_from", "valid_to")
+
+
+class ForecastVersion(NamedTuple):
+    """Identity of one forecast vintage; both instants are naive UTC, as stored."""
+
+    dataset_id: str
+    issued_at: pd.Timestamp
+    source_updated_at: pd.Timestamp
+
+
+@dataclass(frozen=True)
+class _WindowBound:
+    """One side of a forecast validity window and the neighbouring point beyond it."""
+
+    param: str
+    column: str
+    operator: str
+    neighbor_aggregate: str
+    neighbor_operator: str
+
+
+_VALID_START = _WindowBound(
+    param="valid_start",
+    column="valid_to",
+    operator=">=",
+    neighbor_aggregate="MAX",
+    neighbor_operator="<",
+)
+_VALID_END = _WindowBound(
+    param="valid_end",
+    column="valid_from",
+    operator="<=",
+    neighbor_aggregate="MIN",
+    neighbor_operator=">",
+)
+
+
+@dataclass(frozen=True)
+class _ForecastRowFilter:
+    """Canonical forecast row filters; issue cutoffs with a geocode select vintages point-in-time."""
+
+    geocode: str | None
+    dataset_id: str | None
+    issued_before: datetime | None
+    source_updated_before: datetime | None
+    valid_start: datetime | None
+    valid_end: datetime | None
+    include_adjacent_points: bool
+
+    @property
+    def selects_versions(self) -> bool:
+        return self.geocode is not None and self.issued_before is not None
+
+    def row_conditions(self) -> tuple[list[str], dict[str, Any]]:
+        clauses, params = self.release_conditions()
+        if self.geocode is not None:
+            clauses.append("geocode = :geocode")
+            params["geocode"] = self.geocode
+        for bound, value in ((_VALID_START, self.valid_start), (_VALID_END, self.valid_end)):
+            if value is not None:
+                clauses.append(_forecast_window_filter(bound, self.include_adjacent_points))
+                params[bound.param] = value
+        return clauses, params
+
+    def release_conditions(self) -> tuple[list[str], dict[str, Any]]:
+        """Conditions shared by forecast rows and their release headers."""
+        clauses = ["1=1"]
+        params: dict[str, Any] = {}
+        if self.dataset_id is not None:
+            clauses.append("dataset_id = :dataset_id")
+            params["dataset_id"] = self.dataset_id
+        if self.issued_before is not None:
+            clauses.append("issued_at <= :issued_before")
+            params["issued_before"] = self.issued_before
+        if self.source_updated_before is not None:
+            clauses.append("source_updated_at <= :source_updated_before")
+            params["source_updated_before"] = self.source_updated_before
+        return clauses, params
+
+
+def _utc_cutoff(value: datetime | str | None) -> datetime | None:
+    return None if value is None else _taiwan_instant_to_utc(pd.Timestamp(value).to_pydatetime())
+
+
+def _forecast_window_filter(bound: _WindowBound, include_adjacent_points: bool) -> str:
+    """Keep interpolation endpoints from the same location and forecast vintage."""
+    within_window = f"{bound.column} {bound.operator} :{bound.param}"
+    if not include_adjacent_points:
+        return within_window
+    return f"""({within_window} OR (
+        forecast.valid_from = forecast.valid_to AND forecast.valid_from = (
+            SELECT {bound.neighbor_aggregate}(neighbor.valid_from)
+            FROM raw_cwa_township_forecast AS neighbor
+            WHERE neighbor.dataset_id = forecast.dataset_id
+              AND neighbor.geocode = forecast.geocode
+              AND neighbor.issued_at = forecast.issued_at
+              AND neighbor.source_updated_at = forecast.source_updated_at
+              AND neighbor.valid_from = neighbor.valid_to
+              AND neighbor.valid_from {bound.neighbor_operator} :{bound.param}
+        )
+    ))"""
+
+
+def _forecast_version_key(row: pd.Series) -> ForecastVersion:
     """Build a comparable forecast-vintage identity from a query row."""
 
     def normalize(value: object) -> pd.Timestamp:
         timestamp = pd.Timestamp(value)
         return timestamp.tz_convert("UTC").tz_localize(None) if timestamp.tzinfo else timestamp
 
-    return (
+    return ForecastVersion(
         str(row["dataset_id"]),
         normalize(row["issued_at"]),
         normalize(row["source_updated_at"]),
@@ -124,12 +242,12 @@ def _forecast_version_key(row: pd.Series) -> tuple[str, pd.Timestamp, pd.Timesta
 def _select_forecast_versions(
     headers: pd.DataFrame,
     available_versions: pd.DataFrame,
-) -> set[tuple[str, pd.Timestamp, pd.Timestamp]]:
+) -> set[ForecastVersion]:
     """Select a latest release or its prior complete fallback per forecast dataset."""
     if headers.empty:
         return set()
     available = {_forecast_version_key(row) for _, row in available_versions.iterrows()}
-    selected: set[tuple[str, pd.Timestamp, pd.Timestamp]] = set()
+    selected: set[ForecastVersion] = set()
     for _, releases in headers.groupby("dataset_id"):
         ordered = releases.sort_values(["issued_at", "source_updated_at"], ascending=False)
         latest = _forecast_version_key(ordered.iloc[0])
@@ -142,6 +260,61 @@ def _select_forecast_versions(
                 selected.add(version)
                 break
     return selected
+
+
+def _read_forecast_rows(conn: Connection, filters: _ForecastRowFilter) -> pd.DataFrame:
+    clauses, params = filters.row_conditions()
+    query = f"""
+        SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
+               location_name, temperature_c, dew_point_c, apparent_temperature_c,
+               relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+               wind_direction, created_at
+        FROM raw_cwa_township_forecast AS forecast
+        WHERE {" AND ".join(clauses)}
+        ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
+                 issued_at DESC, source_updated_at DESC
+    """
+    return pd.read_sql_query(text(query), conn, params=params)
+
+
+def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> set[ForecastVersion]:
+    """The vintage each dataset serves at the cutoff, among those holding rows for the geocode."""
+    clauses, params = filters.release_conditions()
+    headers = pd.read_sql_query(
+        text(
+            f"""
+            SELECT dataset_id, issued_at, source_updated_at, status
+            FROM raw_cwa_forecast_release
+            WHERE {" AND ".join(clauses)}
+            """
+        ),
+        conn,
+        params=params,
+    )
+    available_versions = pd.read_sql_query(
+        text(
+            """
+            SELECT DISTINCT dataset_id, issued_at, source_updated_at
+            FROM raw_cwa_township_forecast
+            WHERE geocode = :geocode
+            """
+        ),
+        conn,
+        params={"geocode": filters.geocode},
+    )
+    return _select_forecast_versions(headers, available_versions)
+
+
+def _in_versions(frame: pd.DataFrame, versions: set[ForecastVersion]) -> pd.DataFrame:
+    return frame.loc[frame.apply(lambda row: _forecast_version_key(row) in versions, axis=1)]
+
+
+def _forecast_rows_in_taiwan_time(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(columns=FORECAST_ROW_COLUMNS)
+    for column in FORECAST_TIME_COLUMNS:
+        frame[column] = utc_to_taiwan_datetime(frame[column])
+    return frame
 
 
 class TimeSeriesRepository:
@@ -172,12 +345,7 @@ class TimeSeriesRepository:
             self.engine = get_timescale_engine()
 
         if auto_init:
-            try:
-                ensure_timescale_hypertables(self.engine)
-            except Exception as e:
-                logger.warning(
-                    f"Could not automatically ensure hypertables on repository init: {e}"
-                )
+            ensure_timescale_hypertables(self.engine)
 
         self.supply_demand_repo = TaipowerSupplyDemandRepository(
             engine=self.engine, auto_init=False
@@ -192,18 +360,22 @@ class TimeSeriesRepository:
     def upsert_taipower_load(
         self,
         df: pd.DataFrame,
-        default_location: str = DEFAULT_LOCATION,
+        default_subject: str = NATIONWIDE_SUBJECT,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
     ) -> int:
         """Upsert Taipower electricity load records into raw_taipower_load table.
 
-        Handles composite primary key conflict on (time, location) by updating load_mw.
+        Handles composite primary key conflict on (time, subject) by updating load_mw
+        and source, so a recomputed hour always carries its current provenance.
 
         Parameters
         ----------
         df : pd.DataFrame
             DataFrame containing 'datetime' (or 'time') and 'load_mw' columns.
-        default_location : str
-            Fallback location identifier when 'location' column is missing or null.
+        default_subject : str
+            Prediction subject used when the 'subject' column is missing or null.
+        source : str
+            Derivation provenance stored on every row.
 
         Returns
         -------
@@ -213,7 +385,7 @@ class TimeSeriesRepository:
         if df.empty:
             return 0
 
-        work_df = _prepare_timeseries_df(df, default_location=default_location)
+        work_df = _prepare_load_df(df, default_subject=default_subject)
         if LOAD_MW_COL not in work_df.columns:
             raise KeyError(f"DataFrame must contain '{LOAD_MW_COL}' column.")
 
@@ -224,18 +396,20 @@ class TimeSeriesRepository:
                     if hasattr(row["time"], "to_pydatetime")
                     else row["time"]
                 ),
-                "location": str(row[LOCATION_COL]),
+                "subject": str(row[SUBJECT_COL]),
                 "load_mw": float(row[LOAD_MW_COL]),
+                "source": source,
             }
             for _, row in work_df.iterrows()
         ]
 
         upsert_stmt = text(
             """
-            INSERT INTO raw_taipower_load (time, location, load_mw)
-            VALUES (:time, :location, :load_mw)
-            ON CONFLICT (time, location) DO UPDATE SET
-                load_mw = EXCLUDED.load_mw
+            INSERT INTO raw_taipower_load (time, subject, load_mw, source)
+            VALUES (:time, :subject, :load_mw, :source)
+            ON CONFLICT (time, subject) DO UPDATE SET
+                load_mw = EXCLUDED.load_mw,
+                source = EXCLUDED.source
             """
         )
 
@@ -248,7 +422,7 @@ class TimeSeriesRepository:
     def upsert_cwa_weather(
         self,
         df: pd.DataFrame,
-        default_location: str = DEFAULT_LOCATION,
+        default_location: str | None = None,
     ) -> int:
         """Reject deprecated weather writes that do not carry source StationId provenance."""
         del df, default_location
@@ -367,6 +541,14 @@ class TimeSeriesRepository:
 
     def upsert_cwa_forecast_release(self, release: CWAForecastRelease) -> int:
         """Persist one CWA forecast vintage and all typed township rows atomically."""
+        return self.upsert_cwa_forecast_releases([release])
+
+    def upsert_cwa_forecast_releases(self, releases: list[CWAForecastRelease]) -> int:
+        """Persist all products from one forecast ingestion run in one transaction."""
+        with self.engine.begin() as conn:
+            return sum(self._upsert_cwa_forecast_release(conn, release) for release in releases)
+
+    def _upsert_cwa_forecast_release(self, conn: Connection, release: CWAForecastRelease) -> int:
         header = {
             "dataset_id": release.dataset_id,
             "issued_at": _taiwan_instant_to_utc(release.issued_at),
@@ -437,10 +619,9 @@ class TimeSeriesRepository:
                 wind_direction = EXCLUDED.wind_direction
             """
         )
-        with self.engine.begin() as conn:
-            conn.execute(header_stmt, header)
-            if child_records:
-                conn.execute(child_stmt, child_records)
+        conn.execute(header_stmt, header)
+        if child_records:
+            conn.execute(child_stmt, child_records)
         return len(child_records)
 
     def fetch_cwa_forecast_rows(
@@ -452,114 +633,32 @@ class TimeSeriesRepository:
         source_updated_before: datetime | str | None = None,
         valid_start: datetime | str | None = None,
         valid_end: datetime | str | None = None,
+        include_adjacent_points: bool = False,
     ) -> pd.DataFrame:
         """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
-        clauses = ["1=1"]
-        params: dict[str, Any] = {}
-        if geocode is not None:
-            clauses.append("geocode = :geocode")
-            params["geocode"] = geocode
-        if dataset_id is not None:
-            clauses.append("dataset_id = :dataset_id")
-            params["dataset_id"] = dataset_id
-        if issued_before is not None:
-            clauses.append("issued_at <= :issued_before")
-            params["issued_before"] = _taiwan_instant_to_utc(
-                pd.Timestamp(issued_before).to_pydatetime()
-            )
-        if source_updated_before is not None:
-            clauses.append("source_updated_at <= :source_updated_before")
-            params["source_updated_before"] = _taiwan_instant_to_utc(
-                pd.Timestamp(source_updated_before).to_pydatetime()
-            )
-        if valid_start is not None:
-            clauses.append("valid_to >= :valid_start")
-            params["valid_start"] = _taiwan_instant_to_utc(
-                pd.Timestamp(valid_start).to_pydatetime()
-            )
-        if valid_end is not None:
-            clauses.append("valid_from <= :valid_end")
-            params["valid_end"] = _taiwan_instant_to_utc(pd.Timestamp(valid_end).to_pydatetime())
-        query = f"""
-            SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                   location_name, temperature_c, dew_point_c, apparent_temperature_c,
-                   relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
-                   wind_direction, created_at
-            FROM raw_cwa_township_forecast
-            WHERE {" AND ".join(clauses)}
-            ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
-                     issued_at DESC, source_updated_at DESC
-        """
+        filters = _ForecastRowFilter(
+            geocode=geocode,
+            dataset_id=dataset_id,
+            issued_before=_utc_cutoff(issued_before),
+            source_updated_before=_utc_cutoff(source_updated_before),
+            valid_start=_utc_cutoff(valid_start),
+            valid_end=_utc_cutoff(valid_end),
+            include_adjacent_points=include_adjacent_points,
+        )
         with self.engine.connect() as conn:
-            frame = pd.read_sql_query(text(query), conn, params=params)
-            if geocode is not None and issued_before is not None:
-                header_clauses = ["issued_at <= :issued_before"]
-                header_params: dict[str, Any] = {"issued_before": params["issued_before"]}
-                if dataset_id is not None:
-                    header_clauses.append("dataset_id = :dataset_id")
-                    header_params["dataset_id"] = dataset_id
-                if source_updated_before is not None:
-                    header_clauses.append("source_updated_at <= :source_updated_before")
-                    header_params["source_updated_before"] = params["source_updated_before"]
-                headers = pd.read_sql_query(
-                    text(
-                        f"""
-                        SELECT dataset_id, issued_at, source_updated_at, status
-                        FROM raw_cwa_forecast_release
-                        WHERE {" AND ".join(header_clauses)}
-                        """
-                    ),
-                    conn,
-                    params=header_params,
-                )
-                available_versions = pd.read_sql_query(
-                    text(
-                        """
-                        SELECT DISTINCT dataset_id, issued_at, source_updated_at
-                        FROM raw_cwa_township_forecast
-                        WHERE geocode = :geocode
-                        """
-                    ),
-                    conn,
-                    params={"geocode": geocode},
-                )
-                selected_versions = _select_forecast_versions(headers, available_versions)
-                frame = frame.loc[
-                    frame.apply(
-                        lambda row: _forecast_version_key(row) in selected_versions,
-                        axis=1,
-                    )
-                ]
-        if frame.empty:
-            return pd.DataFrame(
-                columns=[
-                    "dataset_id",
-                    "issued_at",
-                    "source_updated_at",
-                    "valid_from",
-                    "valid_to",
-                    "geocode",
-                    "temperature_c",
-                    "dew_point_c",
-                    "apparent_temperature_c",
-                    "relative_humidity_pct",
-                    "probability_of_precipitation_pct",
-                    "wind_speed_m_s",
-                    "wind_direction",
-                    "created_at",
-                ]
-            )
-        for column in ("issued_at", "source_updated_at", "valid_from", "valid_to"):
-            frame[column] = utc_to_taiwan_datetime(frame[column])
-        return frame
+            frame = _read_forecast_rows(conn, filters)
+            if filters.selects_versions:
+                frame = _in_versions(frame, _read_selected_versions(conn, filters))
+        return _forecast_rows_in_taiwan_time(frame)
 
     def fetch_load_range(
         self,
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
-        location: str | None = None,
+        subject: str | None = None,
+        source: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch historical Taipower load records filtered by time range and location.
+        """Fetch historical Taipower load records filtered by time range and prediction subject.
 
         Parameters
         ----------
@@ -567,40 +666,104 @@ class TimeSeriesRepository:
             Start of time filter range (inclusive).
         end_time : datetime | str | None
             End of time filter range (inclusive).
-        location : str | None
-            Optional location filter.
+        subject : str | None
+            Optional prediction subject filter.
+        source : str | None
+            Optional derivation provenance filter. Rows with NULL source never match,
+            so consumers that must not mix load bases pass the derived source.
 
         Returns
         -------
         pd.DataFrame
             Sorted DataFrame of power load records.
         """
-        where_clause, params = _build_time_location_filter(start_time, end_time, location)
+        where_clause, params = _build_time_filter(start_time, end_time)
+        if subject is not None:
+            where_clause += " AND subject = :subject"
+            params["subject"] = subject
+        if source is not None:
+            where_clause += " AND source = :source"
+            params["source"] = source
         query = f"""
-            SELECT time, location, load_mw, created_at
+            SELECT time, subject, load_mw, created_at
             FROM raw_taipower_load
             WHERE {where_clause}
-            ORDER BY time ASC, location ASC
+            ORDER BY time ASC, subject ASC
         """
+        return self._read_load_frame(query, params)
 
+    def fetch_latest_load(
+        self,
+        subject: str = NATIONWIDE_SUBJECT,
+        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+        at_or_before: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Fetch only the newest load row of one source, or an empty frame.
+
+        Hourly consumers need the latest actual value, not the series, so the
+        query stays bounded as the accumulated history grows. ``at_or_before``
+        (Taiwan-local) ignores rows persisted after a point-in-time decision.
+        """
+        where_clause, params = _build_time_filter(None, at_or_before)
+        query = f"""
+            SELECT time, subject, load_mw, created_at
+            FROM raw_taipower_load
+            WHERE {where_clause} AND subject = :subject AND source = :source
+            ORDER BY time DESC
+            LIMIT 1
+        """
+        return self._read_load_frame(query, {**params, "subject": subject, "source": source})
+
+    def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
         with self.engine.connect() as conn:
             df = pd.read_sql_query(text(query), con=conn, params=params)
 
         if df.empty:
-            empty_df = pd.DataFrame(columns=["time", "location", "load_mw", "created_at"])
+            empty_df = pd.DataFrame(columns=["time", SUBJECT_COL, "load_mw", "created_at"])
             empty_df["time"] = pd.to_datetime(empty_df["time"])
             return empty_df
 
         df["time"] = utc_to_taiwan_datetime(df["time"])
         return df
 
+    def summarize_hourly_load_accumulation(
+        self, subject: str = NATIONWIDE_SUBJECT, at_or_before: datetime | None = None
+    ) -> HourlyLoadAccumulation:
+        """Count derived rows through ``at_or_before`` and all legacy rows."""
+        time_filter, time_params = _build_time_filter(None, at_or_before)
+        # Legacy rows block every task, regardless of subject or timestamp.
+        query = text(
+            f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN source = :derived AND {time_filter} THEN 1 ELSE 0 END), 0)
+                    AS valid_hours,
+                (SELECT COUNT(*) FROM raw_taipower_load WHERE source IS NULL) AS legacy_rows,
+                MAX(CASE WHEN source = :derived AND {time_filter} THEN time END) AS latest_time
+            FROM raw_taipower_load
+            WHERE subject = :subject
+            """
+        )
+        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "subject": subject, **time_params}
+        with self.engine.connect() as conn:
+            row = conn.execute(query, params).one()
+
+        latest_hour = None
+        if row.latest_time is not None:
+            latest = utc_to_taiwan_datetime(pd.Series([row.latest_time])).iloc[0]
+            latest_hour = latest.to_pydatetime()
+        return HourlyLoadAccumulation(
+            valid_hours=int(row.valid_hours),
+            legacy_rows=int(row.legacy_rows),
+            latest_hour=latest_hour,
+        )
+
     def fetch_weather_range(
         self,
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
-        location: str | None = None,
+        reference_point: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch historical CWA weather records filtered by time range and location.
+        """Fetch historical CWA station observations for one weather reference point.
 
         Parameters
         ----------
@@ -608,25 +771,25 @@ class TimeSeriesRepository:
             Start of time filter range (inclusive).
         end_time : datetime | str | None
             End of time filter range (inclusive).
-        location : str | None
-            Optional location filter.
+        reference_point : str | None
+            Optional weather reference point alias from the CWA ingestion catalog;
+            the result's ``location`` column carries that alias.
 
         Returns
         -------
         pd.DataFrame
             Sorted DataFrame of weather observation records.
         """
-        station_by_alias = {
-            value.alias: value.station_id for value in DEFAULT_CWA_LOCATIONS.values()
-        }
-        try:
-            canonical = self.fetch_cwa_station_observations(
-                start_time=start_time,
-                end_time=end_time,
-                station_id=station_by_alias.get(location) if location else None,
-            )
-        except SQLAlchemyError:
-            canonical = pd.DataFrame()
+        station_id = (
+            resolve_cwa_location(settings.cwa_locations, reference_point).station_id
+            if reference_point is not None
+            else None
+        )
+        canonical = self.fetch_cwa_station_observations(
+            start_time=start_time,
+            end_time=end_time,
+            station_id=station_id,
+        )
         result = canonical.rename(
             columns={
                 "observed_at": "time",
@@ -635,11 +798,9 @@ class TimeSeriesRepository:
             }
         )
         aliases_by_station = {
-            value.station_id: value.alias for value in DEFAULT_CWA_LOCATIONS.values()
+            value.station_id: value.alias for value in settings.cwa_locations.values()
         }
-        result[LOCATION_COL] = (
-            result["station_id"].map(aliases_by_station).fillna(location or DEFAULT_LOCATION)
-        )
+        result[LOCATION_COL] = result["station_id"].map(aliases_by_station)
         if result.empty:
             result["time"] = pd.to_datetime(result["time"])
         return result[
@@ -674,6 +835,12 @@ class TimeSeriesRepository:
     ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
         """Fetch regional snapshots for a Taiwan-local observation slot."""
         return self.regional_supply_demand_repo.fetch(observed_at)
+
+    def fetch_regional_supply_demand_snapshots_by_source_time(
+        self, start_time: datetime, end_time: datetime
+    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
+        """Fetch regional snapshots whose Taiwan-local source_time is in [start, end)."""
+        return self.regional_supply_demand_repo.fetch_by_source_time(start_time, end_time)
 
     def upsert_unit_generation_snapshots(
         self, snapshots: list[TaipowerUnitGenerationSnapshot]

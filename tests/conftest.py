@@ -13,11 +13,16 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hypertables
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.models.forecaster import LightGBMRecursiveForecaster
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
+from shiro_mlops.tasks.types import get_task_type
+from shiro_mlops.tasks.types.base import TaskModel, TrainingData
+from tests.helpers import create_legacy_load_table, override_task_policies
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 SQLITE_TEST_SCHEMA = SQLITE_DEFAULT_SCHEMA
+# 以一日門檻取代 672 小時預設，讓排程與 smoke check 測試不需建立 28 日資料。
+TEST_MIN_LOAD_HOURS = 24
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +40,14 @@ def mock_mlflow_offline_backend(
     monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.setenv("DAGSTER_HOME", str(dagster_dir))
     yield uri
+
+
+@pytest.fixture
+def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Lower every deployed task's training accumulation threshold and return the value."""
+    for task_id in deployed_tasks():
+        override_task_policies(monkeypatch, task_id, min_training_hours=TEST_MIN_LOAD_HOURS)
+    return TEST_MIN_LOAD_HOURS
 
 
 @pytest.fixture
@@ -59,6 +72,16 @@ def sqlite_engine(tmp_path_factory: pytest.TempPathFactory) -> Generator[Engine,
 
 
 @pytest.fixture
+def legacy_upgraded_engine(tmp_path: Path) -> Generator[Engine, None, None]:
+    """An upgraded d015046-era database: one legacy row whose source is NULL."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_upgraded.db'}")
+    create_legacy_load_table(engine)
+    ensure_timescale_hypertables(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
 def test_repo(sqlite_engine: Engine) -> TimeSeriesRepository:
     """Create an empty TimeSeriesRepository backed by the test engine."""
     return TimeSeriesRepository(engine=sqlite_engine)
@@ -72,17 +95,21 @@ def populated_repo(
 ) -> TimeSeriesRepository:
     """Create and populate TimeSeriesRepository with fixture data."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
-    repo.upsert_taipower_load(taipower_raw_df, default_location="Taipei")
+    repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
     repo.upsert_cwa_observation_batch(cwa_observation_batch)
     return repo
 
 
 @pytest.fixture
-def lightweight_forecaster() -> LightGBMRecursiveForecaster:
-    """Create a lightweight fast forecaster for offline testing."""
-    return LightGBMRecursiveForecaster(
-        params={"n_estimators": 2, "min_child_samples": 1, "verbose": -1}
+def fitted_task_model(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> TaskModel:
+    """Train the deployed dynamic horizon task type directly on the fixture frames."""
+    task = deployed_task(DYNAMIC_HORIZON_FORECAST)
+    data = TrainingData(
+        load=taipower_raw_df.assign(subject=task.subject),
+        weather=cwa_obs_df[["datetime", *task.weather.fields]],
+        validation_start=taipower_raw_df["datetime"].max() + pd.Timedelta(hours=1),
     )
+    return get_task_type(task.task_type).train(task.params, data).model
 
 
 @pytest.fixture

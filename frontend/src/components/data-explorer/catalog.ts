@@ -14,15 +14,25 @@ export interface ExplorerDatasetConfig {
   label: string
   description: string
   path: string
+  navGroup: ExplorerNavGroup
   apiPath: string
   columns: ExplorerColumn[]
   filters: ExplorerFilterField[]
   defaultHours: number
   lookAheadHours?: number
+  search?: Record<string, string>
   auditHref?: string
   auditLabel?: string
   auditDatasetId?: string
 }
+
+export const EXPLORER_NAV_GROUPS = [
+  { id: 'power', label: 'Power' },
+  { id: 'weather', label: 'Weather' },
+  { id: 'audit', label: 'Audits' },
+] as const
+
+export type ExplorerNavGroup = (typeof EXPLORER_NAV_GROUPS)[number]['id']
 
 export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
   {
@@ -30,20 +40,22 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: '逐時用電負載',
     description: '已入庫的台電逐時負載，供模型訓練來源查驗。',
     path: '/data/power/load',
+    navGroup: 'power',
     apiPath: '/data/power/load',
     defaultHours: 24,
     columns: [
       { key: 'datetime', label: '時間' },
-      { key: 'location', label: 'Location' },
+      { key: 'subject', label: 'Prediction subject' },
       { key: 'load_mw', label: '負載 (MW)' },
     ],
-    filters: [{ key: 'location', label: 'Location', placeholder: 'Taipei' }],
+    filters: [{ key: 'subject', label: 'Prediction subject', placeholder: 'nationwide' }],
   },
   {
     id: 'national_supply_demand',
     label: '全台供需',
     description: '全台目前負載、使用率與備轉資訊快照。',
     path: '/data/power/supply-demand',
+    navGroup: 'power',
     apiPath: '/data/power/supply-demand',
     defaultHours: 24,
     columns: [
@@ -58,6 +70,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: '區域供需',
     description: '北中南東四區發電與用電快照。',
     path: '/data/power/regional',
+    navGroup: 'power',
     apiPath: '/data/power/regional',
     defaultHours: 24,
     columns: [
@@ -77,6 +90,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: '機組發電',
     description: '各機組即時淨發電量、容量與備註。',
     path: '/data/power/units',
+    navGroup: 'power',
     apiPath: '/data/power/units',
     defaultHours: 24,
     columns: [
@@ -95,6 +109,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: 'CWA 測站觀測',
     description: 'Canonical 測站觀測與逐時缺口。',
     path: '/data/weather/observations',
+    navGroup: 'weather',
     apiPath: '/data/weather/observations',
     defaultHours: 24,
     auditHref: '/data/audits?type=observations',
@@ -113,6 +128,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: 'CWA 鄉鎮預報',
     description: '所有已保存 forecast vintages；預設最新發布版本。',
     path: '/data/weather/forecasts',
+    navGroup: 'weather',
     apiPath: '/data/weather/forecasts',
     defaultHours: 1,
     lookAheadHours: 72,
@@ -128,7 +144,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     ],
     filters: [
       { key: 'dataset_id', label: '資料集', placeholder: 'F-D0047-089' },
-      { key: 'geocode', label: 'Geocode', placeholder: '63000050' },
+      { key: 'geocode', label: 'Geocode', placeholder: '63000000' },
       { key: 'issued_at', label: '發布時間' },
       { key: 'source_updated_at', label: '來源更新時間' },
       { key: 'all_vintages', label: '全部版本', placeholder: 'true' },
@@ -139,6 +155,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: 'CWA 觀測批次審計',
     description: 'Observation batch 完整／不完整歷史，不含 raw payload。',
     path: '/data/audits',
+    navGroup: 'audit',
+    search: { type: 'observations' },
     apiPath: '/data/audits/cwa-observations',
     defaultHours: 24,
     columns: [
@@ -156,6 +174,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     label: 'CWA 預報版本審計',
     description: 'Forecast release 版本與缺少行政區歷史，不含 raw payload。',
     path: '/data/audits',
+    navGroup: 'audit',
+    search: { type: 'forecasts' },
     apiPath: '/data/audits/cwa-forecasts',
     defaultHours: 24,
     columns: [

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
+import { useQueryClient } from '@tanstack/react-query'
+import { datasetListQueryKey, useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { ExplorerDetail } from './explorer-detail'
 import { ExplorerFilters } from './explorer-filters'
@@ -9,6 +10,7 @@ import { ExplorerStatus } from './explorer-status'
 import { useExplorerSearch } from './use-explorer-search'
 
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
+  const queryClient = useQueryClient()
   const { start, end, filterValues, params, updateSearch } = useExplorerSearch(dataset)
   const statusQuery = useDatasetStatus()
   const listQuery = useDatasetList(dataset.apiPath, params)
@@ -43,7 +45,10 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         filterValues={filterValues}
         fetchedAt={fetchedAt}
         items={listQuery.data?.items ?? []}
-        onRefresh={() => void listQuery.refetch()}
+        onRefresh={() => {
+          void listQuery.refetch()
+          void statusQuery.refetch()
+        }}
         onSearchChange={updateSearch}
       />
       <ExplorerResults
@@ -52,8 +57,16 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         error={listQuery.error}
         isError={listQuery.isError}
         isLoading={listQuery.isLoading}
+        canRestart={Boolean(params.cursor)}
         onSelect={setSelected}
         onNextPage={(cursor) => updateSearch({ cursor })}
+        onRestart={() => {
+          queryClient.removeQueries({
+            queryKey: datasetListQueryKey(dataset.apiPath, { ...params, cursor: undefined }),
+            exact: true,
+          })
+          updateSearch({ cursor: undefined })
+        }}
       />
       <ExplorerDetail selected={selected} onClose={() => setSelected(null)} />
     </div>

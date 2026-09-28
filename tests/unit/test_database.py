@@ -1,12 +1,13 @@
 """Unit tests for TimescaleDB configuration, DDL initialization, and database helpers."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.core.database import (
@@ -17,6 +18,7 @@ from shiro_mlops.core.database import (
     get_timescale_init_ddl,
     init_db,
 )
+from tests.helpers import create_legacy_load_table, create_location_keyed_load_table
 
 
 def test_settings_timescaledb_defaults():
@@ -51,9 +53,11 @@ def test_cwa_api_key_is_available_to_runtime_services() -> None:
     """Verify the CWA API key placeholder and Compose interpolation are wired safely."""
     env_example = Path(".env.example").read_text(encoding="utf-8")
     compose_content = Path("docker/docker-compose.yml").read_text(encoding="utf-8")
+    makefile = Path("Makefile").read_text(encoding="utf-8")
 
     assert "CWA_API_KEY=" in env_example
     assert "CWA_API_KEY: ${CWA_API_KEY:-}" in compose_content
+    assert "docker compose --env-file .env -f docker/docker-compose.yml up -d" in makefile
 
 
 def test_settings_timescaledb_env_override(monkeypatch):
@@ -88,7 +92,7 @@ def test_timescale_init_ddl_content():
     assert "raw_taipower_unit_generation_snapshot" in ddl
 
     # Verify primary keys
-    assert "PRIMARY KEY (time, location)" in ddl
+    assert "PRIMARY KEY (time, subject)" in ddl
     assert "PRIMARY KEY (observed_at)" in ddl
     assert "PRIMARY KEY (observed_at, region)" in ddl
     assert "PRIMARY KEY (observed_at, unit_type, unit_name)" in ddl
@@ -117,11 +121,14 @@ def test_docker_init_sql_file_exists_and_matches():
 
     sql_content = sql_path.read_text(encoding="utf-8")
     assert "raw_taipower_load" in sql_content
+    assert "raw_cwa_forecast_release" in sql_content
+    assert "raw_cwa_township_forecast" in sql_content
+    assert "raw_cwa_observation_batch" in sql_content
     assert "legacy_cwa_weather" in sql_content
     assert "raw_taipower_supply_demand_snapshot" in sql_content
     assert "raw_taipower_regional_supply_demand_snapshot" in sql_content
     assert "raw_taipower_unit_generation_snapshot" in sql_content
-    assert "PRIMARY KEY (time, location)" in sql_content
+    assert "PRIMARY KEY (time, subject)" in sql_content
     assert "PRIMARY KEY (observed_at)" in sql_content
     assert "PRIMARY KEY (observed_at, region)" in sql_content
     assert "PRIMARY KEY (observed_at, unit_type, unit_name)" in sql_content
@@ -135,16 +142,40 @@ def test_get_timescale_engine(tmp_path):
     engine.dispose()
 
 
-def test_init_db_executes_ddl():
-    """Verify init_db executes DDL statements on the provided engine."""
-    mock_conn = MagicMock()
-    mock_engine = MagicMock(spec=Engine)
-    mock_engine.connect.return_value.__enter__.return_value = mock_conn
+def test_init_db_executes_ddl(tmp_path):
+    """Verify init_db creates the load table and its provenance column."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'initialized.db'}")
+    try:
+        init_db(engine)
 
-    init_db(mock_engine)
+        assert "raw_taipower_load" in inspect(engine).get_table_names()
+        assert "source" in {
+            column["name"] for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+    finally:
+        engine.dispose()
 
-    assert mock_conn.execute.called
-    assert mock_conn.commit.called
+
+def test_init_db_executes_create_table_after_comment_with_semicolon(tmp_path):
+    """A semicolon in a SQL line comment cannot split schema initialization or skip the next table."""
+    custom_ddl = """
+    -- 僅為稽核保留；canonical 消費端使用下方的測站觀測資料。
+    CREATE TABLE IF NOT EXISTS raw_cwa_forecast_release (
+        dataset_id TEXT NOT NULL,
+        issued_at TIMESTAMP NOT NULL,
+        PRIMARY KEY (dataset_id, issued_at)
+    );
+    """
+    custom_sql_file = tmp_path / "comment_semicolon.sql"
+    custom_sql_file.write_text(custom_ddl, encoding="utf-8")
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'comment_semicolon.db'}")
+    try:
+        init_db(engine=engine, sql_path=custom_sql_file)
+
+        assert "raw_cwa_forecast_release" in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
 
 
 def test_init_db_with_sqlite_custom_ddl(tmp_path):
@@ -197,8 +228,8 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         with engine.connect() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO raw_taipower_load (time, location, load_mw) "
-                    "VALUES ('2026-08-20 00:00:00', 'Taipei', 26500.0)"
+                    "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                    "VALUES ('2026-08-20 00:00:00', 'nationwide', 26500.0, 'regional_snapshot_sum')"
                 )
             )
             conn.commit()
@@ -211,7 +242,7 @@ def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path)
         with engine.connect() as conn:
             rows = conn.execute(text("SELECT * FROM raw_taipower_load")).fetchall()
             assert len(rows) == 1
-            assert rows[0][1] == "Taipei"
+            assert rows[0][1] == "nationwide"
             assert rows[0][2] == 26500.0
     finally:
         engine.dispose()
@@ -259,6 +290,132 @@ def test_ensure_timescale_hypertables_moves_old_weather_rows_to_legacy_storage(t
         engine.dispose()
 
 
+def test_fresh_schema_requires_taipower_load_source(tmp_path) -> None:
+    """Every load row in a fresh database records its derivation source."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_load.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        columns = {
+            column["name"]: column for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+        assert columns["source"]["nullable"] is False
+    finally:
+        engine.dispose()
+
+
+def test_existing_taipower_load_table_gains_source_column_without_touching_rows(
+    tmp_path,
+) -> None:
+    """Schema migration preserves legacy rows with NULL source so operators can identify d015046 data."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_load.db'}")
+    try:
+        create_legacy_load_table(engine)
+
+        ensure_timescale_hypertables(engine)
+        ensure_timescale_hypertables(engine)
+
+        column_names = {
+            column["name"] for column in inspect(engine).get_columns("raw_taipower_load")
+        }
+        assert "source" in column_names
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT load_mw, source FROM raw_taipower_load")
+            ).fetchall()
+        assert rows == [(26500.0, None)]
+    finally:
+        engine.dispose()
+
+
+def test_fresh_schema_keys_taipower_load_by_prediction_subject(tmp_path) -> None:
+    """A fresh load table keys the series by prediction subject without a location column."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_subject.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        inspector = inspect(engine)
+        column_names = {column["name"] for column in inspector.get_columns("raw_taipower_load")}
+        assert "subject" in column_names
+        assert "location" not in column_names
+        primary_key = inspector.get_pk_constraint("raw_taipower_load")["constrained_columns"]
+        assert primary_key == ["time", "subject"]
+    finally:
+        engine.dispose()
+
+
+def test_existing_location_keyed_load_migrates_to_nationwide_subject_repeatably(
+    tmp_path,
+) -> None:
+    """Repeated migration converts legacy location='Taipei' load to subject='nationwide'."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'location_keyed_load.db'}")
+    try:
+        create_location_keyed_load_table(engine)
+
+        ensure_timescale_hypertables(engine)
+        ensure_timescale_hypertables(engine)
+
+        inspector = inspect(engine)
+        column_names = {column["name"] for column in inspector.get_columns("raw_taipower_load")}
+        assert "location" not in column_names
+        primary_key = inspector.get_pk_constraint("raw_taipower_load")["constrained_columns"]
+        assert primary_key == ["time", "subject"]
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT subject, load_mw, source FROM raw_taipower_load ORDER BY time")
+            ).fetchall()
+        assert rows == [
+            ("nationwide", 26500.0, "regional_snapshot_sum"),
+            ("nationwide", 26600.0, "regional_snapshot_sum"),
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_pre_provenance_load_table_gains_source_and_subject_together(tmp_path) -> None:
+    """Migration adds source and subject to d015046-era tables while marking legacy rows with NULL source."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'pre_provenance.db'}")
+    try:
+        create_legacy_load_table(engine)
+
+        ensure_timescale_hypertables(engine)
+
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT subject, load_mw, source FROM raw_taipower_load")
+            ).fetchall()
+        assert rows == [("nationwide", 26500.0, None)]
+    finally:
+        engine.dispose()
+
+
+def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -> None:
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'inspection_failure.db'}")
+    try:
+        with (
+            patch(
+                "shiro_mlops.core.database.inspect",
+                side_effect=[inspect(engine), NoInspectionAvailable("inspection unavailable")],
+            ),
+            pytest.raises(RuntimeError, match="Cannot inspect raw_taipower_load schema"),
+        ):
+            ensure_timescale_hypertables(engine)
+    finally:
+        engine.dispose()
+
+
 def test_repository_auto_init_on_existing_volume(tmp_path):
     """Verify TimeSeriesRepository auto_init smoothly handles fresh and existing database volumes."""
     from shiro_mlops.data.repository import TimeSeriesRepository
@@ -269,14 +426,12 @@ def test_repository_auto_init_on_existing_volume(tmp_path):
     try:
         # Launch repo against fresh volume
         repo1 = TimeSeriesRepository(engine=engine, auto_init=True)
-        sample_df = pd.DataFrame(
-            [{"datetime": "2026-08-20 00:00:00", "load_mw": 30000.0, "location": "Taipei"}]
-        )
+        sample_df = pd.DataFrame([{"datetime": "2026-08-20 00:00:00", "load_mw": 30000.0}])
         repo1.upsert_taipower_load(sample_df)
 
         # Launch new repo instance against existing volume (service reboot)
         repo2 = TimeSeriesRepository(engine=engine, auto_init=True)
-        persisted = repo2.fetch_load_range(location="Taipei")
+        persisted = repo2.fetch_load_range(subject="nationwide")
         assert len(persisted) == 1
         assert persisted.iloc[0]["load_mw"] == 30000.0
     finally:

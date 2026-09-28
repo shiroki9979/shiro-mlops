@@ -1,5 +1,6 @@
 """Data Explorer HTTP contracts against a real SQLite repository."""
 
+import importlib
 import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
@@ -7,15 +8,21 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
+from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
+from shiro_mlops.service.data_explorer.cursor import encode_cursor
+from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from tests.helpers import (
     TAIWAN,
+    create_legacy_load_table,
     forecast_release,
+    insert_legacy_load_row,
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
@@ -46,16 +53,16 @@ def explorer_client(test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyP
 
 
 def _upsert_hours(
-    repo: TimeSeriesRepository, hours: list[datetime], location: str = "Taipei"
+    repo: TimeSeriesRepository, hours: list[datetime], subject: str = "nationwide"
 ) -> None:
     frame = pd.DataFrame(
         {
             DATETIME_COL: hours,
             LOAD_MW_COL: [30000.0 + index for index in range(len(hours))],
-            "location": location,
+            "subject": subject,
         }
     )
-    repo.upsert_taipower_load(frame, default_location=location)
+    repo.upsert_taipower_load(frame, default_subject=subject)
 
 
 def test_data_explorer_is_unavailable_when_disabled(
@@ -75,6 +82,122 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     """過渡快照端點不得再作為營運資料來源。"""
     client, _ = explorer_client
     assert client.get("/features/latest").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/data/power/load",
+        "/data/power/supply-demand",
+        "/data/power/regional",
+        "/data/power/units",
+        "/data/weather/observations",
+        "/data/weather/forecasts",
+        "/data/audits/cwa-observations",
+        "/data/audits/cwa-forecasts",
+    ],
+)
+def test_all_lists_reject_v1_cursor_before_database_access(
+    explorer_client, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    client, _ = explorer_client
+    legacy = urlsafe_b64encode(b'{"v":1,"ds":"hourly_load","f":{},"k":{}}').decode().rstrip("=")
+
+    def unavailable(_request):
+        raise SQLAlchemyError("database unavailable")
+
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(router_module, "_engine", unavailable)
+
+    response = client.get(path, params={"cursor": legacy})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Incompatible cursor version"
+
+
+def test_malformed_v2_cursor_precedes_database_failure(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    cursor = encode_cursor(
+        dataset="hourly_load", filters=filters, key={"time": 123, "subject": "nationwide"}
+    )
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get("/data/power/load", params={**window, "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
+
+
+def test_forecast_cursor_filter_mismatch_precedes_database_failure(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("cwa_forecasts", {**window, "geocode": "A"}).filters
+    cursor = encode_cursor(
+        dataset="cwa_forecasts",
+        filters=filters,
+        key={
+            "valid_from": "2026-08-01T12:00:00+08:00",
+            "issued_at": "2026-08-01T00:00:00+08:00",
+            "source_updated_at": "2026-08-01T00:00:00+08:00",
+            "dataset_id": "F-EDGE",
+            "geocode": "A",
+            "valid_to": "2026-08-01T13:00:00+08:00",
+        },
+    )
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get(
+        "/data/weather/forecasts", params={**window, "geocode": "B", "cursor": cursor}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cursor filter mismatch"
+
+
+@pytest.mark.parametrize("subject", [["nationwide"], {"name": "nationwide"}])
+def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, subject) -> None:
+    client, _ = explorer_client
+    window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
+    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    cursor = encode_cursor(
+        dataset="hourly_load",
+        filters=filters,
+        key={"time": "2026-08-01T12:00:00+08:00", "subject": subject},
+    )
+
+    response = client.get("/data/power/load", params={**window, "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
+
+
+@pytest.mark.parametrize("field", ["issued_at", "source_updated_at"])
+@pytest.mark.parametrize("value", ["not-a-date", "NaT"])
+def test_invalid_forecast_version_time_returns_validation_error(
+    explorer_client, field, value
+) -> None:
+    client, _ = explorer_client
+
+    response = client.get("/data/weather/forecasts", params={field: value})
+
+    assert response.status_code == 422
+    assert field in response.json()["detail"]
 
 
 def test_data_explorer_does_not_allow_cross_origin_browser_access(explorer_client) -> None:
@@ -111,7 +234,7 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     start = rfc3339(latest - timedelta(hours=1))
     end = rfc3339(latest)
     response = client.get(
-        "/data/power/load", params={"start": start, "end": end, "location": "Taipei"}
+        "/data/power/load", params={"start": start, "end": end, "subject": "nationwide"}
     )
     assert response.status_code == 200
     body = response.json()
@@ -119,10 +242,44 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     assert body["has_more"] is False
     assert len(body["items"]) == 2
     assert body["items"][0]["datetime"] >= body["items"][1]["datetime"]
-    assert body["items"][0]["location"] == "Taipei"
+    assert body["items"][0]["subject"] == "nationwide"
     assert "load_mw" in body["items"][0]
     assert "raw_payload" not in body["items"][0]
     assert all(item["datetime"].endswith("+08:00") for item in body["items"])
+
+
+def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'upgraded_load.db'}")
+    try:
+        create_legacy_load_table(engine)
+        ensure_timescale_hypertables(engine)
+        repo = TimeSeriesRepository(engine=engine, auto_init=False)
+        current_hour = _now().replace(minute=0)
+        legacy_hour = current_hour - timedelta(hours=1)
+        derived_hour = current_hour - timedelta(hours=3)
+        _upsert_hours(repo, [derived_hour])
+        insert_legacy_load_row(engine, legacy_hour, 99999.0)
+        monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
+        monkeypatch.setattr("shiro_mlops.service.api.repository_store", repo)
+
+        with TestClient(app) as client:
+            window = {"start": rfc3339(derived_hour), "end": rfc3339(current_hour)}
+            page = client.get("/data/power/load", params=window)
+            status = client.get("/data/status")
+
+        assert page.status_code == 200
+        assert [item["datetime"] for item in page.json()["items"]] == [rfc3339(derived_hour)]
+        assert rfc3339(legacy_hour) in page.json()["missing_slots"]
+        assert rfc3339(current_hour) not in page.json()["missing_slots"]
+        load_status = next(
+            item for item in status.json()["datasets"] if item["id"] == "hourly_load"
+        )
+        assert load_status["latest_source_at"] == rfc3339(derived_hour)
+        assert load_status["freshness"] == "warning"
+    finally:
+        engine.dispose()
 
 
 def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
@@ -136,7 +293,7 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
         params={
             "start": rfc3339(latest - timedelta(hours=5)),
             "end": rfc3339(latest - timedelta(hours=4)),
-            "location": "Taichung",
+            "subject": "north",
         },
     )
     assert empty.status_code == 200
@@ -167,12 +324,20 @@ def test_hourly_load_empty_invalid_window_and_cursor(explorer_client) -> None:
         params={
             "start": rfc3339(latest - timedelta(hours=1)),
             "end": rfc3339(latest),
-            "location": "Kaohsiung",
+            "subject": "south",
             "cursor": cursor,
         },
     )
     assert mismatched.status_code == 400
     assert client.get("/data/power/load", params={"cursor": "not-a-cursor"}).status_code == 400
+    invalid_window_cursor = encode_cursor(
+        dataset="hourly_load",
+        filters={"start": "not-a-time", "end": rfc3339(latest), "dataset": "hourly_load"},
+        key={"time": rfc3339(latest), "subject": "nationwide"},
+    )
+    assert (
+        client.get("/data/power/load", params={"cursor": invalid_window_cursor}).status_code == 400
+    )
 
     missing_key = _replace_cursor_key(cursor, {})
     malformed = client.get(
@@ -218,6 +383,30 @@ def test_hourly_load_pagination_and_hourly_gaps(explorer_client) -> None:
     assert rfc3339(gap_start + timedelta(hours=1)) in gapped_page.json()["missing_slots"]
 
 
+def test_default_window_cursor_stays_valid_after_clock_advances(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, repo = explorer_client
+    latest = _now().replace(minute=0)
+    _upsert_hours(repo, [latest - timedelta(hours=1), latest])
+    clock = latest + timedelta(minutes=1)
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.query.now_taiwan", lambda: clock)
+    first = client.get("/data/power/load", params={"limit": 1})
+    assert first.status_code == 200
+    assert first.json()["next_cursor"]
+
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.query.now_taiwan",
+        lambda: clock + timedelta(seconds=1),
+    )
+    second = client.get(
+        "/data/power/load", params={"limit": 1, "cursor": first.json()["next_cursor"]}
+    )
+
+    assert second.status_code == 200
+    assert second.json()["items"][0]["datetime"] == rfc3339(latest - timedelta(hours=1))
+
+
 def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
     """TimescaleDB 無法連線時必須回傳 HTTP 503。"""
     client, repo = explorer_client
@@ -229,6 +418,7 @@ def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
     repo.engine = BrokenEngine()
     assert client.get("/data/status").status_code == 503
     assert client.get("/data/power/load").status_code == 503
+    assert client.get("/data/weather/forecasts").status_code == 503
 
 
 def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_client) -> None:

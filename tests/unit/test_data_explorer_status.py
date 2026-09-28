@@ -1,12 +1,56 @@
 """Dataset status dimensions stay independent and explainable."""
 
+from dataclasses import replace
 from datetime import datetime
 
+import pytest
+
+from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.status import (
     DatasetFreshness,
     derive_overall,
     evaluate_freshness,
 )
+from tests.helpers import derived_hourly_load, forecast_release
+
+
+def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    catalog = DatasetStatusCatalog(test_repo.engine)
+    for hour, missing, completeness in ((10, ("63000000",), "incomplete"), (11, (), "complete")):
+        test_repo.upsert_cwa_forecast_release(
+            replace(
+                forecast_release(datetime(2026, 9, 20, hour), ()),
+                status=completeness,
+                missing_geocodes=missing,
+            )
+        )
+
+        statuses = catalog.status(datetime(2026, 9, 20, 12)).datasets
+        forecasts = next(item for item in statuses if item.id == "cwa_forecasts")
+        audits = next(item for item in statuses if item.id == "cwa_forecast_audits")
+
+        assert forecasts.completeness == audits.completeness == completeness
+        assert forecasts.missing_identifiers == audits.missing_identifiers == list(missing)
+        assert forecasts.source_age_seconds == audits.source_age_seconds == (12 - hour) * 3600
+        assert forecasts.serving_stale is False
+        assert audits.serving_stale is None
+
+
+@pytest.mark.parametrize("minute", [0, 15])
+def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
+    test_repo: TimeSeriesRepository, minute: int
+) -> None:
+    test_repo.upsert_taipower_load(derived_hourly_load(24, datetime(2026, 9, 20, 11)))
+
+    status = DatasetStatusCatalog(test_repo.engine).status(datetime(2026, 9, 20, 12, minute))
+    load = next(dataset for dataset in status.datasets if dataset.id == "hourly_load")
+
+    assert load.completeness == "complete"
+    assert load.missing_slot_count == 0
+    assert load.missing_identifiers == []
 
 
 def test_freshness_uses_dataset_cadence_and_two_missed_cycles() -> None:

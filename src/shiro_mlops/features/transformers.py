@@ -1,12 +1,13 @@
 """Time-series feature engineering and transformation functions."""
 
+from collections.abc import Iterator, Sequence
+from datetime import timedelta
+
 import numpy as np
 import pandas as pd
 
 from shiro_mlops.core.constants import (
     DATETIME_COL,
-    DEFAULT_LAG_HOURS,
-    DEFAULT_ROLLING_WINDOWS,
     LOAD_MW_COL,
     LOCATION_COL,
     RELATIVE_HUMIDITY_COL,
@@ -14,12 +15,7 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
-
-def _fill_weather_series(series: pd.Series, *, strict: bool, default: float) -> pd.Series:
-    """Fill weather values without future leakage in strict training mode."""
-    if strict:
-        return series.ffill(limit=2)
-    return series.ffill().bfill().fillna(default)
+MAX_WEATHER_AGE = timedelta(hours=2)
 
 
 def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL) -> pd.DataFrame:
@@ -40,54 +36,58 @@ def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL)
     return df
 
 
+def _observed_load_groups(
+    df: pd.DataFrame, value_col: str, location_col: str
+) -> Iterator[tuple[pd.Index, pd.DatetimeIndex, pd.Series]]:
+    """Yield each location's observations with normalized event times."""
+    groups = df.groupby(location_col, sort=False) if location_col in df.columns else [(None, df)]
+    for _, rows in groups:
+        times = pd.DatetimeIndex(standardize_taiwan_datetime(rows[DATETIME_COL]))
+        yield rows.index, times, pd.Series(rows[value_col].to_numpy(), index=times)
+
+
 def create_lag_features(
     df: pd.DataFrame,
+    *,
+    lags: Sequence[int],
     value_col: str = LOAD_MW_COL,
-    lags: list[int] | None = None,
     location_col: str = LOCATION_COL,
 ) -> pd.DataFrame:
-    """Generate lag features for the specified target value, isolated per location."""
+    """Generate hour-aligned lag features, isolated per location."""
     df = df.copy()
-    if lags is None:
-        lags = DEFAULT_LAG_HOURS
-
-    has_location = location_col in df.columns and df[location_col].nunique() > 1
-
     for lag in lags:
-        if has_location:
-            df[f"{value_col}_lag_{lag}"] = df.groupby(location_col)[value_col].shift(lag)
-        else:
-            df[f"{value_col}_lag_{lag}"] = df[value_col].shift(lag)
+        df[f"{value_col}_lag_{lag}"] = np.nan
+
+    for row_index, times, observed in _observed_load_groups(df, value_col, location_col):
+        for lag in lags:
+            earlier = times - pd.Timedelta(lag, unit="h")
+            df.loc[row_index, f"{value_col}_lag_{lag}"] = observed.reindex(earlier).to_numpy()
 
     return df
 
 
 def create_rolling_features(
     df: pd.DataFrame,
+    *,
+    windows: Sequence[int],
     value_col: str = LOAD_MW_COL,
-    windows: list[int] | None = None,
     location_col: str = LOCATION_COL,
 ) -> pd.DataFrame:
-    """Generate rolling window statistics for the target value, isolated per location."""
+    """Generate statistics over elapsed past hours, isolated per location."""
     df = df.copy()
-    if windows is None:
-        windows = DEFAULT_ROLLING_WINDOWS
-
-    has_location = location_col in df.columns and df[location_col].nunique() > 1
-
     for w in windows:
-        if has_location:
-            df[f"{value_col}_rolling_mean_{w}"] = df.groupby(location_col)[value_col].transform(
-                lambda s: s.shift(1).rolling(window=w, min_periods=1).mean()
+        df[f"{value_col}_rolling_mean_{w}"] = np.nan
+        df[f"{value_col}_rolling_std_{w}"] = np.nan
+
+    for row_index, times, observed in _observed_load_groups(df, value_col, location_col):
+        observed = observed.sort_index()
+        for w in windows:
+            past = observed.rolling(pd.Timedelta(w, unit="h"), closed="left", min_periods=1)
+            df.loc[row_index, f"{value_col}_rolling_mean_{w}"] = (
+                past.mean().reindex(times).to_numpy()
             )
-            df[f"{value_col}_rolling_std_{w}"] = df.groupby(location_col)[value_col].transform(
-                lambda s: s.shift(1).rolling(window=w, min_periods=1).std().fillna(0.0)
-            )
-        else:
-            shifted = df[value_col].shift(1)
-            df[f"{value_col}_rolling_mean_{w}"] = shifted.rolling(window=w, min_periods=1).mean()
-            df[f"{value_col}_rolling_std_{w}"] = (
-                shifted.rolling(window=w, min_periods=1).std().fillna(0.0)
+            df.loc[row_index, f"{value_col}_rolling_std_{w}"] = (
+                past.std().where(past.count().ne(1), 0.0).reindex(times).to_numpy()
             )
 
     return df
@@ -98,9 +98,8 @@ def merge_weather_features(
     weather_df: pd.DataFrame,
     datetime_col: str = DATETIME_COL,
     location_col: str = LOCATION_COL,
-    strict_weather: bool = False,
 ) -> pd.DataFrame:
-    """Merge load DataFrame with weather observations or forecasts matching datetime and location."""
+    """Merge each load hour with the latest weather within two hours; older gaps stay missing."""
     load_df = load_df.copy()
     weather_df = weather_df.copy()
 
@@ -122,46 +121,66 @@ def merge_weather_features(
     join_keys = [datetime_col, location_col] if both_have_location else [datetime_col]
     clean_weather = weather_df[weather_cols].drop_duplicates(subset=join_keys, keep="last")
 
-    merged = pd.merge(load_df, clean_weather, on=join_keys, how="left")
+    return _merge_recent_weather(load_df, clean_weather, join_keys)
 
-    # Forward fill weather values; strict training mode disables future-looking fill.
-    if TEMPERATURE_COL in merged.columns:
-        if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[TEMPERATURE_COL] = merged.groupby(location_col)[TEMPERATURE_COL].transform(
-                lambda series: _fill_weather_series(series, strict=strict_weather, default=25.0)
-            )
-        else:
-            merged[TEMPERATURE_COL] = (
-                merged[TEMPERATURE_COL].ffill(limit=2)
-                if strict_weather
-                else merged[TEMPERATURE_COL].ffill().bfill().fillna(25.0)
-            )
 
-    if RELATIVE_HUMIDITY_COL in merged.columns:
-        if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[RELATIVE_HUMIDITY_COL] = merged.groupby(location_col)[
-                RELATIVE_HUMIDITY_COL
-            ].transform(
-                lambda series: _fill_weather_series(series, strict=strict_weather, default=70.0)
-            )
-        else:
-            merged[RELATIVE_HUMIDITY_COL] = (
-                merged[RELATIVE_HUMIDITY_COL].ffill(limit=2)
-                if strict_weather
-                else merged[RELATIVE_HUMIDITY_COL].ffill().bfill().fillna(70.0)
-            )
+def _merge_recent_weather(
+    load: pd.DataFrame, weather: pd.DataFrame, join_keys: list[str]
+) -> pd.DataFrame:
+    """Match each field to a past observation within two hours, even across load gaps."""
+    result = load.copy()
+    datetime_col = join_keys[0]
+    ordered_load = load[join_keys].sort_values(datetime_col)
+    for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL):
+        if column not in weather.columns:
+            result[column] = np.nan
+            continue
+        observations = weather[join_keys + [column]].dropna(subset=[column])
+        matched = pd.merge_asof(
+            ordered_load,
+            observations.sort_values(datetime_col),
+            on=datetime_col,
+            by=join_keys[1:] or None,
+            direction="backward",
+            tolerance=MAX_WEATHER_AGE,
+        )
+        result[column] = pd.Series(matched[column].to_numpy(), index=ordered_load.index)
+    return result
 
-    return merged
+
+def fill_load_warmup(
+    df: pd.DataFrame,
+    *,
+    lags: Sequence[int],
+    windows: Sequence[int],
+    location_col: str = LOCATION_COL,
+) -> pd.DataFrame:
+    """Use zero only where the requested load history predates the first observation."""
+    df = df.copy()
+    groups = df.groupby(location_col, sort=False) if location_col in df.columns else [(None, df)]
+    for _, rows in groups:
+        first_time = rows[DATETIME_COL].min()
+        for lag in lags:
+            warmup = rows[DATETIME_COL] - pd.Timedelta(lag, unit="h") < first_time
+            index = rows.index[warmup]
+            column = f"{LOAD_MW_COL}_lag_{lag}"
+            df.loc[index, column] = df.loc[index, column].fillna(0.0)
+        first_index = rows.index[rows[DATETIME_COL] == first_time]
+        for window in windows:
+            for statistic in ("mean", "std"):
+                column = f"{LOAD_MW_COL}_rolling_{statistic}_{window}"
+                df.loc[first_index, column] = df.loc[first_index, column].fillna(0.0)
+    return df
 
 
 def build_feature_pipeline(
     load_df: pd.DataFrame,
     weather_df: pd.DataFrame | None = None,
-    lags: list[int] | None = None,
-    windows: list[int] | None = None,
+    *,
+    lags: Sequence[int],
+    windows: Sequence[int],
     drop_na: bool = True,
     location_col: str = LOCATION_COL,
-    strict_weather: bool = False,
 ) -> pd.DataFrame:
     """End-to-end feature pipeline building calendar, weather, lag, and rolling features isolated by location."""
     df = load_df.copy()
@@ -172,25 +191,15 @@ def build_feature_pipeline(
     df = df.sort_values(sort_cols).reset_index(drop=True)
 
     if weather_df is not None:
-        df = merge_weather_features(
-            df, weather_df, location_col=location_col, strict_weather=strict_weather
-        )
+        df = merge_weather_features(df, weather_df, location_col=location_col)
 
     if has_location and df[location_col].nunique() > 1:
         min_len = int(df.groupby(location_col).size().min())
     else:
         min_len = len(df)
 
-    if lags is None:
-        effective_lags = [1, 2, 24]
-        if min_len > 48:
-            effective_lags.append(48)
-        if min_len > 168:
-            effective_lags.append(168)
-    else:
-        effective_lags = lags
-
-    effective_windows = windows or DEFAULT_ROLLING_WINDOWS
+    effective_lags = list(lags)
+    effective_windows = list(windows)
 
     df = create_calendar_features(df)
     df = create_lag_features(
@@ -200,32 +209,11 @@ def build_feature_pipeline(
         df, value_col=LOAD_MW_COL, windows=effective_windows, location_col=location_col
     )
 
-    # 僅允許由過去觀測向前填補；禁止 bfill 以免未來用電負載洩漏進歷史缺值
-    non_leaking_fill = 0.0
     is_short_window = min_len <= max(effective_lags)
     if is_short_window or not drop_na:
-        for lag in effective_lags:
-            lag_col = f"{LOAD_MW_COL}_lag_{lag}"
-            if lag_col in df.columns:
-                if has_location and df[location_col].nunique() > 1:
-                    df[lag_col] = df.groupby(location_col)[lag_col].transform(
-                        lambda s: s.ffill().fillna(non_leaking_fill)
-                    )
-                else:
-                    df[lag_col] = df[lag_col].ffill().fillna(non_leaking_fill)
-
-        for w in effective_windows:
-            mean_col = f"{LOAD_MW_COL}_rolling_mean_{w}"
-            std_col = f"{LOAD_MW_COL}_rolling_std_{w}"
-            if mean_col in df.columns:
-                if has_location and df[location_col].nunique() > 1:
-                    df[mean_col] = df.groupby(location_col)[mean_col].transform(
-                        lambda s: s.ffill().fillna(non_leaking_fill)
-                    )
-                else:
-                    df[mean_col] = df[mean_col].ffill().fillna(non_leaking_fill)
-            if std_col in df.columns:
-                df[std_col] = df[std_col].fillna(0.0)
+        df = fill_load_warmup(
+            df, lags=effective_lags, windows=effective_windows, location_col=location_col
+        )
 
     if drop_na and not is_short_window:
         df = df.dropna().reset_index(drop=True)
@@ -235,19 +223,9 @@ def build_feature_pipeline(
             for col in df.columns
             if col.startswith(f"{LOAD_MW_COL}_lag_") or col.startswith(f"{LOAD_MW_COL}_rolling_")
         ]
-        for col in load_feature_cols:
-            df[col] = df[col].ffill().fillna(non_leaking_fill)
-        if strict_weather:
-            weather_columns = [
-                column
-                for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
-                if column in df.columns
-            ]
-            if weather_columns:
-                df = df.dropna(subset=weather_columns)
-        else:
-            other_cols = [col for col in df.columns if col not in load_feature_cols]
-            df[other_cols] = df[other_cols].ffill().bfill().fillna(0.0)
-        df = df.reset_index(drop=True)
+        weather_columns = [
+            column for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL) if column in df.columns
+        ]
+        df = df.dropna(subset=load_feature_cols + weather_columns).reset_index(drop=True)
 
     return df

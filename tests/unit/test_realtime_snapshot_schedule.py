@@ -3,37 +3,26 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dagster import build_schedule_context, load_assets_from_modules
+from dagster import build_schedule_context
 
-from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.schedules import (
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
-    daily_training_job,
-    hourly_drift_job,
     taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
-
-
-def _all_assets():
-    return load_assets_from_modules([assets_module])
+from tests.helpers import selected_asset_names, task_jobs
 
 
 def test_realtime_job_selects_exactly_three_snapshot_assets() -> None:
     """10 分鐘工作應只選取全台、區域與機組三個即時資產。"""
-    selected = {
-        key.to_user_string()
-        for key in taipower_supply_demand_snapshot_job.selection.resolve(_all_assets())
-    }
+    selected = selected_asset_names(taipower_supply_demand_snapshot_job)
     assert selected == set(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
 
 
-def test_existing_jobs_exclude_realtime_snapshot_assets() -> None:
-    """既有訓練與漂移工作不得包含三個即時快照資產。"""
-    daily = {key.to_user_string() for key in daily_training_job.selection.resolve(_all_assets())}
-    hourly = {key.to_user_string() for key in hourly_drift_job.selection.resolve(_all_assets())}
-    assert daily.isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
-    assert hourly.isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS)
+def test_task_jobs_exclude_realtime_snapshot_assets() -> None:
+    """Training and monitoring jobs exclude all three realtime snapshot assets."""
+    for job in task_jobs():
+        assert selected_asset_names(job).isdisjoint(TAIPOWER_REALTIME_SNAPSHOT_ASSETS), job.name
 
 
 def test_realtime_job_registers_limited_op_retry_policy() -> None:
