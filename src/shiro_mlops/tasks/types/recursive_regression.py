@@ -220,7 +220,6 @@ def _training_features(params: RecursiveRegressionParams, data: TrainingData) ->
         lags=params.lags,
         windows=params.rolling_windows,
         location_col=SUBJECT_COL,
-        strict_weather=True,
     )
 
 

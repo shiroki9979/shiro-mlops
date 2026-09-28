@@ -51,12 +51,13 @@ def test_create_rolling_features(taipower_raw_df: pd.DataFrame) -> None:
 
 
 def test_merge_weather_features(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> None:
-    """Test merging load with weather data on datetime."""
+    """觀測只涵蓋 8/20：該日與其後兩小時帶入天氣，其餘小時保留缺值。"""
     res = merge_weather_features(taipower_raw_df, cwa_obs_df)
-    assert "temperature" in res.columns
     assert "relative_humidity" in res.columns
     assert len(res) == len(taipower_raw_df)
-    assert not res["temperature"].isna().any()
+    covered = res["datetime"] <= pd.Timestamp("2026-08-21 01:00")
+    assert res.loc[covered, "temperature"].notna().all()
+    assert res.loc[~covered, "temperature"].isna().all()
 
 
 def test_build_feature_pipeline(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> None:
@@ -311,9 +312,7 @@ def test_weather_gap_forward_fills_at_most_two_hours_and_drops_remaining_rows() 
         }
     )
 
-    features = build_feature_pipeline(
-        load_df, weather_df, lags=[1], windows=[2], drop_na=True, strict_weather=True
-    )
+    features = build_feature_pipeline(load_df, weather_df, lags=[1], windows=[2], drop_na=True)
 
     assert list(features["datetime"]) == [
         pd.Timestamp("2026-08-20 01:00"),
@@ -340,9 +339,7 @@ def test_strict_weather_drops_stale_values_across_missing_load_hours() -> None:
         }
     )
 
-    features = build_feature_pipeline(
-        load, weather, lags=[1, 2, 24], windows=[2], strict_weather=True
-    )
+    features = build_feature_pipeline(load, weather, lags=[1, 2, 24], windows=[2])
 
     assert features["datetime"].tolist() == [
         pd.Timestamp("2026-09-20 00:00"),
@@ -373,9 +370,7 @@ def test_strict_weather_matches_each_field_to_past_observations_per_location() -
         }
     )
 
-    features = build_feature_pipeline(
-        load, weather, lags=[1, 2, 24], windows=[2], strict_weather=True
-    )
+    features = build_feature_pipeline(load, weather, lags=[1, 2, 24], windows=[2])
 
     assert features.set_index("location")[["temperature", "relative_humidity"]].to_dict(
         "index"
@@ -383,3 +378,26 @@ def test_strict_weather_matches_each_field_to_past_observations_per_location() -
         "Taipei": {"temperature": 32.0, "relative_humidity": 70.0},
         "Taichung": {"temperature": 20.0, "relative_humidity": 80.0},
     }
+
+
+def test_merge_weather_leaves_hours_without_recent_observations_missing() -> None:
+    """缺少兩小時內觀測的小時保留缺值，不以常數或未來觀測補值（#66）。"""
+    load_df = pd.DataFrame(
+        {
+            "datetime": pd.date_range("2026-08-20 00:00", periods=4, freq="h"),
+            "load_mw": [100.0, 110.0, 120.0, 130.0],
+        }
+    )
+    weather_df = pd.DataFrame(
+        {
+            "datetime": [pd.Timestamp("2026-08-20 03:00")],
+            "temperature": [31.0],
+            "relative_humidity": [66.0],
+        }
+    )
+
+    merged = merge_weather_features(load_df, weather_df)
+
+    assert merged["temperature"].iloc[:3].isna().all()
+    assert merged["relative_humidity"].iloc[:3].isna().all()
+    assert merged["temperature"].iloc[3] == 31.0
