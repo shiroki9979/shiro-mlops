@@ -165,7 +165,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   - `temperature`: float32
   - `relative_humidity`: float32
 - **匯出來源**：Feast 凍結為動態視界預報任務專屬匯出，由 `dynamic_horizon_forecast__features` 的訓練表（§3，經 §5.3 `training_data_from_table` 還原為目標序列與觀測天氣）自行計算上列欄位，不共用任何任務的特徵配方；Feast 無正式讀取者。
-- **時間正確性**：訓練資料由 runner 以明確 `as_of` 讀取 `as_of` 以前的目標序列，時間窗由已累積的目標列推導；serving 只讀負載起點往前 `lookback_hours`（§5.3）的歷史，禁止無界歷史掃描。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
+- **時間正確性**：訓練資料由 runner 以明確 `as_of` 讀取 `as_of` 以前的目標序列，時間窗由已累積的目標列推導；serving 只讀負載起點往前 `lookback_hours`（§5.3）的歷史，禁止無界歷史掃描。lag 依時間戳取前 `L` 小時的負載，rolling 只統計前 `W` 小時內已有的觀測；缺漏小時不得由相鄰資料列冒充。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
 - **訓練氣象缺口**：氣溫與相對濕度只能由較早觀測 forward-fill 最多兩小時；補值後仍缺少任一必要氣象欄位的 load row 必須移除。禁止 `bfill` 與固定氣象常數。
 
 ### 1.5 Dagster Artifact 序列化與信任邊界

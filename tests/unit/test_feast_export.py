@@ -55,6 +55,29 @@ def test_feast_export_sorts_unordered_load_before_computing_lags() -> None:
     assert exported["load_mw_lag_1"].tolist() == [0.0, 100.0, 200.0]
 
 
+def test_feast_export_uses_elapsed_hours_when_load_hour_is_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00"]
+            ),
+            "subject": "nationwide",
+            "load_mw": [100.0, 120.0, 130.0],
+        }
+    )
+    weather = pd.DataFrame(
+        {"datetime": load["datetime"], "temperature": 30.0, "relative_humidity": 70.0}
+    )
+
+    exported = build_feast_feature_frames(load, weather).taipower
+
+    assert exported.loc[0, "load_mw_lag_1"] == 0.0
+    assert pd.isna(exported.loc[1, "load_mw_lag_1"])
+    assert exported.loc[1, "load_mw_lag_2"] == 100.0
+    assert pd.isna(exported.loc[2, "load_mw_lag_2"])
+    assert exported.loc[2, "load_mw_rolling_mean_6"] == 110.0
+
+
 def test_feast_exports_key_both_frozen_views_by_prediction_subject() -> None:
     """Feast 凍結 schema 保留 location entity，值為預測對象而非氣象代表點。"""
     times = pd.date_range("2026-08-20 00:00:00", periods=4, freq="h")

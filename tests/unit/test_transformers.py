@@ -40,6 +40,24 @@ def test_create_lag_features(taipower_raw_df: pd.DataFrame) -> None:
         assert res[col_name].iloc[lag] == taipower_raw_df[LOAD_MW_COL].iloc[0]
 
 
+def test_lag_features_use_elapsed_hours_when_a_load_hour_is_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0],
+        }
+    )
+
+    features = create_lag_features(load, lags=[1, 2])
+
+    assert pd.isna(features.loc[1, "load_mw_lag_1"])
+    assert features.loc[1, "load_mw_lag_2"] == 100.0
+    assert features.loc[2, "load_mw_lag_1"] == 120.0
+    assert pd.isna(features.loc[2, "load_mw_lag_2"])
+
+
 def test_create_rolling_features(taipower_raw_df: pd.DataFrame) -> None:
     """Test rolling window mean and standard deviation features."""
     windows = [6, 24]
@@ -48,6 +66,23 @@ def test_create_rolling_features(taipower_raw_df: pd.DataFrame) -> None:
     for w in windows:
         assert f"{LOAD_MW_COL}_rolling_mean_{w}" in res.columns
         assert f"{LOAD_MW_COL}_rolling_std_{w}" in res.columns
+
+
+def test_rolling_features_use_elapsed_hours_when_a_load_hour_is_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0],
+        }
+    )
+
+    features = create_rolling_features(load, windows=[2])
+
+    assert features.loc[1, "load_mw_rolling_mean_2"] == 100.0
+    assert features.loc[2, "load_mw_rolling_mean_2"] == 120.0
+    assert features.loc[2, "load_mw_rolling_std_2"] == 0.0
 
 
 def test_merge_weather_features(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame) -> None:
@@ -78,6 +113,66 @@ def test_build_feature_pipeline(taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.Da
     assert f"{LOAD_MW_COL}_rolling_mean_6" in features_df.columns
     assert "temperature" in features_df.columns
     assert not features_df.isna().any().any()
+
+
+def test_feature_pipeline_skips_training_hours_with_missing_lagged_load() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00", "2026-09-20 14:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0, 140.0],
+        }
+    )
+
+    features = build_feature_pipeline(load, lags=[1], windows=[2])
+
+    assert features["datetime"].tolist() == [
+        pd.Timestamp("2026-09-20 13:00"),
+        pd.Timestamp("2026-09-20 14:00"),
+    ]
+    assert features["load_mw_lag_1"].tolist() == [120.0, 130.0]
+    assert features["load_mw_rolling_mean_2"].tolist() == [120.0, 125.0]
+
+
+def test_feature_pipeline_preserves_internal_gaps_in_short_windows() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-09-20 10:00", "2026-09-20 12:00", "2026-09-20 13:00", "2026-09-20 14:00"]
+            ),
+            "load_mw": [100.0, 120.0, 130.0, 140.0],
+        }
+    )
+
+    features = build_feature_pipeline(load, lags=[1, 2, 24], windows=[2], drop_na=False)
+
+    assert features.loc[0, "load_mw_lag_1"] == 0.0
+    assert features.loc[0, "load_mw_rolling_mean_2"] == 0.0
+    assert pd.isna(features.loc[1, "load_mw_lag_1"])
+    assert pd.isna(features.loc[2, "load_mw_lag_2"])
+    assert features.loc[2, "load_mw_rolling_mean_2"] == 120.0
+
+    training = build_feature_pipeline(load, lags=[1, 2, 24], windows=[2])
+
+    assert training["datetime"].tolist() == [
+        pd.Timestamp("2026-09-20 10:00"),
+        pd.Timestamp("2026-09-20 14:00"),
+    ]
+
+
+def test_rolling_features_leave_elapsed_window_without_observations_missing() -> None:
+    load = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-09-20 10:00", "2026-09-20 14:00"]),
+            "load_mw": [100.0, 140.0],
+        }
+    )
+
+    features = create_rolling_features(load, windows=[2])
+
+    assert pd.isna(features.loc[1, "load_mw_rolling_mean_2"])
+    assert pd.isna(features.loc[1, "load_mw_rolling_std_2"])
 
 
 def test_multi_location_lag_and_rolling_isolation() -> None:
@@ -339,7 +434,7 @@ def test_weather_older_than_two_hours_is_dropped_across_missing_load_hours() -> 
         }
     )
 
-    features = build_feature_pipeline(load, weather, lags=[1, 2, 24], windows=[2])
+    features = build_feature_pipeline(load, weather, lags=[2, 24], windows=[2])
 
     assert features["datetime"].tolist() == [
         pd.Timestamp("2026-09-20 00:00"),
