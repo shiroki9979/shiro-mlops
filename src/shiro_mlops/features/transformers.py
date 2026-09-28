@@ -92,9 +92,8 @@ def merge_weather_features(
     weather_df: pd.DataFrame,
     datetime_col: str = DATETIME_COL,
     location_col: str = LOCATION_COL,
-    strict_weather: bool = False,
 ) -> pd.DataFrame:
-    """Merge load DataFrame with weather observations or forecasts matching datetime and location."""
+    """Merge each load hour with the latest weather within two hours; older gaps stay missing."""
     load_df = load_df.copy()
     weather_df = weather_df.copy()
 
@@ -116,22 +115,7 @@ def merge_weather_features(
     join_keys = [datetime_col, location_col] if both_have_location else [datetime_col]
     clean_weather = weather_df[weather_cols].drop_duplicates(subset=join_keys, keep="last")
 
-    if strict_weather:
-        return _merge_recent_weather(load_df, clean_weather, join_keys)
-
-    merged = pd.merge(load_df, clean_weather, on=join_keys, how="left")
-
-    for column, default in ((TEMPERATURE_COL, 25.0), (RELATIVE_HUMIDITY_COL, 70.0)):
-        if column not in merged.columns:
-            continue
-        if location_col in merged.columns and merged[location_col].nunique() > 1:
-            merged[column] = merged.groupby(location_col)[column].transform(
-                lambda series, default=default: series.ffill().bfill().fillna(default)
-            )
-        else:
-            merged[column] = merged[column].ffill().bfill().fillna(default)
-
-    return merged
+    return _merge_recent_weather(load_df, clean_weather, join_keys)
 
 
 def _merge_recent_weather(
@@ -166,7 +150,6 @@ def build_feature_pipeline(
     windows: Sequence[int],
     drop_na: bool = True,
     location_col: str = LOCATION_COL,
-    strict_weather: bool = False,
 ) -> pd.DataFrame:
     """End-to-end feature pipeline building calendar, weather, lag, and rolling features isolated by location."""
     df = load_df.copy()
@@ -177,9 +160,7 @@ def build_feature_pipeline(
     df = df.sort_values(sort_cols).reset_index(drop=True)
 
     if weather_df is not None:
-        df = merge_weather_features(
-            df, weather_df, location_col=location_col, strict_weather=strict_weather
-        )
+        df = merge_weather_features(df, weather_df, location_col=location_col)
 
     if has_location and df[location_col].nunique() > 1:
         min_len = int(df.groupby(location_col).size().min())
@@ -234,17 +215,11 @@ def build_feature_pipeline(
         ]
         for col in load_feature_cols:
             df[col] = df[col].ffill().fillna(non_leaking_fill)
-        if strict_weather:
-            weather_columns = [
-                column
-                for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
-                if column in df.columns
-            ]
-            if weather_columns:
-                df = df.dropna(subset=weather_columns)
-        else:
-            other_cols = [col for col in df.columns if col not in load_feature_cols]
-            df[other_cols] = df[other_cols].ffill().bfill().fillna(0.0)
+        weather_columns = [
+            column for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL) if column in df.columns
+        ]
+        if weather_columns:
+            df = df.dropna(subset=weather_columns)
         df = df.reset_index(drop=True)
 
     return df
