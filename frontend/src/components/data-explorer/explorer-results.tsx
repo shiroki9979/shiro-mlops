@@ -64,7 +64,7 @@ export function ExplorerResults({
           <div>
             <p className="text-xs text-rose-300">{listErrorMessage(error)}</p>
             {canRestart && isCursorRejected(error) && (
-              <Button className="mt-4" variant="outline" onClick={onRestart}>回到第一頁</Button>
+              <Button className="mt-4" variant="outline" onClick={onRestart}>Back to first page</Button>
             )}
           </div>
         ) : !data || data.items.length === 0 ? (

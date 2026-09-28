@@ -13,9 +13,8 @@ import { cn } from '@/lib/utils'
 import { useHealth } from '@/hooks/use-health'
 import {
   EXPLORER_DATASETS,
-  explorerNavGroup,
+  EXPLORER_NAV_GROUPS,
   type ExplorerDatasetConfig,
-  type ExplorerNavGroup,
 } from '@/components/data-explorer/catalog'
 
 interface NavItem {
@@ -54,11 +53,9 @@ const navItems: NavItem[] = [
   },
 ]
 
-const EXPLORER_GROUP_ORDER: ExplorerNavGroup[] = ['電力', '氣象', '審計']
-
-const explorerGroups = EXPLORER_GROUP_ORDER.map((label) => ({
-  label,
-  datasets: EXPLORER_DATASETS.filter((dataset) => explorerNavGroup(dataset) === label),
+const explorerGroups = EXPLORER_NAV_GROUPS.map((group) => ({
+  ...group,
+  datasets: EXPLORER_DATASETS.filter((dataset) => dataset.navGroup === group.id),
 }))
 
 function searchType(search: unknown): string | null {
@@ -86,7 +83,7 @@ function ExplorerNavigation({ pathname, search }: { pathname: string; search: un
   return (
     <div className="ml-4 border-l border-slate-800 pl-2 space-y-2">
       {explorerGroups.map((group) => (
-        <div key={group.label} className="space-y-0.5">
+        <div key={group.id} className="space-y-0.5">
           <div className="px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
             {group.label}
           </div>

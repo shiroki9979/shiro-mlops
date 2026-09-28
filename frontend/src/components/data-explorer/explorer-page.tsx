@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
+import { datasetListQueryKey, useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { ExplorerDetail } from './explorer-detail'
 import { ExplorerFilters } from './explorer-filters'
@@ -62,7 +62,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         onNextPage={(cursor) => updateSearch({ cursor })}
         onRestart={() => {
           queryClient.removeQueries({
-            queryKey: ['data-explorer', dataset.apiPath, { ...params, cursor: undefined }],
+            queryKey: datasetListQueryKey(dataset.apiPath, { ...params, cursor: undefined }),
             exact: true,
           })
           updateSearch({ cursor: undefined })

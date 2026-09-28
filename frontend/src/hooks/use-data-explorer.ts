@@ -18,13 +18,17 @@ export function useDatasetStatus() {
   })
 }
 
+export function datasetListQueryKey(path: string, params: Record<string, string | undefined>) {
+  return ['data-explorer', path, params] as const
+}
+
 export function useDatasetList(
   path: string,
   params: Record<string, string | undefined>,
   enabled = true,
 ) {
   return useQuery({
-    queryKey: ['data-explorer', path, params],
+    queryKey: datasetListQueryKey(path, params),
     queryFn: () => apiClient.getDataList(path, params),
     enabled,
     staleTime: Infinity,

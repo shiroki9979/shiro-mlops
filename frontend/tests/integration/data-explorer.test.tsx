@@ -110,6 +110,9 @@ describe('Data Explorer routes', () => {
       'href',
       '/data/audits?type=forecasts',
     )
+    for (const group of ['Power', 'Weather', 'Audits']) {
+      expect(screen.getByText(group)).toBeInTheDocument()
+    }
   })
 
   it('hides Data Explorer navigation when the feature is disabled', async () => {
@@ -181,11 +184,11 @@ describe('Data Explorer routes', () => {
     const end = '2026-09-09T20:00:00+08:00'
     renderPath(`${path}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&${filters}&cursor=old`)
 
-    expect(await screen.findByRole('button', { name: '回到第一頁' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Back to first page' })).toBeInTheDocument()
     expect(requests).toHaveLength(1)
     expect(requests[0].searchParams.get('cursor')).toBe('old')
 
-    await user.click(screen.getByRole('button', { name: '回到第一頁' }))
+    await user.click(screen.getByRole('button', { name: 'Back to first page' }))
     await screen.findByText('查無符合資料，查詢成功但結果為空。')
     expect(requests).toHaveLength(2)
     expect(requests[1].searchParams.has('cursor')).toBe(false)
@@ -227,11 +230,11 @@ describe('Data Explorer routes', () => {
       renderPath(`/data/weather/forecasts?${filters}`)
       await screen.findByText('27.5')
       await user.click(screen.getByRole('button', { name: '下一頁' }))
-      await screen.findByRole('button', { name: '回到第一頁' })
+      await screen.findByRole('button', { name: 'Back to first page' })
       expect(requests).toHaveLength(2)
 
       temperature = 31.5
-      await user.click(screen.getByRole('button', { name: '回到第一頁' }))
+      await user.click(screen.getByRole('button', { name: 'Back to first page' }))
 
       expect(await screen.findByText('31.5')).toBeInTheDocument()
       expect(screen.queryByText('27.5')).not.toBeInTheDocument()
@@ -249,7 +252,7 @@ describe('Data Explorer routes', () => {
       : status === 422
         ? '篩選條件無效，請確認時間範圍與欄位格式。'
         : '資料庫目前無法連線，請稍後再試。', {}, { timeout: status === 503 ? 2500 : 1000 })
-    expect(screen.queryByRole('button', { name: '回到第一頁' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back to first page' })).not.toBeInTheDocument()
   })
 })
 
