@@ -60,7 +60,11 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
         columns={SUBJECT_COL: LOCATION_COL}
     )
     result[DATETIME_COL] = pd.to_datetime(result[DATETIME_COL])
-    result = result.sort_values([LOCATION_COL, DATETIME_COL]).reset_index(drop=True)
+    result = (
+        result.sort_values([LOCATION_COL, DATETIME_COL])
+        .drop_duplicates(subset=[DATETIME_COL, LOCATION_COL], keep="last")
+        .reset_index(drop=True)
+    )
 
     result["hour"] = result[DATETIME_COL].dt.hour
     result["dayofweek"] = result[DATETIME_COL].dt.dayofweek
@@ -94,12 +98,7 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
         result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0).astype("int64")
 
     columns = [DATETIME_COL, LOCATION_COL] + float_columns[:6] + int_columns + float_columns[6:]
-    return (
-        result[columns]
-        .drop_duplicates(subset=[DATETIME_COL, LOCATION_COL], keep="last")
-        .sort_values([LOCATION_COL, DATETIME_COL])
-        .reset_index(drop=True)
-    )
+    return result[columns]
 
 
 def _build_weather_export(weather_df: pd.DataFrame, subjects: list[str]) -> pd.DataFrame:

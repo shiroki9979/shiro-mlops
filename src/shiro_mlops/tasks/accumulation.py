@@ -20,7 +20,9 @@ LEGACY_LOAD_GUIDE = "docs/how-to/remove-legacy-d015046-load-rows.md"
 class LoadAccumulationSource(Protocol):
     """Anything that can summarize persisted derived hourly load."""
 
-    def summarize_hourly_load_accumulation(self, subject: str) -> HourlyLoadAccumulation: ...
+    def summarize_hourly_load_accumulation(
+        self, subject: str, at_or_before: datetime | None = None
+    ) -> HourlyLoadAccumulation: ...
 
 
 @dataclass(frozen=True)
@@ -57,10 +59,16 @@ class TrainingLoadReadiness:
 
 
 def check_training_load_readiness(
-    repository: LoadAccumulationSource, required_hours: int, subject: str
+    repository: LoadAccumulationSource,
+    required_hours: int,
+    subject: str,
+    *,
+    as_of: datetime | None = None,
 ) -> TrainingLoadReadiness:
     """Summarize persisted derived load against the minimum training accumulation."""
-    accumulation = repository.summarize_hourly_load_accumulation(subject=subject)
+    accumulation = repository.summarize_hourly_load_accumulation(
+        subject=subject, at_or_before=as_of
+    )
     return TrainingLoadReadiness(
         valid_hours=accumulation.valid_hours,
         required_hours=required_hours,

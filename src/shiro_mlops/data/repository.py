@@ -727,20 +727,23 @@ class TimeSeriesRepository:
         return df
 
     def summarize_hourly_load_accumulation(
-        self, subject: str = NATIONWIDE_SUBJECT
+        self, subject: str = NATIONWIDE_SUBJECT, at_or_before: datetime | None = None
     ) -> HourlyLoadAccumulation:
-        """Count derived hourly observations and legacy rows without loading the series."""
+        """Count derived rows through ``at_or_before`` and all legacy rows."""
+        time_filter, time_params = _build_time_filter(None, at_or_before)
+        # Legacy rows block every task, regardless of subject or timestamp.
         query = text(
-            """
+            f"""
             SELECT
-                COALESCE(SUM(CASE WHEN source = :derived THEN 1 ELSE 0 END), 0) AS valid_hours,
-                COALESCE(SUM(CASE WHEN source IS NULL THEN 1 ELSE 0 END), 0) AS legacy_rows,
-                MAX(CASE WHEN source = :derived THEN time END) AS latest_time
+                COALESCE(SUM(CASE WHEN source = :derived AND {time_filter} THEN 1 ELSE 0 END), 0)
+                    AS valid_hours,
+                (SELECT COUNT(*) FROM raw_taipower_load WHERE source IS NULL) AS legacy_rows,
+                MAX(CASE WHEN source = :derived AND {time_filter} THEN time END) AS latest_time
             FROM raw_taipower_load
             WHERE subject = :subject
             """
         )
-        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "subject": subject}
+        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "subject": subject, **time_params}
         with self.engine.connect() as conn:
             row = conn.execute(query, params).one()
 

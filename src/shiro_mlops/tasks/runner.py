@@ -126,10 +126,12 @@ class MonitoringReport:
 # --- Training ------------------------------------------------------------------------------
 
 
-def check_training_readiness(task: TaskDefinition, runtime: TaskRuntime) -> TrainingLoadReadiness:
-    """Summarize persisted target history against the task's minimum accumulation."""
+def check_training_readiness(
+    task: TaskDefinition, runtime: TaskRuntime, *, as_of: datetime | None = None
+) -> TrainingLoadReadiness:
+    """Summarize target history through ``as_of`` against the minimum accumulation."""
     return check_training_load_readiness(
-        runtime.repository, task.policies.min_training_hours, subject=task.subject
+        runtime.repository, task.policies.min_training_hours, subject=task.subject, as_of=as_of
     )
 
 
@@ -140,7 +142,7 @@ def load_training_data(
 
     The training window is derived from the accumulated target rows themselves.
     """
-    readiness = check_training_readiness(task, runtime)
+    readiness = check_training_readiness(task, runtime, as_of=as_of)
     if not readiness.ready:
         raise TaskNotReady(readiness)
     load = _fetch_target(task, runtime.repository, start=None, end=as_of)
@@ -211,7 +213,7 @@ def monitor_task(
     history, because monitoring runs hourly. Raises ``TaskNotReady`` while the
     minimum accumulation is unmet.
     """
-    readiness = check_training_readiness(task, runtime)
+    readiness = check_training_readiness(task, runtime, as_of=as_of)
     if not readiness.ready:
         raise TaskNotReady(readiness)
     newest = _latest_target_row(task, runtime.repository, as_of)
