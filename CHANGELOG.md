@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 移除 d015046 擷取路徑：`raw_taipower_load_data` 資產、`TaipowerClient` 與 `TAIPOWER_API_URL` 設定（#59）。
 - 移除 `MLFLOW_EXPERIMENT_NAME`、`TRAINING_MIN_LOAD_HOURS` 與 `LOAD_ANCHOR_MAX_LAG_HOURS` 設定：MLflow experiment 名稱改由任務 id 推導，訓練門檻與負載起點落後上限改由任務設定 `[policies]` 管理（#66、#67）。
 - 移除 `FallbackFeatureSources` 與特徵查詢窗等訓練備援路徑，以及 `predict_recursive` 的固定氣象預設值（#66）。
+- 移除 `merge_weather_features` 與 `build_feature_pipeline` 的 `strict_weather` 參數與非 strict 分支：天氣一律只取兩小時內的過去觀測，缺值保留而不再以 25.0／70.0 常數或未來觀測補值（#66）。
 - 移除誤標為 Feast 的 Monitoring Feature Store Snapshot 與 `GET /features/latest` 過渡端點（#50）。
 - Data Explorer 不再接受 v1 cursor，並移除時間窗口起訖各放寬一秒的查詢補償（#77）。
 
