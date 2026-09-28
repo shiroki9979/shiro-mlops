@@ -2,8 +2,9 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import pandas as pd
 from sqlalchemy import text
@@ -103,38 +104,122 @@ def _build_time_filter(
     return " AND ".join(clauses), params
 
 
-def _forecast_window_filter(boundary: str, include_adjacent_points: bool) -> str:
+FORECAST_ROW_COLUMNS = [
+    "dataset_id",
+    "issued_at",
+    "source_updated_at",
+    "valid_from",
+    "valid_to",
+    "geocode",
+    "temperature_c",
+    "dew_point_c",
+    "apparent_temperature_c",
+    "relative_humidity_pct",
+    "probability_of_precipitation_pct",
+    "wind_speed_m_s",
+    "wind_direction",
+    "created_at",
+]
+FORECAST_TIME_COLUMNS = ("issued_at", "source_updated_at", "valid_from", "valid_to")
+
+
+class ForecastVersion(NamedTuple):
+    """Identity of one forecast vintage: dataset plus its issue and source update instants."""
+
+    dataset_id: str
+    issued_at: pd.Timestamp
+    source_updated_at: pd.Timestamp
+
+
+@dataclass(frozen=True)
+class _WindowBound:
+    """One side of a forecast validity window and the neighbouring point beyond it."""
+
+    param: str
+    column: str
+    operator: str
+    neighbor_aggregate: str
+    neighbor_operator: str
+
+
+_VALID_START = _WindowBound("valid_start", "valid_to", ">=", "MAX", "<")
+_VALID_END = _WindowBound("valid_end", "valid_from", "<=", "MIN", ">")
+
+
+@dataclass(frozen=True)
+class _ForecastRowFilter:
+    """Canonical forecast row filters; issue cutoffs with a geocode select vintages point-in-time."""
+
+    geocode: str | None
+    dataset_id: str | None
+    issued_before: datetime | None
+    source_updated_before: datetime | None
+    valid_start: datetime | None
+    valid_end: datetime | None
+    include_adjacent_points: bool
+
+    @property
+    def selects_versions(self) -> bool:
+        return self.geocode is not None and self.issued_before is not None
+
+    def row_conditions(self) -> tuple[list[str], dict[str, Any]]:
+        clauses, params = self.release_conditions()
+        if self.geocode is not None:
+            clauses.append("geocode = :geocode")
+            params["geocode"] = self.geocode
+        for bound, value in ((_VALID_START, self.valid_start), (_VALID_END, self.valid_end)):
+            if value is not None:
+                clauses.append(_forecast_window_filter(bound, self.include_adjacent_points))
+                params[bound.param] = value
+        return clauses, params
+
+    def release_conditions(self) -> tuple[list[str], dict[str, Any]]:
+        """Conditions shared by forecast rows and their release headers."""
+        clauses = ["1=1"]
+        params: dict[str, Any] = {}
+        if self.dataset_id is not None:
+            clauses.append("dataset_id = :dataset_id")
+            params["dataset_id"] = self.dataset_id
+        if self.issued_before is not None:
+            clauses.append("issued_at <= :issued_before")
+            params["issued_before"] = self.issued_before
+        if self.source_updated_before is not None:
+            clauses.append("source_updated_at <= :source_updated_before")
+            params["source_updated_before"] = self.source_updated_before
+        return clauses, params
+
+
+def _utc_cutoff(value: datetime | str | None) -> datetime | None:
+    return None if value is None else _taiwan_instant_to_utc(pd.Timestamp(value).to_pydatetime())
+
+
+def _forecast_window_filter(bound: _WindowBound, include_adjacent_points: bool) -> str:
     """Keep interpolation endpoints from the same location and forecast vintage."""
-    column, operator, aggregate, adjacent_operator = (
-        ("valid_to", ">=", "MAX", "<")
-        if boundary == "valid_start"
-        else ("valid_from", "<=", "MIN", ">")
-    )
-    within_window = f"{column} {operator} :{boundary}"
+    within_window = f"{bound.column} {bound.operator} :{bound.param}"
     if not include_adjacent_points:
         return within_window
     return f"""({within_window} OR (
         forecast.valid_from = forecast.valid_to AND forecast.valid_from = (
-            SELECT {aggregate}(neighbor.valid_from)
+            SELECT {bound.neighbor_aggregate}(neighbor.valid_from)
             FROM raw_cwa_township_forecast AS neighbor
             WHERE neighbor.dataset_id = forecast.dataset_id
               AND neighbor.geocode = forecast.geocode
               AND neighbor.issued_at = forecast.issued_at
               AND neighbor.source_updated_at = forecast.source_updated_at
               AND neighbor.valid_from = neighbor.valid_to
-              AND neighbor.valid_from {adjacent_operator} :{boundary}
+              AND neighbor.valid_from {bound.neighbor_operator} :{bound.param}
         )
     ))"""
 
 
-def _forecast_version_key(row: pd.Series) -> tuple[str, pd.Timestamp, pd.Timestamp]:
+def _forecast_version_key(row: pd.Series) -> ForecastVersion:
     """Build a comparable forecast-vintage identity from a query row."""
 
     def normalize(value: object) -> pd.Timestamp:
         timestamp = pd.Timestamp(value)
         return timestamp.tz_convert("UTC").tz_localize(None) if timestamp.tzinfo else timestamp
 
-    return (
+    return ForecastVersion(
         str(row["dataset_id"]),
         normalize(row["issued_at"]),
         normalize(row["source_updated_at"]),
@@ -144,12 +229,12 @@ def _forecast_version_key(row: pd.Series) -> tuple[str, pd.Timestamp, pd.Timesta
 def _select_forecast_versions(
     headers: pd.DataFrame,
     available_versions: pd.DataFrame,
-) -> set[tuple[str, pd.Timestamp, pd.Timestamp]]:
+) -> set[ForecastVersion]:
     """Select a latest release or its prior complete fallback per forecast dataset."""
     if headers.empty:
         return set()
     available = {_forecast_version_key(row) for _, row in available_versions.iterrows()}
-    selected: set[tuple[str, pd.Timestamp, pd.Timestamp]] = set()
+    selected: set[ForecastVersion] = set()
     for _, releases in headers.groupby("dataset_id"):
         ordered = releases.sort_values(["issued_at", "source_updated_at"], ascending=False)
         latest = _forecast_version_key(ordered.iloc[0])
@@ -162,6 +247,61 @@ def _select_forecast_versions(
                 selected.add(version)
                 break
     return selected
+
+
+def _read_forecast_rows(conn: Connection, filters: _ForecastRowFilter) -> pd.DataFrame:
+    clauses, params = filters.row_conditions()
+    query = f"""
+        SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
+               location_name, temperature_c, dew_point_c, apparent_temperature_c,
+               relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
+               wind_direction, created_at
+        FROM raw_cwa_township_forecast AS forecast
+        WHERE {" AND ".join(clauses)}
+        ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
+                 issued_at DESC, source_updated_at DESC
+    """
+    return pd.read_sql_query(text(query), conn, params=params)
+
+
+def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> set[ForecastVersion]:
+    """The vintage each dataset serves at the cutoff, among those holding rows for the geocode."""
+    clauses, params = filters.release_conditions()
+    headers = pd.read_sql_query(
+        text(
+            f"""
+            SELECT dataset_id, issued_at, source_updated_at, status
+            FROM raw_cwa_forecast_release
+            WHERE {" AND ".join(clauses)}
+            """
+        ),
+        conn,
+        params=params,
+    )
+    available_versions = pd.read_sql_query(
+        text(
+            """
+            SELECT DISTINCT dataset_id, issued_at, source_updated_at
+            FROM raw_cwa_township_forecast
+            WHERE geocode = :geocode
+            """
+        ),
+        conn,
+        params={"geocode": filters.geocode},
+    )
+    return _select_forecast_versions(headers, available_versions)
+
+
+def _in_versions(frame: pd.DataFrame, versions: set[ForecastVersion]) -> pd.DataFrame:
+    return frame.loc[frame.apply(lambda row: _forecast_version_key(row) in versions, axis=1)]
+
+
+def _forecast_rows_in_taiwan_time(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(columns=FORECAST_ROW_COLUMNS)
+    for column in FORECAST_TIME_COLUMNS:
+        frame[column] = utc_to_taiwan_datetime(frame[column])
+    return frame
 
 
 class TimeSeriesRepository:
@@ -483,104 +623,20 @@ class TimeSeriesRepository:
         include_adjacent_points: bool = False,
     ) -> pd.DataFrame:
         """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
-        clauses = ["1=1"]
-        params: dict[str, Any] = {}
-        if geocode is not None:
-            clauses.append("geocode = :geocode")
-            params["geocode"] = geocode
-        if dataset_id is not None:
-            clauses.append("dataset_id = :dataset_id")
-            params["dataset_id"] = dataset_id
-        if issued_before is not None:
-            clauses.append("issued_at <= :issued_before")
-            params["issued_before"] = _taiwan_instant_to_utc(
-                pd.Timestamp(issued_before).to_pydatetime()
-            )
-        if source_updated_before is not None:
-            clauses.append("source_updated_at <= :source_updated_before")
-            params["source_updated_before"] = _taiwan_instant_to_utc(
-                pd.Timestamp(source_updated_before).to_pydatetime()
-            )
-        if valid_start is not None:
-            clauses.append(_forecast_window_filter("valid_start", include_adjacent_points))
-            params["valid_start"] = _taiwan_instant_to_utc(
-                pd.Timestamp(valid_start).to_pydatetime()
-            )
-        if valid_end is not None:
-            clauses.append(_forecast_window_filter("valid_end", include_adjacent_points))
-            params["valid_end"] = _taiwan_instant_to_utc(pd.Timestamp(valid_end).to_pydatetime())
-        query = f"""
-            SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
-                   location_name, temperature_c, dew_point_c, apparent_temperature_c,
-                   relative_humidity_pct, probability_of_precipitation_pct, wind_speed_m_s,
-                   wind_direction, created_at
-            FROM raw_cwa_township_forecast AS forecast
-            WHERE {" AND ".join(clauses)}
-            ORDER BY valid_from ASC, valid_to ASC, geocode ASC,
-                     issued_at DESC, source_updated_at DESC
-        """
+        filters = _ForecastRowFilter(
+            geocode=geocode,
+            dataset_id=dataset_id,
+            issued_before=_utc_cutoff(issued_before),
+            source_updated_before=_utc_cutoff(source_updated_before),
+            valid_start=_utc_cutoff(valid_start),
+            valid_end=_utc_cutoff(valid_end),
+            include_adjacent_points=include_adjacent_points,
+        )
         with self.engine.connect() as conn:
-            frame = pd.read_sql_query(text(query), conn, params=params)
-            if geocode is not None and issued_before is not None:
-                header_clauses = ["issued_at <= :issued_before"]
-                header_params: dict[str, Any] = {"issued_before": params["issued_before"]}
-                if dataset_id is not None:
-                    header_clauses.append("dataset_id = :dataset_id")
-                    header_params["dataset_id"] = dataset_id
-                if source_updated_before is not None:
-                    header_clauses.append("source_updated_at <= :source_updated_before")
-                    header_params["source_updated_before"] = params["source_updated_before"]
-                headers = pd.read_sql_query(
-                    text(
-                        f"""
-                        SELECT dataset_id, issued_at, source_updated_at, status
-                        FROM raw_cwa_forecast_release
-                        WHERE {" AND ".join(header_clauses)}
-                        """
-                    ),
-                    conn,
-                    params=header_params,
-                )
-                available_versions = pd.read_sql_query(
-                    text(
-                        """
-                        SELECT DISTINCT dataset_id, issued_at, source_updated_at
-                        FROM raw_cwa_township_forecast
-                        WHERE geocode = :geocode
-                        """
-                    ),
-                    conn,
-                    params={"geocode": geocode},
-                )
-                selected_versions = _select_forecast_versions(headers, available_versions)
-                frame = frame.loc[
-                    frame.apply(
-                        lambda row: _forecast_version_key(row) in selected_versions,
-                        axis=1,
-                    )
-                ]
-        if frame.empty:
-            return pd.DataFrame(
-                columns=[
-                    "dataset_id",
-                    "issued_at",
-                    "source_updated_at",
-                    "valid_from",
-                    "valid_to",
-                    "geocode",
-                    "temperature_c",
-                    "dew_point_c",
-                    "apparent_temperature_c",
-                    "relative_humidity_pct",
-                    "probability_of_precipitation_pct",
-                    "wind_speed_m_s",
-                    "wind_direction",
-                    "created_at",
-                ]
-            )
-        for column in ("issued_at", "source_updated_at", "valid_from", "valid_to"):
-            frame[column] = utc_to_taiwan_datetime(frame[column])
-        return frame
+            frame = _read_forecast_rows(conn, filters)
+            if filters.selects_versions:
+                frame = _in_versions(frame, _read_selected_versions(conn, filters))
+        return _forecast_rows_in_taiwan_time(frame)
 
     def fetch_load_range(
         self,
