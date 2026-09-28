@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import Any, NamedTuple
 
-import pandas as pd
-
-from shiro_mlops.data.repository import ForecastVersion
 from shiro_mlops.service.data_explorer.completeness import observation_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
@@ -16,7 +14,15 @@ from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
 
-def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> ForecastVersion | None:
+class PinnedForecastVersion(NamedTuple):
+    """A forecast vintage the explorer pins across pages; instants are Taiwan-local."""
+
+    dataset_id: str
+    issued_at: datetime
+    source_updated_at: datetime
+
+
+def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> PinnedForecastVersion | None:
     """Return the newest persisted forecast release in Taiwan time, optionally for one dataset."""
     clauses = []
     params: dict[str, Any] = {}
@@ -37,10 +43,10 @@ def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> ForecastV
     )
     if row is None:
         return None
-    return ForecastVersion(
+    return PinnedForecastVersion(
         dataset_id=row["dataset_id"],
-        issued_at=pd.Timestamp(to_taiwan(row["issued_at"])),
-        source_updated_at=pd.Timestamp(to_taiwan(row["source_updated_at"])),
+        issued_at=to_taiwan(row["issued_at"]),
+        source_updated_at=to_taiwan(row["source_updated_at"]),
     )
 
 
@@ -81,7 +87,7 @@ def _pin_forecast_version(
     return query_params
 
 
-def _version_filters(version: ForecastVersion) -> dict[str, str]:
+def _version_filters(version: PinnedForecastVersion) -> dict[str, str]:
     """Pin a version as query filters; microseconds keep near-simultaneous releases apart."""
     return {
         "dataset_id": version.dataset_id,

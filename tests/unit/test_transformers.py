@@ -322,7 +322,7 @@ def test_weather_gap_forward_fills_at_most_two_hours_and_drops_remaining_rows() 
     assert list(features["temperature"]) == [30.0, 30.0, 34.0]
 
 
-def test_strict_weather_drops_stale_values_across_missing_load_hours() -> None:
+def test_weather_older_than_two_hours_is_dropped_across_missing_load_hours() -> None:
     load = pd.DataFrame(
         {
             "datetime": pd.to_datetime(
@@ -348,7 +348,7 @@ def test_strict_weather_drops_stale_values_across_missing_load_hours() -> None:
     assert features["temperature"].tolist() == [28.0, 28.0]
 
 
-def test_strict_weather_matches_each_field_to_past_observations_per_location() -> None:
+def test_weather_fields_match_past_observations_per_location() -> None:
     load = pd.DataFrame(
         {
             "datetime": ["2026-09-20 03:00", "2026-09-20 03:00"],

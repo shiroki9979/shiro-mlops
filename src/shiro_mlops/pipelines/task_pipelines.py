@@ -225,15 +225,14 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
     )
     def monitoring(context: AssetExecutionContext, model: dict) -> dict:
         """Hourly report: bounded reads only, so the full history is never re-read."""
-        record = TrainedModelRecord(**model)
         try:
-            report = monitor_task(task, _runtime(context), record["metrics"], as_of=taiwan_now())
+            report = monitor_task(task, _runtime(context), model["metrics"], as_of=taiwan_now())
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         context.log.info(
             "%s health: %s (%s)", names.task_id, report.health.status, report.health.reason
         )
-        return _report_payload(report, training_rows=record["training_rows"])
+        return _report_payload(report, training_rows=model["training_rows"])
 
     return monitoring
 
