@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+
+from shiro_mlops.data.repository import ForecastVersion
 from shiro_mlops.service.data_explorer.completeness import observation_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
@@ -13,8 +16,8 @@ from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
 
-def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> dict[str, Any] | None:
-    """Return the newest persisted forecast release, optionally scoped to one dataset."""
+def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> ForecastVersion | None:
+    """Return the newest persisted forecast release in Taiwan time, optionally for one dataset."""
     clauses = []
     params: dict[str, Any] = {}
     if dataset_id:
@@ -34,11 +37,11 @@ def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> dict[str,
     )
     if row is None:
         return None
-    return {
-        "latest_dataset_id": row["dataset_id"],
-        "latest_issued_at": row["issued_at"],
-        "latest_source_updated_at": row["source_updated_at"],
-    }
+    return ForecastVersion(
+        dataset_id=row["dataset_id"],
+        issued_at=pd.Timestamp(to_taiwan(row["issued_at"])),
+        source_updated_at=pd.Timestamp(to_taiwan(row["source_updated_at"])),
+    )
 
 
 def _audit_status(value: str | None) -> str | None:
@@ -74,14 +77,17 @@ def _pin_forecast_version(
 
     latest = latest_forecast_version(db, query_params.get("dataset_id"))
     if latest is not None:
-        query_params["dataset_id"] = latest["latest_dataset_id"]
-        query_params["issued_at"] = format_taiwan_time(
-            to_taiwan(latest["latest_issued_at"]), timespec="microseconds"
-        )
-        query_params["source_updated_at"] = format_taiwan_time(
-            to_taiwan(latest["latest_source_updated_at"]), timespec="microseconds"
-        )
+        query_params.update(_version_filters(latest))
     return query_params
+
+
+def _version_filters(version: ForecastVersion) -> dict[str, str]:
+    """Pin a version as query filters; microseconds keep near-simultaneous releases apart."""
+    return {
+        "dataset_id": version.dataset_id,
+        "issued_at": format_taiwan_time(version.issued_at, timespec="microseconds"),
+        "source_updated_at": format_taiwan_time(version.source_updated_at, timespec="microseconds"),
+    }
 
 
 def _restore_cursor_forecast_version(
