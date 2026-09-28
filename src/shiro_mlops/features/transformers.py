@@ -1,6 +1,6 @@
 """Time-series feature engineering and transformation functions."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import timedelta
 
 import numpy as np
@@ -36,6 +36,16 @@ def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL)
     return df
 
 
+def _observed_load_groups(
+    df: pd.DataFrame, value_col: str, location_col: str
+) -> Iterator[tuple[pd.Index, pd.DatetimeIndex, pd.Series]]:
+    """Yield each location's observations with normalized event times."""
+    groups = df.groupby(location_col, sort=False) if location_col in df.columns else [(None, df)]
+    for _, rows in groups:
+        times = pd.DatetimeIndex(standardize_taiwan_datetime(rows[DATETIME_COL]))
+        yield rows.index, times, pd.Series(rows[value_col].to_numpy(), index=times)
+
+
 def create_lag_features(
     df: pd.DataFrame,
     *,
@@ -48,13 +58,10 @@ def create_lag_features(
     for lag in lags:
         df[f"{value_col}_lag_{lag}"] = np.nan
 
-    groups = df.groupby(location_col, sort=False) if location_col in df.columns else [(None, df)]
-    for _, rows in groups:
-        times = pd.DatetimeIndex(standardize_taiwan_datetime(rows[DATETIME_COL]))
-        observed = pd.Series(rows[value_col].to_numpy(), index=times)
+    for row_index, times, observed in _observed_load_groups(df, value_col, location_col):
         for lag in lags:
             earlier = times - pd.Timedelta(lag, unit="h")
-            df.loc[rows.index, f"{value_col}_lag_{lag}"] = observed.reindex(earlier).to_numpy()
+            df.loc[row_index, f"{value_col}_lag_{lag}"] = observed.reindex(earlier).to_numpy()
 
     return df
 
@@ -72,16 +79,14 @@ def create_rolling_features(
         df[f"{value_col}_rolling_mean_{w}"] = np.nan
         df[f"{value_col}_rolling_std_{w}"] = np.nan
 
-    groups = df.groupby(location_col, sort=False) if location_col in df.columns else [(None, df)]
-    for _, rows in groups:
-        times = pd.DatetimeIndex(standardize_taiwan_datetime(rows[DATETIME_COL]))
-        observed = pd.Series(rows[value_col].to_numpy(), index=times).sort_index()
+    for row_index, times, observed in _observed_load_groups(df, value_col, location_col):
+        observed = observed.sort_index()
         for w in windows:
             past = observed.rolling(pd.Timedelta(w, unit="h"), closed="left", min_periods=1)
-            df.loc[rows.index, f"{value_col}_rolling_mean_{w}"] = (
+            df.loc[row_index, f"{value_col}_rolling_mean_{w}"] = (
                 past.mean().reindex(times).to_numpy()
             )
-            df.loc[rows.index, f"{value_col}_rolling_std_{w}"] = (
+            df.loc[row_index, f"{value_col}_rolling_std_{w}"] = (
                 past.std().where(past.count().ne(1), 0.0).reindex(times).to_numpy()
             )
 

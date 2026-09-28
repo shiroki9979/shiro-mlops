@@ -110,6 +110,18 @@ def test_training_below_minimum_accumulation_raises_task_not_ready(
     assert error.value.readiness.required_hours == HOURS + 1
 
 
+def test_training_gate_counts_only_load_known_by_as_of(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    as_of = LAST_HOUR - pd.Timedelta(hours=1)
+
+    with pytest.raises(TaskNotReady) as error:
+        load_training_data(task, runtime, as_of=as_of)
+
+    assert error.value.readiness.valid_hours == HOURS - 1
+    assert error.value.readiness.required_hours == HOURS
+
+
 def test_training_data_splits_the_latest_validation_fraction_of_target_hours(
     task: TaskDefinition, runtime: TaskRuntime
 ) -> None:
@@ -129,7 +141,7 @@ def test_training_reports_out_of_time_metrics(task: TaskDefinition, runtime: Tas
 def test_training_table_round_trip_trains_the_same_model(
     task: TaskDefinition, runtime: TaskRuntime
 ) -> None:
-    """資產以單一訓練表跨 run 保存；還原後須與直接讀取的訓練資料訓練出相同結果。"""
+    """A stored training table must restore the same training outcome as direct data loading."""
     data = load_training_data(task, runtime, as_of=FRESH_AS_OF)
 
     restored = training_data_from_table(task, training_table(data))
@@ -188,6 +200,31 @@ def test_monitoring_below_minimum_accumulation_raises_task_not_ready(
 
     with pytest.raises(TaskNotReady):
         monitor_task(short_of_threshold, runtime, {"mape": 3.0}, as_of=FRESH_AS_OF)
+
+
+def test_monitoring_gate_counts_only_load_known_by_as_of(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    as_of = LAST_HOUR - pd.Timedelta(hours=1)
+
+    with pytest.raises(TaskNotReady) as error:
+        monitor_task(task, runtime, {"mape": 3.0}, as_of=as_of)
+
+    assert error.value.readiness.valid_hours == HOURS - 1
+
+
+def test_monitoring_report_counts_only_load_known_by_as_of(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    threshold = replace(
+        task, policies=task.policies.model_copy(update={"min_training_hours": HOURS - 1})
+    )
+    as_of = LAST_HOUR - pd.Timedelta(hours=1)
+
+    report = monitor_task(threshold, runtime, {"mape": 3.0}, as_of=as_of)
+
+    assert report.target_hours == HOURS - 1
+    assert report.latest_target_time == as_of
 
 
 # --- Serving -------------------------------------------------------------------------------
@@ -266,7 +303,7 @@ def test_rows_persisted_after_as_of_never_anchor_the_forecast(
 def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
     task: TaskDefinition, runtime: TaskRuntime, model: TaskModel, monkeypatch
 ) -> None:
-    """就緒代表可服務最長視界：預報天氣任務須以 168 小時解析天氣（SPEC §5.3）。"""
+    """Readiness checks weather across the full 168-hour forecast horizon required by SPEC section 5.3."""
     requested_horizons: list[int] = []
     resolve = runner.resolve_weather
 
@@ -319,7 +356,7 @@ def anomaly_model(anomaly_task: TaskDefinition, runtime: TaskRuntime) -> TaskMod
 def test_observed_prediction_scores_window_end_hours_up_to_the_anchor(
     anomaly_task: TaskDefinition, runtime: TaskRuntime, anomaly_model: TaskModel
 ) -> None:
-    """觀測路徑不讀預報、不降級：mode 固定 normal，天氣列逐一對應被評分的時間窗結束小時。"""
+    """The observed-weather path stays normal and aligns each weather row with a scored window end."""
     outcome = predict_task(
         anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
     )
@@ -403,7 +440,7 @@ def test_observed_prediction_with_no_scorable_window_is_unavailable(
     anomaly_model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """起點前三小時沒有觀測天氣時，結束於起點的時間窗無法評分，應回報不可用而非空結果。"""
+    """Without recent observations, an unscorable anchor window is unavailable rather than an empty result."""
     repository = runtime.repository
     fetch_weather_range = repository.fetch_weather_range
     last_observation = ANCHOR - pd.Timedelta(hours=3)
