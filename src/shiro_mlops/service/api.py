@@ -305,6 +305,7 @@ def _readiness(task: TaskDefinition) -> ReadyResponse:
     try:
         readiness = check_task_ready(task, model, _runtime(), as_of=request_clock())
     except Exception as error:
+        logger.exception("Readiness check failed for task %s", task.task_id)
         readiness = Readiness(ready=False, reason=str(error))
     if not readiness.ready:
         response = ReadyResponse(
@@ -328,6 +329,7 @@ def _predict(task: TaskDefinition, *, horizon_hours: int) -> PredictionOutcome:
     except SQLAlchemyError as error:
         raise HTTPException(status_code=503, detail=f"Persistence unavailable: {error}") from error
     except Exception as error:
+        logger.exception("Prediction failed for task %s", task.task_id)
         raise HTTPException(status_code=500, detail=f"Prediction error: {error}") from error
 
 

@@ -307,6 +307,31 @@ def test_task_predict_answers_503_when_serving_inputs_are_unavailable(
     assert task.json()["detail"] == alias.json()["detail"] == str(error)
 
 
+def test_unexpected_task_errors_are_logged_with_their_traceback(monkeypatch, caplog) -> None:
+    """非預期錯誤轉成 not_ready 或 HTTP 500 時，堆疊須留在 log 以追查真因。"""
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
+    monkeypatch.setattr("shiro_mlops.service.api.repository_store", MagicMock())
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("feature column mismatch")
+
+    monkeypatch.setattr("shiro_mlops.service.api.check_task_ready", broken)
+    monkeypatch.setattr("shiro_mlops.service.api.predict_task", broken)
+    client = TestClient(app)
+
+    with caplog.at_level("ERROR", logger="shiro_mlops.service.api"):
+        ready = client.get(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/ready")
+        predict = client.post(
+            f"/tasks/{DYNAMIC_HORIZON_FORECAST}/predict", json={"horizon_hours": 1}
+        )
+
+    assert ready.status_code == 503
+    assert predict.status_code == 500
+    logged = [record for record in caplog.records if record.exc_info]
+    assert len(logged) == 2
+    assert all(DYNAMIC_HORIZON_FORECAST in record.getMessage() for record in logged)
+
+
 def test_task_ready_matches_the_ready_alias(
     fitted_task_model: TaskModel,
     taipower_raw_df: pd.DataFrame,
