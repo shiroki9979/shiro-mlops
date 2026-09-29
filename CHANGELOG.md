@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 將中央氣象署預報的 `-` 缺值標記正規化為 `NULL`，避免每週預報降雨機率為連字號時 ingestion 重試後失敗（`cwa_client`）。
+
 ## [0.4.0] - 2026-09-28
 
 ### Added

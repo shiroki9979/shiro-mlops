@@ -166,7 +166,7 @@ def _coerce_number(
     if value is None:
         return None
     raw = str(_source_value(value)).strip()
-    if raw in {"", "X", "x", "-99"}:
+    if raw in {"", "-", "X", "x", "-99"}:
         return None
     if zero_markers and raw in zero_markers:
         return 0.0
@@ -430,9 +430,9 @@ def _forecast_numeric(values: dict[str, Any], names: set[str], context: str) -> 
 def _forecast_text(values: dict[str, Any], names: set[str]) -> str | None:
     """Read a non-numeric forecast element without interpolation."""
     for name in names:
-        if name in values and values[name] not in (None, "", "X", "-99"):
+        if name in values and values[name] not in (None, "", "-", "X", "-99"):
             value = _source_value(values[name])
-            return None if value in (None, "", "X", "-99") else str(value)
+            return None if value in (None, "", "-", "X", "-99") else str(value)
     return None
 
 

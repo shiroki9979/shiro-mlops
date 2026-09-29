@@ -306,6 +306,65 @@ def test_forecast_parser_rejects_invalid_numbers_with_source_context() -> None:
         parse_forecast_release(payload, dataset_id="F-D0047-089")
 
 
+def test_forecast_parser_treats_hyphen_as_missing_numeric_and_text() -> None:
+    """F-D0047-091 emits '-' when a period has no value, including PoP."""
+    payload = {
+        "records": {
+            "IssueTime": "2026-09-29T17:00:00+08:00",
+            "Update": "2026-09-29T17:00:00+08:00",
+            "locations": [
+                {
+                    "location": [
+                        {
+                            "geocode": "63000000",
+                            "weatherElement": [
+                                {
+                                    "elementName": "PoP12h",
+                                    "time": [
+                                        {
+                                            "startTime": "2026-10-03T06:00:00+08:00",
+                                            "endTime": "2026-10-03T18:00:00+08:00",
+                                            "elementValue": [{"value": "-"}],
+                                        }
+                                    ],
+                                },
+                                {
+                                    "elementName": "T",
+                                    "time": [
+                                        {
+                                            "startTime": "2026-10-03T06:00:00+08:00",
+                                            "endTime": "2026-10-03T18:00:00+08:00",
+                                            "elementValue": [{"value": "28"}],
+                                        }
+                                    ],
+                                },
+                                {
+                                    "elementName": "WD",
+                                    "time": [
+                                        {
+                                            "startTime": "2026-10-03T06:00:00+08:00",
+                                            "endTime": "2026-10-03T18:00:00+08:00",
+                                            "elementValue": [{"value": "-"}],
+                                        }
+                                    ],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+    release = parse_forecast_release(payload, dataset_id="F-D0047-091")
+    point = release.forecasts[0]
+
+    assert point.valid_from == pd.Timestamp("2026-10-03 06:00:00")
+    assert point.probability_of_precipitation_pct is None
+    assert point.temperature_c == 28.0
+    assert point.wind_direction is None
+
+
 def test_repository_persists_canonical_observation_batch(test_repo: TimeSeriesRepository) -> None:
     batch = parse_observation_batch(_observation_payload(), fetched_at=datetime(2026, 8, 20, 14, 5))
 
