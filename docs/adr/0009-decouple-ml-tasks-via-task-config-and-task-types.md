@@ -2,7 +2,7 @@
 
 > - Created: 2026-09-27
 > - Last Updated: 2026-09-28
-> - Author: White Huang
+> - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[CONTEXT.md](../../CONTEXT.md)
 

@@ -2,7 +2,7 @@
 
 > - Created: 2026-09-27
 > - Last Updated: 2026-09-27
-> - Author: White Huang
+> - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[SPEC 1.5 Dagster Artifact 序列化與信任邊界](../SPEC.md)
 

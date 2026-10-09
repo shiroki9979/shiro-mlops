@@ -5,7 +5,7 @@ description = "Hybrid Local/AWS MLOps platform for dynamic horizon load forecast
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "White Huang (shiro)" }
+    { name = "Bo-Xue Huang (shiro)" }
 ]
 dependencies = [
     "dagster>=1.7.0",

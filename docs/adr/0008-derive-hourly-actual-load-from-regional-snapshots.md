@@ -2,7 +2,7 @@
 
 > - Created: 2026-09-26
 > - Last Updated: 2026-09-26
-> - Author: White Huang
+> - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[台電逐時負載來源調查](../research/2026-09-16-taipower-hourly-actual-load-source.md)、[Issue #58](https://github.com/shiroki9979/shiro-mlops/issues/58)、[Issue #59](https://github.com/shiroki9979/shiro-mlops/issues/59)
 
