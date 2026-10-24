@@ -70,7 +70,7 @@ make frontend-smoke ARGS='--check-compose-bindings --direct-api-url http://127.0
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build frontend
 ```
 
-需要 Vite 熱重載時仍可使用 `make frontend`，由 `http://127.0.0.1:5173` 開啟開發伺服器。主分支 PR 與 push CI 另執行前端 lint、測試、建置及 Nginx 映像與 HTTP 檢查；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
+需要 Vite 熱重載時仍可使用 `make frontend`，由 `http://127.0.0.1:5173` 開啟開發伺服器。主分支 PR 與 push CI 另執行前端 lint、測試、建置，以及獨立的 Nginx 映像建置與 `nginx -t` 設定檢查。CI 使用本機 `make frontend-smoke` 的同一支腳本，在不啟動完整 Compose stack 的情況下，以 `api` 名稱的 stub 驗證首頁、深層 SPA 路由、靜態資產、遺失資產 404 與 `/api/health` 去前綴轉送；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
 
 ---
 
