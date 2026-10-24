@@ -3,8 +3,8 @@
 Checks:
   python-uv  Makefile recipes and CI `run:` commands must not start with a host python/python3.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
-  doc-dates  Docs changed between --base and --head must carry a last-updated date no older
-             than their newest commit in that range.
+  doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
+             earlier than the newest author date of their commits in that range.
 """
 
 from __future__ import annotations
@@ -82,6 +82,14 @@ class HeaderDate:
         return date.fromisoformat(self.raw)
 
 
+# Check name -> runner; the single list of checks the CLI accepts.
+CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
+    "python-uv": lambda args: check_python_uv(REPO_ROOT),
+    "terms": lambda args: check_terms(REPO_ROOT),
+    "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
@@ -96,7 +104,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("checks", nargs="+", choices=["python-uv", "terms", "doc-dates"])
+    parser.add_argument("checks", nargs="+", choices=list(CHECKS))
     parser.add_argument("--base", help="base ref for doc-dates, e.g. origin/dev or a PR base SHA")
     parser.add_argument("--head", default="HEAD", help="head ref for doc-dates (default: HEAD)")
     args = parser.parse_args(argv)
@@ -106,12 +114,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def run_checks(args: argparse.Namespace) -> list[Violation]:
-    checks: dict[str, Callable[[], list[Violation]]] = {
-        "python-uv": lambda: check_python_uv(REPO_ROOT),
-        "terms": lambda: check_terms(REPO_ROOT),
-        "doc-dates": lambda: check_doc_dates(REPO_ROOT, args.base, args.head),
-    }
-    return [violation for name in args.checks for violation in checks[name]()]
+    return [violation for name in args.checks for violation in CHECKS[name](args)]
 
 
 def report(violations: list[Violation]) -> int:
@@ -313,46 +316,62 @@ def find_banned_terms(text: str) -> list[TermHit]:
 # --- doc-dates -------------------------------------------------------------
 
 
-def check_doc_dates(repo_root: Path, base: str, head: str) -> list[Violation]:
+def check_doc_dates(revisions: GitRange) -> list[Violation]:
     violations = []
-    for path in changed_markdown(repo_root, base, head):
-        changed_on = newest_change_date(repo_root, base, head, path)
+    for path in revisions.changed_markdown():
+        changed_on = revisions.newest_author_date(path)
         if changed_on is None:
             continue
-        text = git(repo_root, "show", f"{head}:{path}")
-        violation = doc_date_violation(path, text, changed_on)
+        violation = doc_date_violation(path, revisions.read_at_head(path), changed_on)
         if violation is not None:
             violations.append(violation)
     return violations
 
 
-def changed_markdown(repo_root: Path, base: str, head: str) -> list[str]:
-    output = git(
-        repo_root, "diff", "--name-only", "--diff-filter=AMR", f"{base}...{head}", "--", "*.md"
-    )
-    return [path for path in output.splitlines() if path]
+@dataclass(frozen=True)
+class GitRange:
+    """A base/head comparison in one repository, as a PR presents it."""
 
+    repo_root: Path
+    base: str
+    head: str
 
-def newest_change_date(repo_root: Path, base: str, head: str, path: str) -> date | None:
-    # Author date in the author's own timezone matches the calendar day the header was written.
-    output = git(
-        repo_root,
-        "log",
-        "-1",
-        "--no-merges",
-        "--format=%ad",
-        "--date=short",
-        f"{base}..{head}",
-        "--",
-        path,
-    ).strip()
-    return date.fromisoformat(output) if output else None
+    def changed_markdown(self) -> list[str]:
+        output = git(
+            self.repo_root,
+            "diff",
+            "--name-only",
+            "--diff-filter=AMR",
+            f"{self.base}...{self.head}",
+            "--",
+            "*.md",
+        )
+        return [path for path in output.splitlines() if path]
+
+    def newest_author_date(self, path: str) -> date | None:
+        # Author date in the author's own timezone matches the calendar day the header was written.
+        # Log order follows ancestry, and a rebase can leave an older author date on top, so the
+        # newest date is the maximum over the range rather than the first entry.
+        output = git(
+            self.repo_root,
+            "log",
+            "--no-merges",
+            "--format=%ad",
+            "--date=short",
+            f"{self.base}..{self.head}",
+            "--",
+            path,
+        )
+        return max(map(date.fromisoformat, output.split()), default=None)
+
+    def read_at_head(self, path: str) -> str:
+        return git(self.repo_root, "show", f"{self.head}:{path}")
 
 
 def doc_date_violation(path: str, text: str, changed_on: date) -> Violation | None:
     header = find_last_updated(text)
     if header is None:
-        return None
+        return Violation(path, 1, "missing last-updated header")
     try:
         updated_on = header.value
     except ValueError:

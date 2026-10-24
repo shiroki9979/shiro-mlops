@@ -181,10 +181,10 @@ def test_header_already_on_change_date_passes() -> None:
     assert doc_date_violation("docs/doc.md", markdown, changed_on=date(2026, 10, 25)) is None
 
 
-def test_document_without_header_has_no_date_violation() -> None:
-    assert (
-        doc_date_violation("CHANGELOG.md", "# Changelog\n", changed_on=date(2026, 10, 25)) is None
-    )
+def test_document_without_header_is_a_violation_on_its_first_line() -> None:
+    violation = doc_date_violation("CHANGELOG.md", "# Changelog\n", changed_on=date(2026, 10, 25))
+
+    assert (violation.path, violation.line) == ("CHANGELOG.md", 1)
 
 
 def test_invalid_header_date_is_a_violation() -> None:
