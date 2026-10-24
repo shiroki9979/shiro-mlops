@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-28
+- 最後更新：2026-10-24
 - 專案版本：`0.4.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
@@ -12,13 +12,15 @@
 
 | 里程碑 | 目標 | 主要模組 | 驗證標準 |
 | :--- | :--- | :--- | :--- |
-| **M1: 視覺化儀表板** | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 (已完成) |
+| **M1: 視覺化儀表板** | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置；本機 Compose 可預覽已建置的 SPA (已完成) |
 | **M2: 上游中斷韌性與降級預報** | CWA 擷取指數退避重試，serving 依常模降級並拒絕過舊負載起點 | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/service/` | CWA 擷取中斷時以 `mode: "degraded"` 產出預報；負載起點過舊時回傳 HTTP 503 |
 | **M3: 多測站與行事曆特徵** | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
 | **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
 | **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 (已完成) |
 | **M6: 全台逐時實際負載重建** | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
 | **M7: ML 任務解耦** | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
+
+[#81](https://github.com/shiroki9979/shiro-mlops/issues/81) 的 Nginx 靜態前端預覽與同源 API 僅適用本機 Compose；M4 的雲端前端託管、映像發布、DNS 與 TLS 仍需另行規劃與驗收。
 
 ---
 
