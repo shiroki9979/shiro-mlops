@@ -4,21 +4,23 @@
 - 最後更新：2026-10-25
 - 專案版本：`0.4.0`
 
-本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。
+本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。以下狀態依儲存庫程式碼、已合併 PR 與 GitHub issue 核對；需要正式資料或雲端設定的驗收另行標示，不以 issue 關閉代替現場驗證。
 
 ---
 
 ## 里程碑總覽 (Milestone Overview)
 
-| 里程碑 | 目標 | 主要模組 | 驗證標準 |
-| :--- | :--- | :--- | :--- |
-| **M1: 視覺化儀表板** | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 (已完成) |
-| **M2: 上游中斷韌性與降級預報** | CWA 擷取指數退避重試，serving 依常模降級並拒絕過舊負載起點 | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/service/` | CWA 擷取中斷時以 `mode: "degraded"` 產出預報；負載起點過舊時回傳 HTTP 503 |
-| **M3: 多測站與行事曆特徵** | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
-| **M4: 雲端部署與 CI/CD** | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
-| **M5: 營運資料檢視器** | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 (已完成) |
-| **M6: 全台逐時實際負載重建** | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
-| **M7: ML 任務解耦** | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
+| 里程碑 | 狀態 | 目標 | 主要模組 | 驗證標準 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M1: 視覺化儀表板** | 功能已完成；部署未納入 | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 |
+| **M2: 上游中斷韌性與降級預報** | 已完成 | CWA 擷取指數退避重試，serving 依常模降級並拒絕過舊負載起點 | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/service/` | CWA 擷取中斷時以 `mode: "degraded"` 產出預報；負載起點過舊時回傳 HTTP 503 |
+| **M3: 多測站與行事曆特徵** | 待實作 | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
+| **M4: 雲端部署與 CI/CD** | 部分完成 | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
+| **M5: 營運資料檢視器** | 已完成 | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
+| **M6: 全台逐時實際負載重建** | 程式已交付；營運待驗收 | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
+| **M7: ML 任務解耦** | 程式已完成；模型可用性待驗證 | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `src/shiro_mlops/tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
+
+M2、M6、M7 的實作已隨 [PR #79](https://github.com/shiroki9979/shiro-mlops/pull/79) 合併至 `main`；M5 已隨 [PR #56](https://github.com/shiroki9979/shiro-mlops/pull/56) 合併，分頁規則後續由 [PR #78](https://github.com/shiroki9979/shiro-mlops/pull/78) 完成。M6 與 M7 的正式資料累積、首次訓練及模型就緒仍需依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)於運行環境確認。
 
 [#81](https://github.com/shiroki9979/shiro-mlops/issues/81) 的 Nginx 靜態前端預覽與同源 API 僅適用本機 Compose，FastAPI 互動文件仍由 `127.0.0.1:8000/docs` 直接存取，不經 `/api/docs` 提供；M4 的雲端前端託管、映像發布、DNS 與 TLS 仍需另行規劃與驗收。
 
@@ -29,8 +31,15 @@
 [2026-09-27 架構檢視紀錄](explanation/2026-09-27-architecture-review.md) 保存三項架構改善候選：
 集中營運資料檢視器分頁規則、集中預報版本選取與降級解析，以及收攏營運資料檢視器查詢生命週期。
 分頁規則已完成 Q1 至 Q8 的設計討論，並依 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 實作 v2 cursor、精確閉區間與八資料集共用查詢路徑。
-五張工單已確認並發布為 [#73](https://github.com/shiroki9979/shiro-mlops/issues/73)、[#74](https://github.com/shiroki9979/shiro-mlops/issues/74)、[#75](https://github.com/shiroki9979/shiro-mlops/issues/75)、[#76](https://github.com/shiroki9979/shiro-mlops/issues/76)、[#77](https://github.com/shiroki9979/shiro-mlops/issues/77)，依序為共用流程與觀測批次、預報、逐時資料、供需與機組、精確窗口及舊流程退場。
-實作順序為 #73 → #74／#75／#76 → #77；SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-data-explorer-pagination.md)。其餘兩項候選維持待評估，證據與取捨詳見架構檢視紀錄。
+五張工單 [#73](https://github.com/shiroki9979/shiro-mlops/issues/73)、[#74](https://github.com/shiroki9979/shiro-mlops/issues/74)、[#75](https://github.com/shiroki9979/shiro-mlops/issues/75)、[#76](https://github.com/shiroki9979/shiro-mlops/issues/76)、[#77](https://github.com/shiroki9979/shiro-mlops/issues/77) 均已完成，依序涵蓋共用流程與觀測批次、預報、逐時資料、供需與機組、精確窗口及舊流程退場。
+SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-data-explorer-pagination.md)。其餘兩項候選維持待評估，證據與取捨詳見架構檢視紀錄。
+
+## 待辦與驗收焦點
+
+1. **M6／M7 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)確認動態預報與異常偵測所需的 672 小時、高負載預警所需的 1344 小時有效逐時資料，以及三個任務的排程、首次訓練與 API 就緒；目前只有程式、離線測試案例及 issue／PR 完成證據，沒有正式環境的驗收結果。
+2. **M3 特徵工程**：三個 CWA 代表測站已納入擷取目錄，但尚無加權溫度、`is_holiday` 特徵或 MAPE 改善的驗收證據。待 M6 提供可用訓練資料後執行 TICKET-301。
+3. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。
+4. **待分流需求**：[GitHub #80](https://github.com/shiroki9979/shiro-mlops/issues/80)（前端中英語系切換）目前為 open、`needs-triage`，尚未納入既有里程碑。
 
 ---
 
