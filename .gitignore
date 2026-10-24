@@ -41,6 +41,7 @@ src/shiro_mlops/features/data/
 
 # Data artifacts & local cache
 /data/
+/.tmp/
 *.parquet
 *.csv
 !tests/fixtures/*.csv
