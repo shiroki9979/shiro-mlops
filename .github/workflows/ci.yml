@@ -65,3 +65,35 @@ jobs:
 
       - name: Build frontend
         run: pnpm run build
+
+  nginx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build local frontend image
+        run: docker build -t shiro-frontend-smoke frontend
+
+      - name: Check Nginx configuration without API
+        run: docker run --rm shiro-frontend-smoke nginx -t
+
+      - name: Smoke test built SPA and API gateway
+        run: |
+          set -euo pipefail
+          docker network create shiro-nginx-ci
+          trap 'docker rm -f shiro-nginx-ci shiro-api-ci >/dev/null 2>&1 || true; docker network rm shiro-nginx-ci >/dev/null 2>&1 || true' EXIT
+
+          docker run -d --name shiro-api-ci --network shiro-nginx-ci --network-alias api \
+            -v "$PWD/scripts/stub_api.py:/stub_api.py:ro" \
+            python:3.11-alpine python /stub_api.py
+          docker run -d --name shiro-nginx-ci --network shiro-nginx-ci \
+            -p 127.0.0.1:8080:80 shiro-frontend-smoke
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          make frontend-smoke ARGS='--expected-upstream-path /health'
