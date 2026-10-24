@@ -1,0 +1,23 @@
+name: Branch Flow
+
+# Feature and fix PRs target dev; only dev is promoted to main (docs/agents/issue-tracker.md).
+# `edited` re-evaluates the guard when a PR is retargeted, and running on every base lets a PR
+# moved from main to dev replace its earlier failure, without re-running the full CI.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  pr-base-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dev as the only head branch for PRs into main
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "$BASE_REF" == "main" && "$HEAD_REF" != "dev" ]]; then
+            echo "::error title=Wrong PR base branch::Pull requests into main must come from dev, but the head branch is '${HEAD_REF}'. Retarget this PR to dev (gh pr edit <number> --base dev); see docs/agents/issue-tracker.md#branches."
+            exit 1
+          fi
+          echo "PR ${HEAD_REF} -> ${BASE_REF} follows the branch flow"

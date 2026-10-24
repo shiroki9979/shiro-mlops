@@ -41,9 +41,9 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 ## Agent skills
 
-### Issue tracker
+### Issue tracker & PR base branch
 
-GitHub issues (via `gh` CLI). See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+GitHub issues via `gh` CLI. Feature/fix PRs use base `dev` (`gh pr create --base dev`); `main` receives only `dev` release merges. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 
 ### Triage labels
 
