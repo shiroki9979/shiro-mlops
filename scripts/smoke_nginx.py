@@ -92,7 +92,7 @@ def check_compose_bindings() -> None:
         ["docker", "compose", "-f", "docker/docker-compose.yml", "config", "--format", "json"],
         cwd=repo_root,
         check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
     )
     services = json.loads(result.stdout)["services"]
