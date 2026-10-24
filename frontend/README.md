@@ -1,7 +1,7 @@
 # shiro-mlops Frontend Dashboard
 
 - 建立日期：2026-08-23
-- 最後更新：2026-10-24
+- 最後更新：2026-10-25
 
 生產級 React 19 + TypeScript + Vite + TanStack 現代化單頁儀表板（SPA），專為台電 1~72 小時動態負載預測與氣候監控所設計。
 
@@ -47,4 +47,4 @@ pnpm run preview
 pnpm run lint
 ```
 
-`main` 的 push 與 PR CI 另有獨立的前端 job，使用相同 Node.js／pnpm 宣告與 frozen lockfile，依序執行 `pnpm run lint`、`pnpm run test`、`pnpm run build`。Python lint／test 在另一個 job 回報。
+CI 以相同的 Node.js／pnpm 宣告執行上述 lint、測試與建置，設定見 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)。

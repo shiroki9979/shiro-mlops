@@ -61,7 +61,7 @@ smoke-check:
 		python -m shiro_mlops.pipelines.smoke_check $(ARGS)
 
 frontend-smoke:
-	python3 scripts/smoke_nginx.py $(ARGS)
+	uv run --no-project python scripts/smoke_nginx.py $(ARGS)
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .coverage htmlcov dist build .dagster_home mlruns
