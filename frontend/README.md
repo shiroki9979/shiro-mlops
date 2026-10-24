@@ -1,7 +1,7 @@
 # shiro-mlops Frontend Dashboard
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-09
+- 最後更新：2026-10-25
 
 生產級 React 19 + TypeScript + Vite + TanStack 現代化單頁儀表板（SPA），專為台電 1~72 小時動態負載預測與氣候監控所設計。
 
@@ -24,11 +24,12 @@
 
 ## 開發與執行指令
 
-於 `frontend/` 目錄下執行：
+使用 `package.json` 的 `engines.node` 指定之 Node.js 版本與 `packageManager` 指定之 pnpm 版本。於 `frontend/` 目錄下執行：
 
 ```bash
-# 安裝依賴
-pnpm install
+# 啟用 packageManager 指定的 pnpm 並依 lockfile 安裝依賴
+corepack enable
+pnpm install --frozen-lockfile
 
 # 啟動 Vite 本地開發伺服器 (預設 http://localhost:5173，/api 代理至 FastAPI http://localhost:8000)
 pnpm run dev
@@ -45,3 +46,5 @@ pnpm run preview
 # 程式碼風格與 Lint 檢查
 pnpm run lint
 ```
+
+CI 以相同的 Node.js／pnpm 宣告執行上述 lint、測試與建置，設定見 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)。

@@ -51,7 +51,7 @@ export function ApiConfigPanel() {
             <input
               type="text"
               readOnly
-              value={import.meta.env.VITE_API_BASE_URL || '/api (Vite Proxy -> http://localhost:8000)'}
+              value={import.meta.env.VITE_API_BASE_URL || '/api (same-origin proxy)'}
               className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 font-mono"
             />
           </div>
