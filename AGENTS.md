@@ -1,5 +1,8 @@
 # AGENTS.md
 
+- Created: 2026-08-23
+- Last updated: 2026-10-25
+
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
 ## Essential Context Pointers
