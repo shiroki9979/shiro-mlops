@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 新增本機 Nginx 前端預覽：完整 Compose 環境預設於 `http://127.0.0.1:8080` 提供已建置的 SPA，深層路由重新整理仍可載入，並以同源 `/api` 轉送至 FastAPI；API 容器重建後無需重啟 Nginx（#81、#82）。
+- 新增 `make frontend-smoke`，以 HTTP 驗證首頁、深層路由、靜態資產與 `/api` 轉送，本機與 CI 共用（#82、#83）。
+- CI 新增前端 lint、測試與生產建置檢查，以及 Nginx 映像建置、設定檢查與 smoke test；前端以 `package.json` 宣告的 Node.js 與 pnpm 版本執行（#83、#84）。
+
+### Changed
+
+- Compose 所有對主機發布的連接埠（API、TimescaleDB、Redis、MLflow、Dagster、Nginx）改為僅綁定 `127.0.0.1`，區網其他機器無法再直接連線；容器間通訊不受影響（#82）。
+
 ## [0.4.0] - 2026-09-28
 
 ### Added

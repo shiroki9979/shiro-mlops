@@ -1,7 +1,7 @@
 # 如何在全地端運行完整 MLOps 容器化環境
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-27
+- 最後更新：2026-10-25
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -11,7 +11,7 @@
 > - **核心目標**：指引如何在全地端執行拓撲中啟動並驗證完整 Docker Compose MLOps Stack
 > - **排除內容（Avoid）**：零基礎 Python 教學、詳細的時序演算法數學推導
 
-本指南說明如何透過 Docker Compose 一鍵拉起包含 TimescaleDB、Redis (Feast Online Store)、MLflow Tracking Server、Dagster 與 FastAPI 的全地端工作環境。首次擷取仍需連線至台電與 CWA 外部資料來源。
+本指南說明如何透過 Docker Compose 一鍵啟動 Nginx 前端預覽、FastAPI、TimescaleDB、Redis (Feast Online Store)、MLflow Tracking Server 與 Dagster 的全地端工作環境。首次擷取仍需連線至台電與 CWA 外部資料來源。Nginx 提供 Docker 建置後的靜態前端，不提供熱重載；雲端前端部署不在此流程內。
 
 ---
 
@@ -45,18 +45,32 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 
 ---
 
-## 3. 服務端口與健康驗證
+## 3. 服務連接埠與健康驗證
 
 服務啟動後，各元件端點如下：
 
-| 元件名稱 | 容器名稱 | 監聽端口 | 驗證方式 |
+| 元件名稱 | 容器名稱 | 監聽連接埠 | 驗證方式 |
 | :--- | :--- | :--- | :--- |
-| **React 視覺化儀表板** | 本地 SPA (`make frontend`) | `http://localhost:5173` | 瀏覽器開啟檢視 1~72h 負載雙軸預測圖表、監控與 `/data` 營運資料檢視器 |
-| **Dagster Webserver** | `shiro_dagster_webserver` | `http://localhost:3000` | 瀏覽器開啟檢視資產依賴圖與排程（Compose 映射 `3000`） |
-| **MLflow Server** | `shiro_mlflow` | `http://localhost:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
-| **FastAPI 推論服務** | `shiro_api` | `http://localhost:8000/docs` | `/health` 驗證存活；`/ready` 驗證是否可提供完整預測；本機環境另提供 `/data` Data Explorer |
-| **Feast Online Redis** | `shiro_redis` | `localhost:6379` | `docker exec -it shiro_redis redis-cli ping` |
-| **TimescaleDB (時序與 MLflow)** | `shiro_postgres` | `localhost:5432` | 內部容器通訊與時序 Hypertables 存取 |
+| **React 視覺化儀表板** | `shiro_frontend` (Nginx) | `http://127.0.0.1:8080` | 載入已建置的 SPA；`/api/health` 轉送至 FastAPI 的 `/health`；重新整理 `/data/power/load` 仍顯示 SPA |
+| **Dagster Webserver** | `shiro_dagster_webserver` | `http://127.0.0.1:3000` | 瀏覽器開啟檢視資產依賴圖與排程 |
+| **MLflow Server** | `shiro_mlflow` | `http://127.0.0.1:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
+| **FastAPI 推論服務** | `shiro_api` | `http://127.0.0.1:8000/docs` | 直接入口的 `/health` 驗證存活、`/ready` 驗證預測就緒；互動文件僅從直接入口存取，Nginx 不提供 `/api/docs` |
+| **Feast Online Redis** | `shiro_redis` | `127.0.0.1:6379` | `docker exec -it shiro_redis redis-cli ping` |
+| **TimescaleDB (時序與 MLflow)** | `shiro_postgres` | `127.0.0.1:5432` | 內部容器通訊與時序 Hypertables 存取 |
+
+所有 Compose 對主機發布的連接埠只綁定 `127.0.0.1`；容器之間仍以 Compose 服務名稱連線。前端預設 API base 為同源 `/api`，不需額外設定跨來源請求。啟動後可執行：
+
+```bash
+make frontend-smoke ARGS='--check-compose-bindings --direct-api-url http://127.0.0.1:8000'
+```
+
+此檢查會經 Nginx 驗證首頁、深層路由、建置資產、遺失資產的 404 與 `/api/health`，並確認 API 直接入口及 Compose 主機埠綁定。前端程式變更後，從專案根目錄重新建置靜態映像，再重新整理瀏覽器：
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build frontend
+```
+
+需要 Vite 熱重載時仍可使用 `make frontend`，由 `http://127.0.0.1:5173` 開啟開發伺服器。CI 重用同一支 `make frontend-smoke` 腳本，檢查項目見 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
 
 ---
 
