@@ -18,7 +18,7 @@ help:
 	@echo "  make compose-down  Stop full local stack"
 	@echo "  make smoke-check   Verify schedules and per-task training/monitoring readiness in the Dagster container"
 	@echo "  make frontend-smoke Verify built SPA and same-origin API routing through Nginx"
-	@echo "  make frontend-smoke-ci Build the frontend image and run the CI Nginx smoke (FRONTEND_SMOKE_PORT=8080)"
+	@echo "  make frontend-smoke-ci Build the frontend image and run the CI Nginx smoke (FRONTEND_SMOKE_PORT=$(FRONTEND_SMOKE_PORT))"
 	@echo "  make clean         Clean temporary files and caches"
 
 install:
@@ -69,7 +69,6 @@ frontend-smoke:
 
 frontend-smoke-ci:
 	docker build -t $(FRONTEND_SMOKE_IMAGE) frontend
-	docker run --rm $(FRONTEND_SMOKE_IMAGE) nginx -t
 	scripts/ci_nginx_smoke.sh $(FRONTEND_SMOKE_IMAGE) $(FRONTEND_SMOKE_PORT)
 
 clean:

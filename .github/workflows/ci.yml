@@ -108,6 +108,8 @@ jobs:
         with:
           version: "latest"
 
+      # check_conventions.py uses only the standard library, so this job skips syncing the
+      # project environment that lint-and-test installs.
       - name: Check documentation terminology
         run: uv run --no-project python scripts/check_conventions.py terms
 
