@@ -1,4 +1,7 @@
-.PHONY: help install dev test lint format clean compose-up compose-down smoke-check frontend-smoke dagster mlflow api frontend frontend-test frontend-build
+.PHONY: help install dev test lint format clean compose-up compose-down smoke-check frontend-smoke frontend-smoke-ci dagster mlflow api frontend frontend-test frontend-build
+
+FRONTEND_SMOKE_IMAGE ?= shiro-frontend-smoke
+FRONTEND_SMOKE_PORT ?= 8080
 
 help:
 	@echo "Available commands:"
@@ -15,6 +18,7 @@ help:
 	@echo "  make compose-down  Stop full local stack"
 	@echo "  make smoke-check   Verify schedules and per-task training/monitoring readiness in the Dagster container"
 	@echo "  make frontend-smoke Verify built SPA and same-origin API routing through Nginx"
+	@echo "  make frontend-smoke-ci Build the frontend image and run the CI Nginx smoke (FRONTEND_SMOKE_PORT=8080)"
 	@echo "  make clean         Clean temporary files and caches"
 
 install:
@@ -62,6 +66,11 @@ smoke-check:
 
 frontend-smoke:
 	uv run --no-project python scripts/smoke_nginx.py $(ARGS)
+
+frontend-smoke-ci:
+	docker build -t $(FRONTEND_SMOKE_IMAGE) frontend
+	docker run --rm $(FRONTEND_SMOKE_IMAGE) nginx -t
+	scripts/ci_nginx_smoke.sh $(FRONTEND_SMOKE_IMAGE) $(FRONTEND_SMOKE_PORT)
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .coverage htmlcov dist build .dagster_home mlruns

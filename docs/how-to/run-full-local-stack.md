@@ -70,7 +70,15 @@ make frontend-smoke ARGS='--check-compose-bindings --direct-api-url http://127.0
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build frontend
 ```
 
-需要 Vite 熱重載時仍可使用 `make frontend`，由 `http://127.0.0.1:5173` 開啟開發伺服器。CI 重用同一支 `make frontend-smoke` 腳本，檢查項目見 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
+需要 Vite 熱重載時仍可使用 `make frontend`，由 `http://127.0.0.1:5173` 開啟開發伺服器；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
+
+修改 `frontend/nginx.conf` 或前端映像後，可在本機重現 CI 的 Nginx 檢查。此指令以獨立映像與暫時容器執行，結束後自動移除容器與網路；完整 Compose 環境已占用 8080 時，以 `FRONTEND_SMOKE_PORT` 指定其他空閒連接埠：
+
+```bash
+make frontend-smoke-ci FRONTEND_SMOKE_PORT=18080
+```
+
+輸出最後一行為 `Nginx CI smoke passed` 即與 CI 結果一致。CI 執行同一個 target，檢查內容見 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) 與 [`scripts/ci_nginx_smoke.sh`](../../scripts/ci_nginx_smoke.sh)。
 
 ---
 
