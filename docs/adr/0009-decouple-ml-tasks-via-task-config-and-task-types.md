@@ -1,10 +1,10 @@
 # ADR-0009：以任務設定與任務類型解耦單一負載預報任務
 
 > - Created: 2026-09-27
-> - Last Updated: 2026-09-28
+> - Last Updated: 2026-10-25
 > - Author: Bo-Xue Huang
 > - Status: 已接受
-> - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[CONTEXT.md](../../CONTEXT.md)
+> - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[GLOSSARY.md](../../GLOSSARY.md)
 
 ---
 
@@ -16,7 +16,7 @@
 
 ## 2. Decision
 
-引入 **ML 任務**（定義見 CONTEXT.md）作為一級概念，以「任務設定 + 任務類型」兩層描述：
+引入 **ML 任務**（定義見 GLOSSARY.md）作為一級概念，以「任務設定 + 任務類型」兩層描述：
 
 - **範圍**：限以時間為索引的表格資料，涵蓋監督式（回歸、分類）與非監督式（異常偵測）。
 - **任務設定**：`tasks/<task_id>.toml`，以標準函式庫 `tomllib` 讀取、Pydantic 驗證為有型別的任務定義，設定錯誤於啟動時失敗。承載「用什麼值」：任務類型名稱、預測對象、氣象代表點（可多個、可加權）、目標序列來源、特徵配方參數、模型超參數、排程、評估與健康判定門檻、領域規則參數。

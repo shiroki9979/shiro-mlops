@@ -7,7 +7,7 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 
 ## Essential Context Pointers
 
-- **Domain Glossary & Semantics**: Read [CONTEXT.md](CONTEXT.md) for business context, power grid terminology, and degraded forecast definitions.
+- **Domain Glossary & Semantics**: Read [GLOSSARY.md](GLOSSARY.md) for business context, power grid terminology, and degraded forecast definitions.
 - **System & Data Specifications**: Read [docs/SPEC.md](docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
 - **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), and native model persistence.
 - **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
@@ -44,7 +44,7 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 1. **Red-Green-Refactor**: Always write or update tests before or alongside code changes.
 2. **Offline Unit/Integration Tests**: Tests in `tests/` must NOT depend on external live APIs; use fixtures in `tests/fixtures/`.
-3. **No Implementation Details in CONTEXT.md**: `CONTEXT.md` is strictly reserved for business domain terms. Technical details belong in `docs/SPEC.md` or `docs/adr/`.
+3. **No Implementation Details in GLOSSARY.md**: `GLOSSARY.md` is strictly reserved for business domain terms. Technical details belong in `docs/SPEC.md` or `docs/adr/`.
 4. **Diátaxis Discipline**: When adding docs, adhere strictly to the 4 quadrants (Tutorial, How-To, Reference, Explanation).
 
 ## Agent skills
@@ -59,4 +59,4 @@ Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](docs/a
 
 ### Domain docs
 
-Single-context layout (`CONTEXT.md` + `docs/adr/`). See [docs/agents/domain.md](docs/agents/domain.md).
+Single-context layout (`GLOSSARY.md` + `docs/adr/`). See [docs/agents/domain.md](docs/agents/domain.md).

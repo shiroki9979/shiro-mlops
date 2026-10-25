@@ -1,4 +1,4 @@
-# 全台逐時實際負載的用電型態異常偵測（ADR-0009；用語見 CONTEXT.md）。
+# 全台逐時實際負載的用電型態異常偵測（ADR-0009；用語見 GLOSSARY.md）。
 task_id = "load_pattern_anomaly"
 task_type = "unsupervised_reconstruction"
 subject = "nationwide"
