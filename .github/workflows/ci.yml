@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   lint-and-test:
@@ -32,6 +32,9 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check .
+
+      - name: Check Python runs through uv in Makefile and CI
+        run: uv run python scripts/check_conventions.py python-uv
 
       - name: Run unit & integration tests
         run: |
@@ -77,46 +80,42 @@ jobs:
         with:
           version: "latest"
 
-      - name: Build local frontend image
-        run: docker build -t shiro-frontend-smoke frontend
+      - name: Build image and smoke test SPA, API gateway, and upstream recreation
+        run: make frontend-smoke-ci
 
-      - name: Check Nginx configuration without API
-        run: docker run --rm shiro-frontend-smoke nginx -t
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # doc-dates diffs against the PR base and reads commit dates in the PR range.
+          fetch-depth: 0
 
-      - name: Smoke test built SPA and API gateway
-        run: |
-          set -euo pipefail
-          docker network create shiro-nginx-ci
-          trap 'docker rm -f shiro-nginx-ci shiro-api-ci shiro-api-ci-next >/dev/null 2>&1 || true; docker network rm shiro-nginx-ci >/dev/null 2>&1 || true' EXIT
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v24
+        with:
+          globs: "**/*.md"
 
-          start_stub_api() {
-            docker run -d --name "$1" --network shiro-nginx-ci --network-alias api \
-              -v "$PWD/scripts/stub_api.py:/stub_api.py:ro" \
-              python:3.11-alpine python /stub_api.py
-          }
+      - name: Check relative links and anchors offline
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress --include-fragments "**/*.md"
+          fail: true
 
-          wait_for_gateway() {
-            for _ in {1..30}; do
-              if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null; then
-                return 0
-              fi
-              sleep 1
-            done
-            echo "Gateway /api/health did not respond within 30 seconds" >&2
-            docker logs shiro-nginx-ci >&2 || true
-            docker logs shiro-api-ci-next >&2 || docker logs shiro-api-ci >&2 || true
-            return 1
-          }
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
 
-          start_stub_api shiro-api-ci
-          docker run -d --name shiro-nginx-ci --network shiro-nginx-ci \
-            -p 127.0.0.1:8080:80 shiro-frontend-smoke
+      # check_conventions.py uses only the standard library, so this job skips syncing the
+      # project environment that lint-and-test installs.
+      - name: Check documentation terminology
+        run: uv run --no-project python scripts/check_conventions.py terms
 
-          wait_for_gateway
-          make frontend-smoke ARGS='--expected-upstream-path /health'
-
-          # The replacement starts before the original is removed so it cannot reuse the same IP;
-          # the gateway then only recovers if Nginx re-resolves `api` instead of caching its first IP.
-          start_stub_api shiro-api-ci-next
-          docker rm -f shiro-api-ci >/dev/null
-          wait_for_gateway
+      - name: Check last-updated dates of changed docs
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: uv run --no-project python scripts/check_conventions.py doc-dates --base "$BASE_SHA" --head "$HEAD_SHA"

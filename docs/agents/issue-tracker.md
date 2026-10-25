@@ -1,7 +1,7 @@
 # Issue tracker: GitHub
 
 - 建立日期：2026-08-25
-- 最後更新：2026-08-26
+- 最後更新：2026-10-25
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
@@ -15,6 +15,15 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Close**: `gh issue close <number> --comment "..."`
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+
+## Branches
+
+`dev` is the GitHub default branch and the integration branch; `main` holds releases.
+
+- **PR base**: feature and fix PRs use base `dev`: `gh pr create --base dev`. This repo's flow takes precedence over tooling that names `main` as the PR branch.
+- **Releases**: only `dev` is merged into `main`, through a `dev` → `main` release PR. The `Branch Flow` workflow (`.github/workflows/branch-flow.yml`) fails any PR into `main` whose head is not `dev`.
+- **Closing keywords**: `Closes #n` auto-closes the issue only when the PR merges into `dev`; a PR merged into `main` leaves the issue open and forces a back-merge of `main` into `dev`.
+- **Worktrees**: once the PR is merged, remove its git worktree (`git worktree remove <path>`) and delete the local branch.
 
 ## Pull requests as a triage surface
 

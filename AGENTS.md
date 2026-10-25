@@ -1,5 +1,8 @@
 # AGENTS.md
 
+- Created: 2026-08-23
+- Last updated: 2026-10-25
+
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
 ## Essential Context Pointers
@@ -8,6 +11,7 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 - **System & Data Specifications**: Read [docs/SPEC.md](docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
 - **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), and native model persistence.
 - **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
+- **Code Review Standards**: When reviewing a change, apply [CODING_STANDARDS.md](CODING_STANDARDS.md) for repo-specific judgement rules; mechanical rules run in CI.
 - **Operational Guides**:
   - Tutorial: [docs/tutorials/quickstart-local-prediction.md](docs/tutorials/quickstart-local-prediction.md)
   - Full Local Stack: [docs/how-to/run-full-local-stack.md](docs/how-to/run-full-local-stack.md)
@@ -28,6 +32,10 @@ uv run pytest tests/ -v
 uv run ruff check .
 uv run ruff format --check .
 
+# Repository convention & Markdown checks (also run in CI)
+uv run python scripts/check_conventions.py python-uv terms doc-dates --base origin/dev
+npx markdownlint-cli2 "**/*.md"
+
 # Local API dev server
 uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 ```
@@ -41,9 +49,9 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 ## Agent skills
 
-### Issue tracker
+### Issue tracker & PR base branch
 
-GitHub issues (via `gh` CLI). See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+GitHub issues via `gh` CLI. Feature/fix PRs use base `dev` (`gh pr create --base dev`); `main` receives only `dev` release merges. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 
 ### Triage labels
 
