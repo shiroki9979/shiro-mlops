@@ -47,12 +47,4 @@ export function toDatetimeLocal(value: Date): string {
   return `${taipei.getUTCFullYear()}-${pad(taipei.getUTCMonth() + 1)}-${pad(taipei.getUTCDate())}T${pad(taipei.getUTCHours())}:${pad(taipei.getUTCMinutes())}`
 }
 
-export function formatExplorerValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—'
-  if (typeof value === 'boolean') return value ? 'true' : 'false'
-  if (Array.isArray(value)) return value.join(', ')
-  if (typeof value === 'number') return String(value)
-  return String(value)
-}
-
 export type { ListEnvelope }

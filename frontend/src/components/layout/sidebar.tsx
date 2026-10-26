@@ -16,46 +16,47 @@ import {
   EXPLORER_NAV_GROUPS,
   type ExplorerDatasetConfig,
 } from '@/components/data-explorer/catalog'
+import { type Messages, useMessages } from '@/i18n/use-messages'
 
 interface NavItem {
   to: '/' | '/history' | '/monitoring' | '/settings' | '/data'
-  label: string
+  labelKey: keyof Messages['nav']
   icon: typeof LayoutDashboard
-  badge?: string
+  live?: boolean
 }
 
 const navItems: NavItem[] = [
   {
     to: '/',
-    label: '即時預測總覽',
+    labelKey: 'dashboard',
     icon: LayoutDashboard,
-    badge: 'Live',
+    live: true,
   },
   {
     to: '/history',
-    label: '歷史回測與評估',
+    labelKey: 'history',
     icon: BarChart3,
   },
   {
     to: '/monitoring',
-    label: '模型漂移監控',
+    labelKey: 'monitoring',
     icon: Activity,
   },
   {
     to: '/data',
-    label: '營運資料檢視器',
+    labelKey: 'dataExplorer',
     icon: Database,
   },
   {
     to: '/settings',
-    label: '系統連線設定',
+    labelKey: 'settings',
     icon: Settings,
   },
 ]
 
 const explorerGroups = EXPLORER_NAV_GROUPS.map((group) => ({
-  ...group,
-  datasets: EXPLORER_DATASETS.filter((dataset) => dataset.navGroup === group.id),
+  id: group,
+  datasets: EXPLORER_DATASETS.filter((dataset) => dataset.navGroup === group),
 }))
 
 function isDatasetActive(
@@ -69,12 +70,13 @@ function isDatasetActive(
 }
 
 function ExplorerNavigation({ pathname, search }: { pathname: string; search: Record<string, unknown> }) {
+  const m = useMessages()
   return (
     <div className="ml-4 border-l border-slate-800 pl-2 space-y-2">
       {explorerGroups.map((group) => (
         <div key={group.id} className="space-y-0.5">
           <div className="px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-            {group.label}
+            {m.explorer.navGroups[group.id]}
           </div>
           {group.datasets.map((dataset) => (
             <Link
@@ -88,7 +90,7 @@ function ExplorerNavigation({ pathname, search }: { pathname: string; search: Re
                   : 'text-slate-400 hover:bg-slate-900/60 hover:text-slate-200',
               )}
             >
-              {dataset.label}
+              {m.explorer.datasets[dataset.id].label}
             </Link>
           ))}
         </div>
@@ -106,12 +108,13 @@ function SidebarNavigation({
   search: Record<string, unknown>
   explorerEnabled: boolean
 }) {
+  const m = useMessages()
   const items = navItems.filter((item) => item.to !== '/data' || explorerEnabled)
 
   return (
     <nav className="space-y-1.5">
       <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-        核心功能
+        {m.nav.sectionTitle}
       </div>
       {items.map((item) => {
         const Icon = item.icon
@@ -135,12 +138,12 @@ function SidebarNavigation({
                     isActive ? 'text-cyan-400' : 'text-slate-500 group-hover:text-slate-300',
                   )}
                 />
-                <span>{item.label}</span>
+                <span>{m.nav[item.labelKey]}</span>
               </div>
-              {item.badge && (
+              {item.live && (
                 <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                   <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                  {item.badge}
+                  {m.nav.liveBadge}
                 </span>
               )}
             </Link>
@@ -155,21 +158,22 @@ function SidebarNavigation({
 }
 
 function SidebarStatusCard() {
+  const m = useMessages()
   return (
     <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 p-3.5 space-y-2 mt-4 shrink-0">
       <div className="flex items-center justify-between text-xs">
         <span className="text-slate-400 flex items-center gap-1.5">
           <Radio className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
-          台電即時串接
+          {m.nav.taipowerFeed}
         </span>
-        <span className="text-[11px] text-emerald-400 font-mono">NORMAL</span>
+        <span className="text-[11px] text-emerald-400 font-mono">{m.nav.taipowerFeedState}</span>
       </div>
       <div className="flex items-center justify-between text-xs">
         <span className="text-slate-400 flex items-center gap-1.5">
           <Flame className="h-3.5 w-3.5 text-cyan-400" />
-          LightGBM 遞迴推論
+          {m.nav.recursiveInference}
         </span>
-        <span className="text-[11px] text-cyan-400 font-mono">ACTIVE</span>
+        <span className="text-[11px] text-cyan-400 font-mono">{m.nav.recursiveInferenceState}</span>
       </div>
     </div>
   )
@@ -179,6 +183,7 @@ export function Sidebar() {
   const router = useRouterState()
   const { data: health } = useHealth()
   const explorerEnabled = health?.data_explorer_enabled ?? false
+  const m = useMessages()
 
   return (
     <aside className="w-64 shrink-0 border-r border-slate-800 bg-slate-950/80 p-4 flex flex-col justify-between backdrop-blur-xl h-screen sticky top-0">
@@ -189,9 +194,9 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="font-bold text-base tracking-wide text-slate-100 flex items-center gap-1.5">
-              shiro-mlops
+              {m.app.brand}
             </h1>
-            <p className="text-xs text-cyan-400/80 font-medium">電力負載動態預測</p>
+            <p className="text-xs text-cyan-400/80 font-medium">{m.app.tagline}</p>
           </div>
         </div>
         <SidebarNavigation
