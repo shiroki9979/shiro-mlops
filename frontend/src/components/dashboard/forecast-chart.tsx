@@ -1,6 +1,8 @@
 import { PredictionItem } from '@/schemas/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { formatDateTime, formatLoadMW, formatTemperature } from '@/lib/utils'
+import { formatDateTime, formatLoadMW, formatTemperature } from '@/i18n/format'
+import { type Locale, useLocale } from '@/i18n/locale-store'
+import { useMessages } from '@/i18n/use-messages'
 import { useDashboardStore } from '@/store/dashboard-store'
 import {
   Area,
@@ -23,14 +25,22 @@ interface CustomTooltipProps {
   active?: boolean
   payload?: Array<{
     name: string
+    dataKey?: string | number
     value: number
     color: string
-    unit?: string
   }>
   label?: string
+  locale: Locale
 }
 
-function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
+// Units follow the plotted field, not the translated series name.
+function formatSeriesValue(dataKey: string | number | undefined, value: number, locale: Locale): string {
+  if (dataKey === 'predicted_load_mw') return `${formatLoadMW(value, locale)} MW`
+  if (dataKey === 'temperature') return formatTemperature(value)
+  return `${value.toFixed(1)} %`
+}
+
+function CustomTooltip({ active, payload, label, locale }: CustomTooltipProps) {
   if (!active || !payload || !payload.length) {
     return null
   }
@@ -38,7 +48,7 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-xl text-xs space-y-2">
       <p className="font-semibold text-slate-300 border-b border-slate-800 pb-1 font-mono">
-        {label ? formatDateTime(label) : ''}
+        {label ? formatDateTime(label, locale) : ''}
       </p>
       <div className="space-y-1">
         {payload.map((entry, index) => (
@@ -51,11 +61,7 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
               {entry.name}
             </span>
             <span className="font-mono font-bold text-slate-100">
-              {entry.name.includes('負載')
-                ? `${formatLoadMW(entry.value)} MW`
-                : entry.name.includes('氣溫')
-                ? formatTemperature(entry.value)
-                : `${entry.value.toFixed(1)} %`}
+              {formatSeriesValue(entry.dataKey, entry.value, locale)}
             </span>
           </div>
         ))}
@@ -66,19 +72,21 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
 
 export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
   const { showTemperature, showHumidity } = useDashboardStore()
+  const locale = useLocale()
+  const text = useMessages().dashboard.chart
 
   if (isLoading || !predictions || predictions.length === 0) {
     return (
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>
           <CardTitle className="text-base font-semibold text-slate-200">
-            動態預測負載與氣候走勢圖
+            {text.loadingTitle}
           </CardTitle>
         </CardHeader>
         <CardContent className="h-[420px] flex items-center justify-center">
           <div className="text-center space-y-2">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent mx-auto" />
-            <p className="text-xs text-slate-400">計算 LightGBM 遞迴負載推論中...</p>
+            <p className="text-xs text-slate-400">{text.loading}</p>
           </div>
         </CardContent>
       </Card>
@@ -95,10 +103,10 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <div>
           <CardTitle className="text-base font-semibold text-slate-200">
-            動態負載預測與氣候雙軸走勢圖 (1~72h)
+            {text.title}
           </CardTitle>
           <p className="text-xs text-slate-400 mt-1">
-            左軸：預測用電負載 (MW) ｜ 右軸：CWA 預報氣溫 (°C)
+            {text.axes}
           </p>
         </div>
       </CardHeader>
@@ -123,7 +131,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
               />
               <XAxis
                 dataKey="datetime"
-                tickFormatter={(val) => formatDateTime(val)}
+                tickFormatter={(val) => formatDateTime(val, locale)}
                 stroke="#64748b"
                 fontSize={11}
                 tickLine={false}
@@ -169,7 +177,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   dx={5}
                 />
               )}
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip locale={locale} />} />
               <Legend
                 verticalAlign="top"
                 align="right"
@@ -180,7 +188,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                 yAxisId="load"
                 type="monotone"
                 dataKey="predicted_load_mw"
-                name="預測負載 (MW)"
+                name={text.loadSeries}
                 stroke="#06b6d4"
                 strokeWidth={2.5}
                 fillOpacity={1}
@@ -193,7 +201,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   yAxisId="temp"
                   type="monotone"
                   dataKey="temperature"
-                  name="預報氣溫 (°C)"
+                  name={text.temperatureSeries}
                   stroke="#f59e0b"
                   strokeWidth={2}
                   dot={false}
@@ -206,7 +214,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   yAxisId={showTemperature ? 'temp' : 'humidity'}
                   type="monotone"
                   dataKey="relative_humidity"
-                  name="相對濕度 (%)"
+                  name={text.humiditySeries}
                   stroke="#38bdf8"
                   strokeWidth={1.5}
                   dot={false}
