@@ -1,7 +1,7 @@
 # shiro-mlops Frontend Dashboard
 
 - 建立日期：2026-08-23
-- 最後更新：2026-10-25
+- 最後更新：2026-10-26
 
 生產級 React 19 + TypeScript + Vite + TanStack 現代化單頁儀表板（SPA），專為台電 1~72 小時動態負載預測與氣候監控所設計。
 
@@ -20,7 +20,7 @@
 2. **歷史回測與評估 (`/history`)**：目前以瀏覽器產生的 72 小時示範序列與固定指標呈現回測介面，尚未讀取實際評估結果。
 3. **模型漂移監控 (`/monitoring`)**：漂移摘要仍為固定示範資料；資料來源狀態與 Data Explorer 共用 `GET /data/status`，並可 deep-link 至對應資料集。
 4. **營運資料檢視器 (`/data`)**：本機或 `DATA_EXPLORER_ENABLED` 時可用的唯讀 TimescaleDB 檢視，涵蓋六個 typed datasets 與 CWA audits。契約見 [Data Explorer 規格](../docs/SPEC.md#4-營運資料檢視器-data-explorer)。
-5. **系統設定與連線診斷 (`/settings`)**：FastAPI 後端連線設定、降級快取模式說明與手動 Payload 推論測試。
+5. **系統設定與連線診斷 (`/settings`)**：介面語系切換（正體中文／English）、FastAPI 後端連線設定與手動 Payload 推論測試。
 
 ## 開發與執行指令
 
