@@ -19,7 +19,7 @@ function SettingsPage() {
             系統設定與連線診斷 (System Settings & Inference Testing)
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            設定後端 FastAPI 連線參數、檢驗 API 降級快取模式，並進行手動推論測試。
+            檢視後端 FastAPI 連線端點（唯讀），並進行手動推論測試。
           </p>
         </div>
       </div>

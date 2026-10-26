@@ -38,40 +38,25 @@ export function ApiConfigPanel() {
           <div className="flex items-center gap-2">
             <Server className="h-5 w-5 text-cyan-400" />
             <CardTitle className="text-base font-semibold text-slate-200">
-              後端推論伺服器設定 (FastAPI Connection)
+              後端推論伺服器連線 (FastAPI Connection)
             </CardTitle>
           </div>
           <CardDescription>
-            設定推論服務端點與資料快取降級策略
+            顯示前端目前使用的推論服務端點（唯讀）
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 text-xs">
           <div className="space-y-1.5">
-            <label className="text-slate-400 font-medium">API Base Endpoint</label>
+            <label htmlFor="api-base-endpoint" className="text-slate-400 font-medium">
+              API Base Endpoint
+            </label>
             <input
+              id="api-base-endpoint"
               type="text"
               readOnly
               value={import.meta.env.VITE_API_BASE_URL || '/api (same-origin proxy)'}
               className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 font-mono"
             />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-slate-400 font-medium">資料重試與指數退避 (Resiliency)</label>
-            <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-2">
-              <div className="flex justify-between">
-                <span className="text-slate-400">重試次數 (Max Retries)</span>
-                <span className="font-mono text-cyan-400">3 次</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">本地快取格式 (Cache Storage)</span>
-                <span className="font-mono text-slate-300">Parquet / Local Snapshot</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">降級模式策略 (Degraded Mode)</span>
-                <span className="font-mono text-amber-400">Fallback to Climatology Norm</span>
-              </div>
-            </div>
           </div>
         </CardContent>
       </Card>
@@ -104,8 +89,11 @@ export function ApiConfigPanel() {
         <CardContent className="space-y-4 text-xs">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">Horizon Hours (1-168)</label>
+              <label htmlFor="test-horizon-hours" className="text-slate-400 font-medium">
+                Horizon Hours (1-168)
+              </label>
               <input
+                id="test-horizon-hours"
                 type="number"
                 min={1}
                 max={168}
