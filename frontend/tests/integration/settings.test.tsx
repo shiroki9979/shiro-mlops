@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/rea
 import { http, HttpResponse } from 'msw'
 import { routeTree } from '../../src/routeTree'
 import { server } from '../../src/mocks/server'
+import { zhTW } from '@/i18n/zh-TW'
 
 function renderSettings() {
   const history = createMemoryHistory({ initialEntries: ['/settings'] })
@@ -16,8 +17,8 @@ describe('Settings page', () => {
   it('shows the read-only API endpoint without hardcoded resiliency claims', async () => {
     renderSettings()
 
-    expect(await screen.findByLabelText('API Base Endpoint')).toHaveValue(
-      '/api (same-origin proxy)',
+    expect(await screen.findByLabelText(zhTW.settings.connection.endpointLabel)).toHaveValue(
+      zhTW.settings.connection.sameOriginProxy,
     )
     expect(screen.queryByText(/Resiliency/)).not.toBeInTheDocument()
     expect(screen.queryByText('3 次')).not.toBeInTheDocument()
@@ -28,7 +29,7 @@ describe('Settings page', () => {
   it('does not describe cache or degraded-mode strategy as configurable', async () => {
     renderSettings()
 
-    await screen.findByText('API Base Endpoint')
+    await screen.findByText(zhTW.settings.connection.endpointLabel)
     expect(screen.queryByText(/快取|降級/)).not.toBeInTheDocument()
   })
 
@@ -59,16 +60,16 @@ describe('Settings page', () => {
     const user = userEvent.setup()
     renderSettings()
 
-    const horizonInput = await screen.findByLabelText('Horizon Hours (1-168)')
+    const horizonInput = await screen.findByLabelText(zhTW.settings.tester.horizonLabel)
     await user.clear(horizonInput)
     await user.type(horizonInput, '6')
-    const submitButton = screen.getByRole('button', { name: /Execute Prediction/ })
+    const submitButton = screen.getByRole('button', { name: zhTW.settings.tester.submit })
     await user.click(submitButton)
 
     expect(submitButton).toBeDisabled()
     releaseResponse()
 
-    expect(await screen.findByText('200 OK')).toBeInTheDocument()
+    expect(await screen.findByText(zhTW.settings.tester.success)).toBeInTheDocument()
     expect(submitButton).toBeEnabled()
     const responseText = screen.getByText(/27123\.4/).textContent
     expect(responseText).toContain('"horizon_hours": 6')
@@ -83,12 +84,12 @@ describe('Settings page', () => {
     const user = userEvent.setup()
     renderSettings()
 
-    await user.click(await screen.findByRole('button', { name: /Execute Prediction/ }))
+    await user.click(await screen.findByRole('button', { name: zhTW.settings.tester.submit }))
 
-    expect(await screen.findByText('Error')).toBeInTheDocument()
+    expect(await screen.findByText(zhTW.settings.tester.failure)).toBeInTheDocument()
     expect(
-      screen.getByText('推論執行錯誤: API Error (503): model unavailable'),
+      screen.getByText(zhTW.settings.tester.error('API Error (503): model unavailable')),
     ).toBeInTheDocument()
-    expect(screen.queryByText('200 OK')).not.toBeInTheDocument()
+    expect(screen.queryByText(zhTW.settings.tester.success)).not.toBeInTheDocument()
   })
 })

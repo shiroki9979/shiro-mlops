@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { routeTree } from './routeTree'
+import { syncDocumentLocale } from './i18n/document-locale'
 import './index.css'
 
 export const router = createRouter({ routeTree })
@@ -11,6 +12,8 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+syncDocumentLocale()
 
 const rootElement = document.getElementById('root')!
 if (!rootElement.innerHTML) {
