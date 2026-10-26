@@ -31,6 +31,15 @@ const CALENDAR_DATE: Intl.DateTimeFormatOptions = {
 }
 
 const MAX_MEASUREMENT_FRACTION_DIGITS = 3
+const LOAD_MW_FRACTION_DIGITS = 1
+const TEMPERATURE_FRACTION_DIGITS = 1
+const HUMIDITY_FRACTION_DIGITS = 1
+const MW_PER_THOUSAND = 1000
+const PERCENT_SCALE = 100
+
+const PERCENT: Intl.NumberFormatOptions = { style: 'percent' }
+// A change that rounds to zero carries no sign, so "+0.00%" never suggests a direction.
+const SIGNED: Intl.NumberFormatOptions = { signDisplay: 'exceptZero' }
 
 type DateInput = string | number | Date
 
@@ -54,18 +63,47 @@ export function formatCalendarDate(isoDate: string, locale: Locale): string {
 }
 
 export function formatNumber(value: number, locale: Locale): string {
-  return new Intl.NumberFormat(locale, {
-    maximumFractionDigits: MAX_MEASUREMENT_FRACTION_DIGITS,
-  }).format(value)
+  return formatWith(value, locale, { maximumFractionDigits: MAX_MEASUREMENT_FRACTION_DIGITS })
+}
+
+// Shows exactly `fractionDigits` decimals so values in one column or axis line up.
+export function formatDecimal(value: number, locale: Locale, fractionDigits: number): string {
+  return formatWith(value, locale, fixedDigits(fractionDigits))
 }
 
 export function formatLoadMW(value: number, locale: Locale): string {
-  return new Intl.NumberFormat(locale, {
-    maximumFractionDigits: 1,
-    minimumFractionDigits: 1,
-  }).format(value)
+  return formatDecimal(value, locale, LOAD_MW_FRACTION_DIGITS)
 }
 
-export function formatTemperature(value: number): string {
-  return `${value.toFixed(1)}°C`
+export function formatLoadDelta(value: number, locale: Locale): string {
+  return formatWith(value, locale, { ...fixedDigits(LOAD_MW_FRACTION_DIGITS), ...SIGNED })
+}
+
+export function formatLoadThousands(value: number, locale: Locale): string {
+  return `${formatDecimal(value / MW_PER_THOUSAND, locale, LOAD_MW_FRACTION_DIGITS)}k`
+}
+
+export function formatTemperature(value: number, locale: Locale): string {
+  return `${formatDecimal(value, locale, TEMPERATURE_FRACTION_DIGITS)}°C`
+}
+
+export function formatHumidity(value: number, locale: Locale): string {
+  return formatPercent(value, locale, HUMIDITY_FRACTION_DIGITS)
+}
+
+// `value` is in percentage points (12.5 means 12.5%), matching how the API and demo data store rates.
+export function formatPercent(value: number, locale: Locale, fractionDigits: number): string {
+  return formatWith(value / PERCENT_SCALE, locale, { ...fixedDigits(fractionDigits), ...PERCENT })
+}
+
+export function formatPercentDelta(value: number, locale: Locale, fractionDigits: number): string {
+  return formatWith(value / PERCENT_SCALE, locale, { ...fixedDigits(fractionDigits), ...PERCENT, ...SIGNED })
+}
+
+function fixedDigits(fractionDigits: number): Intl.NumberFormatOptions {
+  return { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }
+}
+
+function formatWith(value: number, locale: Locale, options: Intl.NumberFormatOptions): string {
+  return new Intl.NumberFormat(locale, options).format(value)
 }

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { formatDateTime, formatLoadMW, formatTimestamp } from '@/i18n/format'
+import {
+  formatDateTime,
+  formatLoadDelta,
+  formatLoadMW,
+  formatLoadThousands,
+  formatPercent,
+  formatPercentDelta,
+  formatTemperature,
+  formatTimestamp,
+} from '@/i18n/format'
 
 // 12:00 UTC is 20:00 in Taipei; a UTC runtime exposes any formatter that follows the host time zone.
 const NOON_UTC = '2026-09-09T12:00:00Z'
@@ -34,5 +43,36 @@ describe('locale-aware formatters', () => {
 
   it.each(['zh-TW', 'en'] as const)('groups load values with one decimal for %s', (locale) => {
     expect(formatLoadMW(32100.54, locale)).toBe('32,100.5')
+  })
+
+  it.each(['zh-TW', 'en'] as const)('groups temperatures with one decimal for %s', (locale) => {
+    expect(formatTemperature(1234.56, locale)).toBe('1,234.6°C')
+  })
+
+  it.each(['zh-TW', 'en'] as const)('formats percentages with the requested decimals for %s', (locale) => {
+    expect(formatPercent(96.8, locale, 1)).toBe('96.8%')
+    expect(formatPercent(2.1, locale, 2)).toBe('2.10%')
+  })
+
+  it.each([
+    [1.234, '+1.23%'],
+    [-1.234, '-1.23%'],
+    [0, '0.00%'],
+    [-0.001, '0.00%'],
+  ])('signs a percentage change of %d only when it is not zero', (value, expected) => {
+    expect(formatPercentDelta(value, 'en', 2)).toBe(expected)
+  })
+
+  it.each([
+    [1234.56, '+1,234.6'],
+    [-1234.56, '-1,234.6'],
+    [0, '0.0'],
+  ])('signs a load change of %d only when it is not zero', (value, expected) => {
+    expect(formatLoadDelta(value, 'zh-TW')).toBe(expected)
+  })
+
+  it.each(['zh-TW', 'en'] as const)('abbreviates load axis ticks to thousands for %s', (locale) => {
+    expect(formatLoadThousands(28000, locale)).toBe('28.0k')
+    expect(formatLoadThousands(1234567, locale)).toBe('1,234.6k')
   })
 })

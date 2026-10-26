@@ -1,9 +1,13 @@
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AlertCircle, CheckCircle2, ShieldCheck } from 'lucide-react'
+import { formatDecimal, formatNumber } from '@/i18n/format'
+import { useLocale } from '@/i18n/locale-store'
 import { type Messages, useMessages } from '@/i18n/use-messages'
 
 type DriftText = Messages['monitoring']['drift']
+
+const DRIFT_SCORE_FRACTION_DIGITS = 3
 
 // Demo data: feature names are code identifiers (kept verbatim); descriptions come from the dictionary.
 const DRIFT_METRICS: Array<{
@@ -57,22 +61,23 @@ const DRIFT_METRICS: Array<{
 ]
 
 export function DriftReportCard() {
-  const text = useMessages().monitoring.drift
+  const locale = useLocale()
+  const driftText = useMessages().monitoring.drift
   return (
     <Card className="border-slate-800 bg-slate-900/60 backdrop-blur-md">
       <CardHeader className="flex flex-row items-center justify-between pb-3">
         <div>
           <CardTitle className="text-base font-semibold text-slate-200 flex items-center gap-2">
             <ShieldCheck className="h-5 w-5 text-cyan-400" />
-            {text.title}
+            {driftText.title}
           </CardTitle>
           <p className="text-xs text-slate-400 mt-1">
-            {text.description}
+            {driftText.description}
           </p>
         </div>
         <Badge variant="success" className="gap-1.5 py-1 px-3">
           <CheckCircle2 className="h-3.5 w-3.5" />
-          {text.overall}
+          {driftText.overall}
         </Badge>
       </CardHeader>
       <CardContent>
@@ -84,29 +89,29 @@ export function DriftReportCard() {
             >
               <div className="space-y-1">
                 <p className="font-mono font-semibold text-slate-200">
-                  {item.feature} ({text.features[item.descriptionKey]})
+                  {item.feature} ({driftText.features[item.descriptionKey]})
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  {text.testAndThreshold(text.tests[item.statTest], String(item.threshold))}
+                  {driftText.testAndThreshold(driftText.tests[item.statTest], formatNumber(item.threshold, locale))}
                 </p>
               </div>
 
               <div className="flex items-center gap-4">
                 <div className="text-right">
                   <span className="font-mono font-bold text-slate-200">
-                    {item.driftScore.toFixed(3)}
+                    {formatDecimal(item.driftScore, locale, DRIFT_SCORE_FRACTION_DIGITS)}
                   </span>
-                  <p className="text-[10px] text-slate-500">{text.scoreLabel}</p>
+                  <p className="text-[10px] text-slate-500">{driftText.scoreLabel}</p>
                 </div>
                 {item.status === 'NORMAL' ? (
                   <Badge variant="success" className="text-[10px]">
                     <CheckCircle2 className="h-3 w-3 mr-1" />
-                    {text.normal}
+                    {driftText.normal}
                   </Badge>
                 ) : (
                   <Badge variant="warning" className="text-[10px]">
                     <AlertCircle className="h-3 w-3 mr-1" />
-                    {text.warning}
+                    {driftText.warning}
                   </Badge>
                 )}
               </div>

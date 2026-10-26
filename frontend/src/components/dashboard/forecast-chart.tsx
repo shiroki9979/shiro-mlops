@@ -1,9 +1,10 @@
 import { PredictionItem } from '@/schemas/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { formatDateTime, formatLoadMW, formatTemperature } from '@/i18n/format'
+import { formatDateTime, formatLoadThousands, formatNumber, formatPercent } from '@/i18n/format'
 import { type Locale, useLocale } from '@/i18n/locale-store'
 import { useMessages } from '@/i18n/use-messages'
 import { useDashboardStore } from '@/store/dashboard-store'
+import { formatSeriesValue } from './series-format'
 import {
   Area,
   CartesianGrid,
@@ -15,6 +16,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+
+const HUMIDITY_TICK_FRACTION_DIGITS = 0
 
 interface ForecastChartProps {
   predictions?: PredictionItem[]
@@ -31,13 +34,6 @@ interface CustomTooltipProps {
   }>
   label?: string
   locale: Locale
-}
-
-// Units follow the plotted field, not the translated series name.
-function formatSeriesValue(dataKey: string | number | undefined, value: number, locale: Locale): string {
-  if (dataKey === 'predicted_load_mw') return `${formatLoadMW(value, locale)} MW`
-  if (dataKey === 'temperature') return formatTemperature(value)
-  return `${value.toFixed(1)} %`
 }
 
 function CustomTooltip({ active, payload, label, locale }: CustomTooltipProps) {
@@ -73,20 +69,20 @@ function CustomTooltip({ active, payload, label, locale }: CustomTooltipProps) {
 export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
   const { showTemperature, showHumidity } = useDashboardStore()
   const locale = useLocale()
-  const text = useMessages().dashboard.chart
+  const chartText = useMessages().dashboard.chart
 
   if (isLoading || !predictions || predictions.length === 0) {
     return (
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>
           <CardTitle className="text-base font-semibold text-slate-200">
-            {text.loadingTitle}
+            {chartText.loadingTitle}
           </CardTitle>
         </CardHeader>
         <CardContent className="h-[420px] flex items-center justify-center">
           <div className="text-center space-y-2">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent mx-auto" />
-            <p className="text-xs text-slate-400">{text.loading}</p>
+            <p className="text-xs text-slate-400">{chartText.loading}</p>
           </div>
         </CardContent>
       </Card>
@@ -103,10 +99,10 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <div>
           <CardTitle className="text-base font-semibold text-slate-200">
-            {text.title}
+            {chartText.title}
           </CardTitle>
           <p className="text-xs text-slate-400 mt-1">
-            {text.axes}
+            {chartText.axes}
           </p>
         </div>
       </CardHeader>
@@ -142,7 +138,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
               <YAxis
                 yAxisId="load"
                 domain={[minLoad, maxLoad]}
-                tickFormatter={(val) => `${(val / 1000).toFixed(1)}k`}
+                tickFormatter={(val) => formatLoadThousands(val, locale)}
                 stroke="#06b6d4"
                 fontSize={11}
                 tickLine={false}
@@ -155,7 +151,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   yAxisId="temp"
                   orientation="right"
                   domain={[15, 40]}
-                  tickFormatter={(val) => `${val}°`}
+                  tickFormatter={(val) => `${formatNumber(val, locale)}°`}
                   stroke="#f59e0b"
                   fontSize={11}
                   tickLine={false}
@@ -169,7 +165,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   yAxisId="humidity"
                   orientation="right"
                   domain={[0, 100]}
-                  tickFormatter={(val) => `${val}%`}
+                  tickFormatter={(val) => formatPercent(val, locale, HUMIDITY_TICK_FRACTION_DIGITS)}
                   stroke="#38bdf8"
                   fontSize={11}
                   tickLine={false}
@@ -188,7 +184,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                 yAxisId="load"
                 type="monotone"
                 dataKey="predicted_load_mw"
-                name={text.loadSeries}
+                name={chartText.loadSeries}
                 stroke="#06b6d4"
                 strokeWidth={2.5}
                 fillOpacity={1}
@@ -201,7 +197,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   yAxisId="temp"
                   type="monotone"
                   dataKey="temperature"
-                  name={text.temperatureSeries}
+                  name={chartText.temperatureSeries}
                   stroke="#f59e0b"
                   strokeWidth={2}
                   dot={false}
@@ -214,7 +210,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                   yAxisId={showTemperature ? 'temp' : 'humidity'}
                   type="monotone"
                   dataKey="relative_humidity"
-                  name={text.humiditySeries}
+                  name={chartText.humiditySeries}
                   stroke="#38bdf8"
                   strokeWidth={1.5}
                   dot={false}

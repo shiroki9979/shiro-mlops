@@ -124,7 +124,7 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-100 font-mono tracking-tight">
-              {formatTemperature(maxTemp)}
+              {formatTemperature(maxTemp, locale)}
             </span>
             <span className="text-xs text-slate-400">{text.celsius}</span>
           </div>

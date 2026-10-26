@@ -28,6 +28,8 @@ interface ExplorerResultsProps {
 }
 
 const CURSOR_REJECTED_STATUS = 400
+const INVALID_FILTERS_STATUS = 422
+const DATABASE_UNAVAILABLE_STATUS = 503
 
 function errorStatus(error: unknown): unknown {
   return typeof error === 'object' && error !== null && 'status' in error
@@ -42,8 +44,8 @@ function isCursorRejected(error: unknown): boolean {
 function listErrorMessage(error: unknown, text: Messages['explorer']['results']): string {
   const status = errorStatus(error)
   if (status === CURSOR_REJECTED_STATUS) return text.cursorRejected
-  if (status === 422) return text.invalidFilters
-  if (status === 503) return text.databaseUnavailable
+  if (status === INVALID_FILTERS_STATUS) return text.invalidFilters
+  if (status === DATABASE_UNAVAILABLE_STATUS) return text.databaseUnavailable
   return text.queryFailed
 }
 

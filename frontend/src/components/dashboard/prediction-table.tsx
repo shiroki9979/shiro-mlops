@@ -10,7 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatDateTime, formatLoadMW, formatTemperature } from '@/i18n/format'
+import { formatDateTime, formatHumidity, formatLoadMW, formatTemperature } from '@/i18n/format'
 import { useLocale } from '@/i18n/locale-store'
 import { useMessages } from '@/i18n/use-messages'
 import { Download, FileSpreadsheet } from 'lucide-react'
@@ -29,7 +29,7 @@ export function PredictionTable({
   const [page, setPage] = useState(0)
   const m = useMessages()
   const locale = useLocale()
-  const text = m.dashboard.table
+  const tableText = m.dashboard.table
   const pageSize = 10
 
   const handleExportCSV = () => {
@@ -59,11 +59,11 @@ export function PredictionTable({
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>
           <CardTitle className="text-base font-semibold text-slate-200">
-            {text.loadingTitle}
+            {tableText.loadingTitle}
           </CardTitle>
         </CardHeader>
         <CardContent className="h-48 flex items-center justify-center text-xs text-slate-500">
-          {text.loading}
+          {tableText.loading}
         </CardContent>
       </Card>
     )
@@ -78,7 +78,7 @@ export function PredictionTable({
         <div className="flex items-center gap-2">
           <FileSpreadsheet className="h-4 w-4 text-cyan-400" />
           <CardTitle className="text-base font-semibold text-slate-200">
-            {text.title(predictions.length)}
+            {tableText.title(predictions.length)}
           </CardTitle>
         </div>
         <Button
@@ -95,11 +95,11 @@ export function PredictionTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{text.timestamp}</TableHead>
-              <TableHead className="text-right">{text.load}</TableHead>
-              <TableHead className="text-right">{text.temperature}</TableHead>
-              <TableHead className="text-right">{text.humidity}</TableHead>
-              <TableHead className="text-center">{text.status}</TableHead>
+              <TableHead>{tableText.timestamp}</TableHead>
+              <TableHead className="text-right">{tableText.load}</TableHead>
+              <TableHead className="text-right">{tableText.temperature}</TableHead>
+              <TableHead className="text-right">{tableText.humidity}</TableHead>
+              <TableHead className="text-center">{tableText.status}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -112,14 +112,14 @@ export function PredictionTable({
                   {formatLoadMW(item.predicted_load_mw, locale)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-amber-300 text-xs">
-                  {formatTemperature(item.temperature)}
+                  {formatTemperature(item.temperature, locale)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-slate-300 text-xs">
-                  {item.relative_humidity.toFixed(1)}%
+                  {formatHumidity(item.relative_humidity, locale)}
                 </TableCell>
                 <TableCell className="text-center">
                   <span className="inline-block px-2 py-0.5 text-[10px] font-semibold rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                    {text.inferred}
+                    {tableText.inferred}
                   </span>
                 </TableCell>
               </TableRow>
@@ -130,7 +130,7 @@ export function PredictionTable({
         {/* Pagination Controls */}
         <div className="flex items-center justify-between pt-4 text-xs text-slate-400 border-t border-slate-800/80 mt-2">
           <span>
-            {text.range(page * pageSize + 1, Math.min((page + 1) * pageSize, predictions.length), predictions.length)}
+            {tableText.range(page * pageSize + 1, Math.min((page + 1) * pageSize, predictions.length), predictions.length)}
           </span>
           <div className="flex items-center gap-2">
             <Button
