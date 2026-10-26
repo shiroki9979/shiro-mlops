@@ -41,12 +41,12 @@ function isCursorRejected(error: unknown): boolean {
   return errorStatus(error) === CURSOR_REJECTED_STATUS
 }
 
-function listErrorMessage(error: unknown, text: Messages['explorer']['results']): string {
+function listErrorMessage(error: unknown, resultsText: Messages['explorer']['results']): string {
   const status = errorStatus(error)
-  if (status === CURSOR_REJECTED_STATUS) return text.cursorRejected
-  if (status === INVALID_FILTERS_STATUS) return text.invalidFilters
-  if (status === DATABASE_UNAVAILABLE_STATUS) return text.databaseUnavailable
-  return text.queryFailed
+  if (status === CURSOR_REJECTED_STATUS) return resultsText.cursorRejected
+  if (status === INVALID_FILTERS_STATUS) return resultsText.invalidFilters
+  if (status === DATABASE_UNAVAILABLE_STATUS) return resultsText.databaseUnavailable
+  return resultsText.queryFailed
 }
 
 export function ExplorerResults({
@@ -60,35 +60,35 @@ export function ExplorerResults({
   onNextPage,
   onRestart,
 }: ExplorerResultsProps) {
-  const messages = useMessages()
+  const m = useMessages()
   const locale = useLocale()
-  const text = messages.explorer.results
+  const resultsText = m.explorer.results
   return (
     <Card>
       <CardContent className="pt-6">
         {isLoading ? (
-          <p className="text-xs text-slate-500">{text.loading}</p>
+          <p className="text-xs text-slate-500">{resultsText.loading}</p>
         ) : isError ? (
           <div>
-            <p className="text-xs text-rose-300">{listErrorMessage(error, text)}</p>
+            <p className="text-xs text-rose-300">{listErrorMessage(error, resultsText)}</p>
             {canRestart && isCursorRejected(error) && (
-              <Button className="mt-4" variant="outline" onClick={onRestart}>{text.backToFirstPage}</Button>
+              <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </div>
         ) : !data || data.items.length === 0 ? (
-          <p className="text-xs text-slate-500">{text.empty}</p>
+          <p className="text-xs text-slate-500">{resultsText.empty}</p>
         ) : (
           <>
             {data.missing_slots.length > 0 && (
               <p className="text-xs text-amber-300 mb-3">
-                {text.gaps(formatNumber(data.missing_slots.length, locale))}
+                {resultsText.gaps(formatNumber(data.missing_slots.length, locale))}
               </p>
             )}
             <Table>
               <TableHeader>
                 <TableRow>
                   {dataset.columns.map((column) => (
-                    <TableHead key={column}>{explorerFieldLabel(column, messages)}</TableHead>
+                    <TableHead key={column}>{explorerFieldLabel(column, m)}</TableHead>
                   ))}
                 </TableRow>
               </TableHeader>
@@ -97,7 +97,7 @@ export function ExplorerResults({
                   <TableRow key={index} className="cursor-pointer" onClick={() => onSelect(row)}>
                     {dataset.columns.map((column) => (
                       <TableCell key={column} className="font-mono text-xs">
-                        {formatExplorerField(column, row[column], { locale, messages })}
+                        {formatExplorerField(column, row[column], { locale, m })}
                       </TableCell>
                     ))}
                   </TableRow>
@@ -110,7 +110,7 @@ export function ExplorerResults({
                 variant="outline"
                 onClick={() => onNextPage(data.next_cursor ?? undefined)}
               >
-                {messages.common.nextPage}
+                {m.common.nextPage}
               </Button>
             )}
           </>

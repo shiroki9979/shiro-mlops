@@ -1,7 +1,8 @@
-import { formatCalendarDate, formatNumber, formatTimestamp } from '@/i18n/format'
+import { EMPTY_VALUE, formatCalendarDate, formatNumber, formatTimestamp } from '@/i18n/format'
 import type { Locale } from '@/i18n/locale-store'
 import type { Messages } from '@/i18n/use-messages'
 import type { ExplorerFieldKey } from './catalog'
+import { translateCompleteness } from './status-text'
 
 // 'text' covers identifiers and data values (station IDs, geocodes, regions, unit names): shown verbatim.
 type FieldKind = 'timestamp' | 'date' | 'measurement' | 'flag' | 'auditStatus' | 'text'
@@ -82,19 +83,17 @@ const FIELD_KINDS: Record<ExplorerFieldKey, FieldKind> = {
   yday_peak_resv_indicator: 'text',
 }
 
-const EMPTY_VALUE = '—'
-
 export interface FieldFormatContext {
   locale: Locale
-  messages: Messages
+  m: Messages
 }
 
 function isKnownField(key: string): key is ExplorerFieldKey {
   return Object.hasOwn(FIELD_KINDS, key)
 }
 
-export function explorerFieldLabel(key: string, messages: Messages): string {
-  return isKnownField(key) ? messages.explorer.fields[key] : key
+export function explorerFieldLabel(key: string, m: Messages): string {
+  return isKnownField(key) ? m.explorer.fields[key] : key
 }
 
 export function formatExplorerField(key: string, value: unknown, context: FieldFormatContext): string {
@@ -103,18 +102,13 @@ export function formatExplorerField(key: string, value: unknown, context: FieldF
   return formatByKind(kind, value, context)
 }
 
-function formatByKind(kind: FieldKind, value: unknown, { locale, messages }: FieldFormatContext): string {
+function formatByKind(kind: FieldKind, value: unknown, { locale, m }: FieldFormatContext): string {
   if (kind === 'timestamp' && typeof value === 'string') return formatTimestamp(value, locale)
   if (kind === 'date' && typeof value === 'string') return formatCalendarDate(value, locale)
   if (kind === 'measurement' && typeof value === 'number') return formatNumber(value, locale)
-  if (kind === 'flag' && typeof value === 'boolean') return value ? messages.common.yes : messages.common.no
-  if (kind === 'auditStatus') return translateCompleteness(String(value), messages)
+  if (kind === 'flag' && typeof value === 'boolean') return value ? m.common.yes : m.common.no
+  if (kind === 'auditStatus') return translateCompleteness(String(value), m)
   return formatVerbatim(value)
-}
-
-export function translateCompleteness(value: string, messages: Messages): string {
-  const labels: Record<string, string> = messages.status.completeness
-  return labels[value] ?? value
 }
 
 function formatVerbatim(value: unknown): string {

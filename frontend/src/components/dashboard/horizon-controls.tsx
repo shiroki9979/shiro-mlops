@@ -7,10 +7,10 @@ import { type Messages, useMessages } from '@/i18n/use-messages'
 const HOURLY_PRESETS = [24, 48, 72]
 const WEEK_HOURS = 168
 
-function horizonPresets(text: Messages['dashboard']['horizon']) {
+function horizonPresets(horizonText: Messages['dashboard']['horizon']) {
   return [
-    ...HOURLY_PRESETS.map((value) => ({ value, label: text.hours(value) })),
-    { value: WEEK_HOURS, label: text.week },
+    ...HOURLY_PRESETS.map((value) => ({ value, label: horizonText.hours(value) })),
+    { value: WEEK_HOURS, label: horizonText.week },
   ]
 }
 
@@ -26,7 +26,6 @@ export function HorizonControls() {
     setAutoRefresh,
   } = useDashboardStore()
   const m = useMessages()
-  const text = m.dashboard
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 backdrop-blur-md">
@@ -34,10 +33,10 @@ export function HorizonControls() {
       <div className="flex items-center gap-2">
         <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 mr-1">
           <Clock className="h-3.5 w-3.5 text-cyan-400" />
-          {text.horizon.label}
+          {m.dashboard.horizon.label}
         </span>
         <div className="flex flex-wrap items-center gap-1.5">
-          {horizonPresets(text.horizon).map((preset) => (
+          {horizonPresets(m.dashboard.horizon).map((preset) => (
             <Button
               key={preset.value}
               variant={horizonHours === preset.value ? 'default' : 'outline'}
@@ -56,7 +55,7 @@ export function HorizonControls() {
         {/* The model forecasts nationwide load only, so the subject is fixed rather than selectable. */}
         <div className="flex items-center gap-2 text-xs text-slate-300">
           <MapPin className="h-3.5 w-3.5 text-slate-400" />
-          <span>{text.predictionSubject}</span>
+          <span>{m.dashboard.predictionSubject}</span>
         </div>
 
         <div className="h-4 w-px bg-slate-800" />
@@ -74,7 +73,7 @@ export function HorizonControls() {
               className="cursor-pointer text-slate-300 flex items-center gap-1 select-none"
             >
               <Eye className="h-3.5 w-3.5 text-amber-400" />
-              {text.temperatureToggle}
+              {m.dashboard.temperatureToggle}
             </label>
           </div>
 
@@ -88,7 +87,7 @@ export function HorizonControls() {
               htmlFor="humidity-toggle"
               className="cursor-pointer text-slate-300 select-none"
             >
-              {text.humidityToggle}
+              {m.dashboard.humidityToggle}
             </label>
           </div>
         </div>
@@ -107,7 +106,7 @@ export function HorizonControls() {
             className="cursor-pointer text-slate-300 flex items-center gap-1 select-none"
           >
             <RefreshCw className={`h-3 w-3 ${autoRefresh ? 'text-cyan-400' : 'text-slate-500'}`} />
-            {text.autoRefresh}
+            {m.dashboard.autoRefresh}
           </label>
         </div>
       </div>

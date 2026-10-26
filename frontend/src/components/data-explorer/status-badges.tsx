@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { useMessages } from '@/i18n/use-messages'
 import { DatasetStatus } from '@/schemas/data-explorer'
+import { translateCompleteness } from './status-text'
 
 // Variants key off the raw API enum; only the visible text is translated.
 const overallVariant = {
@@ -21,7 +22,7 @@ export function StatusBadges({ status }: { status: DatasetStatus }) {
       </Badge>
       <Badge variant="outline">{labeled(m.status.freshnessLabel, m.status.freshness[status.freshness])}</Badge>
       <Badge variant="outline">
-        {labeled(m.status.completenessLabel, m.status.completeness[status.completeness])}
+        {labeled(m.status.completenessLabel, translateCompleteness(status.completeness, m))}
       </Badge>
     </div>
   )

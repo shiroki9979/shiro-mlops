@@ -1,17 +1,13 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
+  isLocale,
   LOCALE_NATIVE_NAMES,
-  type Locale,
   SUPPORTED_LOCALES,
   useLocale,
   useLocaleStore,
 } from '@/i18n/locale-store'
 import { useMessages } from '@/i18n/use-messages'
 import { Languages } from 'lucide-react'
-
-function isLocale(value: string): value is Locale {
-  return (SUPPORTED_LOCALES as readonly string[]).includes(value)
-}
 
 export function LanguagePanel() {
   const m = useMessages()

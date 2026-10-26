@@ -13,17 +13,17 @@ export const historyRoute = createRoute({
 })
 
 function HistoryPage() {
-  const text = useMessages().history
+  const m = useMessages()
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
             <History className="h-5 w-5 text-cyan-400" />
-            {text.title}
+            {m.history.title}
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            {text.description}
+            {m.history.description}
           </p>
         </div>
       </div>
@@ -38,12 +38,12 @@ function HistoryPage() {
       <Card className="border-slate-800 bg-slate-900/60 backdrop-blur-md">
         <CardHeader>
           <CardTitle className="text-sm font-semibold text-slate-200">
-            {text.conclusionTitle}
+            {m.history.conclusionTitle}
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xs text-slate-400 space-y-2 leading-relaxed">
-          <p>{text.conclusionAccuracy}</p>
-          <p>{text.conclusionPeak}</p>
+          <p>{m.history.conclusionAccuracy}</p>
+          <p>{m.history.conclusionPeak}</p>
         </CardContent>
       </Card>
     </div>

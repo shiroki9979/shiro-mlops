@@ -1,6 +1,6 @@
 import { PredictionItem } from '@/schemas/api'
 import { Card, CardContent } from '@/components/ui/card'
-import { formatDateTime, formatLoadMW, formatTemperature } from '@/i18n/format'
+import { EMPTY_VALUE, formatDateTime, formatLoadMW, formatTemperature } from '@/i18n/format'
 import { useLocale } from '@/i18n/locale-store'
 import { useMessages } from '@/i18n/use-messages'
 import { Activity, ArrowUpRight, Gauge, ThermometerSun, Zap } from 'lucide-react'
@@ -13,7 +13,7 @@ interface MetricCardsProps {
 export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
   const m = useMessages()
   const locale = useLocale()
-  const text = m.dashboard.metrics
+  const metricsText = m.dashboard.metrics
 
   if (isLoading || !predictions || predictions.length === 0) {
     return (
@@ -50,10 +50,10 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <Zap className="h-4 w-4 text-cyan-400" />
-              {text.peakTitle}
+              {metricsText.peakTitle}
             </span>
             <span className="flex items-center text-cyan-400 text-[11px]">
-              {text.peakTag} <ArrowUpRight className="h-3 w-3" />
+              {metricsText.peakTag} <ArrowUpRight className="h-3 w-3" />
             </span>
           </div>
           <div className="flex items-baseline gap-2">
@@ -63,7 +63,7 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
             <span className="text-xs text-slate-400">MW</span>
           </div>
           <p className="text-[11px] text-slate-500 truncate">
-            {text.peakTime(peakItem ? formatDateTime(peakItem.datetime, locale) : '--')}
+            {metricsText.peakTime(peakItem ? formatDateTime(peakItem.datetime, locale) : EMPTY_VALUE)}
           </p>
         </CardContent>
       </Card>
@@ -74,9 +74,9 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <Gauge className="h-4 w-4 text-indigo-400" />
-              {text.averageTitle}
+              {metricsText.averageTitle}
             </span>
-            <span className="text-[11px] text-indigo-400 font-mono">{text.averageTag}</span>
+            <span className="text-[11px] text-indigo-400 font-mono">{metricsText.averageTag}</span>
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-100 font-mono tracking-tight">
@@ -85,7 +85,7 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
             <span className="text-xs text-slate-400">MW</span>
           </div>
           <p className="text-[11px] text-slate-500">
-            {text.averageNote}
+            {metricsText.averageNote}
           </p>
         </CardContent>
       </Card>
@@ -96,9 +96,9 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <Activity className="h-4 w-4 text-emerald-400" />
-              {text.valleyTitle}
+              {metricsText.valleyTitle}
             </span>
-            <span className="text-[11px] text-emerald-400 font-mono">{text.valleyTag}</span>
+            <span className="text-[11px] text-emerald-400 font-mono">{metricsText.valleyTag}</span>
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-100 font-mono tracking-tight">
@@ -107,7 +107,7 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
             <span className="text-xs text-slate-400">MW</span>
           </div>
           <p className="text-[11px] text-slate-500">
-            {text.peakValleySpread(formatLoadMW(peakLoad - minLoad, locale))}
+            {metricsText.peakValleySpread(formatLoadMW(peakLoad - minLoad, locale))}
           </p>
         </CardContent>
       </Card>
@@ -118,18 +118,18 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <ThermometerSun className="h-4 w-4 text-amber-400" />
-              {text.maxTemperatureTitle}
+              {metricsText.maxTemperatureTitle}
             </span>
-            <span className="text-[11px] text-amber-400 font-mono">{text.maxTemperatureTag}</span>
+            <span className="text-[11px] text-amber-400 font-mono">{metricsText.maxTemperatureTag}</span>
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-100 font-mono tracking-tight">
               {formatTemperature(maxTemp, locale)}
             </span>
-            <span className="text-xs text-slate-400">{text.celsius}</span>
+            <span className="text-xs text-slate-400">{metricsText.celsius}</span>
           </div>
           <p className="text-[11px] text-slate-500">
-            {text.temperatureNote}
+            {metricsText.temperatureNote}
           </p>
         </CardContent>
       </Card>

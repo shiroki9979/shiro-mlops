@@ -41,6 +41,9 @@ const PERCENT: Intl.NumberFormatOptions = { style: 'percent' }
 // A change that rounds to zero carries no sign, so "+0.00%" never suggests a direction.
 const SIGNED: Intl.NumberFormatOptions = { signDisplay: 'exceptZero' }
 
+// Shown wherever a value is missing, so every page marks gaps the same way.
+export const EMPTY_VALUE = '—'
+
 type DateInput = string | number | Date
 
 function formatDate(value: DateInput, locale: Locale, options: Intl.DateTimeFormatOptions): string {

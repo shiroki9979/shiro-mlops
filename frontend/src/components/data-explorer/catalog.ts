@@ -1,4 +1,4 @@
-import type { Messages } from '@/i18n/zh-TW'
+import type { Messages } from '@/i18n/use-messages'
 
 // Display text lives in the locale dictionaries; ids and keys are typed against them so a missing entry fails tsc.
 export type ExplorerDatasetId = keyof Messages['explorer']['datasets']

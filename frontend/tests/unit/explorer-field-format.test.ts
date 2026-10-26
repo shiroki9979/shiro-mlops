@@ -11,21 +11,21 @@ describe('formatExplorerField', () => {
   it.each([
     ['zh-TW', zhTW, '2026/09/09 20:00:00'],
     ['en', en, '09/09/2026, 20:00:00'],
-  ] as const)('shows API timestamps as Taipei time for %s', (locale, messages, expected) => {
-    const text = formatExplorerField('observed_at', '2026-09-09T20:00:00+08:00', { locale, messages })
+  ] as const)('shows API timestamps as Taipei time for %s', (locale, m, expected) => {
+    const text = formatExplorerField('observed_at', '2026-09-09T20:00:00+08:00', { locale, m })
 
     expect(plainSpaces(text)).toBe(expected)
   })
 
   it('groups measurement values with the locale separator', () => {
-    const context = { locale: 'en', messages: en } as const
+    const context = { locale: 'en', m: en } as const
 
     expect(formatExplorerField('load_mw', 32100.5, context)).toBe('32,100.5')
     expect(formatExplorerField('curr_load_wan_kw', 3242.1, context)).toBe('3,242.1')
   })
 
   it('keeps identifiers and data values exactly as returned by the API', () => {
-    const context = { locale: 'en', messages: en } as const
+    const context = { locale: 'en', m: en } as const
 
     expect(formatExplorerField('station_id', '466920', context)).toBe('466920')
     expect(formatExplorerField('geocode', '63000000', context)).toBe('63000000')
@@ -37,13 +37,13 @@ describe('formatExplorerField', () => {
   it.each([
     ['zh-TW', zhTW, '不完整', '否'],
     ['en', en, 'Incomplete', 'No'],
-  ] as const)('translates audit status and flags for %s', (locale, messages, status, flag) => {
-    expect(formatExplorerField('status', 'incomplete', { locale, messages })).toBe(status)
-    expect(formatExplorerField('slot_complete', false, { locale, messages })).toBe(flag)
+  ] as const)('translates audit status and flags for %s', (locale, m, status, flag) => {
+    expect(formatExplorerField('status', 'incomplete', { locale, m })).toBe(status)
+    expect(formatExplorerField('slot_complete', false, { locale, m })).toBe(flag)
   })
 
   it('shows a dash for empty values and the raw text for fields it does not know', () => {
-    const context = { locale: 'zh-TW', messages: zhTW } as const
+    const context = { locale: 'zh-TW', m: zhTW } as const
 
     expect(formatExplorerField('load_mw', null, context)).toBe('—')
     expect(formatExplorerField('unexpected_field', 1234.5, context)).toBe('1234.5')

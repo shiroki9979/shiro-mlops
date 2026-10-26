@@ -36,6 +36,17 @@ describe('detectLocale', () => {
   })
 })
 
+describe('isLocale', () => {
+  it('accepts only supported locale codes', async () => {
+    const { isLocale } = await loadFreshLocaleModule()
+
+    expect(isLocale('zh-TW')).toBe(true)
+    expect(isLocale('en')).toBe(true)
+    expect(isLocale('en-US')).toBe(false)
+    expect(isLocale('fr')).toBe(false)
+  })
+})
+
 describe('useLocaleStore persistence', () => {
   it('uses the detected browser language without saving it', async () => {
     stubBrowserLanguages(['en-US', 'zh-TW'])

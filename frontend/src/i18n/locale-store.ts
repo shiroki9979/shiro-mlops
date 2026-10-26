@@ -12,6 +12,10 @@ export const LOCALE_NATIVE_NAMES: Record<Locale, string> = {
   en: 'English',
 }
 
+export function isLocale(value: string): value is Locale {
+  return (SUPPORTED_LOCALES as readonly string[]).includes(value)
+}
+
 export function detectLocale(languages: readonly string[]): Locale {
   for (const language of languages) {
     const normalized = language.toLowerCase()

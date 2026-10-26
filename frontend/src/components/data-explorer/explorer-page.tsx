@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { datasetListQueryKey, useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
-import { formatTimestamp } from '@/i18n/format'
+import { EMPTY_VALUE, formatTimestamp } from '@/i18n/format'
 import { useLocale } from '@/i18n/locale-store'
 import { useMessages } from '@/i18n/use-messages'
 import type { ExplorerDatasetConfig } from './catalog'
@@ -22,23 +22,23 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const auditStatus = dataset.auditDatasetId
     ? statusQuery.data?.datasets.find((item) => item.id === dataset.auditDatasetId)
     : undefined
-  const messages = useMessages()
+  const m = useMessages()
   const locale = useLocale()
-  const datasetText = messages.explorer.datasets[dataset.id]
-  const fetchedAt = listQuery.dataUpdatedAt ? formatTimestamp(listQuery.dataUpdatedAt, locale) : '—'
+  const datasetText = m.explorer.datasets[dataset.id]
+  const fetchedAt = listQuery.dataUpdatedAt ? formatTimestamp(listQuery.dataUpdatedAt, locale) : EMPTY_VALUE
 
   return (
     <div className="space-y-6">
       <div>
         <p className="text-xs text-slate-500">
           <Link to="/data" className="text-cyan-400 hover:underline">
-            {messages.explorer.title}
+            {m.explorer.title}
           </Link>
           <span> / {datasetText.label}</span>
         </p>
         <h1 className="text-xl font-bold text-slate-100 mt-2">{datasetText.label}</h1>
         <p className="text-xs text-slate-400 mt-1">
-          {datasetText.description} {messages.explorer.timeZoneNote}
+          {datasetText.description} {m.explorer.timeZoneNote}
         </p>
       </div>
 
