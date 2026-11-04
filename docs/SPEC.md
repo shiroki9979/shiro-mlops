@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-28
+- 最後更新：2026-10-26
 - 專案版本：`0.4.0`
 
 ---
@@ -465,7 +465,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **Data Explorer 首頁**：`/data` 顯示全部 datasets 的最新來源時間、最新入庫時間、freshness、completeness 與明細連結。
 - **狀態 API**：`GET /data/status` 是 Monitoring、Data Explorer 首頁與各資料頁的共用狀態來源。Typed list endpoints 不重複計算狀態，並共用含 `items`、`next_cursor` 與 `has_more` 的 pagination envelope。
 - **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
-- **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示「Back to first page」；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。
+- **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示返回第一頁的恢復操作（字典鍵 `explorer.results.backToFirstPage`，顯示文字隨介面語系）；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。
 - **開啟條件**：v1 不建立應用層登入與 RBAC。Data Explorer 路由與 API 僅在 local environment 或明確啟用功能旗標時可用；非本機存取必須由內網或 reverse proxy 限制，並使用 same-origin CORS，不得依賴現有 `CORS *` 對外暴露。
 - **顯示範圍**：v1 只提供狀態、資料表、篩選、typed detail drawer 與當頁 CSV 匯出；不提供趨勢圖或可設定維度的分析視覺化。
 - **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。
@@ -571,3 +571,49 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 - `load_model(root, task) -> TaskModel | None`：在同一把鎖下讀取 `root/<task_id>`，替換期間只會載入完整的前一版或新模型；目錄不存在時回傳 `None`（任務尚未訓練）；既有 `model.joblib` 不載入。
 - 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）；`direct_classification` 同為 `model.txt`（二元分類 Booster 文字格式）與 `metadata.json`（格式版本、任務類型、完整 `[params]`、`max_lead_hours`、特徵名稱、氣象欄位）；`unsupervised_reconstruction` 為 `model.npz`（`coef_{i}`、`intercept_{i}` 各層權重與偏差，`scaler_mean`、`scaler_scale` 標準化參數；以 `allow_pickle=False` 讀取）與 `metadata.json`（格式版本、任務類型、激活函數、層數、`window_hours`、氣象欄位、特徵名稱、`threshold`），推論以 numpy 前向計算，不重建 sklearn 物件。
 - `src/` 不得 import `pickle` 或 `joblib`，由測試強制。
+
+---
+
+## 6. 前端語系與格式
+
+> 依 [GitHub #80](https://github.com/shiroki9979/shiro-mlops/issues/80)。程式位於 `frontend/src/i18n/`。
+
+### 6.1 語系與字典
+
+- **支援語系**：`zh-TW`（預設）與 `en`。
+- **字典型別**：`zh-TW.ts` 為基準字典，`Messages` 型別由其推導；`en.ts` 以 `Messages` 標註，缺鍵或多出的鍵在 `tsc`（`pnpm build`）時失敗。
+- **取值方式**：元件經 `useMessages()` 取得目前語系的字典物件（如 `m.nav.dashboard`），插值以函式值表達（如 `m.dashboard.table.title(hours)`）；元件不直接寫 UI 字面值。
+- **用詞**：zh-TW 使用 [GLOSSARY.md](../GLOSSARY.md) 中文正名，en 使用 GLOSSARY 括號內英文；MW、MAPE、CWA、Geocode 等單位與縮寫兩語系皆保留。
+- **Data Explorer catalog**：`catalog.ts` 只保存 dataset id、路由、API 路徑、欄位與 filter key；資料集名稱、說明、欄名、filter 標籤與導覽分組標題由字典以 dataset id 與欄位 key 提供。`ExplorerDatasetId` 與 `ExplorerFieldKey` 由字典鍵推導，catalog 引用字典沒有的鍵時 `tsc` 失敗。
+
+### 6.2 翻譯邊界
+
+| 類別 | 範圍 |
+| :--- | :--- |
+| 經字典翻譯 | UI 字串、錯誤與空狀態訊息、Data Explorer 欄名與布林值、API 狀態 enum（`overall`、`availability`、`freshness`、`completeness`、audit `status`） |
+| 維持原值 | 區域名、測站編號、機組名稱、`dataset_id` 等資料內容值；篩選 placeholder 中的合法輸入值；後端 `ApiError` 訊息（`detail`）；CSV 表頭與內容；請求參數與 cursor |
+
+`GET /data/status` 回傳的 `label` 不直接顯示；前端以 dataset `id` 查字典，僅在 id 不在 catalog 時回退為 `label`。
+
+### 6.3 語系選擇與持久化
+
+- **選擇入口**：僅設定頁提供語系選單，選項以各語言自稱顯示（「正體中文」「English」）。
+- **持久化**：獨立 `useLocaleStore`（zustand `persist`，key `shiro-locale`），只保存使用者明確選擇；未選擇時不寫入瀏覽器儲存，不保存自動偵測結果。
+- **生效語系**：已保存的選擇優先；否則依序檢查 `navigator.languages`，第一個 `zh*` 對應 `zh-TW`、`en*` 對應 `en`，皆不支援時使用 `zh-TW`。
+- **文件語系**：`main.tsx` 在初次 render 前呼叫 `syncDocumentLocale()`，設定 `<html lang>` 與 `document.title`，並於切換語系後同步更新。`index.html` 的靜態值只在 JavaScript 載入前生效。
+
+### 6.4 數字與日期時間
+
+- **時區**：所有日期時間格式化經 `src/i18n/format.ts`，明確指定 `timeZone: 'Asia/Taipei'`，不依賴瀏覽器時區；Data Explorer 時間維持整秒格式。
+- **數字**：以 `Intl.NumberFormat` 依目前語系分組。
+- **Data Explorer 欄位型別**：依欄位 key 的語意對照表辨識時間、日期、量測值、旗標、audit status 與原值；測站編號、Geocode 等識別碼即使形似數字也不格式化。字典沒有的欄位顯示原始 key 與原值。
+- **不受語系影響**：請求參數的時間字串（RFC 3339，`+08:00`）、cursor 與 CSV 匯出直接使用 API 原值。
+
+### 6.5 不引入 i18n 套件
+
+目前只有兩種語系、字串量約數百，且不需要 ICU 訊息語法、語系檔動態載入或翻譯平台整合；型別化字典搭配原生 `Intl` 即可由 `tsc` 保證鍵完整，不增加相依套件與 bundle 體積。代價是英文單複數等少數規則以函式值手寫。新增語系、需要翻譯平台流程或複數規則顯著增加時，再評估 i18n 套件。
+
+### 6.6 測試約定
+
+- vitest 全域 `TZ=UTC`，以已知時間點斷言兩語系皆顯示正確的臺北時間。
+- 每個測試前將語系重設為 `zh-TW`（jsdom 預設語言為 `en-US`）；整合測試以字典值斷言，不寫死顯示文字。

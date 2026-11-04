@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MetricCards } from '@/components/dashboard/metric-cards'
+import { zhTW } from '@/i18n/zh-TW'
 
 describe('MetricCards Component', () => {
   it('renders skeleton cards when loading', () => {
@@ -28,10 +29,11 @@ describe('MetricCards Component', () => {
     render(<MetricCards isLoading={false} predictions={mockPredictions} />)
 
     // Check titles
-    expect(screen.getByText('尖峰用電預估')).toBeInTheDocument()
-    expect(screen.getByText('區間平均負載')).toBeInTheDocument()
-    expect(screen.getByText('離峰用電低谷')).toBeInTheDocument()
-    expect(screen.getByText('最高預估氣溫')).toBeInTheDocument()
+    const metrics = zhTW.dashboard.metrics
+    expect(screen.getByText(metrics.peakTitle)).toBeInTheDocument()
+    expect(screen.getByText(metrics.averageTitle)).toBeInTheDocument()
+    expect(screen.getByText(metrics.valleyTitle)).toBeInTheDocument()
+    expect(screen.getByText(metrics.maxTemperatureTitle)).toBeInTheDocument()
 
     // Peak is 35,000.0
     expect(screen.getByText('35,000.0')).toBeInTheDocument()
@@ -41,5 +43,7 @@ describe('MetricCards Component', () => {
     expect(screen.getByText('25,000.0')).toBeInTheDocument()
     // Max Temp is 34.5°C
     expect(screen.getByText('34.5°C')).toBeInTheDocument()
+    // The peak at 12:00 UTC happens at 20:00 Taipei time, whatever the host time zone is.
+    expect(screen.getByText(metrics.peakTime('08/25 20:00'))).toBeInTheDocument()
   })
 })

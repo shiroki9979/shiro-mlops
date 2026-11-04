@@ -8,9 +8,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatExplorerValue } from '@/lib/data-explorer'
+import { formatNumber } from '@/i18n/format'
+import { useLocale } from '@/i18n/locale-store'
+import { type Messages, useMessages } from '@/i18n/use-messages'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
+import { explorerFieldLabel, formatExplorerField } from './field-format'
 
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
@@ -25,6 +28,8 @@ interface ExplorerResultsProps {
 }
 
 const CURSOR_REJECTED_STATUS = 400
+const INVALID_FILTERS_STATUS = 422
+const DATABASE_UNAVAILABLE_STATUS = 503
 
 function errorStatus(error: unknown): unknown {
   return typeof error === 'object' && error !== null && 'status' in error
@@ -36,12 +41,12 @@ function isCursorRejected(error: unknown): boolean {
   return errorStatus(error) === CURSOR_REJECTED_STATUS
 }
 
-function listErrorMessage(error: unknown): string {
+function listErrorMessage(error: unknown, resultsText: Messages['explorer']['results']): string {
   const status = errorStatus(error)
-  if (status === CURSOR_REJECTED_STATUS) return '分頁游標無效或已與目前篩選條件不相容。'
-  if (status === 422) return '篩選條件無效，請確認時間範圍與欄位格式。'
-  if (status === 503) return '資料庫目前無法連線，請稍後再試。'
-  return '查詢失敗，請稍後再試。'
+  if (status === CURSOR_REJECTED_STATUS) return resultsText.cursorRejected
+  if (status === INVALID_FILTERS_STATUS) return resultsText.invalidFilters
+  if (status === DATABASE_UNAVAILABLE_STATUS) return resultsText.databaseUnavailable
+  return resultsText.queryFailed
 }
 
 export function ExplorerResults({
@@ -55,32 +60,35 @@ export function ExplorerResults({
   onNextPage,
   onRestart,
 }: ExplorerResultsProps) {
+  const m = useMessages()
+  const locale = useLocale()
+  const resultsText = m.explorer.results
   return (
     <Card>
       <CardContent className="pt-6">
         {isLoading ? (
-          <p className="text-xs text-slate-500">載入資料中...</p>
+          <p className="text-xs text-slate-500">{resultsText.loading}</p>
         ) : isError ? (
           <div>
-            <p className="text-xs text-rose-300">{listErrorMessage(error)}</p>
+            <p className="text-xs text-rose-300">{listErrorMessage(error, resultsText)}</p>
             {canRestart && isCursorRejected(error) && (
-              <Button className="mt-4" variant="outline" onClick={onRestart}>Back to first page</Button>
+              <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </div>
         ) : !data || data.items.length === 0 ? (
-          <p className="text-xs text-slate-500">查無符合資料，查詢成功但結果為空。</p>
+          <p className="text-xs text-slate-500">{resultsText.empty}</p>
         ) : (
           <>
             {data.missing_slots.length > 0 && (
               <p className="text-xs text-amber-300 mb-3">
-                查詢區間缺口：{data.missing_slots.length} 筆
+                {resultsText.gaps(formatNumber(data.missing_slots.length, locale))}
               </p>
             )}
             <Table>
               <TableHeader>
                 <TableRow>
                   {dataset.columns.map((column) => (
-                    <TableHead key={column.key}>{column.label}</TableHead>
+                    <TableHead key={column}>{explorerFieldLabel(column, m)}</TableHead>
                   ))}
                 </TableRow>
               </TableHeader>
@@ -88,8 +96,8 @@ export function ExplorerResults({
                 {data.items.map((row, index) => (
                   <TableRow key={index} className="cursor-pointer" onClick={() => onSelect(row)}>
                     {dataset.columns.map((column) => (
-                      <TableCell key={column.key} className="font-mono text-xs">
-                        {formatExplorerValue(row[column.key])}
+                      <TableCell key={column} className="font-mono text-xs">
+                        {formatExplorerField(column, row[column], { locale, m })}
                       </TableCell>
                     ))}
                   </TableRow>
@@ -102,7 +110,7 @@ export function ExplorerResults({
                 variant="outline"
                 onClick={() => onNextPage(data.next_cursor ?? undefined)}
               >
-                下一頁
+                {m.common.nextPage}
               </Button>
             )}
           </>

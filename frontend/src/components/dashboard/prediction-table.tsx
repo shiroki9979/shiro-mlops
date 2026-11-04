@@ -10,7 +10,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatDateTime, formatLoadMW, formatTemperature } from '@/lib/utils'
+import { formatDateTime, formatHumidity, formatLoadMW, formatTemperature } from '@/i18n/format'
+import { useLocale } from '@/i18n/locale-store'
+import { useMessages } from '@/i18n/use-messages'
 import { Download, FileSpreadsheet } from 'lucide-react'
 
 interface PredictionTableProps {
@@ -25,6 +27,9 @@ export function PredictionTable({
   subject = 'nationwide',
 }: PredictionTableProps) {
   const [page, setPage] = useState(0)
+  const m = useMessages()
+  const locale = useLocale()
+  const tableText = m.dashboard.table
   const pageSize = 10
 
   const handleExportCSV = () => {
@@ -54,11 +59,11 @@ export function PredictionTable({
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>
           <CardTitle className="text-base font-semibold text-slate-200">
-            預測逐時明細表
+            {tableText.loadingTitle}
           </CardTitle>
         </CardHeader>
         <CardContent className="h-48 flex items-center justify-center text-xs text-slate-500">
-          載入逐時預測明細中...
+          {tableText.loading}
         </CardContent>
       </Card>
     )
@@ -73,7 +78,7 @@ export function PredictionTable({
         <div className="flex items-center gap-2">
           <FileSpreadsheet className="h-4 w-4 text-cyan-400" />
           <CardTitle className="text-base font-semibold text-slate-200">
-            逐時推論特徵明細表 (共 {predictions.length} 小時)
+            {tableText.title(predictions.length)}
           </CardTitle>
         </div>
         <Button
@@ -83,38 +88,38 @@ export function PredictionTable({
           className="gap-1.5 text-xs h-8 border-slate-700 bg-slate-900/80 hover:bg-slate-800"
         >
           <Download className="h-3.5 w-3.5" />
-          匯出 CSV
+          {m.common.exportCsv}
         </Button>
       </CardHeader>
       <CardContent>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>時間戳記 (Datetime)</TableHead>
-              <TableHead className="text-right">預測負載 (MW)</TableHead>
-              <TableHead className="text-right">預報氣溫 (°C)</TableHead>
-              <TableHead className="text-right">相對濕度 (%)</TableHead>
-              <TableHead className="text-center">狀態</TableHead>
+              <TableHead>{tableText.timestamp}</TableHead>
+              <TableHead className="text-right">{tableText.load}</TableHead>
+              <TableHead className="text-right">{tableText.temperature}</TableHead>
+              <TableHead className="text-right">{tableText.humidity}</TableHead>
+              <TableHead className="text-center">{tableText.status}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {paginatedItems.map((item, idx) => (
               <TableRow key={idx}>
                 <TableCell className="font-mono text-xs text-slate-300">
-                  {formatDateTime(item.datetime)}
+                  {formatDateTime(item.datetime, locale)}
                 </TableCell>
                 <TableCell className="text-right font-mono font-bold text-cyan-300 text-xs">
-                  {formatLoadMW(item.predicted_load_mw)}
+                  {formatLoadMW(item.predicted_load_mw, locale)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-amber-300 text-xs">
-                  {formatTemperature(item.temperature)}
+                  {formatTemperature(item.temperature, locale)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-slate-300 text-xs">
-                  {item.relative_humidity.toFixed(1)}%
+                  {formatHumidity(item.relative_humidity, locale)}
                 </TableCell>
                 <TableCell className="text-center">
                   <span className="inline-block px-2 py-0.5 text-[10px] font-semibold rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                    INFERRED
+                    {tableText.inferred}
                   </span>
                 </TableCell>
               </TableRow>
@@ -125,9 +130,7 @@ export function PredictionTable({
         {/* Pagination Controls */}
         <div className="flex items-center justify-between pt-4 text-xs text-slate-400 border-t border-slate-800/80 mt-2">
           <span>
-            顯示第 {page * pageSize + 1} 至{' '}
-            {Math.min((page + 1) * pageSize, predictions.length)} 筆，共{' '}
-            {predictions.length} 筆
+            {tableText.range(page * pageSize + 1, Math.min((page + 1) * pageSize, predictions.length), predictions.length)}
           </span>
           <div className="flex items-center gap-2">
             <Button
@@ -137,7 +140,7 @@ export function PredictionTable({
               disabled={page === 0}
               className="h-7 text-xs px-2.5"
             >
-              上一頁
+              {m.common.previousPage}
             </Button>
             <span className="font-mono">
               {page + 1} / {totalPages}
@@ -149,7 +152,7 @@ export function PredictionTable({
               disabled={page >= totalPages - 1}
               className="h-7 text-xs px-2.5"
             >
-              下一頁
+              {m.common.nextPage}
             </Button>
           </div>
         </div>

@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { OverviewPageForTest } from './test-helpers'
+import { zhTW } from '@/i18n/zh-TW'
+
+const dashboard = zhTW.dashboard
 
 describe('Overview Page Integration Test', () => {
   it('renders horizon controls, metric cards, and prediction table after loading data', async () => {
@@ -17,19 +20,19 @@ describe('Overview Page Integration Test', () => {
     )
 
     // Check Controls exist
-    expect(screen.getByText('預測時效：')).toBeInTheDocument()
-    expect(screen.getByText('24 小時')).toBeInTheDocument()
-    expect(screen.getByText('48 小時')).toBeInTheDocument()
-    expect(screen.getByText('Prediction subject: Nationwide')).toBeInTheDocument()
+    expect(screen.getByText(dashboard.horizon.label)).toBeInTheDocument()
+    expect(screen.getByText(dashboard.horizon.hours(24))).toBeInTheDocument()
+    expect(screen.getByText(dashboard.horizon.hours(48))).toBeInTheDocument()
+    expect(screen.getByText(dashboard.predictionSubject)).toBeInTheDocument()
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 
     // Wait for MSW to respond and populate metrics
     await waitFor(() => {
-      expect(screen.getByText('尖峰用電預估')).toBeInTheDocument()
+      expect(screen.getByText(dashboard.metrics.peakTitle)).toBeInTheDocument()
     })
 
     // Check Table content rendered
-    expect(screen.getByText(/逐時推論特徵明細表/)).toBeInTheDocument()
-    expect(screen.getByText('匯出 CSV')).toBeInTheDocument()
+    expect(screen.getByText(dashboard.table.title(24))).toBeInTheDocument()
+    expect(screen.getByText(zhTW.common.exportCsv)).toBeInTheDocument()
   })
 })

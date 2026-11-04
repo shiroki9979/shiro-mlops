@@ -1,7 +1,11 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useLocale } from '@/i18n/locale-store'
+import { useMessages } from '@/i18n/use-messages'
 import type { DatasetStatus } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { StatusBadges } from './status-badges'
+import { DatasetStatusDetails } from './status-details'
+import { optionalTimestamp, translateCompleteness } from './status-text'
 
 interface ExplorerStatusProps {
   dataset: ExplorerDatasetConfig
@@ -10,34 +14,35 @@ interface ExplorerStatusProps {
 }
 
 export function ExplorerStatus({ dataset, status, auditStatus }: ExplorerStatusProps) {
+  const m = useMessages()
+  const locale = useLocale()
   if (!status) return null
+  const datasetStatusText = m.explorer.datasetStatus
 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">資料集狀態</CardTitle>
+        <CardTitle className="text-base">{datasetStatusText.title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-xs text-slate-400">
         <StatusBadges status={status} />
-        <p>Ingestion age：{status.ingestion_age_seconds ?? '—'} 秒</p>
-        <p>Source age：{status.source_age_seconds ?? '—'} 秒</p>
-        {status.serving_stale != null && <p>Serving stale：{String(status.serving_stale)}</p>}
-        {status.missing_identifiers.length > 0 && (
-          <p>缺少識別：{status.missing_identifiers.join(', ')}</p>
-        )}
+        <DatasetStatusDetails status={status} />
         {auditStatus && (
           <>
             <p>
-              最新 audit：{auditStatus.completeness}／擷取時間 {auditStatus.latest_source_at ?? '—'}
+              {datasetStatusText.latestAudit(
+                translateCompleteness(auditStatus.completeness, m),
+                optionalTimestamp(auditStatus.latest_source_at, locale),
+              )}
             </p>
             {auditStatus.missing_identifiers.length > 0 && (
-              <p>Audit 缺少識別：{auditStatus.missing_identifiers.join(', ')}</p>
+              <p>{datasetStatusText.auditMissingIdentifiers(auditStatus.missing_identifiers.join(', '))}</p>
             )}
           </>
         )}
         {dataset.auditHref && (
           <a href={dataset.auditHref} className="text-cyan-400 hover:underline">
-            {dataset.auditLabel}
+            {datasetStatusText.auditHistory}
           </a>
         )}
       </CardContent>

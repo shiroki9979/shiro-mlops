@@ -1,5 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { formatDateTime, formatLoadMW } from '@/lib/utils'
+import {
+  formatDateTime,
+  formatLoadDelta,
+  formatLoadMW,
+  formatLoadThousands,
+  formatPercentDelta,
+} from '@/i18n/format'
+import { useLocale } from '@/i18n/locale-store'
+import { useMessages } from '@/i18n/use-messages'
 import {
   CartesianGrid,
   Legend,
@@ -10,6 +18,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+
+const RESIDUAL_PERCENT_FRACTION_DIGITS = 2
 
 // Generate sample 72h historical vs predicted backtest series
 function generateBacktestData() {
@@ -39,14 +49,16 @@ function generateBacktestData() {
 const backtestData = generateBacktestData()
 
 export function BacktestChart() {
+  const locale = useLocale()
+  const backtestText = useMessages().history.backtest
   return (
     <Card className="border-slate-800 bg-slate-900/60 backdrop-blur-md">
       <CardHeader>
         <CardTitle className="text-base font-semibold text-slate-200">
-          72 小時實際用電 vs 模型預測回測對比 (Backtesting Curve)
+          {backtestText.title}
         </CardTitle>
         <p className="text-xs text-slate-400">
-          藍綠實線：台電實際負載 ｜ 紫色虛線：LightGBM 模型預測值
+          {backtestText.legend}
         </p>
       </CardHeader>
       <CardContent>
@@ -59,7 +71,7 @@ export function BacktestChart() {
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} vertical={false} />
               <XAxis
                 dataKey="datetime"
-                tickFormatter={(val) => formatDateTime(val)}
+                tickFormatter={(val) => formatDateTime(val, locale)}
                 stroke="#64748b"
                 fontSize={11}
                 tickLine={false}
@@ -67,7 +79,7 @@ export function BacktestChart() {
               />
               <YAxis
                 domain={['auto', 'auto']}
-                tickFormatter={(val) => `${(val / 1000).toFixed(1)}k`}
+                tickFormatter={(val) => formatLoadThousands(val, locale)}
                 stroke="#64748b"
                 fontSize={11}
                 tickLine={false}
@@ -84,21 +96,21 @@ export function BacktestChart() {
                   return (
                     <div className="rounded-xl border border-slate-700 bg-slate-900/95 p-3 shadow-2xl backdrop-blur-xl text-xs space-y-2">
                       <p className="font-semibold text-slate-300 font-mono">
-                        {label ? formatDateTime(label as string) : ''}
+                        {label ? formatDateTime(label as string, locale) : ''}
                       </p>
                       <div className="space-y-1">
                         <div className="flex justify-between gap-4 text-emerald-400">
-                          <span>實際負載：</span>
-                          <span className="font-mono font-bold">{formatLoadMW(actual)} MW</span>
+                          <span>{backtestText.actual}</span>
+                          <span className="font-mono font-bold">{formatLoadMW(actual, locale)} MW</span>
                         </div>
                         <div className="flex justify-between gap-4 text-cyan-300">
-                          <span>預測負載：</span>
-                          <span className="font-mono font-bold">{formatLoadMW(pred)} MW</span>
+                          <span>{backtestText.predicted}</span>
+                          <span className="font-mono font-bold">{formatLoadMW(pred, locale)} MW</span>
                         </div>
                         <div className="flex justify-between gap-4 text-slate-400 border-t border-slate-800 pt-1">
-                          <span>殘差誤差：</span>
+                          <span>{backtestText.residual}</span>
                           <span className="font-mono font-semibold text-amber-300">
-                            {diff >= 0 ? `+${formatLoadMW(diff)}` : formatLoadMW(diff)} MW ({diffPct.toFixed(2)}%)
+                            {formatLoadDelta(diff, locale)} MW ({formatPercentDelta(diffPct, locale, RESIDUAL_PERCENT_FRACTION_DIGITS)})
                           </span>
                         </div>
                       </div>
@@ -114,7 +126,7 @@ export function BacktestChart() {
               <Line
                 type="monotone"
                 dataKey="actual_load_mw"
-                name="台電實際負載 (MW)"
+                name={backtestText.actualSeries}
                 stroke="#10b981"
                 strokeWidth={2}
                 dot={false}
@@ -122,7 +134,7 @@ export function BacktestChart() {
               <Line
                 type="monotone"
                 dataKey="predicted_load_mw"
-                name="LightGBM 回測預測 (MW)"
+                name={backtestText.predictedSeries}
                 stroke="#06b6d4"
                 strokeWidth={2}
                 strokeDasharray="4 4"

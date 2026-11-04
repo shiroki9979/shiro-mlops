@@ -8,6 +8,8 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
+    // A host zone other than Asia/Taipei makes tests fail when a formatter falls back to the browser zone.
+    env: { TZ: 'UTC' },
     alias: {
       '@': resolve(__dirname, './src'),
     },

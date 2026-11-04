@@ -2,13 +2,17 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useDashboardStore } from '@/store/dashboard-store'
 import { Clock, Eye, MapPin, RefreshCw } from 'lucide-react'
+import { type Messages, useMessages } from '@/i18n/use-messages'
 
-const HORIZON_PRESETS = [
-  { label: '24 小時', value: 24 },
-  { label: '48 小時', value: 48 },
-  { label: '72 小時', value: 72 },
-  { label: '7 天 (168h)', value: 168 },
-]
+const HOURLY_PRESETS = [24, 48, 72]
+const WEEK_HOURS = 168
+
+function horizonPresets(horizonText: Messages['dashboard']['horizon']) {
+  return [
+    ...HOURLY_PRESETS.map((value) => ({ value, label: horizonText.hours(value) })),
+    { value: WEEK_HOURS, label: horizonText.week },
+  ]
+}
 
 export function HorizonControls() {
   const {
@@ -21,6 +25,7 @@ export function HorizonControls() {
     autoRefresh,
     setAutoRefresh,
   } = useDashboardStore()
+  const m = useMessages()
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 backdrop-blur-md">
@@ -28,10 +33,10 @@ export function HorizonControls() {
       <div className="flex items-center gap-2">
         <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 mr-1">
           <Clock className="h-3.5 w-3.5 text-cyan-400" />
-          預測時效：
+          {m.dashboard.horizon.label}
         </span>
         <div className="flex flex-wrap items-center gap-1.5">
-          {HORIZON_PRESETS.map((preset) => (
+          {horizonPresets(m.dashboard.horizon).map((preset) => (
             <Button
               key={preset.value}
               variant={horizonHours === preset.value ? 'default' : 'outline'}
@@ -50,7 +55,7 @@ export function HorizonControls() {
         {/* The model forecasts nationwide load only, so the subject is fixed rather than selectable. */}
         <div className="flex items-center gap-2 text-xs text-slate-300">
           <MapPin className="h-3.5 w-3.5 text-slate-400" />
-          <span>Prediction subject: Nationwide</span>
+          <span>{m.dashboard.predictionSubject}</span>
         </div>
 
         <div className="h-4 w-px bg-slate-800" />
@@ -68,7 +73,7 @@ export function HorizonControls() {
               className="cursor-pointer text-slate-300 flex items-center gap-1 select-none"
             >
               <Eye className="h-3.5 w-3.5 text-amber-400" />
-              氣溫曲線 (°C)
+              {m.dashboard.temperatureToggle}
             </label>
           </div>
 
@@ -82,7 +87,7 @@ export function HorizonControls() {
               htmlFor="humidity-toggle"
               className="cursor-pointer text-slate-300 select-none"
             >
-              相對濕度 (%)
+              {m.dashboard.humidityToggle}
             </label>
           </div>
         </div>
@@ -101,7 +106,7 @@ export function HorizonControls() {
             className="cursor-pointer text-slate-300 flex items-center gap-1 select-none"
           >
             <RefreshCw className={`h-3 w-3 ${autoRefresh ? 'text-cyan-400' : 'text-slate-500'}`} />
-            自動輪詢 (60s)
+            {m.dashboard.autoRefresh}
           </label>
         </div>
       </div>

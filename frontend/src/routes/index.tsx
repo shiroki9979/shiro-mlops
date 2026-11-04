@@ -6,6 +6,7 @@ import { HorizonControls } from '@/components/dashboard/horizon-controls'
 import { MetricCards } from '@/components/dashboard/metric-cards'
 import { PredictionTable } from '@/components/dashboard/prediction-table'
 import { AlertTriangle } from 'lucide-react'
+import { useMessages } from '@/i18n/use-messages'
 
 export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -15,6 +16,7 @@ export const indexRoute = createRoute({
 
 function OverviewPage() {
   const { data, isLoading, isError, error } = usePrediction()
+  const m = useMessages()
 
   return (
     <div className="space-y-6">
@@ -24,10 +26,10 @@ function OverviewPage() {
           <AlertTriangle className="h-5 w-5 shrink-0 text-rose-400" />
           <div>
             <p className="font-semibold text-rose-200">
-              無法取得即時推論資料 (Inference Service Error)
+              {m.dashboard.errorTitle}
             </p>
             <p className="text-rose-300/80">
-              {error instanceof Error ? error.message : '請檢查後端 API 是否已啟動 (make dev)'}
+              {error instanceof Error ? error.message : m.dashboard.errorFallback}
             </p>
           </div>
         </div>
