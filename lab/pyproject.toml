@@ -1,0 +1,26 @@
+[project]
+name = "lab"
+version = "0.1.0"
+description = "Research workspace for shiro-mlops snapshot, rolling-origin backtest, and hyperparameter studies"
+requires-python = ">=3.11"
+dependencies = [
+    "shiro-mlops",
+    "jupyterlab>=4.2.0",
+    "jupytext>=1.16.0",
+    "optuna>=3.6.0",
+    "matplotlib>=3.9.0",
+    "pytest>=8.0.0",
+]
+
+[tool.uv.sources]
+shiro-mlops = { workspace = true }
+
+[tool.ruff]
+extend = "../pyproject.toml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
