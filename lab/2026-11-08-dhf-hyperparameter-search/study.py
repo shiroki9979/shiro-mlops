@@ -32,8 +32,9 @@ import json
 import logging
 import sys
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import mlflow
 import optuna
@@ -172,23 +173,51 @@ def log_lab_run(
 
 
 # %%
+@dataclass(frozen=True)
+class TrialCandidate:
+    """Bundled feature-recipe keys and LightGBM hyperparameters for a single Optuna trial."""
+
+    lags_key: str
+    rolling_key: str
+    n_estimators: int
+    learning_rate: float
+    num_leaves: int
+
+    @classmethod
+    def from_params(cls, params: Mapping[str, Any]) -> TrialCandidate:
+        return cls(
+            lags_key=str(params["lags_key"]),
+            rolling_key=str(params["rolling_key"]),
+            n_estimators=int(params["n_estimators"]),
+            learning_rate=float(params["learning_rate"]),
+            num_leaves=int(params["num_leaves"]),
+        )
+
+    @classmethod
+    def suggest(cls, trial: optuna.Trial) -> TrialCandidate:
+        return cls(
+            lags_key=trial.suggest_categorical("lags_key", list(LAG_RECIPES.keys())),
+            rolling_key=trial.suggest_categorical(
+                "rolling_key", list(ROLLING_WINDOW_RECIPES.keys())
+            ),
+            n_estimators=trial.suggest_int("n_estimators", 50, 250, step=25),
+            learning_rate=trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
+            num_leaves=trial.suggest_int("num_leaves", 15, 63, step=8),
+        )
+
+
 def build_candidate_task(
     base_task: TaskDefinition,
-    *,
-    lags_key: str,
-    rolling_key: str,
-    n_estimators: int,
-    learning_rate: float,
-    num_leaves: int,
+    candidate: TrialCandidate,
 ) -> TaskDefinition:
     """Create a candidate TaskDefinition via dataclasses.replace without touching TOML files."""
     candidate_params = RecursiveRegressionParams(
-        lags=LAG_RECIPES[lags_key],
-        rolling_windows=ROLLING_WINDOW_RECIPES[rolling_key],
+        lags=LAG_RECIPES[candidate.lags_key],
+        rolling_windows=ROLLING_WINDOW_RECIPES[candidate.rolling_key],
         model=LightGBMParams(
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            num_leaves=num_leaves,
+            n_estimators=candidate.n_estimators,
+            learning_rate=candidate.learning_rate,
+            num_leaves=candidate.num_leaves,
         ),
     )
     return replace(base_task, params=candidate_params)
@@ -201,20 +230,8 @@ def make_objective(
     """Build an Optuna objective that ONLY evaluates on SEARCH_ORIGINS."""
 
     def objective(trial: optuna.Trial) -> float:
-        lags_key = trial.suggest_categorical("lags_key", list(LAG_RECIPES.keys()))
-        rolling_key = trial.suggest_categorical("rolling_key", list(ROLLING_WINDOW_RECIPES.keys()))
-        n_estimators = trial.suggest_int("n_estimators", 50, 250, step=25)
-        learning_rate = trial.suggest_float("learning_rate", 0.01, 0.15, log=True)
-        num_leaves = trial.suggest_int("num_leaves", 15, 63, step=8)
-
-        candidate_task = build_candidate_task(
-            base_task,
-            lags_key=lags_key,
-            rolling_key=rolling_key,
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            num_leaves=num_leaves,
-        )
+        candidate = TrialCandidate.suggest(trial)
+        candidate_task = build_candidate_task(base_task, candidate)
         report = rolling_origin_backtest(
             candidate_task,
             data,
@@ -228,8 +245,8 @@ def make_objective(
             metrics=_report_metrics("search", report),
             extra_params={
                 "trial_number": trial.number,
-                "lags_key": lags_key,
-                "rolling_key": rolling_key,
+                "lags_key": candidate.lags_key,
+                "rolling_key": candidate.rolling_key,
                 "as_of": AS_OF,
                 "horizon_hours": HORIZON_HOURS,
             },
@@ -244,6 +261,15 @@ def make_objective(
 
 
 # %%
+@dataclass(frozen=True)
+class _RoleEvaluation:
+    """Paired search-origin and evaluation-origin backtest reports for a single task."""
+
+    task: TaskDefinition
+    search: BacktestReport
+    eval: BacktestReport
+
+
 def run_study(
     *,
     snapshots_dir: Path = DEFAULT_SNAPSHOTS_DIR,
@@ -252,25 +278,12 @@ def run_study(
 ) -> dict[str, object]:
     """Execute the baseline comparison, Optuna search on SEARCH_ORIGINS, and evaluation on EVAL_ORIGINS."""
     verify_non_overlapping_target_windows(SEARCH_ORIGINS, EVAL_ORIGINS, HORIZON_HOURS)
+    base_task, data, snapshot_sha256 = _load_study_snapshot(snapshots_dir)
 
-    base_task = deployed_task(DYNAMIC_HORIZON_FORECAST)
-    snapshot_file = Path(snapshots_dir) / base_task.task_id / f"{AS_OF}.parquet"
-    snapshot_sha256 = hashlib.sha256(snapshot_file.read_bytes()).hexdigest()
-    data = read_snapshot(base_task, AS_OF, snapshots_dir=snapshots_dir)
-
-    baseline_search = rolling_origin_backtest(
-        base_task, data, origins=SEARCH_ORIGINS, horizon_hours=HORIZON_HOURS
-    )
-    baseline_eval = rolling_origin_backtest(
-        base_task, data, origins=EVAL_ORIGINS, horizon_hours=HORIZON_HOURS
-    )
-    log_lab_run(
-        run_name="baseline",
+    baseline = _evaluate_and_log_role(
         task=base_task,
-        metrics={
-            **_report_metrics("search", baseline_search),
-            **_report_metrics("eval", baseline_eval),
-        },
+        data=data,
+        run_name="baseline",
         extra_params={
             "role": "baseline",
             "as_of": AS_OF,
@@ -278,7 +291,78 @@ def run_study(
             "horizon_hours": HORIZON_HOURS,
         },
     )
+    study = _optimize_study(base_task, data, n_trials=n_trials, seed=seed)
+    best_trial = study.best_trial
+    best_candidate = TrialCandidate.from_params(best_trial.params)
+    best_task = build_candidate_task(base_task, best_candidate)
+    candidate = _evaluate_and_log_role(
+        task=best_task,
+        data=data,
+        run_name=f"best_candidate_trial_{best_trial.number:02d}",
+        extra_params={
+            "role": "best_candidate",
+            "best_trial_number": best_trial.number,
+            "lags_key": best_candidate.lags_key,
+            "rolling_key": best_candidate.rolling_key,
+            "as_of": AS_OF,
+            "snapshot_sha256": snapshot_sha256,
+            "horizon_hours": HORIZON_HOURS,
+            "seed": seed,
+            "n_trials": n_trials,
+        },
+    )
+    return _assemble_study_summary(
+        snapshot_sha256=snapshot_sha256,
+        seed=seed,
+        n_trials=n_trials,
+        baseline=baseline,
+        candidate=candidate,
+        study=study,
+    )
 
+
+def _load_study_snapshot(
+    snapshots_dir: Path,
+) -> tuple[TaskDefinition, TrainingData, str]:
+    base_task = deployed_task(DYNAMIC_HORIZON_FORECAST)
+    snapshot_file = Path(snapshots_dir) / base_task.task_id / f"{AS_OF}.parquet"
+    snapshot_sha256 = hashlib.sha256(snapshot_file.read_bytes()).hexdigest()
+    data = read_snapshot(base_task, AS_OF, snapshots_dir=snapshots_dir)
+    return base_task, data, snapshot_sha256
+
+
+def _evaluate_and_log_role(
+    *,
+    task: TaskDefinition,
+    data: TrainingData,
+    run_name: str,
+    extra_params: Mapping[str, object],
+) -> _RoleEvaluation:
+    search_report = rolling_origin_backtest(
+        task, data, origins=SEARCH_ORIGINS, horizon_hours=HORIZON_HOURS
+    )
+    eval_report = rolling_origin_backtest(
+        task, data, origins=EVAL_ORIGINS, horizon_hours=HORIZON_HOURS
+    )
+    log_lab_run(
+        run_name=run_name,
+        task=task,
+        metrics={
+            **_report_metrics("search", search_report),
+            **_report_metrics("eval", eval_report),
+        },
+        extra_params=extra_params,
+    )
+    return _RoleEvaluation(task=task, search=search_report, eval=eval_report)
+
+
+def _optimize_study(
+    base_task: TaskDefinition,
+    data: TrainingData,
+    *,
+    n_trials: int,
+    seed: int,
+) -> optuna.Study:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = optuna.create_study(
@@ -287,48 +371,26 @@ def run_study(
         sampler=sampler,
     )
     study.optimize(make_objective(base_task, data), n_trials=n_trials)
+    return study
 
+
+def _round_horizon_mapes(report: BacktestReport) -> dict[int, float]:
+    return {step: round(val, 4) for step, val in report.mape_by_horizon.items()}
+
+
+def _assemble_study_summary(
+    *,
+    snapshot_sha256: str,
+    seed: int,
+    n_trials: int,
+    baseline: _RoleEvaluation,
+    candidate: _RoleEvaluation,
+    study: optuna.Study,
+) -> dict[str, object]:
     best_trial = study.best_trial
-    best_task = build_candidate_task(
-        base_task,
-        lags_key=str(best_trial.params["lags_key"]),
-        rolling_key=str(best_trial.params["rolling_key"]),
-        n_estimators=int(best_trial.params["n_estimators"]),
-        learning_rate=float(best_trial.params["learning_rate"]),
-        num_leaves=int(best_trial.params["num_leaves"]),
-    )
-
-    candidate_search = rolling_origin_backtest(
-        best_task, data, origins=SEARCH_ORIGINS, horizon_hours=HORIZON_HOURS
-    )
-    candidate_eval = rolling_origin_backtest(
-        best_task, data, origins=EVAL_ORIGINS, horizon_hours=HORIZON_HOURS
-    )
-    log_lab_run(
-        run_name=f"best_candidate_trial_{best_trial.number:02d}",
-        task=best_task,
-        metrics={
-            **_report_metrics("search", candidate_search),
-            **_report_metrics("eval", candidate_eval),
-        },
-        extra_params={
-            "role": "best_candidate",
-            "best_trial_number": best_trial.number,
-            "lags_key": best_trial.params["lags_key"],
-            "rolling_key": best_trial.params["rolling_key"],
-            "as_of": AS_OF,
-            "snapshot_sha256": snapshot_sha256,
-            "horizon_hours": HORIZON_HOURS,
-            "seed": seed,
-            "n_trials": n_trials,
-        },
-    )
-
     eval_distinct_days = len({ts.date() for ts in EVAL_ORIGINS})
     eval_sample_sufficient = eval_distinct_days >= MIN_EVAL_DISTINCT_DAYS
-    beats_baseline_on_eval = candidate_eval.beats(baseline_eval)
-    adopted = bool(eval_sample_sufficient and beats_baseline_on_eval)
-
+    beats_baseline_on_eval = candidate.eval.beats(baseline.eval)
     top_trials = sorted(
         study.trials,
         key=lambda t: t.value if t.value is not None else float("inf"),
@@ -338,8 +400,8 @@ def run_study(
         "as_of": AS_OF,
         "snapshot_sha256": snapshot_sha256,
         "horizon_hours": HORIZON_HOURS,
-        "min_history_hours": baseline_search.min_history_hours,
-        "min_history_overridden": baseline_search.min_history_overridden,
+        "min_history_hours": baseline.search.min_history_hours,
+        "min_history_overridden": baseline.search.min_history_overridden,
         "seed": seed,
         "n_trials": n_trials,
         "search_origins": [ts.isoformat() for ts in SEARCH_ORIGINS],
@@ -347,29 +409,21 @@ def run_study(
         "eval_distinct_days": eval_distinct_days,
         "min_eval_distinct_days": MIN_EVAL_DISTINCT_DAYS,
         "eval_sample_sufficient": eval_sample_sufficient,
-        "baseline_params": base_task.params.model_dump(),
+        "baseline_params": baseline.task.params.model_dump(),
         "best_trial_number": best_trial.number,
         "best_trial_params": best_trial.params,
-        "candidate_params": best_task.params.model_dump(),
-        "baseline_search_overall_mape": round(baseline_search.overall_mape, 4),
-        "candidate_search_overall_mape": round(candidate_search.overall_mape, 4),
-        "baseline_eval_overall_mape": round(baseline_eval.overall_mape, 4),
-        "candidate_eval_overall_mape": round(candidate_eval.overall_mape, 4),
-        "beats_baseline_on_search": candidate_search.beats(baseline_search),
+        "candidate_params": candidate.task.params.model_dump(),
+        "baseline_search_overall_mape": round(baseline.search.overall_mape, 4),
+        "candidate_search_overall_mape": round(candidate.search.overall_mape, 4),
+        "baseline_eval_overall_mape": round(baseline.eval.overall_mape, 4),
+        "candidate_eval_overall_mape": round(candidate.eval.overall_mape, 4),
+        "beats_baseline_on_search": candidate.search.beats(baseline.search),
         "beats_baseline_on_eval": beats_baseline_on_eval,
-        "adopted": adopted,
-        "baseline_search_mape_by_horizon": {
-            step: round(val, 4) for step, val in baseline_search.mape_by_horizon.items()
-        },
-        "candidate_search_mape_by_horizon": {
-            step: round(val, 4) for step, val in candidate_search.mape_by_horizon.items()
-        },
-        "baseline_eval_mape_by_horizon": {
-            step: round(val, 4) for step, val in baseline_eval.mape_by_horizon.items()
-        },
-        "candidate_eval_mape_by_horizon": {
-            step: round(val, 4) for step, val in candidate_eval.mape_by_horizon.items()
-        },
+        "adopted": bool(eval_sample_sufficient and beats_baseline_on_eval),
+        "baseline_search_mape_by_horizon": _round_horizon_mapes(baseline.search),
+        "candidate_search_mape_by_horizon": _round_horizon_mapes(candidate.search),
+        "baseline_eval_mape_by_horizon": _round_horizon_mapes(baseline.eval),
+        "candidate_eval_mape_by_horizon": _round_horizon_mapes(candidate.eval),
         "top_5_trials": [
             {
                 "trial_number": t.number,

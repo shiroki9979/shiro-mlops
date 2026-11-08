@@ -22,11 +22,12 @@ from shiro_mlops.tasks.types.base import TrainingData
 DEFAULT_SNAPSHOTS_DIR = Path("data/lab/snapshots")
 
 
-def _normalize_as_of(as_of: datetime | pd.Timestamp | str) -> datetime:
-    timestamp = pd.Timestamp(as_of)
+def normalize_taiwan_timestamp(value: datetime | pd.Timestamp | str) -> pd.Timestamp:
+    """Normalize a timestamp input to a timezone-naive Asia/Taipei pd.Timestamp."""
+    timestamp = pd.Timestamp(value)
     if timestamp.tzinfo is not None:
         timestamp = timestamp.tz_convert(TAIWAN_TZ).tz_localize(None)
-    return timestamp.to_pydatetime()
+    return timestamp
 
 
 def _snapshot_path(
@@ -34,7 +35,7 @@ def _snapshot_path(
     as_of: datetime | pd.Timestamp | str,
     snapshots_dir: Path,
 ) -> Path:
-    normalized = _normalize_as_of(as_of)
+    normalized = normalize_taiwan_timestamp(as_of)
     return Path(snapshots_dir) / task.task_id / f"{normalized.isoformat()}.parquet"
 
 
@@ -46,13 +47,13 @@ def write_snapshot(
     snapshots_dir: Path = DEFAULT_SNAPSHOTS_DIR,
 ) -> Path:
     """Freeze ``training_table`` at ``as_of`` into an immutable parquet snapshot."""
-    normalized_as_of = _normalize_as_of(as_of)
+    normalized_as_of = normalize_taiwan_timestamp(as_of)
     path = _snapshot_path(task, normalized_as_of, snapshots_dir)
     if path.exists():
         raise FileExistsError(
             f"Snapshot already exists for ({task.task_id}, {normalized_as_of.isoformat()}): {path}"
         )
-    data = load_training_data(task, runtime, as_of=normalized_as_of)
+    data = load_training_data(task, runtime, as_of=normalized_as_of.to_pydatetime())
     table = training_table(data)
     path.parent.mkdir(parents=True, exist_ok=True)
     table.to_parquet(path, index=False)
