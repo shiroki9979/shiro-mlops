@@ -1,7 +1,7 @@
 # AGENTS.md
 
 - Created: 2026-08-23
-- Last updated: 2026-11-08
+- Last updated: 2026-11-09
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -16,6 +16,7 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 - **Operational Guides**:
   - Tutorial: [docs/tutorials/quickstart-local-prediction.md](docs/tutorials/quickstart-local-prediction.md)
   - Full Local Stack: [docs/how-to/run-full-local-stack.md](docs/how-to/run-full-local-stack.md)
+  - Lab Research Study: [docs/how-to/run-lab-study.md](docs/how-to/run-lab-study.md)
   - AWS Deployment: [docs/how-to/deploy-aws-infrastructure.md](docs/how-to/deploy-aws-infrastructure.md)
 
 ## Development Loop & Commands
