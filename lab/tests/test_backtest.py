@@ -59,7 +59,6 @@ def test_rolling_origin_backtest_populates_all_horizon_buckets_and_zero_mape_on_
     assert report.params == fast_task.params
     assert list(report.mape_by_horizon.keys()) == list(range(1, HORIZON_HOURS + 1))
     assert report.overall_mape == pytest.approx(0.0, abs=1e-6)
-    assert report.mape == pytest.approx(0.0, abs=1e-6)
     for step in range(1, HORIZON_HOURS + 1):
         assert report.mape_by_horizon[step] == pytest.approx(0.0, abs=1e-6)
 
@@ -259,11 +258,7 @@ def test_backtest_report_direct_comparison_lower_overall_mape_wins(
     assert better.beats(worse) is True
     assert worse.beats(better) is False
     assert better.beats(better) is False
-    assert better < worse
-    assert worse > better
 
     mismatched_origins = replace(worse, origins=(ORIGIN_1,))
     with pytest.raises(ValueError, match="origins"):
         better.beats(mismatched_origins)
-    with pytest.raises(ValueError, match="origins"):
-        _ = better < mismatched_origins

@@ -35,10 +35,10 @@ class BacktestReport:
     min_history_overridden: bool
     params: BaseModel
 
-    @property
-    def mape(self) -> float:
-        """Alias for ``overall_mape``."""
-        return self.overall_mape
+    def beats(self, baseline: BacktestReport) -> bool:
+        """Return True when this report achieves strictly lower overall MAPE on the same origins and horizon."""
+        self._require_comparable(baseline)
+        return self.overall_mape < baseline.overall_mape
 
     def _require_comparable(self, other: BacktestReport) -> None:
         if self.origins != other.origins:
@@ -51,35 +51,6 @@ class BacktestReport:
                 "Cannot compare BacktestReport instances with different horizon_hours: "
                 f"{self.horizon_hours} != {other.horizon_hours}."
             )
-
-    def beats(self, baseline: BacktestReport) -> bool:
-        """Return True when this report achieves strictly lower overall MAPE on the same origins and horizon."""
-        self._require_comparable(baseline)
-        return self.overall_mape < baseline.overall_mape
-
-    def __lt__(self, other: object) -> bool:
-        if not isinstance(other, BacktestReport):
-            return NotImplemented
-        self._require_comparable(other)
-        return self.overall_mape < other.overall_mape
-
-    def __le__(self, other: object) -> bool:
-        if not isinstance(other, BacktestReport):
-            return NotImplemented
-        self._require_comparable(other)
-        return self.overall_mape <= other.overall_mape
-
-    def __gt__(self, other: object) -> bool:
-        if not isinstance(other, BacktestReport):
-            return NotImplemented
-        self._require_comparable(other)
-        return self.overall_mape > other.overall_mape
-
-    def __ge__(self, other: object) -> bool:
-        if not isinstance(other, BacktestReport):
-            return NotImplemented
-        self._require_comparable(other)
-        return self.overall_mape >= other.overall_mape
 
 
 def rolling_origin_backtest(
