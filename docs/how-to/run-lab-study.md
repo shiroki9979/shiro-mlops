@@ -61,7 +61,7 @@ sha256sum data/lab/snapshots/dynamic_horizon_forecast/2026-11-08T22:00:00.parque
 from dataclasses import replace
 import pandas as pd
 
-from lab.backtest import rolling_origin_backtest
+from lab.backtest import rolling_origin_backtest, verify_non_overlapping_target_windows
 from lab.snapshot import read_snapshot
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 
@@ -76,6 +76,8 @@ search_origins = [
 eval_origins = [
     pd.Timestamp("2026-10-29 18:00:00"),
 ]
+# 評估起點須晚於搜尋起點且目標時段不重疊，否則拋出 ValueError
+verify_non_overlapping_target_windows(search_origins, eval_origins, horizon_hours=24)
 
 # 1. 基線回測（使用現行 TOML 參數）
 baseline_search = rolling_origin_backtest(task, data, origins=search_origins, horizon_hours=24)
@@ -103,14 +105,10 @@ candidate_eval = rolling_origin_backtest(
 is_adopted = candidate_eval.beats(baseline_eval)
 ```
 
-### 起點有效性與分離原則
+起點與報告欄位的完整規則見 [SPEC §7](../SPEC.md)（研究空間介面與報告契約）；以下只列操作時的檢查步驟：
 
-1. **三項有效性檢查**：每個起點 `origin` 必須同時滿足：
-   - `datetime <= origin` 的有效實際負載小時數達 `min_history_hours`（預設取任務設定 `policies.min_training_hours`）；
-   - `(origin - lookback_hours, origin]` 的逐時負載完整無缺漏（含 `origin` 當小時）；
-   - `origin + 1h .. origin + horizon_hours` 的實際負載與經 2 小時向後對齊後的觀測氣象皆完整無缺值。
-2. **搜尋起點與評估起點分離**：超參數搜尋（例如 Optuna objective）只能在「搜尋起點」上計算整體 MAPE；是否採用候選參數則只在較晚、且預報目標時段與任何搜尋起點目標時段不重疊的「評估起點」上判定。若快照的有效起點跨度不足以切出具備代表性的評估起點，研究僅交付探索報告，不修改正式 TOML。
-3. **MLflow 紀錄隔離**：研究過程若記錄 MLflow run，experiment 名稱須使用 `lab/<topic>` 前綴（例如 `lab/dhf-hyperparameter-search`），且**嚴禁**建立或寫入任何 registered model 或 model version。
+1. 先以基線參數對兩組起點各跑一次回測；若拋出 `ValueError`，訊息會指出不合格的起點與條件，改選連續無缺口區間內的起點。
+2. 研究過程若記錄 MLflow run，experiment 名稱使用 `lab/<topic>`，不寫入 model registry。
 
 ---
 
@@ -118,33 +116,14 @@ is_adopted = candidate_eval.beats(baseline_eval)
 
 每個研究主題存放於 `lab/<YYYY-MM-DD>-<topic>/`（例如 [`lab/2026-11-08-dhf-hyperparameter-search/README.md`](../../lab/2026-11-08-dhf-hyperparameter-search/README.md)）：
 
-- 互動式探索以 Jupytext 配對 `.py`（`percent` 格式）與 `.ipynb`；**只有 `.py` 與 `README.md` 進版控**，`*.ipynb` 已由 `.gitignore` 排除。
-- 引用 `data/lab/snapshots/...` 或 `*.ipynb` 等不進版控的路徑時，一律使用 code span（例如 `` `data/lab/snapshots/...` ``），不可使用 Markdown 連結，以免觸發 CI 死連結檢查失敗。
+1. 建立 `lab/<YYYY-MM-DD>-<topic>/`，研究腳本以 Jupytext `percent` 格式撰寫，標頭宣告 `formats: ipynb,py:percent`。
+2. 需要互動探索時產生配對 notebook（`*.ipynb` 由 `.gitignore` 排除，只有 `.py` 與 `README.md` 進版控）：
 
-### 4.1 報告 `README.md` 的固定段落
+   ```bash
+   uv run --package lab jupytext --sync lab/<YYYY-MM-DD>-<topic>/<script>.py
+   ```
 
-每份 `lab/<YYYY-MM-DD>-<topic>/README.md` 必須依序包含以下七個固定段落：
-
-1. **問題 (Problem)**：研究要回答的具體問題與評估標的。
-2. **快照 (Snapshot)**：使用的快照檔案資訊、雜湊值與連續區間查核。
-3. **回測設定 (Backtest Settings)**：回測視界、最低累積門檻、搜尋起點與評估起點清單，以及「**使用觀測氣象的條件式回測結果，不代表正式 serving 誤差**」聲明。
-4. **基線 (Baseline)**：現行 TOML 參數在搜尋起點與評估起點上的整體 MAPE 及 `1..horizon_hours` 各提前時數分組 MAPE。
-5. **候選 (Candidates)**：搜尋空間、試驗設定與最佳候選參數在各分組上的回測表現。
-6. **結論 (Conclusion)**：基線與候選在搜尋起點及評估起點上的比較分析。
-7. **是否採用 (Adoption Decision)**：明確記載是否採用至正式任務設定 TOML；若採用，於 TOML 參數旁加上註解連回本報告。
-
-### 4.2 必備重現紀錄欄位檢查表
-
-為確保不依賴 MLflow 服務也能完整重現實驗，報告內必須包含下表所有欄位：
-
-| 重現紀錄欄位 | 說明與範例 |
-| :--- | :--- |
-| **Git revision** | 執行回測時的 commit SHA（例如 `b343382`） |
-| **快照識別與 SHA-256** | `task_id`、`as_of`、code span 路徑與完整檔案 SHA-256 |
-| **任務設定來源與完整基線參數** | 來源 TOML 路徑，以及 `lags`、`rolling_windows`、`model.*` 完整參數值 |
-| **完整候選參數** | 最佳候選的 `lags`、`rolling_windows`、`model.*` 完整參數值 |
-| **搜尋起點與評估起點清單** | 兩組起點的完整 ISO 時間戳記與不重疊說明 |
-| **預報視界 (`horizon_hours`)** | 例如 `24` |
-| **最低歷史累積 (`min_history_hours`)** | 數值、是否覆寫（`min_history_overridden`），若覆寫須載明理由 |
-| **Optuna 搜尋設定** | 搜尋空間各維度範圍、亂數 `seed`、總 `trial` 數 |
-| **分組誤差揭露** | 搜尋與評估起點上 `1..horizon_hours` 各提前時數分組 MAPE |
+3. 程式變更全部 commit 後，在該 commit 上執行研究腳本，報告中的數字必須來自這次執行。
+4. 依 [SPEC §7.5](../SPEC.md) 的固定段落與重現紀錄欄位撰寫 `README.md`，Git revision 填第 3 步的 commit SHA。
+5. 引用 `data/lab/snapshots/...` 或 `*.ipynb` 等不進版控的路徑時使用 code span，不用 Markdown 連結，否則 CI 死連結檢查會失敗。
+6. 若結論為採用，在同一個 PR 更新任務設定 TOML 的 `[params]`，並在參數旁加註解連回報告。

@@ -1,7 +1,7 @@
 # ADR-0011：研究空間與正式程式同庫、單向相依
 
 > - Created: 2026-11-08
-> - Last Updated: 2026-11-08
+> - Last Updated: 2026-11-09
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0005](0005-dependency-management-with-uv.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -50,6 +50,9 @@
   - **選定方案：`uv` workspace 成員 `lab`**。`lab` 擁有獨立的 `lab/pyproject.toml` 與 pytest 設定，根目錄 `uv sync --all-extras` 不會安裝 `optuna`、`jupyterlab` 等研究套件，同時共用根目錄 `uv.lock` 維持核心科學計算套件版本一致。
   - **候選方案 D：放在根目錄 `[project.optional-dependencies]`**。根目錄設定與 CI 的 `--all-extras` 會被迫拉入所有研究套件，把正式測試環境拖重；未採納。
   - **候選方案 E：獨立的 `lab/uv.lock`（非 workspace）**。`lab` 與根目錄各自解析依賴，`lightgbm` 或 `pandas` 版本可能漂移；未採納。
+- **取捨四：採用判定的起點（同一組起點 vs 搜尋與評估分離）**
+  - **選定方案：搜尋起點與評估起點分離**。超參數搜尋會挑出恰好擬合搜尋起點雜訊的候選，若在同一組起點上判定是否採用，挑選偏差會直接計入「改善幅度」而高估效益。評估起點須較晚且預報目標時段與搜尋起點不重疊，候選在評估起點上的表現才是未參與挑選的估計。代價是快照的有效起點必須切成兩組，資料不足時只能交付探索報告、不改任務設定 TOML。
+  - **候選方案 F：單一起點集合同時搜尋與判定**。可用樣本較多，但挑選偏差無法扣除；未採納。具體規則見 [SPEC §7.3](../SPEC.md)。
 
 ## 3. Consequences
 
