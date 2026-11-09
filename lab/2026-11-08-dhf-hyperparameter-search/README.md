@@ -38,7 +38,7 @@
 
 ## 3. 回測設定 (Backtest Settings)
 
-- **Git revision**：`0150918`（基線建立於 `b343382`）
+- **Git revision**：`545efab`（本報告的基線、候選與各分組數字皆在此 commit 以下列指令重新執行並逐項核對一致，快照 SHA-256 亦相符；先前記載的 `0150918`／`b343382` 不含產生這些數字的程式碼，已更正）
 - **研究腳本（Jupytext `percent` 格式）**：[`lab/2026-11-08-dhf-hyperparameter-search/study.py`](study.py)，標頭宣告 `formats: ipynb,py:percent`；以 `uv run --package lab jupytext --sync lab/2026-11-08-dhf-hyperparameter-search/study.py` 產生或同步配對的 `study.ipynb`，該檔由 `.gitignore` 排除，不進版控
 - **執行指令**：
 
