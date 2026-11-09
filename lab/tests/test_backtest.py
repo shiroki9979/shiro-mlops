@@ -6,6 +6,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from lab.backtest import BacktestReport, rolling_origin_backtest
+from pydantic import BaseModel
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.types.base import TrainingData
@@ -63,32 +64,41 @@ def test_rolling_origin_backtest_populates_all_horizon_buckets_and_zero_mape_on_
         assert report.mape_by_horizon[step] == pytest.approx(0.0, abs=1e-6)
 
 
-def test_rolling_origin_backtest_rejects_origin_below_min_history_and_allows_override(
+def test_rolling_origin_backtest_rejects_origin_below_min_history(
     fast_task: TaskDefinition,
 ) -> None:
-    """Seam: rolling_origin_backtest raises ValueError naming offending origin when history < min_history_hours."""
+    """Seam: an origin with fewer valid load hours than min_history_hours is rejected by name."""
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
-    data = _training_data(load, weather)
     early_origin = pd.Timestamp(load["datetime"].iloc[180])
 
     with pytest.raises(ValueError, match=early_origin.isoformat()) as exc_info:
         rolling_origin_backtest(
             fast_task,
-            data,
+            _training_data(load, weather),
             origins=[early_origin, ORIGIN_2],
             horizon_hours=HORIZON_HOURS,
         )
+
     assert "min_history_hours" in str(exc_info.value)
 
-    overridden_report = rolling_origin_backtest(
+
+def test_rolling_origin_backtest_records_explicit_min_history_override(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: an explicit min_history_hours admits an early origin and the report records the override."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    early_origin = pd.Timestamp(load["datetime"].iloc[180])
+
+    report = rolling_origin_backtest(
         fast_task,
-        data,
+        _training_data(load, weather),
         origins=[early_origin],
         horizon_hours=HORIZON_HOURS,
         min_history_hours=180,
     )
-    assert overridden_report.min_history_hours == 180
-    assert overridden_report.min_history_overridden is True
+
+    assert report.min_history_hours == 180
+    assert report.min_history_overridden is True
 
 
 def test_rolling_origin_backtest_rejects_origin_with_missing_lookback_load(
@@ -110,43 +120,44 @@ def test_rolling_origin_backtest_rejects_origin_with_missing_lookback_load(
     assert "lookback" in str(exc_info.value).lower()
 
 
-def test_rolling_origin_backtest_rejects_origin_with_missing_horizon_load_or_weather(
+def test_rolling_origin_backtest_rejects_origin_with_missing_horizon_load(
     fast_task: TaskDefinition,
 ) -> None:
-    """Seam: rolling_origin_backtest raises ValueError naming offending origin when horizon load or weather is missing."""
+    """Seam: a missing actual load hour inside the horizon rejects that origin by name."""
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     missing_horizon_hour = ORIGIN_2 + pd.Timedelta(hours=3)
     gapped_load = load[load["datetime"] != missing_horizon_hour].reset_index(drop=True)
-    load_gap_data = _training_data(gapped_load, weather)
 
     with pytest.raises(ValueError, match=ORIGIN_2.isoformat()) as exc_info:
         rolling_origin_backtest(
             fast_task,
-            load_gap_data,
+            _training_data(gapped_load, weather),
             origins=[ORIGIN_1, ORIGIN_2],
             horizon_hours=HORIZON_HOURS,
         )
+
     assert "horizon" in str(exc_info.value).lower()
 
-    # 3 consecutive missing weather hours exceed the 2-hour backward fill tolerance
-    three_hour_weather_gap = {
-        ORIGIN_2 + pd.Timedelta(hours=1),
-        ORIGIN_2 + pd.Timedelta(hours=2),
-        ORIGIN_2 + pd.Timedelta(hours=3),
-    }
+
+def test_rolling_origin_backtest_rejects_horizon_weather_gap_beyond_alignment_tolerance(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: 3 consecutive missing weather hours exceed the 2-hour backward alignment and reject the origin."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    three_hour_weather_gap = {ORIGIN_2 + pd.Timedelta(hours=step) for step in (1, 2, 3)}
     gapped_weather = weather[~weather["datetime"].isin(three_hour_weather_gap)].reset_index(
         drop=True
     )
-    weather_gap_data = _training_data(load, gapped_weather)
 
-    with pytest.raises(ValueError, match=ORIGIN_2.isoformat()) as wx_exc_info:
+    with pytest.raises(ValueError, match=ORIGIN_2.isoformat()) as exc_info:
         rolling_origin_backtest(
             fast_task,
-            weather_gap_data,
+            _training_data(load, gapped_weather),
             origins=[ORIGIN_1, ORIGIN_2],
             horizon_hours=HORIZON_HOURS,
         )
-    assert "weather" in str(wx_exc_info.value).lower()
+
+    assert "weather" in str(exc_info.value).lower()
 
 
 def test_rolling_origin_backtest_fills_single_missing_weather_hour_in_horizon(
@@ -169,21 +180,17 @@ def test_rolling_origin_backtest_fills_single_missing_weather_hour_in_horizon(
     assert all(pd.notna(val) for val in report.mape_by_horizon.values())
 
 
-def test_rolling_origin_backtest_has_no_future_leakage_and_includes_origin_in_history(
+def test_rolling_origin_backtest_has_no_future_leakage(
     fast_task: TaskDefinition,
 ) -> None:
-    """Seam: injecting extreme load/weather after origin does not alter origin predictions, and origin is in history."""
+    """Seam: injecting extreme load/weather after origin does not alter step-1 accuracy for that origin."""
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
-    clean_data = _training_data(load, weather)
     clean_report = rolling_origin_backtest(
         fast_task,
-        clean_data,
+        _training_data(load, weather),
         origins=[ORIGIN_1],
         horizon_hours=HORIZON_HOURS,
     )
-
-    # Inject extreme load at ORIGIN_1 + 2h .. end (leaving ORIGIN_1 + 1h untouched so step-1 actual is identical)
-    # and extreme weather after ORIGIN_1 + HORIZON_HOURS.
     corrupted_load = load.copy()
     corrupted_load.loc[
         corrupted_load["datetime"] >= ORIGIN_1 + pd.Timedelta(hours=2), "load_mw"
@@ -193,36 +200,52 @@ def test_rolling_origin_backtest_has_no_future_leakage_and_includes_origin_in_hi
         corrupted_weather["datetime"] > ORIGIN_1 + pd.Timedelta(hours=HORIZON_HOURS),
         ["temperature", "relative_humidity"],
     ] = [99.0, 1.0]
-    corrupted_data = _training_data(corrupted_load, corrupted_weather)
 
     corrupted_report = rolling_origin_backtest(
         fast_task,
-        corrupted_data,
+        _training_data(corrupted_load, corrupted_weather),
         origins=[ORIGIN_1],
         horizon_hours=HORIZON_HOURS,
     )
 
-    # Step 1 actual load was untouched, so identical step-1 MAPE proves the model and step-1 prediction
-    # were completely unaffected by future load (ORIGIN_1 + 2h..) and future weather.
     assert corrupted_report.mape_by_horizon[1] == pytest.approx(
         clean_report.mape_by_horizon[1], abs=1e-12
     )
 
-    # Conversely, perturbing load AT origin itself changes step-1 prediction (since origin is lag_1 for origin + 1h).
+
+def test_rolling_origin_backtest_uses_origin_hour_as_latest_history(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: perturbing the load at the origin hour changes the step-1 forecast (origin is lag 1)."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    clean_report = rolling_origin_backtest(
+        fast_task,
+        _training_data(load, weather),
+        origins=[ORIGIN_1],
+        horizon_hours=HORIZON_HOURS,
+    )
     shifted_origin_load = load.copy()
     shifted_origin_load.loc[shifted_origin_load["datetime"] == ORIGIN_1, "load_mw"] = 45_000.0
+
     shifted_origin_report = rolling_origin_backtest(
         fast_task,
         _training_data(shifted_origin_load, weather),
         origins=[ORIGIN_1],
         horizon_hours=HORIZON_HOURS,
     )
+
     assert shifted_origin_report.mape_by_horizon[1] != pytest.approx(
         clean_report.mape_by_horizon[1], abs=1e-4
     )
 
-    # Removing the origin hour itself must fail lookback completeness naming the origin timestamp.
+
+def test_rolling_origin_backtest_rejects_origin_missing_its_own_load_hour(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: an origin whose own hour has no actual load fails lookback completeness by name."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     without_origin_load = load[load["datetime"] != ORIGIN_1].reset_index(drop=True)
+
     with pytest.raises(ValueError, match=ORIGIN_1.isoformat()):
         rolling_origin_backtest(
             fast_task,
@@ -232,33 +255,38 @@ def test_rolling_origin_backtest_has_no_future_leakage_and_includes_origin_in_hi
         )
 
 
-def test_backtest_report_direct_comparison_lower_overall_mape_wins(
+def _report(
+    overall_mape: float, origins: tuple[pd.Timestamp, ...], params: BaseModel
+) -> BacktestReport:
+    return BacktestReport(
+        overall_mape=overall_mape,
+        mape_by_horizon={1: overall_mape, 2: overall_mape},
+        origins=origins,
+        horizon_hours=2,
+        min_history_hours=216,
+        min_history_overridden=False,
+        params=params,
+    )
+
+
+def test_backtest_report_lower_overall_mape_beats_baseline(
     fast_task: TaskDefinition,
 ) -> None:
-    """Seam: two BacktestReport instances on the same origins and horizon compare directly by overall_mape."""
-    better = BacktestReport(
-        overall_mape=1.85,
-        mape_by_horizon={1: 1.2, 2: 2.5},
-        origins=(ORIGIN_1, ORIGIN_2),
-        horizon_hours=2,
-        min_history_hours=216,
-        min_history_overridden=False,
-        params=fast_task.params,
-    )
-    worse = BacktestReport(
-        overall_mape=2.40,
-        mape_by_horizon={1: 1.1, 2: 3.7},
-        origins=(ORIGIN_1, ORIGIN_2),
-        horizon_hours=2,
-        min_history_hours=216,
-        min_history_overridden=False,
-        params=fast_task.params,
-    )
+    """Seam: on the same origins and horizon, strictly lower overall MAPE wins."""
+    better = _report(1.85, (ORIGIN_1, ORIGIN_2), fast_task.params)
+    worse = _report(2.40, (ORIGIN_1, ORIGIN_2), fast_task.params)
 
     assert better.beats(worse) is True
     assert worse.beats(better) is False
     assert better.beats(better) is False
 
-    mismatched_origins = replace(worse, origins=(ORIGIN_1,))
+
+def test_backtest_report_refuses_comparison_across_different_origins(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: reports built on different origin sets are not comparable."""
+    candidate = _report(1.85, (ORIGIN_1, ORIGIN_2), fast_task.params)
+    baseline = _report(2.40, (ORIGIN_1,), fast_task.params)
+
     with pytest.raises(ValueError, match="origins"):
-        better.beats(mismatched_origins)
+        candidate.beats(baseline)
