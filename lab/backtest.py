@@ -92,6 +92,29 @@ def rolling_origin_backtest(
     )
 
 
+def verify_non_overlapping_target_windows(
+    search_origins: Sequence[pd.Timestamp],
+    eval_origins: Sequence[pd.Timestamp],
+    horizon_hours: int,
+) -> None:
+    """Reject eval origins that are not strictly later than, or share target hours with, search origins."""
+    search_targets = {ts for origin in search_origins for ts in target_hours(origin, horizon_hours)}
+    eval_targets = {ts for origin in eval_origins for ts in target_hours(origin, horizon_hours)}
+    overlap = search_targets & eval_targets
+    if overlap:
+        raise ValueError(
+            "Evaluation target window overlaps with search target window "
+            f"(earliest shared hour: {min(overlap).isoformat()})."
+        )
+    if min(eval_origins) <= max(search_origins):
+        raise ValueError("Evaluation origins must be strictly later than all search origins.")
+
+
+def target_hours(origin: pd.Timestamp, horizon_hours: int) -> pd.DatetimeIndex:
+    """Return the forecast target hours ``origin + 1h .. origin + horizon_hours``."""
+    return pd.date_range(start=origin + pd.Timedelta(hours=1), periods=horizon_hours, freq="h")
+
+
 def _validate_backtest_inputs(
     origins: Sequence[datetime | pd.Timestamp | str],
     horizon_hours: int,
@@ -174,9 +197,7 @@ def _evaluate_single_origin(
         min_history_hours=min_history_hours,
         lookback_hours=lookback_hours,
     )
-    horizon_times = pd.date_range(
-        start=origin + pd.Timedelta(hours=1), periods=horizon_hours, freq="h"
-    )
+    horizon_times = target_hours(origin, horizon_hours)
     horizon_load = _slice_and_validate_horizon_load(
         load=load,
         origin=origin,

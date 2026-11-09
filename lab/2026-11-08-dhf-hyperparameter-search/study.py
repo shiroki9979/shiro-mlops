@@ -51,7 +51,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2] if "__file__" in globals() else
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lab.backtest import BacktestReport, rolling_origin_backtest  # noqa: E402
+from lab.backtest import (  # noqa: E402
+    BacktestReport,
+    rolling_origin_backtest,
+    verify_non_overlapping_target_windows,
+)
 from lab.snapshot import DEFAULT_SNAPSHOTS_DIR, read_snapshot  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -109,32 +113,6 @@ ROLLING_WINDOW_RECIPES: dict[str, list[int]] = {
 
 
 # %%
-def verify_non_overlapping_target_windows(
-    search_origins: tuple[pd.Timestamp, ...],
-    eval_origins: tuple[pd.Timestamp, ...],
-    horizon_hours: int,
-) -> None:
-    """Confirm that evaluation target windows are strictly later and never overlap search target windows."""
-    search_targets = {
-        ts
-        for origin in search_origins
-        for ts in pd.date_range(origin + pd.Timedelta(hours=1), periods=horizon_hours, freq="h")
-    }
-    eval_targets = {
-        ts
-        for origin in eval_origins
-        for ts in pd.date_range(origin + pd.Timedelta(hours=1), periods=horizon_hours, freq="h")
-    }
-    overlap = search_targets & eval_targets
-    if overlap:
-        earliest = min(overlap).isoformat()
-        raise ValueError(
-            f"Evaluation target window overlaps with search target window (e.g. {earliest})."
-        )
-    if min(eval_origins) <= max(search_origins):
-        raise ValueError("Evaluation origins must be strictly later than all search origins.")
-
-
 def _report_metrics(prefix: str, report: BacktestReport) -> dict[str, float]:
     metrics = {f"{prefix}_overall_mape": float(report.overall_mape)}
     for step, mape in report.mape_by_horizon.items():

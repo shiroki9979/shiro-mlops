@@ -5,7 +5,11 @@ from datetime import datetime
 
 import pandas as pd
 import pytest
-from lab.backtest import BacktestReport, rolling_origin_backtest
+from lab.backtest import (
+    BacktestReport,
+    rolling_origin_backtest,
+    verify_non_overlapping_target_windows,
+)
 from pydantic import BaseModel
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
@@ -295,3 +299,29 @@ def test_backtest_report_refuses_comparison_across_different_origins(
 
     with pytest.raises(ValueError, match="origins"):
         candidate.beats(baseline)
+
+
+def test_verify_non_overlapping_target_windows_rejects_shared_target_hour() -> None:
+    """Seam: an eval origin whose first target hour is a search origin's last target hour is rejected."""
+    search_origins = (pd.Timestamp("2026-10-28 18:00:00"),)
+    eval_origins = (pd.Timestamp("2026-10-29 17:00:00"),)
+
+    with pytest.raises(ValueError, match="2026-10-29T18:00:00"):
+        verify_non_overlapping_target_windows(search_origins, eval_origins, horizon_hours=24)
+
+
+def test_verify_non_overlapping_target_windows_rejects_eval_origin_before_search_origins() -> None:
+    """Seam: eval origins must be strictly later than every search origin even without overlap."""
+    search_origins = (pd.Timestamp("2026-10-28 18:00:00"),)
+    eval_origins = (pd.Timestamp("2026-10-26 18:00:00"),)
+
+    with pytest.raises(ValueError, match="strictly later"):
+        verify_non_overlapping_target_windows(search_origins, eval_origins, horizon_hours=24)
+
+
+def test_verify_non_overlapping_target_windows_accepts_later_disjoint_windows() -> None:
+    """Seam: the study's split (last search 10-28 18:00, first eval 10-29 18:00, H=24) is accepted."""
+    search_origins = (pd.Timestamp("2026-10-27 18:00:00"), pd.Timestamp("2026-10-28 18:00:00"))
+    eval_origins = (pd.Timestamp("2026-10-29 18:00:00"), pd.Timestamp("2026-10-29 22:00:00"))
+
+    verify_non_overlapping_target_windows(search_origins, eval_origins, horizon_hours=24)
