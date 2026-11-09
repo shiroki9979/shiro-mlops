@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from lab.snapshot import main as snapshot_main
-from lab.snapshot import read_snapshot, write_snapshot
+from lab.snapshot import read_snapshot, snapshot_path, write_snapshot
 from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.definition import TaskDefinition
@@ -120,6 +120,18 @@ def test_snapshot_round_trip_with_staggered_load_and_weather_gaps_trains_identic
     assert restored_trained.model.booster.model_to_string() == (
         direct_trained.model.booster.model_to_string()
     )
+
+
+def test_snapshot_path_resolves_tz_aware_as_of_to_written_snapshot_file(
+    task: TaskDefinition, runtime: TaskRuntime, tmp_path: Path
+) -> None:
+    """Seam: snapshot_path locates the file write_snapshot produced, given a UTC as_of for the same instant."""
+    snapshots_dir = tmp_path / "snapshots"
+    written = write_snapshot(task, runtime, AS_OF, snapshots_dir=snapshots_dir)
+
+    located = snapshot_path(task, "2026-09-20T15:30:00+00:00", snapshots_dir=snapshots_dir)
+
+    assert located == written
 
 
 def test_write_snapshot_refuses_to_overwrite_existing_snapshot(

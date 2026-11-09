@@ -18,7 +18,7 @@ from shiro_mlops.tasks.runner import fit_task
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import PredictionData, TrainingData
 
-from lab.snapshot import normalize_taiwan_timestamp
+from lab.timestamps import normalize_taiwan_timestamp
 
 PREDICTION_COL = f"predicted_{LOAD_MW_COL}"
 

@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import deployed_task
@@ -19,24 +18,9 @@ from shiro_mlops.tasks.runner import (
 )
 from shiro_mlops.tasks.types.base import TrainingData
 
+from lab.timestamps import normalize_taiwan_timestamp
+
 DEFAULT_SNAPSHOTS_DIR = Path("data/lab/snapshots")
-
-
-def normalize_taiwan_timestamp(value: datetime | pd.Timestamp | str) -> pd.Timestamp:
-    """Normalize a timestamp input to a timezone-naive Asia/Taipei pd.Timestamp."""
-    timestamp = pd.Timestamp(value)
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_convert(TAIWAN_TZ).tz_localize(None)
-    return timestamp
-
-
-def _snapshot_path(
-    task: TaskDefinition,
-    as_of: datetime | pd.Timestamp | str,
-    snapshots_dir: Path,
-) -> Path:
-    normalized = normalize_taiwan_timestamp(as_of)
-    return Path(snapshots_dir) / task.task_id / f"{normalized.isoformat()}.parquet"
 
 
 def write_snapshot(
@@ -48,7 +32,7 @@ def write_snapshot(
 ) -> Path:
     """Freeze ``training_table`` at ``as_of`` into an immutable parquet snapshot."""
     normalized_as_of = normalize_taiwan_timestamp(as_of)
-    path = _snapshot_path(task, normalized_as_of, snapshots_dir)
+    path = _snapshot_file(task, normalized_as_of, snapshots_dir)
     if path.exists():
         raise FileExistsError(
             f"Snapshot already exists for ({task.task_id}, {normalized_as_of.isoformat()}): {path}"
@@ -67,9 +51,24 @@ def read_snapshot(
     snapshots_dir: Path = DEFAULT_SNAPSHOTS_DIR,
 ) -> TrainingData:
     """Restore ``TrainingData`` from a frozen parquet snapshot."""
-    path = _snapshot_path(task, as_of, snapshots_dir)
-    table = pd.read_parquet(path)
+    table = pd.read_parquet(snapshot_path(task, as_of, snapshots_dir=snapshots_dir))
     return training_data_from_table(task, table)
+
+
+def snapshot_path(
+    task: TaskDefinition,
+    as_of: datetime | pd.Timestamp | str,
+    *,
+    snapshots_dir: Path = DEFAULT_SNAPSHOTS_DIR,
+) -> Path:
+    """Return the parquet path that holds the snapshot of ``task`` at ``as_of``."""
+    return _snapshot_file(task, normalize_taiwan_timestamp(as_of), snapshots_dir)
+
+
+def _snapshot_file(
+    task: TaskDefinition, normalized_as_of: pd.Timestamp, snapshots_dir: Path
+) -> Path:
+    return snapshots_dir / task.task_id / f"{normalized_as_of.isoformat()}.parquet"
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
