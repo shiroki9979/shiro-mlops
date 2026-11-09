@@ -1,11 +1,12 @@
 # ---
 # jupyter:
 #   jupytext:
+#     formats: ipynb,py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.4
+#       jupytext_version: 1.19.6
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -39,6 +40,7 @@ from typing import Any
 import mlflow
 import optuna
 import pandas as pd
+from mlflow.exceptions import MlflowException
 from shiro_mlops.core.config import settings
 from shiro_mlops.pipelines.tracking import flatten_params
 from shiro_mlops.tasks.definition import TaskDefinition
@@ -47,7 +49,15 @@ from shiro_mlops.tasks.types.base import TrainingData
 from shiro_mlops.tasks.types.lightgbm_common import LightGBMParams
 from shiro_mlops.tasks.types.recursive_regression import RecursiveRegressionParams
 
-_REPO_ROOT = Path(__file__).resolve().parents[2] if "__file__" in globals() else Path.cwd()
+# `lab` is a non-packaged uv workspace member, so it is importable only when the repo root is
+# on sys.path. `python -m lab.snapshot` gets that from the cwd, but a script inside a dated topic
+# folder (or its paired notebook, whose kernel starts in this folder) does not.
+_SEARCH_START = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+_REPO_ROOT = next(
+    path
+    for path in (_SEARCH_START, *_SEARCH_START.parents)
+    if (path / "lab" / "__init__.py").is_file()
+)
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -56,7 +66,7 @@ from lab.backtest import (  # noqa: E402
     rolling_origin_backtest,
     verify_non_overlapping_target_windows,
 )
-from lab.snapshot import DEFAULT_SNAPSHOTS_DIR, read_snapshot  # noqa: E402
+from lab.snapshot import DEFAULT_SNAPSHOTS_DIR, read_snapshot, snapshot_path  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +100,13 @@ EVAL_ORIGINS: tuple[pd.Timestamp, ...] = (
     pd.Timestamp("2026-10-29 22:00:00"),
 )
 
+N_ESTIMATORS_LOW, N_ESTIMATORS_HIGH, N_ESTIMATORS_STEP = 50, 250, 25
+LEARNING_RATE_LOW, LEARNING_RATE_HIGH = 0.01, 0.15
+NUM_LEAVES_LOW, NUM_LEAVES_HIGH, NUM_LEAVES_STEP = 15, 63, 8
+
+TOP_TRIALS_REPORTED = 5
+REPORT_DECIMALS = 4
+
 # 所有候選特徵配方的最大滯後／視窗皆維持 <= 168 小時，確保與基線共用同一組有效起點。
 LAG_RECIPES: dict[str, list[int]] = {
     "baseline_1_2_24_48_168": [1, 2, 24, 48, 168],
@@ -109,7 +126,7 @@ ROLLING_WINDOW_RECIPES: dict[str, list[int]] = {
 
 
 # %% [markdown]
-# ## 2. 起點不重疊驗證與 MLflow 輔助函式
+# ## 2. MLflow 輔助函式
 
 
 # %%
@@ -137,7 +154,9 @@ def log_lab_run(
             mlflow.log_params(params_payload)
             mlflow.log_metrics({k: float(v) for k, v in metrics.items()})
             return str(run.info.run_id)
-    except Exception as exc:
+    # An unreachable tracking server surfaces as MlflowException (MLflow wraps HTTP errors);
+    # local file-store failures are OSError. Anything else is a programming error and must raise.
+    except (MlflowException, OSError) as exc:
         logger.warning(
             "MLflow unavailable when logging run %s; continuing without MLflow: %s",
             run_name,
@@ -178,9 +197,15 @@ class TrialCandidate:
             rolling_key=trial.suggest_categorical(
                 "rolling_key", list(ROLLING_WINDOW_RECIPES.keys())
             ),
-            n_estimators=trial.suggest_int("n_estimators", 50, 250, step=25),
-            learning_rate=trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
-            num_leaves=trial.suggest_int("num_leaves", 15, 63, step=8),
+            n_estimators=trial.suggest_int(
+                "n_estimators", N_ESTIMATORS_LOW, N_ESTIMATORS_HIGH, step=N_ESTIMATORS_STEP
+            ),
+            learning_rate=trial.suggest_float(
+                "learning_rate", LEARNING_RATE_LOW, LEARNING_RATE_HIGH, log=True
+            ),
+            num_leaves=trial.suggest_int(
+                "num_leaves", NUM_LEAVES_LOW, NUM_LEAVES_HIGH, step=NUM_LEAVES_STEP
+            ),
         )
 
 
@@ -303,7 +328,7 @@ def _load_study_snapshot(
     snapshots_dir: Path,
 ) -> tuple[TaskDefinition, TrainingData, str]:
     base_task = deployed_task(DYNAMIC_HORIZON_FORECAST)
-    snapshot_file = Path(snapshots_dir) / base_task.task_id / f"{AS_OF}.parquet"
+    snapshot_file = snapshot_path(base_task, AS_OF, snapshots_dir=snapshots_dir)
     snapshot_sha256 = hashlib.sha256(snapshot_file.read_bytes()).hexdigest()
     data = read_snapshot(base_task, AS_OF, snapshots_dir=snapshots_dir)
     return base_task, data, snapshot_sha256
@@ -352,8 +377,12 @@ def _optimize_study(
     return study
 
 
+def _round_metric(value: float) -> float:
+    return round(float(value), REPORT_DECIMALS)
+
+
 def _round_horizon_mapes(report: BacktestReport) -> dict[int, float]:
-    return {step: round(val, 4) for step, val in report.mape_by_horizon.items()}
+    return {step: _round_metric(val) for step, val in report.mape_by_horizon.items()}
 
 
 def _assemble_study_summary(
@@ -372,7 +401,7 @@ def _assemble_study_summary(
     top_trials = sorted(
         study.trials,
         key=lambda t: t.value if t.value is not None else float("inf"),
-    )[:5]
+    )[:TOP_TRIALS_REPORTED]
 
     return {
         "as_of": AS_OF,
@@ -391,10 +420,10 @@ def _assemble_study_summary(
         "best_trial_number": best_trial.number,
         "best_trial_params": best_trial.params,
         "candidate_params": candidate.task.params.model_dump(),
-        "baseline_search_overall_mape": round(baseline.search.overall_mape, 4),
-        "candidate_search_overall_mape": round(candidate.search.overall_mape, 4),
-        "baseline_eval_overall_mape": round(baseline.eval.overall_mape, 4),
-        "candidate_eval_overall_mape": round(candidate.eval.overall_mape, 4),
+        "baseline_search_overall_mape": _round_metric(baseline.search.overall_mape),
+        "candidate_search_overall_mape": _round_metric(candidate.search.overall_mape),
+        "baseline_eval_overall_mape": _round_metric(baseline.eval.overall_mape),
+        "candidate_eval_overall_mape": _round_metric(candidate.eval.overall_mape),
         "beats_baseline_on_search": candidate.search.beats(baseline.search),
         "beats_baseline_on_eval": beats_baseline_on_eval,
         "adopted": bool(eval_sample_sufficient and beats_baseline_on_eval),
@@ -402,10 +431,10 @@ def _assemble_study_summary(
         "candidate_search_mape_by_horizon": _round_horizon_mapes(candidate.search),
         "baseline_eval_mape_by_horizon": _round_horizon_mapes(baseline.eval),
         "candidate_eval_mape_by_horizon": _round_horizon_mapes(candidate.eval),
-        "top_5_trials": [
+        "top_trials": [
             {
                 "trial_number": t.number,
-                "search_overall_mape": round(float(t.value), 4) if t.value is not None else None,
+                "search_overall_mape": _round_metric(t.value) if t.value is not None else None,
                 "params": t.params,
             }
             for t in top_trials

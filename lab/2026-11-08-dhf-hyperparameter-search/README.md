@@ -39,7 +39,7 @@
 ## 3. 回測設定 (Backtest Settings)
 
 - **Git revision**：`0150918`（基線建立於 `b343382`）
-- **研究腳本（Jupytext `percent` 格式）**：[`lab/2026-11-08-dhf-hyperparameter-search/study.py`](study.py)（配對之 `study.ipynb` 由 `.gitignore` 排除，不進版控）
+- **研究腳本（Jupytext `percent` 格式）**：[`lab/2026-11-08-dhf-hyperparameter-search/study.py`](study.py)，標頭宣告 `formats: ipynb,py:percent`；以 `uv run --package lab jupytext --sync lab/2026-11-08-dhf-hyperparameter-search/study.py` 產生或同步配對的 `study.ipynb`，該檔由 `.gitignore` 排除，不進版控
 - **執行指令**：
 
   ```bash
