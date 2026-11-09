@@ -29,6 +29,7 @@ class BacktestReport:
 
     overall_mape: float
     mape_by_horizon: dict[int, float]
+    predictions: dict[pd.Timestamp, tuple[float, ...]]
     origins: tuple[pd.Timestamp, ...]
     horizon_hours: int
     min_history_hours: int
@@ -67,7 +68,7 @@ def rolling_origin_backtest(
         task.policies.min_training_hours if min_history_hours is None else min_history_hours
     )
     load, weather = _prepare_backtest_frames(task, data)
-    y_true_by_step, y_pred_by_step = _collect_origin_forecasts(
+    predictions, y_true_by_step, y_pred_by_step = _collect_origin_forecasts(
         task=task,
         load=load,
         weather=weather,
@@ -82,6 +83,7 @@ def rolling_origin_backtest(
     return BacktestReport(
         overall_mape=overall_mape,
         mape_by_horizon=mape_by_horizon,
+        predictions=predictions,
         origins=normalized_origins,
         horizon_hours=horizon_hours,
         min_history_hours=effective_min_history,
@@ -128,14 +130,15 @@ def _collect_origin_forecasts(
     origins: tuple[pd.Timestamp, ...],
     horizon_hours: int,
     min_history_hours: int,
-) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
+) -> tuple[dict[pd.Timestamp, tuple[float, ...]], dict[int, list[float]], dict[int, list[float]]]:
     lookback_hours = get_task_type(task.task_type).requirements(task.params).lookback_hours
     weather_fields = list(task.weather.fields)
     y_true_by_step: dict[int, list[float]] = {step: [] for step in range(1, horizon_hours + 1)}
     y_pred_by_step: dict[int, list[float]] = {step: [] for step in range(1, horizon_hours + 1)}
+    predictions: dict[pd.Timestamp, tuple[float, ...]] = {}
 
     for origin in origins:
-        horizon_load, predictions = _evaluate_single_origin(
+        horizon_load, forecast = _evaluate_single_origin(
             task=task,
             load=load,
             weather=weather,
@@ -145,12 +148,13 @@ def _collect_origin_forecasts(
             min_history_hours=min_history_hours,
             lookback_hours=lookback_hours,
         )
+        predictions[origin] = tuple(float(value) for value in forecast[PREDICTION_COL])
         for step_idx in range(horizon_hours):
             step = step_idx + 1
             y_true_by_step[step].append(float(horizon_load[LOAD_MW_COL].iloc[step_idx]))
-            y_pred_by_step[step].append(float(predictions[PREDICTION_COL].iloc[step_idx]))
+            y_pred_by_step[step].append(float(forecast[PREDICTION_COL].iloc[step_idx]))
 
-    return y_true_by_step, y_pred_by_step
+    return predictions, y_true_by_step, y_pred_by_step
 
 
 def _evaluate_single_origin(

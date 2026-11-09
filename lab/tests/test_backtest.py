@@ -180,10 +180,14 @@ def test_rolling_origin_backtest_fills_single_missing_weather_hour_in_horizon(
     assert all(pd.notna(val) for val in report.mape_by_horizon.values())
 
 
-def test_rolling_origin_backtest_has_no_future_leakage(
+def test_rolling_origin_backtest_predictions_ignore_load_from_first_target_hour_onward(
     fast_task: TaskDefinition,
 ) -> None:
-    """Seam: injecting extreme load/weather after origin does not alter step-1 accuracy for that origin."""
+    """Seam: extreme load from origin + 1h onward and weather beyond the horizon leave the forecast unchanged.
+
+    Horizon weather stays clean because observed horizon weather is a legitimate forecast input
+    under the observed-weather conditional backtest.
+    """
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     clean_report = rolling_origin_backtest(
         fast_task,
@@ -191,14 +195,13 @@ def test_rolling_origin_backtest_has_no_future_leakage(
         origins=[ORIGIN_1],
         horizon_hours=HORIZON_HOURS,
     )
+    first_target_hour = ORIGIN_1 + pd.Timedelta(hours=1)
+    horizon_end = ORIGIN_1 + pd.Timedelta(hours=HORIZON_HOURS)
     corrupted_load = load.copy()
-    corrupted_load.loc[
-        corrupted_load["datetime"] >= ORIGIN_1 + pd.Timedelta(hours=2), "load_mw"
-    ] = 9_999_999.0
+    corrupted_load.loc[corrupted_load["datetime"] >= first_target_hour, "load_mw"] = 9_999_999.0
     corrupted_weather = weather.copy()
     corrupted_weather.loc[
-        corrupted_weather["datetime"] > ORIGIN_1 + pd.Timedelta(hours=HORIZON_HOURS),
-        ["temperature", "relative_humidity"],
+        corrupted_weather["datetime"] > horizon_end, ["temperature", "relative_humidity"]
     ] = [99.0, 1.0]
 
     corrupted_report = rolling_origin_backtest(
@@ -208,8 +211,9 @@ def test_rolling_origin_backtest_has_no_future_leakage(
         horizon_hours=HORIZON_HOURS,
     )
 
-    assert corrupted_report.mape_by_horizon[1] == pytest.approx(
-        clean_report.mape_by_horizon[1], abs=1e-12
+    assert len(clean_report.predictions[ORIGIN_1]) == HORIZON_HOURS
+    assert corrupted_report.predictions[ORIGIN_1] == pytest.approx(
+        clean_report.predictions[ORIGIN_1], abs=1e-9
     )
 
 
@@ -234,8 +238,8 @@ def test_rolling_origin_backtest_uses_origin_hour_as_latest_history(
         horizon_hours=HORIZON_HOURS,
     )
 
-    assert shifted_origin_report.mape_by_horizon[1] != pytest.approx(
-        clean_report.mape_by_horizon[1], abs=1e-4
+    assert shifted_origin_report.predictions[ORIGIN_1][0] != pytest.approx(
+        clean_report.predictions[ORIGIN_1][0], abs=1.0
     )
 
 
@@ -261,6 +265,7 @@ def _report(
     return BacktestReport(
         overall_mape=overall_mape,
         mape_by_horizon={1: overall_mape, 2: overall_mape},
+        predictions={origin: (28_000.0, 28_100.0) for origin in origins},
         origins=origins,
         horizon_hours=2,
         min_history_hours=216,
