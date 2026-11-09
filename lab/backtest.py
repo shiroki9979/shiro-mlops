@@ -67,14 +67,9 @@ def rolling_origin_backtest(
     effective_min_history = (
         task.policies.min_training_hours if min_history_hours is None else min_history_hours
     )
-    load, weather = _prepare_backtest_frames(task, data)
+    context = _build_context(task, data, horizon_hours, effective_min_history)
     predictions, y_true_by_step, y_pred_by_step = _collect_origin_forecasts(
-        task=task,
-        load=load,
-        weather=weather,
-        origins=normalized_origins,
-        horizon_hours=horizon_hours,
-        min_history_hours=effective_min_history,
+        context, normalized_origins
     )
     overall_mape, mape_by_horizon = _compute_horizon_mape(
         y_true_by_step, y_pred_by_step, horizon_hours
@@ -126,6 +121,39 @@ def _validate_backtest_inputs(
     return tuple(normalize_taiwan_timestamp(origin) for origin in origins)
 
 
+@dataclass(frozen=True)
+class _BacktestContext:
+    """Inputs shared by every origin within one backtest run."""
+
+    task: TaskDefinition
+    load: pd.DataFrame
+    weather: pd.DataFrame
+    horizon_hours: int
+    min_history_hours: int
+    lookback_hours: int
+
+    @property
+    def weather_fields(self) -> list[str]:
+        return list(self.task.weather.fields)
+
+
+def _build_context(
+    task: TaskDefinition,
+    data: TrainingData,
+    horizon_hours: int,
+    min_history_hours: int,
+) -> _BacktestContext:
+    load, weather = _prepare_backtest_frames(task, data)
+    return _BacktestContext(
+        task=task,
+        load=load,
+        weather=weather,
+        horizon_hours=horizon_hours,
+        min_history_hours=min_history_hours,
+        lookback_hours=get_task_type(task.task_type).requirements(task.params).lookback_hours,
+    )
+
+
 def _prepare_backtest_frames(
     task: TaskDefinition,
     data: TrainingData,
@@ -146,78 +174,48 @@ def _prepare_backtest_frames(
 
 
 def _collect_origin_forecasts(
-    *,
-    task: TaskDefinition,
-    load: pd.DataFrame,
-    weather: pd.DataFrame,
+    context: _BacktestContext,
     origins: tuple[pd.Timestamp, ...],
-    horizon_hours: int,
-    min_history_hours: int,
 ) -> tuple[dict[pd.Timestamp, tuple[float, ...]], dict[int, list[float]], dict[int, list[float]]]:
-    lookback_hours = get_task_type(task.task_type).requirements(task.params).lookback_hours
-    weather_fields = list(task.weather.fields)
-    y_true_by_step: dict[int, list[float]] = {step: [] for step in range(1, horizon_hours + 1)}
-    y_pred_by_step: dict[int, list[float]] = {step: [] for step in range(1, horizon_hours + 1)}
+    steps = range(1, context.horizon_hours + 1)
+    y_true_by_step: dict[int, list[float]] = {step: [] for step in steps}
+    y_pred_by_step: dict[int, list[float]] = {step: [] for step in steps}
     predictions: dict[pd.Timestamp, tuple[float, ...]] = {}
 
     for origin in origins:
-        horizon_load, forecast = _evaluate_single_origin(
-            task=task,
-            load=load,
-            weather=weather,
-            weather_fields=weather_fields,
-            origin=origin,
-            horizon_hours=horizon_hours,
-            min_history_hours=min_history_hours,
-            lookback_hours=lookback_hours,
-        )
+        horizon_load, forecast = _evaluate_single_origin(context, origin)
         predictions[origin] = tuple(float(value) for value in forecast[PREDICTION_COL])
-        for step_idx in range(horizon_hours):
-            step = step_idx + 1
+        for step_idx, step in enumerate(steps):
             y_true_by_step[step].append(float(horizon_load[LOAD_MW_COL].iloc[step_idx]))
-            y_pred_by_step[step].append(float(forecast[PREDICTION_COL].iloc[step_idx]))
+            y_pred_by_step[step].append(predictions[origin][step_idx])
 
     return predictions, y_true_by_step, y_pred_by_step
 
 
 def _evaluate_single_origin(
-    *,
-    task: TaskDefinition,
-    load: pd.DataFrame,
-    weather: pd.DataFrame,
-    weather_fields: list[str],
+    context: _BacktestContext,
     origin: pd.Timestamp,
-    horizon_hours: int,
-    min_history_hours: int,
-    lookback_hours: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     train_load = _slice_and_validate_origin_history(
-        load=load,
+        load=context.load,
         origin=origin,
-        min_history_hours=min_history_hours,
-        lookback_hours=lookback_hours,
+        min_history_hours=context.min_history_hours,
+        lookback_hours=context.lookback_hours,
     )
-    horizon_times = target_hours(origin, horizon_hours)
+    horizon_times = target_hours(origin, context.horizon_hours)
     horizon_load = _slice_and_validate_horizon_load(
-        load=load,
+        load=context.load,
         origin=origin,
         horizon_times=horizon_times,
     )
     aligned_weather = _align_and_validate_horizon_weather(
-        weather=weather,
-        weather_fields=weather_fields,
+        weather=context.weather,
+        weather_fields=context.weather_fields,
         origin=origin,
         horizon_times=horizon_times,
     )
-    predictions = _fit_and_predict_origin(
-        task=task,
-        train_load=train_load,
-        weather=weather,
-        aligned_weather=aligned_weather,
-        origin=origin,
-        horizon_hours=horizon_hours,
-    )
-    return horizon_load, predictions
+    forecast = _fit_and_predict_origin(context, origin, train_load, aligned_weather)
+    return horizon_load, forecast
 
 
 def _slice_and_validate_origin_history(
@@ -293,27 +291,24 @@ def _align_and_validate_horizon_weather(
 
 
 def _fit_and_predict_origin(
-    *,
-    task: TaskDefinition,
-    train_load: pd.DataFrame,
-    weather: pd.DataFrame,
-    aligned_weather: pd.DataFrame,
+    context: _BacktestContext,
     origin: pd.Timestamp,
-    horizon_hours: int,
+    train_load: pd.DataFrame,
+    aligned_weather: pd.DataFrame,
 ) -> pd.DataFrame:
-    train_weather = weather[weather[DATETIME_COL] <= origin].reset_index(drop=True)
+    train_weather = context.weather[context.weather[DATETIME_COL] <= origin].reset_index(drop=True)
     truncated_data = TrainingData(
         load=train_load,
         weather=train_weather,
         validation_start=origin + pd.Timedelta(hours=1),
     )
-    trained = fit_task(task, truncated_data)
+    trained = fit_task(context.task, truncated_data)
 
     prediction_data = PredictionData(
         anchor=origin,
         load_history=train_load,
         weather=aligned_weather,
-        horizon_hours=horizon_hours,
+        horizon_hours=context.horizon_hours,
     )
     return trained.model.predict(prediction_data).sort_values(DATETIME_COL, ignore_index=True)
 
