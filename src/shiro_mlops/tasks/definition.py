@@ -8,6 +8,7 @@ definition stops the process at startup (ADR-0009).
 
 from __future__ import annotations
 
+import math
 import re
 import tomllib
 from collections.abc import Mapping
@@ -22,7 +23,7 @@ from pydantic import (
     Field,
     PositiveInt,
     ValidationError,
-    field_validator,
+    model_validator,
 )
 
 from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
@@ -94,21 +95,40 @@ class TaskSchedule(BaseModel):
     monitoring: CronExpression
 
 
+# 權重總和容許的浮點誤差；TOML 中的十進位權重（例如 0.45、0.3、0.25）相加不一定剛好為 1。
+WEIGHT_SUM_TOLERANCE = 1e-6
+
+
 class _WeatherSection(BaseModel):
+    """Weather reference points with their weights for the task's weighted weather (ADR-0012)."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     reference_points: list[str] = Field(min_length=1)
+    # 單一代表點可省略（權重為 1）；多個代表點必須逐一給權重。
+    weights: list[float] | None = None
     fields: list[WeatherField] = Field(min_length=1)
 
-    @field_validator("reference_points")
-    @classmethod
-    def _single_reference_point(cls, value: list[str]) -> list[str]:
-        if len(value) > 1:
-            raise ValueError(
-                "multiple weather reference points are not supported yet "
-                "(weighting is deferred to M3); list exactly one"
-            )
-        return value
+    @model_validator(mode="after")
+    def _weights_combine_into_one_value(self) -> _WeatherSection:
+        points = self.reference_points
+        if len(set(points)) != len(points):
+            raise ValueError("a weather reference point is listed more than once")
+        if self.weights is None:
+            if len(points) > 1:
+                raise ValueError("multiple weather reference points need weights")
+            return self
+        if len(self.weights) != len(points):
+            raise ValueError("list one weight per reference point")
+        if any(weight <= 0.0 for weight in self.weights):
+            raise ValueError("every weight must be greater than 0")
+        if not math.isclose(sum(self.weights), 1.0, abs_tol=WEIGHT_SUM_TOLERANCE):
+            raise ValueError(f"weights must sum to 1, got {sum(self.weights)}")
+        return self
+
+    @property
+    def point_weights(self) -> list[float]:
+        return list(self.weights) if self.weights is not None else [1.0]
 
 
 class _TaskFile(BaseModel):
@@ -126,10 +146,18 @@ class _TaskFile(BaseModel):
 
 
 @dataclass(frozen=True)
-class WeatherSpec:
-    """The task's weather reference point, resolved against the ingestion catalog."""
+class WeightedReferencePoint:
+    """One weather reference point and its share of the task's weighted weather."""
 
-    reference_point: CWALocation
+    location: CWALocation
+    weight: float
+
+
+@dataclass(frozen=True)
+class WeatherSpec:
+    """The task's weighted weather reference points, resolved against the ingestion catalog."""
+
+    reference_points: tuple[WeightedReferencePoint, ...]
     fields: tuple[str, ...]
 
 
@@ -174,7 +202,7 @@ def load_task_definition(path: Path, catalog: Mapping[str, CWALocation]) -> Task
         subject=spec.subject,
         target=spec.target,
         weather=WeatherSpec(
-            reference_point=_resolve_reference_point(path, spec.weather, catalog),
+            reference_points=_resolve_reference_points(path, spec.weather, catalog),
             fields=tuple(spec.weather.fields),
         ),
         policies=spec.policies,
@@ -207,10 +235,13 @@ def _describe(error: ValidationError, location: str) -> str:
     return "; ".join(problems)
 
 
-def _resolve_reference_point(
+def _resolve_reference_points(
     path: Path, weather: _WeatherSection, catalog: Mapping[str, CWALocation]
-) -> CWALocation:
+) -> tuple[WeightedReferencePoint, ...]:
     try:
-        return resolve_cwa_location(catalog, weather.reference_points[0])
+        return tuple(
+            WeightedReferencePoint(resolve_cwa_location(catalog, name), weight)
+            for name, weight in zip(weather.reference_points, weather.point_weights, strict=True)
+        )
     except ValueError as error:
         raise TaskDefinitionError(path, f"weather.reference_points: {error}") from error
