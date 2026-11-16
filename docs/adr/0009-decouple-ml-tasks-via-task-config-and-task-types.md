@@ -1,7 +1,7 @@
 # ADR-0009：以任務設定與任務類型解耦單一負載預報任務
 
 > - Created: 2026-09-27
-> - Last Updated: 2026-10-25
+> - Last Updated: 2026-11-16
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -53,7 +53,7 @@
   - `raw_taipower_load` 需資料遷移；Data Explorer 與前端需配合調整欄位名稱與地點選單。
   - 高負載門檻需先累積 28 日歷史才產生第一筆標籤，加上訓練資料，最早約 2026-11-21 可訓練。
 - **不做／延後範圍（Out of Scope / Deferred）**：
-  - Feast 凍結為動態視界預報任務專屬的匯出，不納入任務抽象；[ADR-0002](0002-feast-storage-layer-strategy.md) 的適用範圍縮為該任務。是否移除 Feast 另案評估。
+  - Feast 凍結為動態視界預報任務專屬的匯出，不納入任務抽象；[ADR-0002](0002-feast-storage-layer-strategy.md) 的適用範圍縮為該任務。是否移除 Feast 另案評估（[#104](https://github.com/shiroki9979/shiro-mlops/issues/104)）。
   - [ADR-0003](0003-recursive-multi-step-forecasting.md) 的遞迴策略僅適用動態視界預報任務。
   - 前端不做任務泛化，只做跟隨 API 契約的調整。
   - 深層 AutoEncoder（需 PyTorch）、任務間串接、非時間索引資料。
