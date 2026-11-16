@@ -160,6 +160,11 @@ class WeatherSpec:
     reference_points: tuple[WeightedReferencePoint, ...]
     fields: tuple[str, ...]
 
+    @property
+    def aliases(self) -> tuple[str, ...]:
+        """Catalog aliases of the reference points, in task definition order."""
+        return tuple(point.location.alias for point in self.reference_points)
+
 
 @dataclass(frozen=True)
 class TaskDefinition:

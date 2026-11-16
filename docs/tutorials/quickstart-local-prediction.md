@@ -1,7 +1,7 @@
 # 快速上手：本地隨需用電負載預測
 
 - 建立日期：2026-08-23
-- 最後更新：2026-09-27
+- 最後更新：2026-11-16
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -111,14 +111,18 @@ curl -X POST http://localhost:8000/predict \
       "relative_humidity": 82.0,
       "weather_sources": {
         "temperature": {
-          "source": "three_day",
-          "issued_at": "2026-08-21T23:00:00+08:00",
-          "source_updated_at": "2026-08-21T23:20:00+08:00"
+          "Taipei": {
+            "source": "three_day",
+            "issued_at": "2026-08-21T23:00:00+08:00",
+            "source_updated_at": "2026-08-21T23:20:00+08:00"
+          }
         },
         "relative_humidity": {
-          "source": "weekly",
-          "issued_at": "2026-08-21T23:00:00+08:00",
-          "source_updated_at": "2026-08-21T23:25:00+08:00"
+          "Taipei": {
+            "source": "weekly",
+            "issued_at": "2026-08-21T23:00:00+08:00",
+            "source_updated_at": "2026-08-21T23:25:00+08:00"
+          }
         }
       }
     }

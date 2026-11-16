@@ -170,8 +170,11 @@ def test_weighted_reference_points_resolve_with_their_weights(tmp_path: Path) ->
     ]
 
 
-def test_single_reference_point_without_weights_has_weight_one(tmp_path: Path) -> None:
-    task = load_task_definition(_write(tmp_path, _definition()), DEFAULT_CWA_LOCATIONS)
+@pytest.mark.parametrize("weather", ['["Taipei"]', '["Taipei"]\nweights = [1.0]'])
+def test_single_reference_point_has_weight_one(tmp_path: Path, weather: str) -> None:
+    path = _write(tmp_path, _definition(reference_points=weather))
+
+    task = load_task_definition(path, DEFAULT_CWA_LOCATIONS)
 
     assert [(point.location, point.weight) for point in task.weather.reference_points] == [
         (DEFAULT_CWA_LOCATIONS["Taipei"], 1.0)

@@ -39,6 +39,7 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
 )
 from shiro_mlops.tasks.weighted_weather import (
+    PointResolution,
     PointSources,
     PointWeather,
     WeightedWeather,
@@ -403,7 +404,7 @@ def _resolve_future_weather(
         raise ValueError("Forecast-weather prediction needs an explicit horizon_hours")
     fields = request.task.weather.fields
     resolutions = [
-        (
+        PointResolution(
             point.location.alias,
             point.weight,
             resolve_weather(
@@ -435,9 +436,8 @@ def _observed_weather_until(
     observed = load_observed_weather(task, request.runtime, start=start, end=anchor)
     observed = observed.dropna(subset=list(task.weather.fields), how="all")
     if observed.empty:
-        aliases = ", ".join(point.location.alias for point in task.weather.reference_points)
         raise WeatherUnavailableError(
-            f"No observed weather at {aliases} between "
+            f"No observed weather at {', '.join(task.weather.aliases)} between "
             f"{start.isoformat()} and {anchor.isoformat()}."
         )
     observed = observed.assign(
@@ -516,7 +516,7 @@ _WEATHER_PATHS = {
 def _observation_source(task: TaskDefinition, observed_at: pd.Timestamp) -> PointSources:
     """Weighted observations exist only where every point observed that same hour."""
     source = {"source": OBSERVED_WEATHER_SOURCE, OBSERVED_AT_FIELD: observed_at.isoformat()}
-    aliases = [point.location.alias for point in task.weather.reference_points]
+    aliases = task.weather.aliases
     return {field: {alias: dict(source) for alias in aliases} for field in task.weather.fields}
 
 
