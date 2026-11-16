@@ -22,6 +22,8 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.datetime_utils import with_datetime_column
 from shiro_mlops.features.transformers import (
+    DAY_OFF_COL,
+    create_calendar_features,
     create_lag_features,
     create_rolling_features,
     fill_load_warmup,
@@ -71,6 +73,9 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
     result["is_weekend"] = (result["dayofweek"] >= SATURDAY).astype(int)
     result["hour_sin"] = np.sin(2 * np.pi * result["hour"] / HOURS_PER_DAY)
     result["hour_cos"] = np.cos(2 * np.pi * result["hour"] / HOURS_PER_DAY)
+    result[DAY_OFF_COL] = create_calendar_features(result[[DATETIME_COL]], day_off=True)[
+        DAY_OFF_COL
+    ]
 
     result = create_lag_features(result, lags=TAIPOWER_EXPORT_LAG_HOURS)
     result = create_rolling_features(result, windows=TAIPOWER_EXPORT_ROLLING_WINDOWS)
@@ -88,7 +93,7 @@ def _build_taipower_export(load_df: pd.DataFrame) -> pd.DataFrame:
         "hour_sin",
         "hour_cos",
     ]
-    int_columns = ["hour", "dayofweek", "is_weekend"]
+    int_columns = ["hour", "dayofweek", "is_weekend", DAY_OFF_COL]
     for column in float_columns:
         values = pd.to_numeric(result[column], errors="coerce")
         if column in (LOAD_MW_COL, "hour_sin", "hour_cos"):

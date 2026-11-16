@@ -64,6 +64,7 @@ def create_taipower_load_feature_view(source: FileSource | None = None) -> Featu
             Field(name="hour", dtype=Int64),
             Field(name="dayofweek", dtype=Int64),
             Field(name="is_weekend", dtype=Int64),
+            Field(name="is_day_off", dtype=Int64),
             Field(name="hour_sin", dtype=Float32),
             Field(name="hour_cos", dtype=Float32),
         ],

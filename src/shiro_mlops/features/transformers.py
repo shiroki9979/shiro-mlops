@@ -2,7 +2,9 @@
 
 from collections.abc import Iterator, Sequence
 from datetime import timedelta
+from functools import cache
 
+import holidays
 import numpy as np
 import pandas as pd
 
@@ -16,10 +18,27 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 MAX_WEATHER_AGE = timedelta(hours=2)
+DAY_OFF_COL = "is_day_off"
 
 
-def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL) -> pd.DataFrame:
-    """Generate cyclical and calendar features from datetime."""
+@cache
+def _taiwan_office_calendar(year: int) -> holidays.HolidayBase:
+    return holidays.country_holidays("TW", years=year)
+
+
+def _is_day_off(day: pd.Timestamp) -> bool:
+    """放假日（GLOSSARY）：週末、國定假日、補假與彈性放假；週六補班日為上班日。"""
+    return not _taiwan_office_calendar(day.year).is_working_day(day.date())
+
+
+def create_calendar_features(
+    df: pd.DataFrame, datetime_col: str = DATETIME_COL, *, day_off: bool = False
+) -> pd.DataFrame:
+    """Generate cyclical and calendar features from datetime.
+
+    ``day_off`` adds ``is_day_off`` from Taiwan's office calendar, judged by each
+    row's own date; tasks opt in through their feature recipe.
+    """
     df = df.copy()
     dt_series = standardize_taiwan_datetime(df[datetime_col])
 
@@ -32,6 +51,11 @@ def create_calendar_features(df: pd.DataFrame, datetime_col: str = DATETIME_COL)
     # Cyclical hour encoding
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24.0)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24.0)
+
+    if day_off:
+        dates = dt_series.dt.normalize()
+        flags = {day: int(_is_day_off(day)) for day in dates.dropna().unique()}
+        df[DAY_OFF_COL] = dates.map(flags).astype(int)
 
     return df
 
@@ -181,6 +205,7 @@ def build_feature_pipeline(
     windows: Sequence[int],
     drop_na: bool = True,
     location_col: str = LOCATION_COL,
+    day_off: bool = False,
 ) -> pd.DataFrame:
     """End-to-end feature pipeline building calendar, weather, lag, and rolling features isolated by location."""
     df = load_df.copy()
@@ -201,7 +226,7 @@ def build_feature_pipeline(
     effective_lags = list(lags)
     effective_windows = list(windows)
 
-    df = create_calendar_features(df)
+    df = create_calendar_features(df, day_off=day_off)
     df = create_lag_features(
         df, value_col=LOAD_MW_COL, lags=effective_lags, location_col=location_col
     )

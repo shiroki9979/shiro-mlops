@@ -56,6 +56,8 @@ class RecursiveRegressionParams(BaseModel):
 
     lags: list[PositiveInt] = Field(min_length=1)
     rolling_windows: list[PositiveInt] = Field(min_length=1)
+    # 放假日特徵（GLOSSARY）：依各小時自身日期判定，預設關閉以維持既有特徵集。
+    day_off: bool = False
     model: LightGBMParams
 
     @property
@@ -132,10 +134,12 @@ class RecursiveRegressionModel:
         rolling_windows: list[int],
         feature_names: list[str],
         weather_columns: list[str],
+        day_off: bool = False,
     ):
         self.booster = booster
         self.lags = lags
         self.rolling_windows = rolling_windows
+        self.day_off = day_off
         self.feature_names = feature_names
         self.weather_columns = weather_columns
 
@@ -155,6 +159,7 @@ class RecursiveRegressionModel:
             rolling_windows=list(params.rolling_windows),
             feature_names=feature_names,
             weather_columns=weather_columns,
+            day_off=params.day_off,
         )
 
     def evaluate(self, validation_rows: pd.DataFrame) -> dict[str, float]:
@@ -181,7 +186,7 @@ class RecursiveRegressionModel:
     def _predict_step(self, buffer: pd.DataFrame, step: pd.Series) -> float:
         candidate = pd.DataFrame([{DATETIME_COL: step[DATETIME_COL], LOAD_MW_COL: np.nan}])
         extended = pd.concat([buffer, candidate], ignore_index=True)
-        extended = create_calendar_features(extended)
+        extended = create_calendar_features(extended, day_off=self.day_off)
         extended = create_lag_features(extended, value_col=LOAD_MW_COL, lags=self.lags)
         extended = create_rolling_features(
             extended, value_col=LOAD_MW_COL, windows=self.rolling_windows
@@ -197,6 +202,7 @@ class RecursiveRegressionModel:
             "rolling_windows": self.rolling_windows,
             "feature_names": self.feature_names,
             "weather_columns": self.weather_columns,
+            "day_off": self.day_off,
         }
         MODEL_FILES.save(directory, self.booster, metadata)
 
@@ -209,6 +215,8 @@ class RecursiveRegressionModel:
             rolling_windows=metadata["rolling_windows"],
             feature_names=metadata["feature_names"],
             weather_columns=metadata["weather_columns"],
+            # 放假日特徵加入前保存的模型沒有此鍵，即未使用該特徵。
+            day_off=metadata.get("day_off", False),
         )
 
 
@@ -220,6 +228,7 @@ def _training_features(params: RecursiveRegressionParams, data: TrainingData) ->
         lags=params.lags,
         windows=params.rolling_windows,
         location_col=SUBJECT_COL,
+        day_off=params.day_off,
     )
 
 

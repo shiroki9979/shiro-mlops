@@ -28,6 +28,7 @@ def test_build_feast_feature_frames_returns_contracts_without_storage_side_effec
         "hour",
         "dayofweek",
         "is_weekend",
+        "is_day_off",
         "hour_sin",
         "hour_cos",
     ]
