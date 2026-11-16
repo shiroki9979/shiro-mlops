@@ -2,9 +2,9 @@
 # 架構檢視：module 加深候選紀錄
 
 - 建立日期：2026-09-27
-- 最後更新：2026-10-25
+- 最後更新：2026-11-16
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估
+- 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估，分別登記為技術債 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)、[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)
 - 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)
 - 檢視基準：`da538a58433a3e00ccf84dee19f7de9679c02e0e`
 
@@ -18,8 +18,8 @@
 | 候選 | 建議強度 | 主要收益 | 建議時機 |
 | :--- | :--- | :--- | :--- |
 | 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 已實作並驗收 |
-| 2. 集中預報版本選取與降級解析 | Worth exploring | 預報消費政策具有共同 locality | 確認後續政策變更需要共同修改時 |
-| 3. 收攏營運資料檢視器的查詢生命週期 | Worth exploring | 畫面操作共用窗口與 cursor 有效性規則 | 下次新增篩選或查詢操作時 |
+| 2. 集中預報版本選取與降級解析 | Worth exploring | 預報消費政策具有共同 locality | 確認後續政策變更需要共同修改時（[#102](https://github.com/shiroki9979/shiro-mlops/issues/102)） |
+| 3. 收攏營運資料檢視器的查詢生命週期 | Worth exploring | 畫面操作共用窗口與 cursor 有效性規則 | 下次新增篩選或查詢操作時（[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)） |
 
 優先建議候選 1：相同排序 invariant 曾需三處同步修補，已有具體維護成本；
 沿用既有 list interface 與離線 fixture 即可驗證改善，範圍也較候選 2 容易控制。
