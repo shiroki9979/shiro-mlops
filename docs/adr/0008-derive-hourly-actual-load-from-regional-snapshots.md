@@ -1,7 +1,7 @@
 # ADR-0008：由區域供需快照推算全台逐時實際負載
 
 > - Created: 2026-09-26
-> - Last Updated: 2026-09-26
+> - Last Updated: 2026-11-16
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[台電逐時負載來源調查](../research/2026-09-16-taipower-hourly-actual-load-source.md)、[Issue #58](https://github.com/shiroki9979/shiro-mlops/issues/58)、[Issue #59](https://github.com/shiroki9979/shiro-mlops/issues/59)
@@ -56,3 +56,10 @@
 - 推算測試必須覆蓋：四區不齊或 `source_time` 不一致的樣本被排除、重複 `source_time` 只計一次、樣本數低於門檻的小時不產出、未結束小時不產出、重算冪等。
 - 訓練與 drift 資產不得讀取任何快照表；只能經由 `raw_taipower_load` 取得負載。
 - 啟用推算前須確認並清除 `raw_taipower_load` 中 d015046 時期的資料列，避免不同口徑混用；清除前訓練維持未就緒，serving 與 drift 以 `source` 篩選忽略舊列。
+
+## 5. Notes
+
+- 2026-11-16 一次性重算：排程推算只重算最近幾小時，因此推算上線前（2026-09-06 起）已入庫的區域快照，以及擷取中斷邊界上已達樣本門檻的小時（`2026-10-30 23:00`、`2026-11-09 02:00`），從未產出逐時負載。以 `scripts/rederive_hourly_actual_load.py` 對這些**已入庫**的快照套用相同推算規則補出 379 小時。
+  - 這不屬於「回補」：不向台電重抓任何資料，只處理本系統已擷取的快照；推算規則與排程相同，且只寫入尚無資料的小時，不覆寫既有列。
+  - 執行前查核：2026-09-28 前後的快照單位（萬瓩）、取樣頻率（每 10 分鐘）一致；以同一規則重算既有 854 小時，與已存值的最大差為 7e-12 MW。
+  - 動機為滾動起點回測需要足夠的評估起點（[#98](https://github.com/shiroki9979/shiro-mlops/issues/98)）；排程推算的時窗缺陷另見 [#113](https://github.com/shiroki9979/shiro-mlops/issues/113)。

@@ -7,17 +7,19 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+# 固定 uv 版本，同一 commit 的映像建置結果不隨 uv 新版漂移。
+COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /bin/uv
 
-COPY pyproject.toml README.md ./
-COPY src/ ./src/
-
-# 依賴版本取自 uv.lock：未鎖版時重建會解析到新版（例如 SQLAlchemy 2.1 改變 postgresql:// 的預設驅動）。
-COPY uv.lock ./
-COPY lab/pyproject.toml ./lab/
+# 只依 uv.lock 的鎖定版本與 hash 安裝正式相依：不含 dev extras 與 lab workspace 成員，
+# 讓映像與本機 uv sync、CI 及 lab 研究使用同一組套件版本。先裝相依再複製 src/，
+# 原始碼變動時不必重建相依層。
+COPY pyproject.toml uv.lock README.md ./
 RUN uv export --frozen --no-dev --no-emit-workspace --package shiro-mlops -o /tmp/requirements.txt \
-    && uv pip install --system -r /tmp/requirements.txt \
-    && uv pip install --system --no-deps -e .
+    && uv pip install --system --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+COPY src/ ./src/
+RUN uv pip install --system --no-cache --no-deps -e .
 
 ENV DAGSTER_HOME=/dagster_home
 RUN mkdir -p /dagster_home

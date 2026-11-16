@@ -109,7 +109,7 @@ After ：既有解析 interface → 天氣解析 module〔選版／查詢範圍�
 
 ### 現況與證據
 
-[use-explorer-search.ts](../../frontend/src/components/data-explorer/use-explorer-search.ts)
+[use-explorer-search.ts](../../frontend/src/components/data-explorer/use-explorer-query.ts)
 集中 URL 合併與預設窗口，但
 [explorer-filters.tsx](../../frontend/src/components/data-explorer/explorer-filters.tsx)
 仍有 3 處輸入事件自行傳入 `cursor: undefined`；
