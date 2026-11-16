@@ -5,6 +5,9 @@ Checks:
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
   doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
              earlier than the newest author date of their commits in that range.
+  debt-markers
+             TODO/FIXME/HACK/XXX in tracked source files must name their tech-debt issue,
+             as in `TODO(#123): ...` (see docs/agents/tech-debt.md).
 """
 
 from __future__ import annotations
@@ -42,6 +45,21 @@ RUN_KEY = re.compile(r"^(?P<indent>\s*)(?:-\s+)?run:\s*(?P<value>.*)$")
 BLOCK_SCALAR = re.compile(r"^(?P<style>[|>])[-+0-9]*\s*(?:#.*)?$")
 FOLDED_STYLE = ">"
 YAML_QUOTES = "\"'"
+
+DEBT_MARKER = re.compile(r"\b(?P<marker>TODO|FIXME|HACK|XXX)\b(?!\(#\d+\))")
+DEBT_MARKER_SUFFIXES = frozenset(
+    {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".sql", ".css", ".html", ".conf"}
+    | {".toml", ".yml", ".yaml", ".tf"}
+)
+DEBT_MARKER_FILE_PREFIXES = ("Makefile", "Dockerfile")
+# These files spell the markers out to define and test the check itself.
+DEBT_MARKER_EXEMPT = frozenset(
+    {
+        "scripts/check_conventions.py",
+        "tests/unit/test_check_conventions.py",
+        "tests/integration/test_check_conventions_git.py",
+    }
+)
 
 LAST_UPDATED = re.compile(
     r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
@@ -88,6 +106,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "python-uv": lambda args: check_python_uv(REPO_ROOT),
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
+    "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
 }
 
 
@@ -301,7 +320,11 @@ def check_terms(repo_root: Path) -> list[Violation]:
 
 
 def tracked_markdown(repo_root: Path) -> list[str]:
-    paths = git(repo_root, "ls-files", "-z", "--", "*.md").split("\0")
+    return tracked_files(repo_root, "*.md")
+
+
+def tracked_files(repo_root: Path, *pathspecs: str) -> list[str]:
+    paths = git(repo_root, "ls-files", "-z", "--", *pathspecs).split("\0")
     return [path for path in paths if path and not EXCLUDED_DIRS.intersection(Path(path).parts)]
 
 
@@ -311,6 +334,36 @@ def find_banned_terms(text: str) -> list[TermHit]:
         for number, line in enumerate(text.splitlines(), start=1)
         for term, replacement in BANNED_TERMS.items()
         if term in line
+    ]
+
+
+# --- debt-markers ----------------------------------------------------------
+
+
+def check_debt_markers(repo_root: Path) -> list[Violation]:
+    return [
+        Violation(
+            path, hit.line, f"'{hit.text}' must name its tech-debt issue, e.g. {hit.text}(#123)"
+        )
+        for path in tracked_files(repo_root)
+        if is_debt_marker_source(path)
+        for hit in find_unlinked_debt_markers((repo_root / path).read_text(encoding="utf-8"))
+    ]
+
+
+def is_debt_marker_source(path: str) -> bool:
+    parts = Path(path).parts
+    if path in DEBT_MARKER_EXEMPT or EXCLUDED_DIRS.intersection(parts):
+        return False
+    name = parts[-1]
+    return name.startswith(DEBT_MARKER_FILE_PREFIXES) or Path(name).suffix in DEBT_MARKER_SUFFIXES
+
+
+def find_unlinked_debt_markers(text: str) -> list[SourceLine]:
+    return [
+        SourceLine(number, match["marker"])
+        for number, line in enumerate(text.splitlines(), start=1)
+        for match in DEBT_MARKER.finditer(line)
     ]
 
 

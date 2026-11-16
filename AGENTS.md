@@ -1,7 +1,7 @@
 # AGENTS.md
 
 - Created: 2026-08-23
-- Last updated: 2026-11-09
+- Last updated: 2026-11-16
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -42,7 +42,7 @@ uv run ruff check .
 uv run ruff format --check .
 
 # Repository convention & Markdown checks (also run in CI)
-uv run python scripts/check_conventions.py python-uv terms doc-dates --base origin/dev
+uv run python scripts/check_conventions.py python-uv terms debt-markers doc-dates --base origin/dev
 npx markdownlint-cli2 "**/*.md"
 
 # Local API dev server
@@ -65,6 +65,10 @@ GitHub issues via `gh` CLI. Feature/fix PRs use base `dev` (`gh pr create --base
 ### Triage labels
 
 Canonical five-role triage vocabulary. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+
+### Tech debt
+
+Tech debt lives as GitHub issues labelled `tech-debt`; code markers take the form `TODO(#123)`. See [docs/agents/tech-debt.md](docs/agents/tech-debt.md).
 
 ### Domain docs
 

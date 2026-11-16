@@ -141,3 +141,21 @@ def test_doc_dates_without_base_exits_2() -> None:
         main(["doc-dates"])
 
     assert exit_info.value.code == 2
+
+
+def test_main_flags_a_tracked_source_debt_marker_without_an_issue(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(repo, {"src/pkg/load.py": "# TODO: retry on timeout\n"}, "2026-11-16")
+
+    assert main(["debt-markers"]) == 1
+
+
+def test_main_passes_once_the_debt_marker_names_its_issue(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(repo, {"src/pkg/load.py": "# TODO(#123): retry on timeout\n"}, "2026-11-16")
+
+    assert main(["debt-markers"]) == 0
