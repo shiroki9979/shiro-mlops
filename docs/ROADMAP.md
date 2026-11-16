@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-10-25
+- 最後更新：2026-11-16
 - 專案版本：`0.4.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。以下狀態依儲存庫程式碼、已合併 PR 與 GitHub issue 核對；需要正式資料或雲端設定的驗收另行標示，不以 issue 關閉代替現場驗證。
@@ -14,7 +14,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | **M1: 視覺化儀表板** | 功能已完成；部署未納入 | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 |
 | **M2: 上游中斷韌性與降級預報** | 已完成 | CWA 擷取指數退避重試，serving 依常模降級並拒絕過舊負載起點 | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/service/` | CWA 擷取中斷時以 `mode: "degraded"` 產出預報；負載起點過舊時回傳 HTTP 503 |
-| **M3: 多測站與行事曆特徵** | 待實作 | 納入全台三區測站溫度加權與台灣節假日特徵 | `src/shiro_mlops/features/` | 特徵矩陣擴充且單元測試通過，MAPE 指標提升 |
+| **M3: 加權天氣與放假日特徵** | 設計已定案；待實作 | 以全台三區氣象代表點的加權天氣與放假日特徵改善動態視界預報 | `src/shiro_mlops/tasks/`, `src/shiro_mlops/features/`, `src/shiro_mlops/data/`, `lab/` | 能力：多代表點與放假日的離線測試通過；採用：lab 滾動起點回測在至少 7 個評估日贏過基線後修改任務設定 |
 | **M4: 雲端部署與 CI/CD** | 部分完成 | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
 | **M5: 營運資料檢視器** | 已完成 | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
 | **M6: 全台逐時實際負載重建** | 程式已交付；營運待驗收 | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
@@ -23,6 +23,8 @@
 M2、M6、M7 的實作已隨 [PR #79](https://github.com/shiroki9979/shiro-mlops/pull/79) 合併至 `main`；M5 已隨 [PR #56](https://github.com/shiroki9979/shiro-mlops/pull/56) 合併，分頁規則後續由 [PR #78](https://github.com/shiroki9979/shiro-mlops/pull/78) 完成。M6 與 M7 的正式資料累積、首次訓練及模型就緒仍需依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)於運行環境確認。
 
 [#81](https://github.com/shiroki9979/shiro-mlops/issues/81) 的 Nginx 靜態前端預覽與同源 API 僅適用本機 Compose，FastAPI 互動文件仍由 `127.0.0.1:8000/docs` 直接存取，不經 `/api/docs` 提供；M4 的雲端前端託管、映像發布、DNS 與 TLS 仍需另行規劃與驗收。
+
+前端中英語系切換（[GitHub #80](https://github.com/shiroki9979/shiro-mlops/issues/80)）已隨 [PR #88](https://github.com/shiroki9979/shiro-mlops/pull/88) 合併，未另立里程碑。
 
 ---
 
@@ -37,9 +39,8 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 ## 待辦與驗收焦點
 
 1. **M6／M7 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)確認動態預報與異常偵測所需的 672 小時、高負載預警所需的 1344 小時有效逐時資料，以及三個任務的排程、首次訓練與 API 就緒；目前只有程式、離線測試案例及 issue／PR 完成證據，沒有正式環境的驗收結果。
-2. **M3 特徵工程**：三個 CWA 代表測站已納入擷取目錄，但尚無加權溫度、`is_holiday` 特徵或 MAPE 改善的驗收證據。待 M6 提供可用訓練資料後執行 TICKET-301。
+2. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 待 [PR #94](https://github.com/shiroki9979/shiro-mlops/pull/94) 合併後開始；採用段 TICKET-303 待能力段完成，且有效評估起點至少涵蓋 7 個日曆日。
 3. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。
-4. **待分流需求**：[GitHub #80](https://github.com/shiroki9979/shiro-mlops/issues/80)（前端中英語系切換）目前為 open、`needs-triage`，尚未納入既有里程碑。
 
 ---
 
@@ -78,19 +79,24 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 
 ---
 
-### Milestone 3: 多測站與節假日特徵工程深化
+### Milestone 3: 加權天氣與放假日特徵 ([GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95))
 
-> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md)，於 M7 完成後以任務設定（氣象代表點權重、日曆特徵開關）實作。
+> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md) 與 [ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)，以任務設定的加權氣象代表點與放假日開關實作。分為能力（TICKET-301、302）與採用（TICKET-303）兩段；能力段完成時三個任務的 TOML 不變。
 
-#### [TICKET-301] 擴充全台三區測站溫度加權與行事曆特徵
+#### [TICKET-301] 放假日特徵 ([GitHub #96](https://github.com/shiroki9979/shiro-mlops/issues/96))
 
-- **目標**：提高預測精度，反映北中南用電重鎮氣候差異。
-- **功能範圍**：
-  1. CWA 抓取臺北 (466920)、臺中 (467490)、高雄 (467441) 測站氣溫；高雄使用 2022 年遷站後的現行站號。
-  2. 計算人口/用電加權平均溫度：$T_{weighted} = 0.45 \cdot T_{north} + 0.30 \cdot T_{central} + 0.25 \cdot T_{south}$。
-  3. 整合台灣國定假日套件（如 `holidays`），加入 `is_holiday` 特徵。
-- **完成標準 (DoD)**：
-  - `tests/unit/test_transformers.py` 通過多測站特徵轉換測試。
+- **目標**：由任務設定開啟 `is_day_off`，依政府行政機關辦公日曆判定目標小時是否為放假日（含補假，不含颱風假），從訓練、遞迴預報到 Feast 匯出一致實作。
+- **完成標準 (DoD)**：`holidays` 套件鎖版加入依賴；官方 2026 年 16 個平日放假日 fixture 與跨越放假日的遞迴預報測試通過；開關預設關閉，既有測試不修改即通過；`docs/SPEC.md` 同步更新。
+
+#### [TICKET-302] 多氣象代表點加權天氣 ([GitHub #97](https://github.com/shiroki9979/shiro-mlops/issues/97))
+
+- **目標**：任務設定可列多個氣象代表點與權重，訓練、serving、API 與 Feast 一致以加權天氣作為天氣輸入；任一點降級即整次降級，任一點無替代資料即回傳 HTTP 503。
+- **完成標準 (DoD)**：權重驗證、逐點降級彙整、503、訓練與 serving 加權值一致、逐點缺口下訓練表往返無損，以及依代表點揭露的 `weather_sources` 皆有離線測試；三個任務的 TOML 不變；`docs/SPEC.md` 同步更新。
+
+#### [TICKET-303] M3 採用研究 ([GitHub #98](https://github.com/shiroki9979/shiro-mlops/issues/98))
+
+- **目標**：在 lab 以區域供需快照的北中南用電占比推算權重，比較基線、放假日、三點加權與兩者合併四個候選，判定 `dynamic_horizon_forecast` 是否採用。
+- **完成標準 (DoD)**：研究報告依 #89 格式記錄快照、權重期間、各提前時數的 MAPE 與訓練列損失；評估起點至少涵蓋 7 個日曆日且贏過基線才修改 TOML，並同步把儀表板天氣欄位改為「加權氣溫／加權濕度」。
 
 ---
 
