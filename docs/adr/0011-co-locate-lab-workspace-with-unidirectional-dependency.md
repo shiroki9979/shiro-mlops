@@ -1,7 +1,7 @@
 # ADR-0011：研究空間與正式程式同庫、單向相依
 
 > - Created: 2026-11-08
-> - Last Updated: 2026-11-09
+> - Last Updated: 2026-11-16
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0005](0005-dependency-management-with-uv.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -26,7 +26,7 @@
 - **`uv` Workspace 與鎖版邊界**：
   - 根目錄 `pyproject.toml` 宣告 `[tool.uv.workspace] members = ["lab"]`；`lab/pyproject.toml` 以 `{ workspace = true }` 依賴 `shiro-mlops`，放入 `jupyterlab`、`jupytext`、`optuna`、`matplotlib`、`pytest` 等研究專屬套件。
   - 根目錄 `uv sync --all-extras` 與 Dockerfile 不安裝 `lab` 的依賴；進入研究空間時以 `uv sync --package lab` 或 `uv run --package lab ...` 執行。
-  - **版本一致承諾範圍**：`lab` 與根專案共用同一份 `uv.lock`，確保 `lightgbm`、`pandas`、`numpy`、`scikit-learn` 等核心套件在**使用同一份 lockfile 的環境**（本機 `uv sync`、CI）完全一致。現行 API 與 Dagster 的 Dockerfile 以 `uv pip install --system -e .` 安裝、未讀取 `uv.lock`，故映像檔內的套件版本不在本 ADR 的鎖版承諾範圍內（映像檔鎖版另案處理）。
+  - **版本一致承諾範圍**：`lab` 與根專案共用同一份 `uv.lock`，確保 `lightgbm`、`pandas`、`numpy`、`scikit-learn` 等核心套件在**使用同一份 lockfile 的環境**（本機 `uv sync`、CI）完全一致。現行 API 與 Dagster 的 Dockerfile 以 `uv pip install --system -e .` 安裝、未讀取 `uv.lock`，故映像檔內的套件版本不在本 ADR 的鎖版承諾範圍內（映像檔鎖版另案處理，見 [#101](https://github.com/shiroki9979/shiro-mlops/issues/101)）。
 - **訓練表層級的不可變快照（Snapshot）**：
   - 快照定義為指定 ML 任務在某個 `as_of`（`Asia/Taipei`）時刻的正式 `training_table` 輸出，保存於 `data/lab/snapshots/<task_id>/<as_of>.parquet`。
   - 快照只包含目標小時、預測對象、目標負載與該 ML 任務宣告的 `weather.fields` 觀測值，**不包含** lag、rolling 等衍生特徵，讓特徵配方可在讀回後作為研究變數調整。
@@ -62,11 +62,11 @@
   - 根目錄 `uv sync --all-extras` 與正式容器映像維持輕量，不混入研究相依。
 - **代價與風險（Trade-offs & Risks）**：
   - 快照檔（`.parquet`）體積較大且不進版控，研究報告必須記錄 `task_id`、`as_of` 與檔案 SHA-256 以供核對。
-  - 現行 Dockerfile 未以 `uv.lock` 鎖定安裝版本，本機 `lab` 與容器內版本的一致性需待後續映像檔鎖版工單補齊。
+  - 現行 Dockerfile 未以 `uv.lock` 鎖定安裝版本，本機 `lab` 與容器內版本的一致性需待後續映像檔鎖版工單補齊（[#101](https://github.com/shiroki9979/shiro-mlops/issues/101)）。
 - **不做／延後範圍（Out of Scope / Deferred）**：
   - 自動調參的排程化 Dagster job。
   - 原始資料表層級的快照與多氣象代表點研究。
-  - 將 API／Dagster Dockerfile 改為以 `uv.lock` 鎖版安裝（另案處理）。
+  - 將 API／Dagster Dockerfile 改為以 `uv.lock` 鎖版安裝（另案處理，見 [#101](https://github.com/shiroki9979/shiro-mlops/issues/101)）。
   - 更換模型家族（若研究結論建議更換模型家族，須新增任務類型、另立 ADR 並重新檢視 ADR-0003 與 ADR-0010）。
 
 ## 4. Compliance

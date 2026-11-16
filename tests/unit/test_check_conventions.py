@@ -8,6 +8,8 @@ from check_conventions import (
     find_host_python_in_makefile,
     find_host_python_in_workflow,
     find_last_updated,
+    find_unlinked_debt_markers,
+    is_debt_marker_source,
 )
 
 
@@ -203,3 +205,61 @@ def test_lab_markdown_without_header_is_excluded_from_doc_dates() -> None:
     )
 
     assert violation is None
+
+
+def test_debt_marker_without_issue_reference_is_flagged() -> None:
+    source = "def load():\n    # TODO: retry on timeout\n    return None\n"
+
+    hits = find_unlinked_debt_markers(source)
+
+    assert [(hit.line, hit.text) for hit in hits] == [(2, "TODO")]
+
+
+def test_debt_marker_with_issue_reference_is_allowed() -> None:
+    source = "# TODO(#123): retry on timeout\n// FIXME(#7) clamp horizon\n"
+
+    assert find_unlinked_debt_markers(source) == []
+
+
+def test_every_debt_marker_kind_is_checked() -> None:
+    source = "# FIXME later\n# HACK around upstream\n# XXX unclear\n"
+
+    hits = find_unlinked_debt_markers(source)
+
+    assert [hit.text for hit in hits] == ["FIXME", "HACK", "XXX"]
+
+
+def test_marker_inside_a_longer_word_is_not_a_debt_marker() -> None:
+    assert find_unlinked_debt_markers("todo_items = TODOS + MY_TODO_LIST\n") == []
+
+
+def test_issue_reference_must_follow_the_marker_directly() -> None:
+    hits = find_unlinked_debt_markers("# TODO see (#123)\n")
+
+    assert [hit.line for hit in hits] == [1]
+
+
+def test_source_files_are_scanned_for_debt_markers() -> None:
+    scanned = [
+        "src/shiro_mlops/service/api.py",
+        "frontend/src/routes/index.tsx",
+        "docker/Dockerfile.api",
+        "Makefile",
+        ".github/workflows/ci.yml",
+    ]
+
+    assert all(is_debt_marker_source(path) for path in scanned)
+
+
+def test_docs_data_and_the_checker_itself_are_not_scanned_for_debt_markers() -> None:
+    skipped = [
+        "docs/agents/tech-debt.md",
+        "tests/fixtures/taipower_load.json",
+        "uv.lock",
+        "scripts/check_conventions.py",
+        "tests/unit/test_check_conventions.py",
+        "tests/integration/test_check_conventions_git.py",
+        "frontend/node_modules/pkg/index.js",
+    ]
+
+    assert not any(is_debt_marker_source(path) for path in skipped)
