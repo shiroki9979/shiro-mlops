@@ -164,6 +164,47 @@ def test_training_table_round_trip_keeps_weather_gaps_as_gaps(
     assert restored.weather[["temperature", "relative_humidity"]].notna().all().all()
 
 
+def test_training_table_round_trip_preserves_weather_on_load_missing_hours(
+    task: TaskDefinition, test_repo: TimeSeriesRepository
+) -> None:
+    """Seam: load_training_data -> training_table -> training_data_from_table -> fit_task.
+
+    When load misses hour N and weather misses hour N+1, the weather observation at
+    hour N must survive training_table serialization so backward weather alignment
+    fills hour N+1 identically to direct database training.
+    """
+    load, weather = hourly_load_with_weather(HOURS + 1, LAST_HOUR)
+    hour_n = pd.Timestamp(load["datetime"].iloc[200])
+    hour_n_plus_1 = pd.Timestamp(load["datetime"].iloc[201])
+    gapped_load = load[load["datetime"] != hour_n].reset_index(drop=True)
+    gapped_weather = weather[weather["datetime"] != hour_n_plus_1].reset_index(drop=True)
+    test_repo.upsert_taipower_load(gapped_load)
+    test_repo.upsert_cwa_observation_batch(
+        canonical_observation_batch(gapped_weather.assign(location="Taipei"))
+    )
+    gapped_runtime = TaskRuntime(repository=test_repo)
+
+    direct = load_training_data(task, gapped_runtime, as_of=FRESH_AS_OF)
+    table = training_table(direct)
+    restored = training_data_from_table(task, table)
+
+    assert hour_n in set(table["datetime"])
+    assert hour_n not in set(restored.load["datetime"])
+    assert hour_n in set(restored.weather["datetime"])
+    assert hour_n_plus_1 in set(restored.load["datetime"])
+    assert hour_n_plus_1 not in set(restored.weather["datetime"])
+    pd.testing.assert_frame_equal(restored.load, direct.load)
+    pd.testing.assert_frame_equal(restored.weather, direct.weather)
+    assert restored.validation_start == direct.validation_start
+
+    direct_trained = train_task(task, gapped_runtime, as_of=FRESH_AS_OF)
+    restored_trained = fit_task(task, restored)
+    assert restored_trained.metrics == direct_trained.metrics
+    assert restored_trained.model.booster.model_to_string() == (
+        direct_trained.model.booster.model_to_string()
+    )
+
+
 # --- Monitoring ----------------------------------------------------------------------------
 
 

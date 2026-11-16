@@ -19,6 +19,7 @@
 | **M5: 營運資料檢視器** | 已完成 | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
 | **M6: 全台逐時實際負載重建** | 程式已交付；營運待驗收 | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
 | **M7: ML 任務解耦** | 程式已完成；模型可用性待驗證 | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `src/shiro_mlops/tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
+| **M8: 研究空間 (Lab)** | 實作中 | 建立同庫單向相依的 `lab/` 研究空間、訓練表快照、滾動起點回測與超參數研究流程 | `lab/`, `src/shiro_mlops/tasks/` | 快照無損往返、滾動起點回測與基線／Optuna 研究報告可重現，且 `uv run --package lab pytest lab/tests` 通過 |
 
 M2、M6、M7 的實作已隨 [PR #79](https://github.com/shiroki9979/shiro-mlops/pull/79) 合併至 `main`；M5 已隨 [PR #56](https://github.com/shiroki9979/shiro-mlops/pull/56) 合併，分頁規則後續由 [PR #78](https://github.com/shiroki9979/shiro-mlops/pull/78) 完成。M6 與 M7 的正式資料累積、首次訓練及模型就緒仍需依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)於運行環境確認。
 
@@ -234,3 +235,29 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 
 - **目標**：以淺層 MLP AutoEncoder 對 24 小時滑動窗評分，偵測用電型態異常。
 - **完成標準 (DoD)**：numpy 前向計算與 sklearn 輸出一致；合成異常注入的召回率與誤報率記錄於 MLflow；不新增相依。
+
+---
+
+### Milestone 8: 研究空間 (Lab) ([GitHub #89](https://github.com/shiroki9979/shiro-mlops/issues/89))
+
+> 依 [ADR-0011](adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)，`lab/` 作為 `uv` workspace 成員單向依賴 `shiro_mlops`，提供訓練表快照、滾動起點回測與超參數搜尋空間。
+
+#### [TICKET-800] 訓練表序列化改為無損：保留負載缺時的氣象列 ([GitHub #93](https://github.com/shiroki9979/shiro-mlops/issues/93))
+
+- **目標**：將 `training_table` 改為以負載與觀測氣象時間軸的聯集序列化，消除負載缺時丟失氣象列造成的向後補值偏差。
+- **完成標準 (DoD)**：負載與氣象缺口錯開時，經 `training_table`／`training_data_from_table` 往返的 `TrainingData` 與訓練出的模型皆與直接查庫一致；`docs/SPEC.md` 同步更新。
+
+#### [TICKET-801] 建立 lab workspace 與快照指令 ([GitHub #90](https://github.com/shiroki9979/shiro-mlops/issues/90))
+
+- **目標**：建立 `lab/` workspace 成員與 `python -m lab.snapshot` 指令，將指定 ML 任務於 `as_of` 時刻的訓練表凍結為不可覆寫快照。
+- **完成標準 (DoD)**：根目錄 `uv sync --all-extras` 不安裝 `lab` 依賴；`write_snapshot`／`read_snapshot` 往返無損、拒絕覆寫且原樣傳遞 `TaskNotReady`；CI 執行 `lab/tests`；完成 [ADR-0011](adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、`AGENTS.md` 與本里程碑登錄。
+
+#### [TICKET-802] 滾動起點回測與基線報告 ([GitHub #91](https://github.com/shiroki9979/shiro-mlops/issues/91))
+
+- **目標**：於 `lab/` 實作純函式 `rolling_origin_backtest`，對 `dynamic_horizon_forecast` 快照產出基線回測報告與操作指南。
+- **完成標準 (DoD)**：起點有效性檢查、訓練截斷與觀測氣象對齊通過離線單元測試；產出第一個研究主題的基線 `README.md` 與 `docs/how-to/` 研究指南。
+
+#### [TICKET-803] dynamic_horizon_forecast 超參數與特徵配方研究 ([GitHub #92](https://github.com/shiroki9979/shiro-mlops/issues/92))
+
+- **目標**：以 Optuna 結合滾動起點回測搜尋 `dynamic_horizon_forecast` 的 LightGBM 超參數與特徵配方（`lags`、`rolling_windows`），分離搜尋起點與評估起點。
+- **完成標準 (DoD)**：完成 Jupytext `.py` 研究腳本、MLflow `lab/dhf-hyperparameter-search` 紀錄與研究報告結論；依評估起點判定是否更新任務設定 TOML。

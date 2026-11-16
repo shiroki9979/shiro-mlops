@@ -96,6 +96,17 @@ def test_deleted_doc_is_not_checked(repo: Path) -> None:
     assert check_doc_dates(GitRange(repo, base, head)) == []
 
 
+def test_lab_markdown_is_excluded_from_doc_dates(repo: Path) -> None:
+    base = _commit(repo, {"docs/guide.md": _doc("2026-10-01")}, "2026-10-01")
+    head = _commit(
+        repo,
+        {"lab/2026-11-08-dhf-hyperparameter-search/README.md": "# Topic\n\nNo date header.\n"},
+        "2026-11-08",
+    )
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
+
+
 def test_main_exits_1_when_a_changed_doc_is_stale(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

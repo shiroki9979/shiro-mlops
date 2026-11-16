@@ -193,3 +193,13 @@ def test_invalid_header_date_is_a_violation() -> None:
     violation = doc_date_violation("docs/doc.md", markdown, changed_on=date(2026, 10, 25))
 
     assert violation.line == 1
+
+
+def test_lab_markdown_without_header_is_excluded_from_doc_dates() -> None:
+    violation = doc_date_violation(
+        "lab/2026-11-08-dhf-hyperparameter-search/README.md",
+        "# Research Report\n",
+        changed_on=date(2026, 11, 8),
+    )
+
+    assert violation is None

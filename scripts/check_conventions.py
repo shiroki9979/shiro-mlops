@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MAKEFILE = "Makefile"
 WORKFLOW_GLOB = ".github/workflows/*.yml"
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
+DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
 
 # Single source for terminology: banned term -> preferred replacement.
 BANNED_TERMS = {
@@ -346,7 +347,7 @@ class GitRange:
             "--",
             "*.md",
         )
-        return [path for path in output.splitlines() if path]
+        return [path for path in output.splitlines() if path and not is_doc_date_excluded(path)]
 
     def newest_author_date(self, path: str) -> date | None:
         # Author date in the author's own timezone matches the calendar day the header was written.
@@ -368,7 +369,13 @@ class GitRange:
         return git(self.repo_root, "show", f"{self.head}:{path}")
 
 
+def is_doc_date_excluded(path: str) -> bool:
+    return bool(DOC_DATES_EXCLUDED_DIRS.intersection(Path(path).parts[:1]))
+
+
 def doc_date_violation(path: str, text: str, changed_on: date) -> Violation | None:
+    if is_doc_date_excluded(path):
+        return None
     header = find_last_updated(text)
     if header is None:
         return Violation(path, 1, "missing last-updated header")

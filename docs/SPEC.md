@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-10-26
+- 最後更新：2026-11-09
 - 專案版本：`0.4.0`
 
 ---
@@ -357,7 +357,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
      | 種類 | 名稱 | 內容 |
      | :--- | :--- | :--- |
-     | 資產 | `{task_id}__features` | 經 runner `load_training_data` 讀取並套用 §3.1 最低累積，輸出 `training_table`（目標列 left join 觀測天氣：`datetime`、`subject`、`load_mw` 與 `weather.fields`）；lineage 依賴 `raw_taipower_load` 與 `raw_cwa_station_observation`，但不執行它們 |
+     | 資產 | `{task_id}__features` | 經 runner `load_training_data` 讀取並套用 §3.1 最低累積，輸出 `training_table`（以目標序列與觀測天氣的時間軸聯集為主鍵序列化：`datetime`、`subject`、`load_mw` 與 `weather.fields`，保留負載缺漏小時的觀測天氣；`rows` metadata 為訓練表總列數）；lineage 依賴 `raw_taipower_load` 與 `raw_cwa_station_observation`，但不執行它們 |
      | 資產 | `{task_id}__model` | 以 `training_data_from_table` 還原上游訓練表後經 `fit_task` 訓練，不再重讀資料庫；模型存入 `DATA_DIR/models/{task_id}/`，並寫入 MLflow（見下）。輸出 `task_id`、`metrics`、`run_id`、`model_version`、`model_path`、`training_rows` |
      | 資產 | `{task_id}__monitoring` | 經 runner `monitor_task` 以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新一列（僅 `source = 'regional_snapshot_sum'`），再由任務類型 `assess_health` 以任務設定 `[health]` 門檻判定；輸出 `task_id`、`status`（`HEALTHY`／`WARNING`）、`health_reason`、`metrics`、`training_rows`、`target_hours`（有效逐時目標觀測數）、`latest_target_time`、`latest_target_value`（目前任務的目標皆為逐時實際負載，單位 MW） |
      | job | `{task_id}__training_job` | selection 為 `{task_id}__features` 及其所有下游（model、monitoring，以及只掛在該任務的資產，例如 Feast 匯出） |
@@ -556,7 +556,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 | `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`；讀取 `as_of` 以前的目標序列與同期觀測天氣，並以 `validation_fraction` 推導 `validation_start` |
 | `train_task(task, runtime, *, as_of) -> Trained` | `load_training_data` 後交由 `fit_task` |
 | `fit_task(task, data) -> Trained` | 以已讀取且通過門檻的 `TrainingData` 交由任務類型訓練 |
-| `training_table(data)`／`training_data_from_table(task, table)` | 將 `TrainingData` 攤平為每個目標小時一列（left join 觀測天氣）以便跨 run 保存，並可逆還原：完全沒有觀測天氣的小時在還原後仍為缺口而非 NaN 列，`validation_start` 以相同切分規則重算 |
+| `training_table(data)`／`training_data_from_table(task, table)` | 以目標序列與觀測天氣的時間軸聯集將 `TrainingData` 攤平序列化以便跨 run 保存（包含無負載但有觀測天氣的小時），並無損還原：`load` 只保留有 `load_mw` 的列、`weather` 只保留有任一氣象欄位值的列（完全沒有觀測天氣的小時仍為缺口而非 NaN 列），`validation_start` 由還原後的目標小時以相同切分規則重算 |
 | `monitor_task(task, runtime, metrics, *, as_of) -> MonitoringReport` | 未達門檻拋 `TaskNotReady`；以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新目標列，交由任務類型 `assess_health` 依 `[health]` 判定；結果含 `health`、`metrics`、`target_hours`、`latest_target_time`、`latest_target_value` |
 | `check_task_ready(task, model, runtime, *, as_of) -> Readiness` | 模型、負載起點、任務類型宣告的 `history_coverage` 與完整 168 小時天氣皆可用時 `ready`，並回報 `mode`；`OBSERVED` 任務只需 lookback 內有測站觀測，`mode` 固定 `normal` |
 | `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；資料庫錯誤（`SQLAlchemyError`）原樣拋出，不得轉為空資料而偽裝成資料缺口（API 同樣對應 503）；結果含 `mode`、預測、逐時天氣與其來源，三者逐列對應 |
@@ -617,3 +617,74 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 
 - vitest 全域 `TZ=UTC`，以已知時間點斷言兩語系皆顯示正確的臺北時間。
 - 每個測試前將語系重設為 `zh-TW`（jsdom 預設語言為 `en-US`）；整合測試以字典值斷言，不寫死顯示文字。
+
+---
+
+## 7. 研究空間（`lab/`）介面與報告契約
+
+> 依 [ADR-0011](adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)。程式位於 `lab/`，相依方向固定為 `lab` → `shiro_mlops`；操作步驟見 [如何執行一次 lab 研究](how-to/run-lab-study.md)。
+
+### 7.1 快照（`lab/snapshot.py`）
+
+| 介面 | 行為 |
+| :--- | :--- |
+| `write_snapshot(task, runtime, as_of, *, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`TaskNotReady` 原樣拋出 |
+| `read_snapshot(task, as_of, *, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原 |
+| `snapshot_path(task, as_of, *, snapshots_dir) -> Path` | 回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
+
+`snapshots_dir` 預設 `data/lab/snapshots`（不進版控）。CLI：`uv run --package lab python -m lab.snapshot <task_id> --as-of <ISO>`。
+
+### 7.2 滾動起點回測（`lab/backtest.py`）
+
+`rolling_origin_backtest(task, data, origins, horizon_hours, *, min_history_hours=None) -> BacktestReport` 為純函式，不做 I/O。
+
+- **起點語意**：起點為最後一筆已知實際負載的整點，預報目標為 `origin + 1h .. origin + horizon_hours`（`target_hours(origin, horizon_hours)`）。
+- **訓練**：負載與氣象皆截斷為 `datetime <= origin`，`validation_start = origin + 1h`（驗證集為空）。
+- **預報**：`PredictionData.anchor = origin`，`load_history` 含起點當小時；`weather` 為目標時段的完整逐時軸，以正式的觀測氣象對齊規則（2 小時內向後對齊）填入。
+- **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `ValueError` 並指出起點與條件：
+  1. `datetime <= origin` 的有效負載小時數達 `min_history_hours`（預設取任務設定 `policies.min_training_hours`）。
+  2. `(origin - lookback_hours, origin]` 的逐時負載完整（含起點當小時）。
+  3. 目標時段的實際負載與對齊後觀測氣象皆有值。
+
+`BacktestReport` 欄位：
+
+| 欄位 | 說明 |
+| :--- | :--- |
+| `overall_mape` | 所有起點、所有提前時數合併的 MAPE（`evaluate_forecast`） |
+| `mape_by_horizon` | 提前時數 `1..horizon_hours` 各自的 MAPE |
+| `predictions` | 每個起點的預報值序列（依提前時數排序） |
+| `origins`、`horizon_hours` | 正規化後的起點清單與視界 |
+| `min_history_hours`、`min_history_overridden` | 實際使用的最低累積與是否由呼叫端覆寫 |
+| `params` | 所用任務參數 |
+
+`candidate.beats(baseline)`：起點清單與視界相同時，`overall_mape` 嚴格較低即為贏；起點或視界不同時拋 `ValueError`。回測使用觀測氣象，結果為「氣象已知」條件下的條件式數字，不代表正式 serving 誤差，也不是其上界或下界。
+
+### 7.3 搜尋起點與評估起點
+
+- 超參數搜尋的 objective 只在搜尋起點上計算整體 MAPE；是否採用只比較基線與最佳候選在評估起點上的 `BacktestReport`。
+- `verify_non_overlapping_target_windows(search_origins, eval_origins, horizon_hours)`：評估起點須全部晚於搜尋起點，且兩組的目標時段不得有任何共同小時；違反時拋 `ValueError`。
+- 評估起點不足以代表負載型態時（門檻由研究主題定義並寫入報告），只交付探索報告，不修改任務設定 TOML。
+
+### 7.4 MLflow 隔離
+
+lab 的 run 記錄於 experiment `lab/<topic>`；不得呼叫 model registry 的任何寫入操作。MLflow 不可用時記錄警告並繼續。
+
+### 7.5 研究報告（`lab/<YYYY-MM-DD>-<topic>/README.md`）
+
+固定段落依序為：問題、快照、回測設定、基線、候選、結論、是否採用。回測設定段須含觀測氣象條件式聲明（§7.2）。採用時在任務設定 TOML 參數旁註解連回報告。
+
+重現紀錄欄位（不依賴 MLflow 可用）：
+
+| 欄位 | 內容 |
+| :--- | :--- |
+| Git revision | 產生報告數字的 commit SHA |
+| 快照 | `task_id`、`as_of`、code span 路徑、檔案 SHA-256 |
+| 基線參數 | 任務設定 TOML 路徑與完整 `[params]` |
+| 候選參數 | 最佳候選完整參數 |
+| 起點 | 搜尋起點與評估起點完整清單 |
+| 視界 | `horizon_hours` |
+| 最低累積 | `min_history_hours`、是否覆寫與理由 |
+| 搜尋設定 | 搜尋空間、seed、trial 數 |
+| 分組誤差 | 搜尋與評估起點的 `1..horizon_hours` 各分組 MAPE |
+
+不進版控的路徑（快照、`*.ipynb`）以 code span 引用，不用 Markdown 連結。
