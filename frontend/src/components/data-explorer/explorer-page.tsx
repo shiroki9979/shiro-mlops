@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
-import { datasetListQueryKey, useDatasetList, useDatasetStatus } from '@/hooks/use-data-explorer'
+import { useDatasetStatus } from '@/hooks/use-data-explorer'
 import { EMPTY_VALUE, formatTimestamp } from '@/i18n/format'
 import { useLocale } from '@/i18n/locale-store'
 import { useMessages } from '@/i18n/use-messages'
@@ -10,13 +9,12 @@ import { ExplorerDetail } from './explorer-detail'
 import { ExplorerFilters } from './explorer-filters'
 import { ExplorerResults } from './explorer-results'
 import { ExplorerStatus } from './explorer-status'
-import { useExplorerSearch } from './use-explorer-search'
+import { useExplorerQuery } from './use-explorer-query'
 
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
-  const queryClient = useQueryClient()
-  const { start, end, filterValues, params, updateSearch } = useExplorerSearch(dataset)
+  const explorer = useExplorerQuery(dataset)
+  const { list } = explorer
   const statusQuery = useDatasetStatus()
-  const listQuery = useDatasetList(dataset.apiPath, params)
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null)
   const datasetStatus = statusQuery.data?.datasets.find((item) => item.id === dataset.id)
   const auditStatus = dataset.auditDatasetId
@@ -25,7 +23,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const m = useMessages()
   const locale = useLocale()
   const datasetText = m.explorer.datasets[dataset.id]
-  const fetchedAt = listQuery.dataUpdatedAt ? formatTimestamp(listQuery.dataUpdatedAt, locale) : EMPTY_VALUE
+  const fetchedAt = list.dataUpdatedAt ? formatTimestamp(list.dataUpdatedAt, locale) : EMPTY_VALUE
 
   return (
     <div className="space-y-6">
@@ -45,33 +43,29 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
       <ExplorerStatus dataset={dataset} status={datasetStatus} auditStatus={auditStatus} />
       <ExplorerFilters
         dataset={dataset}
-        start={start}
-        end={end}
-        filterValues={filterValues}
+        start={explorer.start}
+        end={explorer.end}
+        filterValues={explorer.filterValues}
         fetchedAt={fetchedAt}
-        items={listQuery.data?.items ?? []}
+        items={list.data?.items ?? []}
         onRefresh={() => {
-          void listQuery.refetch()
+          explorer.refetchList()
           void statusQuery.refetch()
         }}
-        onSearchChange={updateSearch}
+        onStartChange={explorer.setStart}
+        onEndChange={explorer.setEnd}
+        onFilterChange={explorer.setFilter}
       />
       <ExplorerResults
         dataset={dataset}
-        data={listQuery.data}
-        error={listQuery.error}
-        isError={listQuery.isError}
-        isLoading={listQuery.isLoading}
-        canRestart={Boolean(params.cursor)}
+        data={list.data}
+        error={list.error}
+        isError={list.isError}
+        isLoading={list.isLoading}
+        canRestart={explorer.canRestart}
         onSelect={setSelected}
-        onNextPage={(cursor) => updateSearch({ cursor })}
-        onRestart={() => {
-          queryClient.removeQueries({
-            queryKey: datasetListQueryKey(dataset.apiPath, { ...params, cursor: undefined }),
-            exact: true,
-          })
-          updateSearch({ cursor: undefined })
-        }}
+        onNextPage={explorer.goToNextPage}
+        onRestart={explorer.restartFromFirstPage}
       />
       <ExplorerDetail selected={selected} onClose={() => setSelected(null)} />
     </div>

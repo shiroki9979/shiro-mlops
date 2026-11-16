@@ -460,6 +460,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **Freshness 維度**：分別顯示 ingestion age 與 source age。前者表示距上次成功入庫所經時間，後者表示最新來源事件或發布時間距今時間；不得以其中一者取代另一者。
 - **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。
 - **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供預測對象（`subject`，如 `nationwide`），區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
+- **預設窗口與 cursor 失效**：URL 未指定 `start`／`end` 時，前端以進入頁面當下計算預設窗口，同一次瀏覽內不隨重新繪製漂移，且不主動寫入 URL。變更窗口或任一篩選即清除 cursor 並回到第一頁；只有翻頁操作會設定 cursor。
 - **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
 - **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
 - **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。

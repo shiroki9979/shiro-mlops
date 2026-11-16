@@ -35,7 +35,9 @@ M2、M6、M7 的實作已隨 [PR #79](https://github.com/shiroki9979/shiro-mlops
 集中營運資料檢視器分頁規則、集中預報版本選取與降級解析，以及收攏營運資料檢視器查詢生命週期。
 分頁規則已完成 Q1 至 Q8 的設計討論，並依 [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72) 實作 v2 cursor、精確閉區間與八資料集共用查詢路徑。
 五張工單 [#73](https://github.com/shiroki9979/shiro-mlops/issues/73)、[#74](https://github.com/shiroki9979/shiro-mlops/issues/74)、[#75](https://github.com/shiroki9979/shiro-mlops/issues/75)、[#76](https://github.com/shiroki9979/shiro-mlops/issues/76)、[#77](https://github.com/shiroki9979/shiro-mlops/issues/77) 均已完成，依序涵蓋共用流程與觀測批次、預報、逐時資料、供需與機組、精確窗口及舊流程退場。
-SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-data-explorer-pagination.md)。其餘兩項候選維持待評估，證據與取捨詳見架構檢視紀錄。
+SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-data-explorer-pagination.md)。
+查詢生命週期已依 [GitHub #103](https://github.com/shiroki9979/shiro-mlops/issues/103) 收攏至前端單一查詢 hook：預設窗口、cursor 失效、URL 同步與回第一頁的快取清除集中處理，畫面只表達使用者操作。
+集中預報版本選取與降級解析維持待評估，證據與取捨詳見架構檢視紀錄。
 
 ## 待辦與驗收焦點
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from '../../src/routeTree'
@@ -252,6 +252,62 @@ describe('Data Explorer routes', () => {
       expect(Object.fromEntries(requests[2].searchParams)).toEqual(Object.fromEntries(filters))
     },
   )
+
+  it.each([
+    {
+      change: 'the subject filter',
+      path: '/data/power/load',
+      apiPath: '/data/power/load',
+      markerField: 'subject',
+      field: () => screen.getByLabelText(m.explorer.fields.subject),
+      input: 'north',
+      sent: { subject: 'north' },
+    },
+    {
+      change: 'the start time',
+      path: '/data/power/load',
+      apiPath: '/data/power/load',
+      markerField: 'subject',
+      field: () => screen.getByLabelText(m.explorer.filters.start),
+      input: '2026-09-09T01:00',
+      sent: { start: '2026-09-09T01:00:00+08:00' },
+    },
+    {
+      change: 'the forecast audit status filter',
+      path: '/data/audits?type=forecasts',
+      apiPath: '/data/audits/cwa-forecasts',
+      markerField: 'dataset_id',
+      field: () => screen.getByLabelText(m.explorer.fields.status),
+      input: 'complete',
+      sent: { status: 'complete' },
+    },
+  ])('returns to the first page after changing $change on a later page', async (scenario) => {
+    const requests: URL[] = []
+    server.use(http.get(`*${scenario.apiPath}`, ({ request }) => {
+      const url = new URL(request.url)
+      requests.push(url)
+      const isLaterPage = url.searchParams.has('cursor')
+      return HttpResponse.json({
+        timezone: 'Asia/Taipei',
+        items: [{ [scenario.markerField]: isLaterPage ? 'second-page-row' : 'first-page-row' }],
+        has_more: !isLaterPage,
+        next_cursor: isLaterPage ? null : 'page-2',
+        missing_slots: [],
+      })
+    }))
+    const queryWindow = { start: '2026-09-09T00:00:00+08:00', end: '2026-09-09T20:00:00+08:00' }
+    const separator = scenario.path.includes('?') ? '&' : '?'
+    const user = userEvent.setup()
+    renderPath(`${scenario.path}${separator}${new URLSearchParams(queryWindow)}`)
+    await screen.findByText('first-page-row')
+    await user.click(screen.getByRole('button', { name: m.common.nextPage }))
+    await screen.findByText('second-page-row')
+
+    fireEvent.change(scenario.field(), { target: { value: scenario.input } })
+
+    expect(await screen.findByText('first-page-row')).toBeInTheDocument()
+    expect(Object.fromEntries(requests.at(-1)!.searchParams)).toEqual({ ...queryWindow, ...scenario.sent })
+  })
 
   it.each([400, 422, 503])('does not offer cursor recovery for an unrelated %s error', async (status) => {
     server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'failed' }, { status })))
