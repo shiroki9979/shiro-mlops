@@ -14,7 +14,9 @@ interface ExplorerFiltersProps {
   fetchedAt: string
   items: Record<string, unknown>[]
   onRefresh: () => void
-  onSearchChange: (patch: Record<string, string | undefined>) => void
+  onStartChange: (value: string) => void
+  onEndChange: (value: string) => void
+  onFilterChange: (key: string, value: string) => void
 }
 
 export function ExplorerFilters({
@@ -25,7 +27,9 @@ export function ExplorerFilters({
   fetchedAt,
   items,
   onRefresh,
-  onSearchChange,
+  onStartChange,
+  onEndChange,
+  onFilterChange,
 }: ExplorerFiltersProps) {
   const m = useMessages()
   const filtersText = m.explorer.filters
@@ -55,9 +59,7 @@ export function ExplorerFilters({
               type="datetime-local"
               className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200"
               value={fromRfc3339(start)}
-              onChange={(event) =>
-                onSearchChange({ start: toRfc3339(event.target.value), cursor: undefined })
-              }
+              onChange={(event) => onStartChange(toRfc3339(event.target.value))}
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
@@ -66,9 +68,7 @@ export function ExplorerFilters({
               type="datetime-local"
               className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200"
               value={fromRfc3339(end)}
-              onChange={(event) =>
-                onSearchChange({ end: toRfc3339(event.target.value), cursor: undefined })
-              }
+              onChange={(event) => onEndChange(toRfc3339(event.target.value))}
             />
           </label>
           {dataset.filters.map((field) => (
@@ -78,9 +78,7 @@ export function ExplorerFilters({
                 className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200"
                 placeholder={field.placeholder}
                 value={filterValues[field.key] ?? ''}
-                onChange={(event) =>
-                  onSearchChange({ [field.key]: event.target.value || undefined, cursor: undefined })
-                }
+                onChange={(event) => onFilterChange(field.key, event.target.value)}
               />
             </label>
           ))}
