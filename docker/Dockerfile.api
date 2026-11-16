@@ -13,7 +13,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-RUN uv pip install --system -e .
+# 依賴版本取自 uv.lock：未鎖版時重建會解析到新版（例如 SQLAlchemy 2.1 改變 postgresql:// 的預設驅動）。
+COPY uv.lock ./
+COPY lab/pyproject.toml ./lab/
+RUN uv export --frozen --no-dev --no-emit-workspace --package shiro-mlops -o /tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt \
+    && uv pip install --system --no-deps -e .
 
 EXPOSE 8000
 
