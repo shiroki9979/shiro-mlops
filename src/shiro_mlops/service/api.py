@@ -180,7 +180,8 @@ def _prediction_item(schema: _ItemSchema, name: str) -> type[BaseModel]:
         __base__=item,
         __doc__=item.__doc__,
         **weather_fields,
-        weather_sources=(dict[str, dict[str, str]], ...),
+        # 天氣欄位 → 氣象代表點別名 → 來源（ADR-0012）。
+        weather_sources=(dict[str, dict[str, dict[str, str]]], ...),
     )
 
 

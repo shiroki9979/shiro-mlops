@@ -15,7 +15,7 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
 )
 from shiro_mlops.tasks.types.recursive_regression import RecursiveRegressionParams
-from tests.helpers import hourly_load_with_weather
+from tests.helpers import OFFICIAL_2026_WEEKDAY_DAYS_OFF, hourly_load_with_weather
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 TRAINING_HOURS = 24 * 21
@@ -169,3 +169,55 @@ def test_health_without_a_mape_metric_warns_instead_of_passing() -> None:
 
     assert assessment.status is HealthStatus.WARNING
     assert "mape" in assessment.reason
+
+
+DAY_OFF_DROP_MW = 4000.0
+# 2026-01-01 至 10-08：涵蓋 13 個落在平日的放假日，模型才看得到放假日與週末的差別。
+DAY_OFF_TRAINING_HOURS = 281 * 24
+DAY_OFF_PARAMS = RecursiveRegressionParams.model_validate({**PARAMS.model_dump(), "day_off": True})
+
+
+def _load_with_days_off(last_hour: datetime, hours: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Patterned load that is DAY_OFF_DROP_MW lower on every 2026 office-calendar day off."""
+    load, weather = hourly_load_with_weather(hours, last_hour)
+    dates = load["datetime"].dt.strftime("%Y-%m-%d")
+    is_day_off = (load["datetime"].dt.dayofweek >= 5) | dates.isin(OFFICIAL_2026_WEEKDAY_DAYS_OFF)
+    return load.assign(load_mw=load["load_mw"] - DAY_OFF_DROP_MW * is_day_off), weather
+
+
+def test_day_off_recipe_forecasts_the_drop_on_a_substitute_holiday() -> None:
+    """2026-10-09 (Fri) is the National Day substitute holiday; lag and weekday say workday."""
+    load, weather = _load_with_days_off(datetime(2026, 10, 8, 23, 0), DAY_OFF_TRAINING_HOURS)
+    trained = task_type.train(
+        DAY_OFF_PARAMS, TrainingData(load, weather, load["datetime"].iloc[-48])
+    )
+    actual, future_weather = _load_with_days_off(datetime(2026, 10, 9, 23, 0), 24)
+
+    predictions = trained.model.predict(
+        PredictionData(
+            anchor=load["datetime"].max(),
+            load_history=load,
+            weather=future_weather,
+            horizon_hours=24,
+        )
+    )
+
+    errors = predictions["predicted_load_mw"].to_numpy() - actual["load_mw"].to_numpy()
+    # 不用放假日特徵時誤差約等於整個降幅（模型照上班日預測）。
+    assert np.abs(errors).mean() < DAY_OFF_DROP_MW / 2
+
+
+def test_day_off_recipe_survives_save_and_load(tmp_path: Path) -> None:
+    load, weather = _load_with_days_off(datetime(2026, 10, 8, 23, 0), DAY_OFF_TRAINING_HOURS)
+    trained = task_type.train(
+        DAY_OFF_PARAMS, TrainingData(load, weather, load["datetime"].iloc[-48])
+    )
+    _, future_weather = _load_with_days_off(datetime(2026, 10, 9, 23, 0), 24)
+    data = PredictionData(
+        anchor=load["datetime"].max(), load_history=load, weather=future_weather, horizon_hours=24
+    )
+
+    trained.model.save(tmp_path)
+    reloaded = task_type.load(tmp_path)
+
+    pd.testing.assert_frame_equal(reloaded.predict(data), trained.model.predict(data))

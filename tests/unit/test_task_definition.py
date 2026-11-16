@@ -68,7 +68,9 @@ def test_shipped_definition_describes_the_dynamic_horizon_forecast() -> None:
     assert task.task_type == "recursive_regression"
     assert task.subject == "nationwide"
     assert task.target == "hourly_actual_load"
-    assert task.weather.reference_point == DEFAULT_CWA_LOCATIONS["Taipei"]
+    assert [point.location for point in task.weather.reference_points] == [
+        DEFAULT_CWA_LOCATIONS["Taipei"]
+    ]
     assert task.weather.fields == ("temperature", "relative_humidity")
     assert task.policies.min_training_hours == 672
     assert task.policies.stale_anchor_max_lag_hours == 3
@@ -85,7 +87,9 @@ def test_shipped_definition_describes_the_high_load_alert() -> None:
 
     assert task.task_type == "direct_classification"
     assert task.subject == "nationwide"
-    assert task.weather.reference_point == DEFAULT_CWA_LOCATIONS["Taipei"]
+    assert [point.location for point in task.weather.reference_points] == [
+        DEFAULT_CWA_LOCATIONS["Taipei"]
+    ]
     assert task.weather.fields == ("temperature", "relative_humidity")
     assert task.params.threshold.window_days == 28
     assert task.params.threshold.quantile == 0.9
@@ -149,10 +153,51 @@ def test_unknown_weather_reference_point_is_rejected(tmp_path: Path) -> None:
         load_task_definition(path, DEFAULT_CWA_LOCATIONS)
 
 
-def test_more_than_one_weather_reference_point_is_rejected(tmp_path: Path) -> None:
-    path = _write(tmp_path, _definition(reference_points='["Taipei", "Kaohsiung"]'))
+def test_weighted_reference_points_resolve_with_their_weights(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        _definition(
+            reference_points='["Taipei", "Taichung", "Kaohsiung"]\nweights = [0.5, 0.3, 0.2]'
+        ),
+    )
 
-    with pytest.raises(TaskDefinitionError, match="weather.reference_points.*not supported yet"):
+    task = load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+    assert [(point.location.alias, point.weight) for point in task.weather.reference_points] == [
+        ("Taipei", 0.5),
+        ("Taichung", 0.3),
+        ("Kaohsiung", 0.2),
+    ]
+
+
+@pytest.mark.parametrize("weather", ['["Taipei"]', '["Taipei"]\nweights = [1.0]'])
+def test_single_reference_point_has_weight_one(tmp_path: Path, weather: str) -> None:
+    path = _write(tmp_path, _definition(reference_points=weather))
+
+    task = load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+    assert [(point.location, point.weight) for point in task.weather.reference_points] == [
+        (DEFAULT_CWA_LOCATIONS["Taipei"], 1.0)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("weather", "message"),
+    [
+        ('["Taipei", "Kaohsiung"]', "weights"),
+        ('["Taipei", "Kaohsiung"]\nweights = [0.6, 0.6]', "sum to 1"),
+        ('["Taipei", "Kaohsiung"]\nweights = [1.2, -0.2]', "greater than 0"),
+        ('["Taipei", "Kaohsiung"]\nweights = [0.0, 1.0]', "greater than 0"),
+        ('["Taipei", "Kaohsiung"]\nweights = [1.0]', "one weight per reference point"),
+        ('["Taipei", "Taipei"]\nweights = [0.5, 0.5]', "more than once"),
+    ],
+)
+def test_invalid_reference_point_weights_fail_at_load(
+    tmp_path: Path, weather: str, message: str
+) -> None:
+    path = _write(tmp_path, _definition(reference_points=weather))
+
+    with pytest.raises(TaskDefinitionError, match=f"weather.*{message}"):
         load_task_definition(path, DEFAULT_CWA_LOCATIONS)
 
 

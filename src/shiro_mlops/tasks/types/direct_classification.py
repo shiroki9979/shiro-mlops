@@ -82,6 +82,8 @@ class DirectClassificationParams(BaseModel):
     threshold: HighLoadThresholdParams
     lags: list[PositiveInt] = Field(min_length=1)
     rolling_windows: list[PositiveInt] = Field(min_length=1)
+    # 放假日特徵（GLOSSARY）：依目標小時的日期判定，預設關閉以維持既有特徵集。
+    day_off: bool = False
     model: LightGBMParams
 
     @property
@@ -217,7 +219,7 @@ class DirectClassificationModel:
                 f"ending at anchor {anchor.isoformat()}"
             )
         targets = pd.to_datetime(data.weather[DATETIME_COL])
-        rows = _target_rows(known.loc[[anchor] * len(targets)], targets)
+        rows = _target_rows(known.loc[[anchor] * len(targets)], targets, self.params.day_off)
         _require_trained_leads(rows[LEAD_HOURS_COL])
         for column in self.weather_columns:
             rows[column] = data.weather[column].to_numpy(dtype=float)
@@ -266,7 +268,9 @@ def training_rows(params: DirectClassificationParams, data: TrainingData) -> pd.
     targets = known.index.repeat(MAX_LEAD_HOURS) + pd.to_timedelta(
         list(range(1, MAX_LEAD_HOURS + 1)) * len(known), unit="h"
     )
-    rows = _target_rows(known.loc[known.index.repeat(MAX_LEAD_HOURS)], pd.Series(targets))
+    rows = _target_rows(
+        known.loc[known.index.repeat(MAX_LEAD_HOURS)], pd.Series(targets), params.day_off
+    )
     weather = data.weather.assign(**{DATETIME_COL: pd.to_datetime(data.weather[DATETIME_COL])})
     # 觀測天氣缺漏的小時直接捨棄，不以常數或未來值補值。
     rows = rows.merge(weather.dropna(), on=DATETIME_COL)
@@ -303,12 +307,12 @@ def _anchor_features(params: DirectClassificationParams, load: pd.Series) -> pd.
     return features
 
 
-def _target_rows(known: pd.DataFrame, targets: pd.Series) -> pd.DataFrame:
+def _target_rows(known: pd.DataFrame, targets: pd.Series, day_off: bool) -> pd.DataFrame:
     """Pair anchor rows with target hours, adding the lead time and the target's calendar."""
     rows = known.reset_index()
     rows[DATETIME_COL] = targets.to_numpy()
     rows[LEAD_HOURS_COL] = (rows[DATETIME_COL] - rows[ANCHOR_COL]) // pd.Timedelta(hours=1)
-    return create_calendar_features(rows)
+    return create_calendar_features(rows, day_off=day_off)
 
 
 def _require_trained_leads(leads: pd.Series) -> None:

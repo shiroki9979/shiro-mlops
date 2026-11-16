@@ -96,7 +96,12 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
                 "relative_humidity": [70.0],
             }
         ),
-        sources=({},),
+        sources=(
+            {
+                "temperature": {"source": "previous_day_observation"},
+                "relative_humidity": {"source": "climatology"},
+            },
+        ),
         mode="degraded",
     )
     monkeypatch.setattr("shiro_mlops.tasks.runner.resolve_weather", lambda *args, **kwargs: weather)
@@ -623,3 +628,12 @@ def test_openapi_describes_anomaly_predictions_and_horizon_semantics() -> None:
     assert schemas["PredictionRequest"]["properties"]["horizon_hours"]["description"] == (
         "Forecast horizon in hours (1-168)"
     )
+
+
+def test_openapi_describes_weather_sources_per_field_and_reference_point() -> None:
+    """ADR-0012: each weather field lists the source behind every weather reference point."""
+    item = app.openapi()["components"]["schemas"]["PredictionItem"]
+
+    by_field = item["properties"]["weather_sources"]["additionalProperties"]
+    by_point = by_field["additionalProperties"]
+    assert by_point["additionalProperties"] == {"type": "string"}

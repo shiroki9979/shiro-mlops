@@ -38,6 +38,27 @@ from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
 
+# 人事行政總處公告的 2026 年辦公日曆中落在平日的 16 個放假日（含補假）；週末一律放假，
+# 2026 年起不再有週六補班。
+OFFICIAL_2026_WEEKDAY_DAYS_OFF = {
+    "2026-01-01",
+    "2026-02-16",
+    "2026-02-17",
+    "2026-02-18",
+    "2026-02-19",
+    "2026-02-20",
+    "2026-02-27",
+    "2026-04-03",
+    "2026-04-06",
+    "2026-05-01",
+    "2026-06-19",
+    "2026-09-25",
+    "2026-09-28",
+    "2026-10-09",
+    "2026-10-26",
+    "2026-12-25",
+}
+
 
 def rfc3339(value: datetime) -> str:
     """測試時間統一套用臺灣時區，避免各測試產生不同 offset 語意。"""

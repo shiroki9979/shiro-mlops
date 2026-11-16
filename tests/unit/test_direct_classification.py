@@ -283,3 +283,20 @@ def test_predictions_do_not_depend_on_rows_order_of_load_history(trained) -> Non
     )
 
     np.testing.assert_allclose(result["probability"], trained.model.predict(data)["probability"])
+
+
+def test_day_off_recipe_describes_each_target_hour_by_its_own_date() -> None:
+    """From a workday anchor, targets on the 10-09 substitute holiday are days off, 10-08 is not."""
+    params = DirectClassificationParams.model_validate({**PARAMS.model_dump(), "day_off": True})
+    load, weather = hourly_load_with_weather(TRAINING_HOURS, datetime(2026, 10, 10, 23, 0))
+
+    rows = training_rows(params, TrainingData(load, weather, load["datetime"].iloc[-1]))
+
+    from_anchor = rows[rows["anchor"] == pd.Timestamp("2026-10-07 23:00")]
+    by_target = dict(
+        zip(from_anchor["datetime"].dt.strftime("%m-%d %H"), from_anchor["is_day_off"])
+    )
+    assert by_target["10-08 12"] == 0
+    assert by_target["10-09 00"] == 1
+    assert by_target["10-09 23"] == 1
+    assert "is_day_off" not in training_rows(PARAMS, _training_data()).columns

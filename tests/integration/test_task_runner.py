@@ -10,7 +10,7 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks import runner
-from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.definition import TaskDefinition, WeightedReferencePoint
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import (
     MissingLoadHistoryError,
@@ -291,7 +291,7 @@ def test_missing_forecast_degrades_to_previous_day_observations(
     assert outcome.mode == "degraded"
     assert outcome.subject == "nationwide"
     assert len(outcome.predictions) == HORIZON_HOURS
-    assert {source["temperature"]["source"] for source in outcome.weather_sources} == {
+    assert {source["temperature"]["Taipei"]["source"] for source in outcome.weather_sources} == {
         "previous_day_observation"
     }
     assert check_task_ready(task, model, runtime, as_of=FRESH_AS_OF).mode == "degraded"
@@ -410,8 +410,7 @@ def test_observed_prediction_scores_window_end_hours_up_to_the_anchor(
     assert list(outcome.weather.columns) == ["datetime", "temperature", "relative_humidity"]
     assert len(outcome.weather_sources) == HORIZON_HOURS
     assert outcome.weather_sources[-1]["temperature"] == {
-        "source": "station_observation",
-        "observed_at": ANCHOR.isoformat(),
+        "Taipei": {"source": "station_observation", "observed_at": ANCHOR.isoformat()}
     }
     assert check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF).mode == (
         "normal"
@@ -466,7 +465,10 @@ def test_observed_prediction_without_observations_is_unavailable(
 ) -> None:
     elsewhere = replace(
         anomaly_task,
-        weather=replace(anomaly_task.weather, reference_point=settings.cwa_locations["Kaohsiung"]),
+        weather=replace(
+            anomaly_task.weather,
+            reference_points=(WeightedReferencePoint(settings.cwa_locations["Kaohsiung"], 1.0),),
+        ),
     )
 
     with pytest.raises(WeatherUnavailableError, match="No observed weather"):
@@ -499,3 +501,173 @@ def test_observed_prediction_with_no_scorable_window_is_unavailable(
     readiness = check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF)
     assert not readiness.ready
     assert "No complete observed window" in readiness.reason
+
+
+# --- Weighted weather (ADR-0012) -----------------------------------------------------------
+
+WEIGHTS = {"Taipei": 0.5, "Taichung": 0.3, "Kaohsiung": 0.2}
+# 臺中比臺北低 2 度、高雄高 2 度：加權氣溫 = 臺北 × 0.5 + (臺北 − 2) × 0.3 + (臺北 + 2) × 0.2
+# = 臺北 − 0.2；濕度同樣位移。
+OFFSETS = {"Taichung": -2.0, "Kaohsiung": 2.0}
+WEIGHTED_OFFSET = -0.2
+GEOCODES = {"Taipei": "63000000", "Taichung": "66000000", "Kaohsiung": "64000000"}
+
+
+def _weighted(task: TaskDefinition) -> TaskDefinition:
+    points = tuple(
+        WeightedReferencePoint(settings.cwa_locations[name], weight)
+        for name, weight in WEIGHTS.items()
+    )
+    return replace(task, weather=replace(task.weather, reference_points=points))
+
+
+def _observe(runtime: TaskRuntime, name: str, *, skip: pd.Timestamp | None = None) -> None:
+    _, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    shifted = weather.assign(
+        temperature=weather["temperature"] + OFFSETS[name],
+        relative_humidity=weather["relative_humidity"] + OFFSETS[name],
+        location=name,
+    )
+    if skip is not None:
+        shifted = shifted[shifted["datetime"] != skip]
+    runtime.repository.upsert_cwa_observation_batch(canonical_observation_batch(shifted))
+
+
+def _release_for(*names: str) -> CWAForecastRelease:
+    """A fresh three-day release where each point's forecast sits at its observation offset."""
+    taipei = _fresh_forecast_release()
+    forecasts = tuple(
+        replace(
+            forecast,
+            geocode=GEOCODES[name],
+            temperature_c=forecast.temperature_c + OFFSETS.get(name, 0.0),
+            relative_humidity_pct=forecast.relative_humidity_pct + OFFSETS.get(name, 0.0),
+        )
+        for name in names
+        for forecast in taipei.forecasts
+    )
+    return replace(taipei, forecasts=forecasts)
+
+
+def test_training_weather_is_the_weighted_weather_of_every_reference_point(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    for name in OFFSETS:
+        _observe(runtime, name)
+
+    data = load_training_data(_weighted(task), runtime, as_of=FRESH_AS_OF)
+
+    _, taipei = hourly_load_with_weather(HOURS, LAST_HOUR)
+    weighted = data.weather.set_index("datetime").reindex(taipei["datetime"])
+    assert weighted["temperature"].to_numpy() == pytest.approx(
+        (taipei["temperature"] + WEIGHTED_OFFSET).to_numpy()
+    )
+    assert weighted["relative_humidity"].to_numpy() == pytest.approx(
+        (taipei["relative_humidity"] + WEIGHTED_OFFSET).to_numpy()
+    )
+
+
+def test_training_weather_has_no_value_where_any_reference_point_misses_the_hour(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    gap = ANCHOR - pd.Timedelta(hours=30)
+    _observe(runtime, "Taichung")
+    _observe(runtime, "Kaohsiung", skip=gap)
+
+    data = load_training_data(_weighted(task), runtime, as_of=FRESH_AS_OF)
+
+    by_hour = data.weather.set_index("datetime").reindex([gap, gap - pd.Timedelta(hours=1)])
+    assert by_hour.loc[gap].isna().all()
+    assert by_hour.loc[gap - pd.Timedelta(hours=1)].notna().all()
+
+
+def test_weighted_training_table_round_trip_is_lossless(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    _observe(runtime, "Taichung")
+    _observe(runtime, "Kaohsiung", skip=ANCHOR - pd.Timedelta(hours=30))
+    weighted = _weighted(task)
+    direct = load_training_data(weighted, runtime, as_of=FRESH_AS_OF)
+
+    restored = training_data_from_table(weighted, training_table(direct))
+
+    pd.testing.assert_frame_equal(restored.load, direct.load)
+    pd.testing.assert_frame_equal(
+        restored.weather,
+        direct.weather.dropna(subset=["temperature", "relative_humidity"], how="all").reset_index(
+            drop=True
+        ),
+    )
+    assert restored.validation_start == direct.validation_start
+
+
+def test_weighted_forecast_combines_every_point_and_reports_each_source(
+    task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
+) -> None:
+    for name in OFFSETS:
+        _observe(runtime, name)
+    runtime.repository.upsert_cwa_forecast_release(_release_for(*GEOCODES))
+
+    outcome = predict_task(
+        _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
+    )
+
+    assert outcome.mode == "normal"
+    assert outcome.weather["temperature"].tolist() == pytest.approx([30.0 + WEIGHTED_OFFSET] * 6)
+    assert outcome.weather["relative_humidity"].tolist() == pytest.approx([69.8] * 6)
+    first = outcome.weather_sources[0]
+    assert set(first["temperature"]) == set(GEOCODES)
+    assert {source["source"] for source in first["temperature"].values()} == {"three_day"}
+
+
+def test_one_stale_reference_point_degrades_the_whole_forecast(
+    task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
+) -> None:
+    for name in OFFSETS:
+        _observe(runtime, name)
+    runtime.repository.upsert_cwa_forecast_release(_release_for("Taipei", "Taichung"))
+
+    outcome = predict_task(
+        _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
+    )
+
+    assert outcome.mode == "degraded"
+    sources = outcome.weather_sources[0]["temperature"]
+    assert sources["Taipei"]["source"] == "three_day"
+    assert sources["Kaohsiung"]["source"] == "previous_day_observation"
+    assert check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF).mode == "degraded"
+
+
+def test_reference_point_without_any_fallback_makes_the_forecast_unavailable(
+    task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
+) -> None:
+    """No forecast and no observation at Kaohsiung: refuse rather than drop it and reweight."""
+    _observe(runtime, "Taichung")
+    runtime.repository.upsert_cwa_forecast_release(_release_for("Taipei", "Taichung"))
+
+    with pytest.raises(WeatherUnavailableError, match="Kaohsiung"):
+        predict_task(
+            _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
+        )
+    assert not check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF).ready
+
+
+def test_observed_prediction_weights_every_point_and_reports_each_observation(
+    anomaly_task: TaskDefinition, runtime: TaskRuntime, anomaly_model: TaskModel
+) -> None:
+    for name in OFFSETS:
+        _observe(runtime, name)
+
+    outcome = predict_task(
+        _weighted(anomaly_task),
+        anomaly_model,
+        runtime,
+        as_of=FRESH_AS_OF,
+        horizon_hours=HORIZON_HOURS,
+    )
+
+    _, taipei = hourly_load_with_weather(HOURS, LAST_HOUR)
+    at_anchor = taipei.set_index("datetime").loc[ANCHOR, "temperature"]
+    assert outcome.weather["temperature"].iloc[-1] == pytest.approx(at_anchor + WEIGHTED_OFFSET)
+    observation = {"source": "station_observation", "observed_at": ANCHOR.isoformat()}
+    assert outcome.weather_sources[-1]["temperature"] == dict.fromkeys(GEOCODES, observation)

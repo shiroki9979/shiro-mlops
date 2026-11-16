@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-09
+- 最後更新：2026-11-16
 - 專案版本：`0.4.0`
 
 ---
@@ -151,6 +151,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - 可消費 `incomplete` header 中已存在的指定行政區資料；指定行政區缺少時，退回該行政區上一個完整版本。
 - 預報與觀測皆取自同一氣象代表點：預報讀其 `geocode`，替代資料讀其 `station_id`。
 - 預報缺少或最新 `issued_at` 超過七小時時，依序使用氣象代表點測站的前日同小時觀測、同月份同小時歷史平均；月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料。
+- 多氣象代表點（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)）：每個代表點各自依上列規則選版、投影與降級，再依任務設定權重逐小時合成加權天氣。任一點降級，整次即為 `mode: degraded`；任一點連替代資料都無法涵蓋某小時，整次即無法產出（HTTP 503），不剔除該點、不重新正規化。
 
 ### 1.4 Feast 特徵庫視圖 (Feature View Schema)
 
@@ -159,12 +160,12 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   - `load_mw`: float32
   - `load_mw_lag_1`, `load_mw_lag_2`, `load_mw_lag_24`: float32
   - `load_mw_rolling_mean_6`, `load_mw_rolling_mean_24`: float32
-  - `hour`, `dayofweek`, `is_weekend`: int64
+  - `hour`, `dayofweek`, `is_weekend`, `is_day_off`: int64（`is_day_off` 依 GLOSSARY「放假日」，以 `holidays` 套件 Taiwan 曆的 `is_working_day` 判定）
   - `hour_sin`, `hour_cos`: float32
 - **Features (`cwa_weather_features`)**:
   - `temperature`: float32
   - `relative_humidity`: float32
-- **匯出來源**：Feast 凍結為動態視界預報任務專屬匯出，由 `dynamic_horizon_forecast__features` 的訓練表（§3，經 §5.3 `training_data_from_table` 還原為目標序列與觀測天氣）自行計算上列欄位，不共用任何任務的特徵配方；Feast 無正式讀取者。
+- **匯出來源**：`cwa_weather_features` 為預測對象的加權天氣（§5.3 runner 讀取觀測時合成）。Feast 凍結為動態視界預報任務專屬匯出，由 `dynamic_horizon_forecast__features` 的訓練表（§3，經 §5.3 `training_data_from_table` 還原為目標序列與觀測天氣）自行計算上列欄位，不共用任何任務的特徵配方；Feast 無正式讀取者。
 - **時間正確性**：訓練資料由 runner 以明確 `as_of` 讀取 `as_of` 以前的目標序列，時間窗由已累積的目標列推導；serving 只讀負載起點往前 `lookback_hours`（§5.3）的歷史，禁止無界歷史掃描。lag 依時間戳取前 `L` 小時的負載，rolling 只統計前 `W` 小時內已有的觀測；缺漏小時不得由相鄰資料列冒充。lag / rolling 缺值不得以未來用電負載（`bfill`）填補，warm-up 列使用非洩漏哨兵值 `0.0`。
 - **訓練氣象缺口**：氣溫與相對濕度只能由較早觀測 forward-fill 最多兩小時；補值後仍缺少任一必要氣象欄位的 load row 必須移除。禁止 `bfill` 與固定氣象常數。
 
@@ -230,7 +231,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **相容性欄位**：請求 `location` 為選填，於 OpenAPI 標示 `deprecated`；任何值皆被忽略，不影響預測對象，也不再回傳 HTTP 400。回應不再包含 `location`。
 - **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
 - **狀態欄位**：`status` 表示請求成功（固定為 `success`）；`mode` 表示預報品質（`normal` 或 `degraded`），兩者不得混用。
-- **來源追溯**：每個預測點的 `weather_sources` 必須逐一揭露各氣象欄位的來源，以及可用的預報發布／更新時間；同一時點允許不同欄位來自不同產品或降級來源。
+- **來源追溯**：每個預測點的 `weather_sources` 依「氣象欄位 → 氣象代表點別名 → 來源」逐一揭露每個代表點的來源，以及可用的預報發布／更新時間；只有一個代表點時也採同一形狀。同一時點允許不同欄位或不同代表點來自不同產品或降級來源。
 - **請求 Body**：
 
   ```json
@@ -255,14 +256,18 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
         "relative_humidity": 82.0,
         "weather_sources": {
           "temperature": {
-            "source": "three_day",
-            "issued_at": "2026-08-21T23:00:00+08:00",
-            "source_updated_at": "2026-08-21T23:20:00+08:00"
+            "Taipei": {
+              "source": "three_day",
+              "issued_at": "2026-08-21T23:00:00+08:00",
+              "source_updated_at": "2026-08-21T23:20:00+08:00"
+            }
           },
           "relative_humidity": {
-            "source": "weekly",
-            "issued_at": "2026-08-21T23:00:00+08:00",
-            "source_updated_at": "2026-08-21T23:25:00+08:00"
+            "Taipei": {
+              "source": "weekly",
+              "issued_at": "2026-08-21T23:00:00+08:00",
+              "source_updated_at": "2026-08-21T23:25:00+08:00"
+            }
           }
         }
       }
@@ -277,7 +282,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   - 預報天氣任務（`FORECAST`）：負載起點之後預測的小時數（預測視界）。
   - 觀測天氣任務（`OBSERVED`）：評分最近幾個時間窗結束小時，由負載起點往回算，即結束小時落在 `(anchor - horizon_hours, anchor]`；不預測未來。資料有缺口的時間窗不評分，因此回傳筆數可能少於 `horizon_hours`，但不以常數補值。
 - **回應 Body**：共通欄位 `status`（固定為 `success`）、`task_id`、`task_type`、`subject`、`mode`，以及 `predictions`；`predictions` 的 item schema 由任務類型的 `prediction_item` 與任務設定的 `weather.fields` 共同決定（§5.2），OpenAPI 以每個任務的 `<TaskId>TaskPredictionResponse`（item 為 `<TaskId>PredictionItem`，未附帶天氣者直接沿用任務類型的 item）逐一描述，並以 `task_id` 常數區分；回應模型於建構時驗證，端點不再以聯集重驗。
-- **Item 組成**：runner 回傳的預測列、天氣列（`weather.fields`）與 `weather_sources` 依位置一一對應合併後，以該任務的 item 驗證；`datetime` 以字串輸出（`YYYY-MM-DD HH:MM:SS`）。觀測天氣任務的天氣列與來源由 runner 對齊至被評分的結束小時（該小時以前最新一筆測站觀測，來源為 `{"source": "station_observation", "observed_at": ...}`），因此依位置合併的契約同樣成立。
+- **Item 組成**：runner 回傳的預測列、天氣列（`weather.fields`）與 `weather_sources` 依位置一一對應合併後，以該任務的 item 驗證；`datetime` 以字串輸出（`YYYY-MM-DD HH:MM:SS`）。觀測天氣任務的天氣列與來源由 runner 對齊至被評分的結束小時（該小時以前最新一筆測站觀測，每個代表點的來源為 `{"source": "station_observation", "observed_at": ...}`），因此依位置合併的契約同樣成立。
 - **錯誤對應**：
 
   | 情境 | HTTP |
@@ -303,7 +308,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
         "predicted_load_mw": 26850.4,
         "temperature": 28.5,
         "relative_humidity": 82.0,
-        "weather_sources": {"temperature": {"source": "three_day"}}
+        "weather_sources": {"temperature": {"Taipei": {"source": "three_day"}}}
       }
     ]
   }
@@ -326,7 +331,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
         "threshold_mw": 38210.5,
         "temperature": 33.1,
         "relative_humidity": 62.0,
-        "weather_sources": {"temperature": {"source": "three_day"}}
+        "weather_sources": {"temperature": {"Taipei": {"source": "three_day"}}}
       }
     ]
   }
@@ -396,7 +401,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
    - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
 6. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。
-   - 既有模型在本階段只使用氣象代表點 `Taipei`（測站與預報區見 §1.2 目錄）；臺中與高雄資料先完成入庫，多氣象代表點加權仍由 TICKET-301 處理。
+   - 三個任務目前只使用氣象代表點 `Taipei`（測站與預報區見 §1.2 目錄）。任務設定可依 §5.1 列出多個加權代表點（ADR-0012），是否採用由 TICKET-303 的滾動起點回測判定。
 7. **本機冷啟動**：
    - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達 §3 訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
    - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
@@ -502,7 +507,8 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 | `task_type` | string | 必須為已註冊的任務類型（§5.2） |
 | `subject` | string | 預測對象識別碼，例如 `nationwide` |
 | `target` | `"hourly_actual_load"` | 目標序列來源；目前只有全台逐時實際負載（`raw_taipower_load`，`source = 'regional_snapshot_sum'`） |
-| `weather.reference_points` | list[string] | 必須引用 CWA 擷取目錄中的 alias；目前恰好一個，多於一個以錯誤拒絕（加權留待 M3） |
+| `weather.reference_points` | list[string] | 必須引用 CWA 擷取目錄中的 alias，不得重複 |
+| `weather.weights` | list[float] | 與 `reference_points` 一一對應的權重，每個大於 0、總和為 1（容許 `1e-6` 浮點誤差）；只有一個代表點時可省略（權重為 1），多個代表點時必填 |
 | `weather.fields` | list[`temperature` \| `relative_humidity`] | 訓練觀測與預報皆提供的氣象欄位 |
 | `policies.min_training_hours` | 正整數 | 最低累積門檻（§3.1） |
 | `policies.stale_anchor_max_lag_hours` | 正整數 | 負載起點過舊門檻（§2.2） |
@@ -512,9 +518,9 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 | `schedule.monitoring` | cron string | 監控排程（`Asia/Taipei`，§3）；規則同上 |
 | `health` | table | 依任務類型的 `health_model` 驗證；健康判定門檻的唯一來源 |
 
-`recursive_regression` 的 `[params]`：`lags`（正整數 list，至少一個）、`rolling_windows`（正整數 list，至少一個）、`[params.model]` 的 `n_estimators`（正整數）、`learning_rate`（正數）、`num_leaves`（≥ 2）；objective、metric 與 random seed 由任務類型固定。`[health]`：`max_mape`（正數，單位 %）。
+`recursive_regression` 的 `[params]`：`lags`（正整數 list，至少一個）、`rolling_windows`（正整數 list，至少一個）、`day_off`（布林，預設 `false`；開啟時加入以各小時日期判定的 `is_day_off`）、`[params.model]` 的 `n_estimators`（正整數）、`learning_rate`（正數）、`num_leaves`（≥ 2）；objective、metric 與 random seed 由任務類型固定。`[health]`：`max_mape`（正數，單位 %）。
 
-`direct_classification` 的 `[params]`：`lags`、`rolling_windows`（規則同上，但皆相對於錨點）、`[params.threshold]` 的 `window_days`（正整數）與 `quantile`（0 < x < 1）、`[params.model]`（同上）；objective（`binary`）與 random seed 由任務類型固定。`[health]`：`min_precision`、`min_recall`、`min_f1`（皆為 0–1）。
+`direct_classification` 的 `[params]`：`lags`、`rolling_windows`（規則同上，但皆相對於錨點）、`day_off`（布林，預設 `false`；開啟時加入以目標小時日期判定的 `is_day_off`）、`[params.threshold]` 的 `window_days`（正整數）與 `quantile`（0 < x < 1）、`[params.model]`（同上）；objective（`binary`）與 random seed 由任務類型固定。`[health]`：`min_precision`、`min_recall`、`min_f1`（皆為 0–1）。
 
 `unsupervised_reconstruction` 的 `[params]`：`window_hours`（整數 ≥ 6，時間窗長度）、`threshold_quantile`（0 < x < 1，判定門檻取驗證期校準日重建誤差的分位數）、`[params.model]` 的 `hidden_layer_sizes`（一至三個正整數，淺層）、`alpha`（≥ 0）、`learning_rate_init`（正數）、`max_iter`（正整數）；激活函數（隱藏層 `relu`、輸出層 `identity`）、solver `adam` 與 random seed 由任務類型固定。`[health]`：`min_recall`（0 < x ≤ 1）、`max_false_positive_rate`（0 ≤ x < 1）。
 
@@ -548,12 +554,12 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 ### 5.3 Runner（`tasks/runner.py`）
 
-Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件（累積門檻、取資料、負載起點過舊、天氣解析與降級）；所有時間相關判斷皆傳入明確 `as_of`（台灣本地 naive 時間）。
+Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件（累積門檻、取資料、負載起點過舊、天氣解析與降級、加權天氣）；所有時間相關判斷皆傳入明確 `as_of`（台灣本地 naive 時間）。
 
 | 函式 | 行為 |
 | :--- | :--- |
 | `check_training_readiness(task, runtime, *, as_of=None)` | 回傳累積摘要；傳入 `as_of` 時只計該時間以前的有效逐時負載，全表任何時間的 legacy 列仍阻擋訓練；未傳入時供排程 skip 與 smoke check 檢查目前累積量 |
-| `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`；讀取 `as_of` 以前的目標序列與同期觀測天氣，並以 `validation_fraction` 推導 `validation_start` |
+| `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`；讀取 `as_of` 以前的目標序列與同期觀測天氣，並以 `validation_fraction` 推導 `validation_start`。觀測天氣為加權天氣：各代表點在同一觀測整點皆有值才合成，任一點缺少的整點沒有加權值，交由任務類型既有的缺值規則處理 |
 | `train_task(task, runtime, *, as_of) -> Trained` | `load_training_data` 後交由 `fit_task` |
 | `fit_task(task, data) -> Trained` | 以已讀取且通過門檻的 `TrainingData` 交由任務類型訓練 |
 | `training_table(data)`／`training_data_from_table(task, table)` | 以目標序列與觀測天氣的時間軸聯集將 `TrainingData` 攤平序列化以便跨 run 保存（包含無負載但有觀測天氣的小時），並無損還原：`load` 只保留有 `load_mw` 的列、`weather` 只保留有任一氣象欄位值的列（完全沒有觀測天氣的小時仍為缺口而非 NaN 列），`validation_start` 由還原後的目標小時以相同切分規則重算 |
@@ -563,7 +569,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 
 serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史。
 
-`OBSERVED` 任務的 serving 路徑：負載起點過舊檢查照常適用；天氣改讀同一區間 `[anchor - lookback_hours, anchor]` 的測站觀測，不讀預報也不降級，`mode` 固定 `normal`。區間內沒有任何觀測時拋 `WeatherUnavailableError`；任務類型未能評分任何請求的結束小時（負載或天氣缺口）時拋 `ObservedInputsIncompleteError`。`PredictionOutcome.weather` 與 `weather_sources` 對齊至每個被評分的結束小時，取該小時以前最新一筆觀測，來源為 `station_observation` 並附 `observed_at`。
+`OBSERVED` 任務的 serving 路徑：負載起點過舊檢查照常適用；天氣改讀同一區間 `[anchor - lookback_hours, anchor]` 的測站觀測（加權規則同 `load_training_data`），不讀預報也不降級，`mode` 固定 `normal`。區間內沒有任何觀測時拋 `WeatherUnavailableError`；任務類型未能評分任何請求的結束小時（負載或天氣缺口）時拋 `ObservedInputsIncompleteError`。`PredictionOutcome.weather` 與 `weather_sources` 對齊至每個被評分的結束小時，取該小時以前最新一筆觀測，來源為 `station_observation` 並附 `observed_at`。
 
 ### 5.4 模型保存（`tasks/model_store.py`）
 

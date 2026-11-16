@@ -10,6 +10,7 @@ from shiro_mlops.features.transformers import (
     create_rolling_features,
     merge_weather_features,
 )
+from tests.helpers import OFFICIAL_2026_WEEKDAY_DAYS_OFF
 
 
 def test_create_calendar_features(taipower_raw_df: pd.DataFrame) -> None:
@@ -496,3 +497,35 @@ def test_merge_weather_leaves_hours_without_recent_observations_missing() -> Non
     assert merged["temperature"].iloc[:3].isna().all()
     assert merged["relative_humidity"].iloc[:3].isna().all()
     assert merged["temperature"].iloc[3] == 31.0
+
+
+def test_day_off_follows_the_official_2026_office_calendar() -> None:
+    noons = pd.date_range("2026-01-01 12:00", "2026-12-31 12:00", freq="D")
+
+    result = create_calendar_features(pd.DataFrame({"datetime": noons}), day_off=True)
+
+    days_off = {
+        day.strftime("%Y-%m-%d")
+        for day, flag in zip(noons, result["is_day_off"], strict=True)
+        if flag == 1
+    }
+    weekends = {day.strftime("%Y-%m-%d") for day in noons if day.dayofweek >= 5}
+    assert days_off == weekends | OFFICIAL_2026_WEEKDAY_DAYS_OFF
+
+
+def test_day_off_is_judged_by_each_hour_own_date() -> None:
+    hours = pd.date_range("2026-10-08 22:00", "2026-10-10 01:00", freq="h")
+
+    result = create_calendar_features(pd.DataFrame({"datetime": hours}), day_off=True)
+
+    by_hour = dict(zip(hours.strftime("%m-%d %H"), result["is_day_off"], strict=True))
+    assert by_hour["10-08 23"] == 0
+    assert by_hour["10-09 00"] == 1
+    assert by_hour["10-09 23"] == 1
+    assert by_hour["10-10 00"] == 1
+
+
+def test_calendar_features_add_day_off_only_when_requested() -> None:
+    frame = pd.DataFrame({"datetime": pd.date_range("2026-10-09", periods=3, freq="h")})
+
+    assert "is_day_off" not in create_calendar_features(frame).columns

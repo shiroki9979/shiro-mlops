@@ -122,3 +122,15 @@ def test_feast_exports_key_both_frozen_views_by_prediction_subject() -> None:
         "relative_humidity",
     ]
     assert set(frames.weather["location"]) == {"nationwide"}
+
+
+def test_feast_load_export_marks_days_off_beside_the_weekend_flag() -> None:
+    """2026-10-09 (Fri) is the National Day substitute holiday; 10-08 is a workday."""
+    times = pd.to_datetime(["2026-10-08 12:00", "2026-10-09 12:00", "2026-10-10 12:00"])
+    load = pd.DataFrame({"datetime": times, "subject": "nationwide", "load_mw": 100.0})
+
+    exported = build_feast_feature_frames(load, pd.DataFrame({"datetime": times})).taipower
+
+    assert exported["is_day_off"].tolist() == [0, 1, 1]
+    assert exported["is_weekend"].tolist() == [0, 0, 1]
+    assert exported["is_day_off"].dtype == "int64"

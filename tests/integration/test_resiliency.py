@@ -261,8 +261,8 @@ def test_stale_forecast_degrades_predict_with_per_field_fallback_sources(
     for item in body["predictions"]:
         assert item["relative_humidity"] == pytest.approx(EXPECTED_CLIMATOLOGY_HUMIDITY)
         assert item["weather_sources"] == {
-            "temperature": {"source": "previous_day_observation"},
-            "relative_humidity": {"source": "climatology"},
+            "temperature": {"Taipei": {"source": "previous_day_observation"}},
+            "relative_humidity": {"Taipei": {"source": "climatology"}},
         }
 
 
