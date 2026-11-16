@@ -167,22 +167,33 @@ def fit_task(task: TaskDefinition, data: TrainingData) -> Trained:
 
 
 def training_table(data: TrainingData) -> pd.DataFrame:
-    """One frame per target hour with its observed weather, for persisting between runs."""
-    return data.load.merge(data.weather, on=DATETIME_COL, how="left")
+    """Serialize target and observed weather across the union of their hourly timelines."""
+    return data.load.merge(data.weather, on=DATETIME_COL, how="outer").sort_values(
+        DATETIME_COL, ignore_index=True
+    )
 
 
 def training_data_from_table(task: TaskDefinition, table: pd.DataFrame) -> TrainingData:
-    """Invert ``training_table``: hours without any observed weather stay absent, not NaN.
+    """Invert ``training_table``: restore target rows with load and weather rows with observations.
 
-    ``validation_start`` is recomputed with the same shared split, so it matches
-    the value ``load_training_data`` derived from the same target hours.
+    ``validation_start`` is recomputed from the restored target hours with the same
+    shared split, matching the value ``load_training_data`` derived.
     """
     fields = list(task.weather.fields)
-    weather = table[[DATETIME_COL, *fields]].dropna(subset=fields, how="all")
+    load = (
+        table[TARGET_COLUMNS]
+        .dropna(subset=[LOAD_MW_COL])
+        .sort_values(DATETIME_COL, ignore_index=True)
+    )
+    weather = (
+        table[[DATETIME_COL, *fields]]
+        .dropna(subset=fields, how="all")
+        .sort_values(DATETIME_COL, ignore_index=True)
+    )
     return TrainingData(
-        load=table[TARGET_COLUMNS].reset_index(drop=True),
-        weather=weather.reset_index(drop=True),
-        validation_start=_validation_start(table[DATETIME_COL], task.policies.validation_fraction),
+        load=load,
+        weather=weather,
+        validation_start=_validation_start(load[DATETIME_COL], task.policies.validation_fraction),
     )
 
 

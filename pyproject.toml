@@ -61,3 +61,7 @@ pythonpath = ["src", "scripts"]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.uv.workspace]
+members = ["lab"]
+

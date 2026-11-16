@@ -46,6 +46,10 @@ src/shiro_mlops/features/data/
 *.csv
 !tests/fixtures/*.csv
 
+# Jupyter / Lab
+*.ipynb
+
+
 # Testing & Linting
 .pytest_cache/
 .coverage

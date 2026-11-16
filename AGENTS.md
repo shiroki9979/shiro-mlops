@@ -1,7 +1,7 @@
 # AGENTS.md
 
 - Created: 2026-08-23
-- Last updated: 2026-10-25
+- Last updated: 2026-11-09
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -9,12 +9,14 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 
 - **Domain Glossary & Semantics**: Read [GLOSSARY.md](GLOSSARY.md) for business context, power grid terminology, and degraded forecast definitions.
 - **System & Data Specifications**: Read [docs/SPEC.md](docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
-- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), and native model persistence.
+- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, and the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)).
+- **Research Workspace (`lab/`)**: `lab/` is a `uv` workspace member that depends unidirectionally on `shiro_mlops` (`src/` must NEVER import `lab`). Use it to freeze point-in-time training table snapshots, run rolling-origin backtests (滾動起點回測), and record hyperparameter studies under `lab/<YYYY-MM-DD>-<topic>/`.
 - **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
 - **Code Review Standards**: When reviewing a change, apply [CODING_STANDARDS.md](CODING_STANDARDS.md) for repo-specific judgement rules; mechanical rules run in CI.
 - **Operational Guides**:
   - Tutorial: [docs/tutorials/quickstart-local-prediction.md](docs/tutorials/quickstart-local-prediction.md)
   - Full Local Stack: [docs/how-to/run-full-local-stack.md](docs/how-to/run-full-local-stack.md)
+  - Lab Research Study: [docs/how-to/run-lab-study.md](docs/how-to/run-lab-study.md)
   - AWS Deployment: [docs/how-to/deploy-aws-infrastructure.md](docs/how-to/deploy-aws-infrastructure.md)
 
 ## Development Loop & Commands
@@ -27,6 +29,13 @@ uv sync --all-extras
 
 # Run test suite (100% mocked offline tests, fast execution)
 uv run pytest tests/ -v
+
+# Sync and test the lab research workspace
+uv sync --package lab
+uv run --package lab pytest lab/tests -v
+
+# Freeze an immutable training table snapshot for lab research
+uv run --package lab python -m lab.snapshot dynamic_horizon_forecast --as-of 2026-11-08T22:00:00
 
 # Lint & formatting checks
 uv run ruff check .
