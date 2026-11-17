@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeVar
@@ -217,6 +217,29 @@ def load_task_definition(path: Path, catalog: Mapping[str, CWALocation]) -> Task
     )
 
 
+def build_weather_spec(
+    reference_points: Sequence[str],
+    weights: Sequence[float] | None,
+    fields: Sequence[str],
+    catalog: Mapping[str, CWALocation],
+) -> WeatherSpec:
+    """Validate and resolve weighted weather outside a task file, with the TOML's rules.
+
+    Lets research tools try other reference-point combinations without editing a
+    shipped definition. Invalid weights, fields or reference points raise ``ValueError``.
+    """
+    raw: dict[str, Any] = {"reference_points": list(reference_points), "fields": list(fields)}
+    if weights is not None:
+        raw["weights"] = list(weights)
+    try:
+        section = _WeatherSection.model_validate(raw)
+    except ValidationError as error:
+        raise ValueError(_describe(error, "weather")) from error
+    return WeatherSpec(
+        reference_points=_weighted_points(section, catalog), fields=tuple(section.fields)
+    )
+
+
 def _read_toml(path: Path) -> dict[str, Any]:
     try:
         with path.open("rb") as file:
@@ -244,9 +267,15 @@ def _resolve_reference_points(
     path: Path, weather: _WeatherSection, catalog: Mapping[str, CWALocation]
 ) -> tuple[WeightedReferencePoint, ...]:
     try:
-        return tuple(
-            WeightedReferencePoint(resolve_cwa_location(catalog, name), weight)
-            for name, weight in zip(weather.reference_points, weather.point_weights, strict=True)
-        )
+        return _weighted_points(weather, catalog)
     except ValueError as error:
         raise TaskDefinitionError(path, f"weather.reference_points: {error}") from error
+
+
+def _weighted_points(
+    weather: _WeatherSection, catalog: Mapping[str, CWALocation]
+) -> tuple[WeightedReferencePoint, ...]:
+    return tuple(
+        WeightedReferencePoint(resolve_cwa_location(catalog, name), weight)
+        for name, weight in zip(weather.reference_points, weather.point_weights, strict=True)
+    )

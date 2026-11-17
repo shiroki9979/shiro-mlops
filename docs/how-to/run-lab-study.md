@@ -1,7 +1,7 @@
 # 如何執行一次 lab 研究
 
 - 建立日期：2026-11-09
-- 最後更新：2026-11-09
+- 最後更新：2026-11-17
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -51,9 +51,64 @@ sha256sum data/lab/snapshots/dynamic_horizon_forecast/2026-11-08T22:00:00.parque
 > [!IMPORTANT]
 > 快照一經寫入即不可覆寫；對已存在的 `(task_id, as_of)` 再次執行會拋出 `FileExistsError`。
 
+### 比較不同氣象代表點或權重時
+
+訓練表只保存加權後的天氣，代表點或權重不同的候選須各自凍結一份快照；只改 `[params]`（例如放假日開關）的候選可共用同一份。
+
+1. 以區域供需快照推算權重，期間採半開區間 `[start, end)`：
+
+   ```bash
+   uv run --package lab python -m lab.regional_weights --start 2026-10-01T00:00:00 --end 2026-11-01T00:00:00
+   ```
+
+   輸出最後一行為 `snapshot arguments: --reference-points Taipei Taichung Kaohsiung --weights ...`，將期間、有效樣本數與權重記入研究報告。
+
+2. 以相同 `as_of` 凍結候選快照，並以 `--variant` 命名，貼上第 1 步輸出的參數：
+
+   ```bash
+   uv run --package lab python -m lab.snapshot dynamic_horizon_forecast --as-of 2026-11-08T22:00:00 --variant three-point --reference-points Taipei Taichung Kaohsiung --weights 0.5 0.3 0.2
+   ```
+
+   產出檔案位於 `data/lab/snapshots/<task_id>/<variant>/<as_of>.parquet`，不影響同一 `as_of` 的基線快照。
+
+3. 研究腳本以相同天氣讀回快照；天氣與快照記錄不一致時，`read_snapshot` 會拋出 `SnapshotWeatherMismatchError`：
+
+   ```python
+   from dataclasses import replace
+
+   from lab.snapshot import read_snapshot
+   from shiro_mlops.core.config import settings
+   from shiro_mlops.tasks.definition import build_weather_spec
+
+   weighted_task = replace(
+       task,
+       weather=build_weather_spec(
+           ["Taipei", "Taichung", "Kaohsiung"],
+           [0.5, 0.3, 0.2],
+           task.weather.fields,
+           settings.cwa_locations,
+       ),
+   )
+   weighted_data = read_snapshot(weighted_task, "2026-11-08T22:00:00", variant="three-point")
+   ```
+
+三點加權只在各點同一整點皆有觀測時才有值，候選快照的訓練列數可能少於基線；比較候選時一併記錄各快照的列數。
+
 ---
 
-## 3. 讀取快照並執行滾動起點回測 (Rolling-Origin Backtest)
+## 3. 確認快照提供的起點
+
+選擇起點前，先列出快照中每個能通過起點有效性檢查的整點，並確認評估起點能否涵蓋 7 個日曆日：
+
+```bash
+uv run --package lab python -m lab.origins dynamic_horizon_forecast --as-of 2026-11-08T22:00:00
+```
+
+- `run:` 各行為合格起點的連續區間；區間之間的空缺來自負載或觀測氣象缺口。
+- `search origins:`／`eval origins:` 為建議切分；`sufficient: no` 表示評估起點不足，該快照只能產出探索報告。
+- 天氣候選的快照加上與凍結時相同的 `--variant`、`--reference-points` 與 `--weights`；三點加權的合格起點可能比基線少，研究應使用各候選合格起點的交集。
+
+## 4. 讀取快照並執行滾動起點回測 (Rolling-Origin Backtest)
 
 在研究腳本或 Jupytext `.py` 中，使用 `read_snapshot` 還原正式 `TrainingData`，並以 `rolling_origin_backtest` 評估基線與候選參數：
 
@@ -112,7 +167,7 @@ is_adopted = candidate_eval.beats(baseline_eval)
 
 ---
 
-## 4. 建立研究主題目錄與撰寫報告 (`README.md`)
+## 5. 建立研究主題目錄與撰寫報告 (`README.md`)
 
 每個研究主題存放於 `lab/<YYYY-MM-DD>-<topic>/`（例如 [`lab/2026-11-08-dhf-hyperparameter-search/README.md`](../../lab/2026-11-08-dhf-hyperparameter-search/README.md)）：
 

@@ -7,7 +7,11 @@ import pandas as pd
 import pytest
 from lab.backtest import (
     BacktestReport,
+    eligible_origins,
+    origin_runs,
     rolling_origin_backtest,
+    split_search_and_eval_origins,
+    training_row_count,
     verify_non_overlapping_target_windows,
 )
 from pydantic import BaseModel
@@ -325,3 +329,90 @@ def test_verify_non_overlapping_target_windows_accepts_later_disjoint_windows() 
     eval_origins = (pd.Timestamp("2026-10-29 18:00:00"), pd.Timestamp("2026-10-29 22:00:00"))
 
     verify_non_overlapping_target_windows(search_origins, eval_origins, horizon_hours=24)
+
+
+def test_eligible_origins_span_every_hour_that_passes_the_backtest_checks(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: eligible_origins lists each hourly origin rolling_origin_backtest accepts, and no other."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    times = load["datetime"]
+    gap_hour = times.iloc[250]
+    data = _training_data(load[times != gap_hour], weather)
+
+    eligible = eligible_origins(fast_task, data, HORIZON_HOURS)
+
+    # min_training_hours = 216 首次於 index 215 達成；index 244..249 的目標時段含缺口，
+    # index 250 之後的 168 小時回看皆含缺口，直到資料結束。
+    expected = tuple(pd.date_range(times.iloc[215], times.iloc[243], freq="h"))
+    assert eligible == expected
+    assert origin_runs(eligible) == [(times.iloc[215], times.iloc[243])]
+    rolling_origin_backtest(fast_task, data, origins=[eligible[-1]], horizon_hours=HORIZON_HOURS)
+    with pytest.raises(ValueError, match="horizon load"):
+        rolling_origin_backtest(
+            fast_task, data, origins=[times.iloc[244]], horizon_hours=HORIZON_HOURS
+        )
+
+
+def test_eligible_origins_respect_an_explicit_min_history_override(
+    fast_task: TaskDefinition,
+) -> None:
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    data = _training_data(load, weather)
+
+    eligible = eligible_origins(fast_task, data, HORIZON_HOURS, min_history_hours=168)
+
+    assert eligible[0] == pd.Timestamp(load["datetime"].iloc[167])
+
+
+def test_origin_runs_group_consecutive_hours() -> None:
+    origins = (
+        pd.Timestamp("2026-10-01 00:00"),
+        pd.Timestamp("2026-10-01 01:00"),
+        pd.Timestamp("2026-10-01 05:00"),
+    )
+
+    assert origin_runs(origins) == [
+        (pd.Timestamp("2026-10-01 00:00"), pd.Timestamp("2026-10-01 01:00")),
+        (pd.Timestamp("2026-10-01 05:00"), pd.Timestamp("2026-10-01 05:00")),
+    ]
+    assert origin_runs(()) == []
+
+
+def test_split_takes_the_last_calendar_days_for_evaluation_and_earlier_disjoint_search() -> None:
+    eligible = tuple(pd.date_range("2026-10-01 00:00", "2026-10-12 23:00", freq="h"))
+
+    split = split_search_and_eval_origins(
+        eligible, horizon_hours=24, eval_calendar_days=7, hour_step=6
+    )
+
+    assert split.eval_origins[0] == pd.Timestamp("2026-10-06 00:00")
+    assert split.eval_origins[-1] == pd.Timestamp("2026-10-12 18:00")
+    assert split.eval_calendar_days == 7
+    assert split.search_origins[0] == pd.Timestamp("2026-10-01 00:00")
+    assert split.search_origins[-1] == pd.Timestamp("2026-10-05 00:00")
+    assert all(origin.hour % 6 == 0 for origin in (*split.search_origins, *split.eval_origins))
+    verify_non_overlapping_target_windows(split.search_origins, split.eval_origins, 24)
+
+
+def test_split_without_room_for_search_origins_is_rejected() -> None:
+    eligible = tuple(pd.date_range("2026-10-01 00:00", "2026-10-05 23:00", freq="h"))
+
+    with pytest.raises(ValueError, match="search origins"):
+        split_search_and_eval_origins(eligible, horizon_hours=24, eval_calendar_days=7, hour_step=6)
+
+
+def test_training_row_count_grows_with_the_origin_and_drops_rows_without_weather(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: training_row_count counts the rows fit_task trains on for history up to the origin."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    origin = pd.Timestamp(load["datetime"].iloc[260])
+    complete = _training_data(load, weather)
+    gap = weather["datetime"].between(load["datetime"].iloc[230], load["datetime"].iloc[235])
+    gapped = _training_data(load, weather[~gap])
+
+    count = training_row_count(fast_task, complete, origin)
+
+    assert training_row_count(fast_task, complete, origin + pd.Timedelta(hours=1)) == count + 1
+    assert training_row_count(fast_task, gapped, origin) < count

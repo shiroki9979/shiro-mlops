@@ -637,11 +637,23 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 
 | 介面 | 行為 |
 | :--- | :--- |
-| `write_snapshot(task, runtime, as_of, *, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`TaskNotReady` 原樣拋出 |
-| `read_snapshot(task, as_of, *, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原 |
-| `snapshot_path(task, as_of, *, snapshots_dir) -> Path` | 回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
+| `write_snapshot(task, runtime, as_of, *, variant=None, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表，並於 parquet 記錄 `task.weather` 的代表點、權重與欄位；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`TaskNotReady` 原樣拋出 |
+| `read_snapshot(task, as_of, *, variant=None, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原；快照記錄的天氣與 `task.weather` 不同時拋 `SnapshotWeatherMismatchError`；未記錄天氣的舊快照不檢查 |
+| `snapshot_path(task, as_of, *, variant=None, snapshots_dir) -> Path` | 無 `variant` 時回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`，有 `variant` 時回傳 `<snapshots_dir>/<task_id>/<variant>/<as_of>.parquet`；`variant` 限小寫英數與連字號，否則拋 `ValueError`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
 
-`snapshots_dir` 預設 `data/lab/snapshots`（不進版控）。CLI：`uv run --package lab python -m lab.snapshot <task_id> --as-of <ISO>`。
+訓練表只保存加權天氣（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)），代表點或權重不同的候選須各自凍結快照，以 `variant` 區分；放假日等 `[params]` 差異可共用同一份快照。
+
+`snapshots_dir` 預設 `data/lab/snapshots`（不進版控）。CLI：`uv run --package lab python -m lab.snapshot <task_id> --as-of <ISO> [--variant <name> --reference-points <alias>... --weights <w>...]`；`--reference-points` 取代任務設定的代表點並沿用其 `weather.fields`，驗證規則與任務設定相同（`build_weather_spec`），且必須搭配 `--variant`。
+
+### 7.1.1 代表點權重（`lab/regional_weights.py`）
+
+`regional_load_shares(snapshots, *, start, end) -> RegionalLoadShares` 以區域供需快照計算 `source_time` 落在 `[start, end)` 的北中南東用電占比，供 TICKET-303 推算氣象代表點權重。
+
+- **有效樣本**：與逐時實際負載推算相同（`complete_region_loads`）：四區齊全的 `source_time` 才計入，同一 `source_time` 多次擷取只算一次。期間內沒有有效樣本時拋 `ValueError`。
+- **占比**：各區在有效樣本的用電加總除以四區總和。
+- **權重**：`reference_point_weights(region_points=REGION_REFERENCE_POINTS, *, decimals=None)` 將北部、中部、南部對應臺北、臺中、高雄；東部占比依三點比例分配，等同三區占比重新正規化。指定 `decimals` 時逐一四捨五入，差額歸給最大權重，使總和恰為 1。
+
+CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <ISO> [--decimals 3]`，輸出期間、有效樣本數、四區占比、權重，以及可直接傳給 `lab.snapshot` 的 `--reference-points`／`--weights` 參數。
 
 ### 7.2 滾動起點回測（`lab/backtest.py`）
 
@@ -665,6 +677,17 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 | `origins`、`horizon_hours` | 正規化後的起點清單與視界 |
 | `min_history_hours`、`min_history_overridden` | 實際使用的最低累積與是否由呼叫端覆寫 |
 | `params` | 所用任務參數 |
+
+起點盤點（不訓練模型）：
+
+| 介面 | 行為 |
+| :--- | :--- |
+| `eligible_origins(task, data, horizon_hours, *, min_history_hours=None)` | 以上述三項起點有效性條件逐一檢查快照內每個整點，回傳 `rolling_origin_backtest` 會接受的全部起點 |
+| `origin_runs(origins)` | 將排序後的起點分組為連續整點區間 `(first, last)` |
+| `split_search_and_eval_origins(eligible, *, horizon_hours, eval_calendar_days, hour_step)` | 只取整點為 `hour_step` 倍數的起點；最後 `eval_calendar_days` 個日曆日為評估起點，搜尋起點為 `<= 第一個評估起點 - horizon_hours` 者，並以 `verify_non_overlapping_target_windows` 驗證；沒有可用的評估或搜尋起點時拋 `ValueError` |
+| `training_row_count(task, data, origin)` | 遞迴回歸任務在 `origin` 截斷後實際訓練的列數（缺任一 lag 或天氣的列已剔除），用於揭露加權天氣嚴格缺值的訓練列損失 |
+
+CLI：`uv run --package lab python -m lab.origins <task_id> --as-of <ISO> [--variant <name> --reference-points ... --weights ...] [--horizon-hours 24] [--eval-days 7] [--hour-step 6]`，輸出合格起點數、日曆日數、連續區間、建議的搜尋／評估切分，以及評估起點是否涵蓋 `--eval-days` 個日曆日（`sufficient: yes|no`）。
 
 `candidate.beats(baseline)`：起點清單與視界相同時，`overall_mape` 嚴格較低即為贏；起點或視界不同時拋 `ValueError`。回測使用觀測氣象，結果為「氣象已知」條件下的條件式數字，不代表正式 serving 誤差，也不是其上界或下界。
 

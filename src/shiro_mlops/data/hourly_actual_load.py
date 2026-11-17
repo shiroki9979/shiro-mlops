@@ -138,15 +138,29 @@ def derive_hourly_actual_load(
     return _to_frame(rows)
 
 
+def complete_region_loads(
+    snapshots: Iterable[TaipowerRegionalSupplyDemandSnapshot],
+) -> dict[datetime, dict[str, float]]:
+    """Region loads (萬瓩) of every source_time that has all four regions, the valid samples.
+
+    A source_time captured in several observation slots counts once; samples missing
+    a region are dropped. Derivation and research weights share this rule.
+    """
+    loads_by_source_time = _latest_region_loads_by_source_time(snapshots)
+    return {
+        source_time: region_loads
+        for source_time, region_loads in loads_by_source_time.items()
+        if region_loads.keys() == _REQUIRED_REGIONS
+    }
+
+
 def _valid_nationwide_samples(
     snapshots: Iterable[TaipowerRegionalSupplyDemandSnapshot],
 ) -> dict[datetime, float]:
     """Map each complete source_time to its four-region load sum in MW."""
-    loads_by_source_time = _latest_region_loads_by_source_time(snapshots)
     return {
         source_time: sum(region_loads.values()) * WAN_KW_TO_MW
-        for source_time, region_loads in loads_by_source_time.items()
-        if region_loads.keys() == _REQUIRED_REGIONS
+        for source_time, region_loads in complete_region_loads(snapshots).items()
     }
 
 
