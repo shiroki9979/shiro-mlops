@@ -278,7 +278,7 @@ export const zhTW = {
       latestIngestedAt: (time: string) => `最新入庫時間：${time}`,
       ingestionAge: (seconds: string) => `入庫經過時間：${seconds} 秒`,
       sourceAge: (seconds: string) => `來源經過時間：${seconds} 秒`,
-      servingStale: (value: string) => `預報服務過期：${value}`,
+      latestReleaseStale: (value: string) => `最新發布超過七小時：${value}`,
       missingIdentifiers: (identifiers: string) => `缺少識別：${identifiers}`,
       openDetails: '開啟明細',
     },

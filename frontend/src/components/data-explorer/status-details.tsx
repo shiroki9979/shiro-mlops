@@ -13,8 +13,8 @@ export function DatasetStatusDetails({ status }: { status: DatasetStatus }) {
     <>
       <p>{statusCardText.ingestionAge(optionalSeconds(status.ingestion_age_seconds, locale))}</p>
       <p>{statusCardText.sourceAge(optionalSeconds(status.source_age_seconds, locale))}</p>
-      {status.serving_stale != null && (
-        <p>{statusCardText.servingStale(status.serving_stale ? m.common.yes : m.common.no)}</p>
+      {status.latest_release_stale != null && (
+        <p>{statusCardText.latestReleaseStale(status.latest_release_stale ? m.common.yes : m.common.no)}</p>
       )}
       {status.missing_identifiers.length > 0 && (
         <p>{statusCardText.missingIdentifiers(status.missing_identifiers.join(', '))}</p>

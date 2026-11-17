@@ -281,7 +281,7 @@ export const en: Messages = {
       latestIngestedAt: (time) => `Latest ingested: ${time}`,
       ingestionAge: (seconds) => `Ingestion age: ${seconds} s`,
       sourceAge: (seconds) => `Source age: ${seconds} s`,
-      servingStale: (value) => `Serving stale: ${value}`,
+      latestReleaseStale: (value) => `Latest release over 7 hours old: ${value}`,
       missingIdentifiers: (identifiers) => `Missing identifiers: ${identifiers}`,
       openDetails: 'Open details',
     },

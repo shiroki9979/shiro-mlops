@@ -14,7 +14,7 @@ export const DatasetStatusSchema = z.object({
   missing_identifiers: z.array(z.string()).default([]),
   missing_slot_count: z.number().default(0),
   record_count: z.number().nullable().optional(),
-  serving_stale: z.boolean().nullable().optional(),
+  latest_release_stale: z.boolean().nullable().optional(),
   href: z.string(),
 })
 
