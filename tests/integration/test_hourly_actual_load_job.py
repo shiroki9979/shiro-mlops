@@ -31,9 +31,9 @@ def _store_samples(repo: TimeSeriesRepository, start: datetime, count: int) -> N
         repo.upsert_regional_supply_demand_snapshots(snapshots)
 
 
-def _run_scheduled_tick(repo: TimeSeriesRepository):
+def _run_scheduled_tick(repo: TimeSeriesRepository, tick: datetime = TICK):
     evaluation = hourly_actual_load_schedule.evaluate_tick(
-        build_schedule_context(scheduled_execution_time=TICK)
+        build_schedule_context(scheduled_execution_time=tick)
     )
     assert evaluation.run_requests is not None
     job_def = Definitions(
@@ -54,10 +54,10 @@ def _persisted_load(repo: TimeSeriesRepository) -> dict[pd.Timestamp, float]:
     return dict(zip(loads["time"], loads["load_mw"], strict=True))
 
 
-def test_job_recomputes_recent_completed_hours_idempotently(
+def test_job_derives_completed_hours_idempotently(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    _store_samples(test_repo, datetime(2026, 9, 5, 14, 0), 6)  # 超出三小時重算窗口
+    _store_samples(test_repo, datetime(2026, 9, 5, 14, 0), 6)  # 尚無推算紀錄，由補算窗口涵蓋
     _store_samples(test_repo, datetime(2026, 9, 5, 15, 0), 6)
     _store_samples(test_repo, datetime(2026, 9, 5, 16, 0), 4)
     _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 3)  # 低於門檻
@@ -68,6 +68,7 @@ def test_job_recomputes_recent_completed_hours_idempotently(
     _run_scheduled_tick(test_repo)
 
     assert first == {
+        pd.Timestamp("2026-09-05 14:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
         pd.Timestamp("2026-09-05 15:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
         pd.Timestamp("2026-09-05 16:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
     }
@@ -85,3 +86,33 @@ def test_late_sample_fills_previously_missing_hour(test_repo: TimeSeriesReposito
     assert _persisted_load(test_repo) == {
         pd.Timestamp("2026-09-05 17:00:00"): pytest.approx(FIXTURE_TOTAL_MW)
     }
+
+
+def test_resumed_job_derives_boundary_hour_left_by_an_outage(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """An hour stored just before an outage is derived once the schedule resumes (#113)."""
+    _store_samples(test_repo, datetime(2026, 9, 5, 10, 0), 6)
+    _run_scheduled_tick(test_repo, tick=TICK.replace(hour=11))
+    _store_samples(test_repo, datetime(2026, 9, 5, 11, 0), 6)  # 中斷前最後一個完整小時
+    _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 6)  # 排程恢復後的小時
+
+    _run_scheduled_tick(test_repo)
+
+    assert _persisted_load(test_repo) == {
+        pd.Timestamp("2026-09-05 10:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
+        pd.Timestamp("2026-09-05 11:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
+        pd.Timestamp("2026-09-05 17:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
+    }
+
+
+def test_job_ignores_derived_hours_newer_than_its_tick(test_repo: TimeSeriesRepository) -> None:
+    """A re-run of an old tick anchors on what was derived by then, not on later rows."""
+    _store_samples(test_repo, datetime(2026, 9, 5, 11, 0), 6)
+    _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 6)
+    _run_scheduled_tick(test_repo)
+
+    _store_samples(test_repo, datetime(2026, 9, 5, 12, 0), 6)
+    _run_scheduled_tick(test_repo, tick=TICK.replace(hour=16))
+
+    assert pd.Timestamp("2026-09-05 12:00:00") in _persisted_load(test_repo)

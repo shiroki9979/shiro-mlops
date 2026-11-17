@@ -6,8 +6,11 @@ import pandas as pd
 import pytest
 
 from shiro_mlops.data.hourly_actual_load import (
+    HourWindow,
+    catch_up_window,
     derive_hourly_actual_load,
     recent_completed_hours,
+    uncovered_gap,
 )
 from shiro_mlops.data.taipower_regional_supply_demand import (
     REGIONAL_SUPPLY_DEMAND_REGIONS,
@@ -149,3 +152,58 @@ def test_recent_completed_hours_ends_at_current_hour_start() -> None:
 
     assert window.start == datetime(2026, 9, 26, 11, 0)
     assert window.end == datetime(2026, 9, 26, 14, 0)
+
+
+TICK_14_05 = datetime(2026, 9, 26, 14, 5)
+
+
+def _catch_up(latest_derived_hour: datetime | None) -> HourWindow:
+    return catch_up_window(TICK_14_05, latest_derived_hour, recent_hours=3, max_catchup_hours=24)
+
+
+def test_catch_up_window_keeps_recent_hours_when_derivation_is_current() -> None:
+    window = _catch_up(datetime(2026, 9, 26, 13, 0))
+
+    assert window == HourWindow(datetime(2026, 9, 26, 11, 0), datetime(2026, 9, 26, 14, 0))
+
+
+def test_catch_up_window_starts_after_latest_derived_hour_after_an_outage() -> None:
+    """The boundary hour right after the last derived one is recomputed once ingestion resumes."""
+    window = _catch_up(datetime(2026, 9, 26, 2, 0))
+
+    assert window == HourWindow(datetime(2026, 9, 26, 3, 0), datetime(2026, 9, 26, 14, 0))
+
+
+def test_catch_up_window_is_capped_when_outage_exceeds_the_limit() -> None:
+    window = _catch_up(datetime(2026, 9, 20, 2, 0))
+
+    assert window == HourWindow(datetime(2026, 9, 25, 14, 0), datetime(2026, 9, 26, 14, 0))
+
+
+def test_catch_up_window_without_derived_hours_scans_up_to_the_limit() -> None:
+    window = _catch_up(None)
+
+    assert window == HourWindow(datetime(2026, 9, 25, 14, 0), datetime(2026, 9, 26, 14, 0))
+
+
+def test_catch_up_limit_must_cover_the_recent_recompute_hours() -> None:
+    with pytest.raises(ValueError, match="max_catchup_hours"):
+        catch_up_window(TICK_14_05, None, recent_hours=3, max_catchup_hours=2)
+
+
+def test_uncovered_gap_reports_hours_skipped_by_the_cap() -> None:
+    window = _catch_up(datetime(2026, 9, 20, 2, 0))
+
+    assert uncovered_gap(datetime(2026, 9, 20, 2, 0), window) == HourWindow(
+        datetime(2026, 9, 20, 3, 0), datetime(2026, 9, 25, 14, 0)
+    )
+
+
+@pytest.mark.parametrize(
+    "latest_derived_hour",
+    [None, datetime(2026, 9, 26, 2, 0), datetime(2026, 9, 26, 13, 0)],
+)
+def test_uncovered_gap_is_none_when_the_window_reaches_the_latest_derived_hour(
+    latest_derived_hour: datetime | None,
+) -> None:
+    assert uncovered_gap(latest_derived_hour, _catch_up(latest_derived_hour)) is None

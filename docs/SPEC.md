@@ -1,7 +1,7 @@
 # 系統規格與資料契約規格書 (SPEC.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-16
+- 最後更新：2026-11-17
 - 專案版本：`0.4.0`
 
 ---
@@ -397,7 +397,8 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
    - **故障邊界**：使用獨立 job 與 schedule，不因觀測擷取或其他管線失敗而跳過當次預報版本。
 5. **`hourly_actual_load_job`**：
    - **排程**：`5 * * * *`（`Asia/Taipei`）。
-   - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 §1.1 推算最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，以 `(time, subject)` upsert 至 `raw_taipower_load`，`subject` 為 `nationwide`；不呼叫任何台電外部 API。
+   - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 §1.1 推算已結束小時，以 `(time, subject)` upsert 至 `raw_taipower_load`，`subject` 為 `nationwide`；不呼叫任何台電外部 API。
+   - **推算窗口**：最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，並向前延伸至 tick 時已存在的最後一個推算小時（`source = regional_snapshot_sum`）之後，使擷取中斷前已入庫、尚未推算的小時在排程恢復後補上；最多回溯 `HOURLY_LOAD_CATCHUP_MAX_HOURS`（預設 `168`）個小時，尚無推算小時時即回溯此上限。超出上限而未涵蓋的區間以 warning 記錄於 run log，改由 `scripts/rederive_hourly_actual_load.py` 補算。
    - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
 6. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。

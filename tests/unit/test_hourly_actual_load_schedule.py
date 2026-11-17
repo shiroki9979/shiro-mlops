@@ -22,6 +22,7 @@ def test_hourly_load_settings_defaults() -> None:
 
     assert settings.HOURLY_LOAD_MIN_SAMPLES == 4
     assert settings.HOURLY_LOAD_RECOMPUTE_HOURS == 3
+    assert settings.HOURLY_LOAD_CATCHUP_MAX_HOURS == 168
 
 
 def test_hourly_actual_load_job_selects_only_derivation_asset() -> None:

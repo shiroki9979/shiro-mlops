@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # Nationwide hourly actual load derived from regional snapshots (ADR-0008)
     HOURLY_LOAD_MIN_SAMPLES: PositiveInt = 4
     HOURLY_LOAD_RECOMPUTE_HOURS: PositiveInt = 3
+    HOURLY_LOAD_CATCHUP_MAX_HOURS: PositiveInt = 168
 
     # API Serving
     API_HOST: str = "0.0.0.0"
