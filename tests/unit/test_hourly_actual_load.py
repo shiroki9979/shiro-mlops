@@ -8,6 +8,7 @@ import pytest
 from shiro_mlops.data.hourly_actual_load import (
     HourWindow,
     catch_up_window,
+    complete_region_loads,
     derive_hourly_actual_load,
     recent_completed_hours,
     uncovered_gap,
@@ -109,6 +110,20 @@ def test_repeated_source_time_across_observation_slots_counts_once() -> None:
     hourly = _derive([*distinct, *repeated_capture])
 
     assert hourly.empty
+
+
+def test_complete_region_loads_keep_only_four_region_samples_counted_once() -> None:
+    complete = HOUR_13 + timedelta(minutes=10)
+    partial = HOUR_13 + timedelta(minutes=20)
+    snapshots = [
+        *_sample(complete, (1.0, 2.0, 3.0, 4.0), observed_at=complete),
+        *_sample(complete, (10.0, 20.0, 30.0, 40.0), observed_at=complete + timedelta(minutes=10)),
+        *_sample(partial, (1.0, 2.0, 3.0), regions=REGIONAL_SUPPLY_DEMAND_REGIONS[:3]),
+    ]
+
+    assert complete_region_loads(snapshots) == {
+        complete: {"北部": 10.0, "中部": 20.0, "南部": 30.0, "東部": 40.0}
+    }
 
 
 def test_hour_with_fewer_valid_samples_than_threshold_is_not_produced() -> None:

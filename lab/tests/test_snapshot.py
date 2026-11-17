@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from lab.snapshot import SnapshotWeatherMismatchError, read_snapshot, snapshot_path, write_snapshot
 from lab.snapshot import main as snapshot_main
-from lab.snapshot import read_snapshot, snapshot_path, write_snapshot
 from shiro_mlops.core.database import ensure_timescale_hypertables
+from shiro_mlops.data.cwa_client import DEFAULT_CWA_LOCATIONS
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.definition import TaskDefinition, build_weather_spec
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import (
     TaskNotReady,
@@ -196,6 +197,161 @@ def test_snapshot_cli_writes_parquet_at_default_relative_layout(
     pd.testing.assert_frame_equal(restored.load, direct.load)
     pd.testing.assert_frame_equal(restored.weather, direct.weather)
     assert restored.validation_start == direct.validation_start
+
+
+THREE_POINTS = ["Taipei", "Taichung", "Kaohsiung"]
+THREE_POINT_WEIGHTS = [0.5, 0.3, 0.2]
+
+
+@pytest.fixture
+def weighted_task(task: TaskDefinition) -> TaskDefinition:
+    weather = build_weather_spec(
+        THREE_POINTS, THREE_POINT_WEIGHTS, task.weather.fields, DEFAULT_CWA_LOCATIONS
+    )
+    return replace(task, weather=weather)
+
+
+@pytest.fixture
+def three_point_runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    test_repo.upsert_taipower_load(load)
+    for offset, location in enumerate(THREE_POINTS):
+        shifted = weather.assign(temperature=weather["temperature"] + offset, location=location)
+        test_repo.upsert_cwa_observation_batch(canonical_observation_batch(shifted))
+    return TaskRuntime(repository=test_repo)
+
+
+def test_weather_variants_of_one_as_of_are_frozen_side_by_side(
+    task: TaskDefinition,
+    weighted_task: TaskDefinition,
+    three_point_runtime: TaskRuntime,
+    tmp_path: Path,
+) -> None:
+    """Seam: write_snapshot / read_snapshot with variant; candidates with other weather keep their own file."""
+    snapshots_dir = tmp_path / "snapshots"
+
+    baseline_path = write_snapshot(task, three_point_runtime, AS_OF, snapshots_dir=snapshots_dir)
+    weighted_path = write_snapshot(
+        weighted_task,
+        three_point_runtime,
+        AS_OF,
+        variant="three-point",
+        snapshots_dir=snapshots_dir,
+    )
+
+    assert weighted_path == (
+        snapshots_dir / task.task_id / "three-point" / "2026-09-20T23:30:00.parquet"
+    )
+    assert weighted_path == snapshot_path(
+        weighted_task, AS_OF, variant="three-point", snapshots_dir=snapshots_dir
+    )
+    restored = read_snapshot(
+        weighted_task, AS_OF, variant="three-point", snapshots_dir=snapshots_dir
+    )
+    direct = load_training_data(weighted_task, three_point_runtime, as_of=AS_OF)
+    pd.testing.assert_frame_equal(restored.weather, direct.weather)
+    baseline = read_snapshot(task, AS_OF, snapshots_dir=snapshots_dir)
+    assert baseline_path.is_file()
+    assert not baseline.weather["temperature"].equals(restored.weather["temperature"])
+
+
+def test_reading_a_snapshot_with_other_weather_is_refused(
+    task: TaskDefinition,
+    weighted_task: TaskDefinition,
+    three_point_runtime: TaskRuntime,
+    tmp_path: Path,
+) -> None:
+    """Seam: read_snapshot refuses a task whose weighted weather differs from the frozen one."""
+    snapshots_dir = tmp_path / "snapshots"
+    write_snapshot(
+        weighted_task,
+        three_point_runtime,
+        AS_OF,
+        variant="three-point",
+        snapshots_dir=snapshots_dir,
+    )
+
+    with pytest.raises(SnapshotWeatherMismatchError, match="Taichung"):
+        read_snapshot(task, AS_OF, variant="three-point", snapshots_dir=snapshots_dir)
+
+
+def test_snapshot_without_recorded_weather_still_reads(
+    task: TaskDefinition, runtime: TaskRuntime, tmp_path: Path
+) -> None:
+    """Seam: snapshots frozen before weather was recorded (e.g. the 2026-11-08 study) stay readable."""
+    snapshots_dir = tmp_path / "snapshots"
+    path = write_snapshot(task, runtime, AS_OF, snapshots_dir=snapshots_dir)
+    legacy = pd.read_parquet(path)
+    legacy.attrs = {}
+    legacy.to_parquet(path, index=False)
+
+    restored = read_snapshot(task, AS_OF, snapshots_dir=snapshots_dir)
+
+    pd.testing.assert_frame_equal(
+        restored.load, load_training_data(task, runtime, as_of=AS_OF).load
+    )
+
+
+@pytest.mark.parametrize("variant", ["", "Three Point", "../escape", "three/point"])
+def test_variant_must_be_a_plain_lowercase_name(
+    task: TaskDefinition, tmp_path: Path, variant: str
+) -> None:
+    with pytest.raises(ValueError, match="variant"):
+        snapshot_path(task, AS_OF, variant=variant, snapshots_dir=tmp_path)
+
+
+def test_snapshot_cli_freezes_a_weather_variant(
+    task: TaskDefinition,
+    weighted_task: TaskDefinition,
+    three_point_runtime: TaskRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seam: python -m lab.snapshot <task_id> --as-of <ISO> --variant <name> --reference-points ... --weights ..."""
+    import lab.snapshot as snapshot_mod
+
+    monkeypatch.setattr(snapshot_mod, "deployed_task", lambda task_id: task)
+    monkeypatch.setattr(
+        snapshot_mod, "TimeSeriesRepository", lambda: three_point_runtime.repository
+    )
+    snapshots_dir = tmp_path / "snapshots"
+
+    exit_code = snapshot_main(
+        [
+            task.task_id,
+            "--as-of",
+            "2026-09-20T23:30:00",
+            "--snapshots-dir",
+            str(snapshots_dir),
+            "--variant",
+            "three-point",
+            "--reference-points",
+            *THREE_POINTS,
+            "--weights",
+            *(str(weight) for weight in THREE_POINT_WEIGHTS),
+        ]
+    )
+
+    assert exit_code == 0
+    restored = read_snapshot(
+        weighted_task, AS_OF, variant="three-point", snapshots_dir=snapshots_dir
+    )
+    direct = load_training_data(weighted_task, three_point_runtime, as_of=AS_OF)
+    pd.testing.assert_frame_equal(restored.weather, direct.weather)
+
+
+def test_snapshot_cli_requires_a_variant_for_other_weather(
+    task: TaskDefinition, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seam: a weather override without --variant would take the shipped weather's file name."""
+    import lab.snapshot as snapshot_mod
+
+    monkeypatch.setattr(snapshot_mod, "deployed_task", lambda task_id: task)
+
+    with pytest.raises(SystemExit):
+        snapshot_main(
+            [task.task_id, "--as-of", "2026-09-20T23:30:00", "--reference-points", "Taichung"]
+        )
 
 
 def test_src_never_imports_lab() -> None:

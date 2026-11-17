@@ -7,6 +7,7 @@ import pytest
 from shiro_mlops.data.cwa_client import DEFAULT_CWA_LOCATIONS
 from shiro_mlops.tasks.definition import (
     TaskDefinitionError,
+    build_weather_spec,
     load_task_definition,
     load_task_definitions,
 )
@@ -199,6 +200,37 @@ def test_invalid_reference_point_weights_fail_at_load(
 
     with pytest.raises(TaskDefinitionError, match=f"weather.*{message}"):
         load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+
+def test_weather_spec_built_outside_a_task_file_resolves_weights() -> None:
+    weather = build_weather_spec(
+        ["Taipei", "Taichung", "Kaohsiung"],
+        [0.5, 0.3, 0.2],
+        ["temperature"],
+        DEFAULT_CWA_LOCATIONS,
+    )
+
+    assert [(point.location.alias, point.weight) for point in weather.reference_points] == [
+        ("Taipei", 0.5),
+        ("Taichung", 0.3),
+        ("Kaohsiung", 0.2),
+    ]
+    assert weather.fields == ("temperature",)
+
+
+@pytest.mark.parametrize(
+    ("points", "weights", "message"),
+    [
+        (["Taipei", "Kaohsiung"], [0.6, 0.6], "sum to 1"),
+        (["Taipei", "Kaohsiung"], None, "need weights"),
+        (["Taipei", "Atlantis"], [0.5, 0.5], "Atlantis"),
+    ],
+)
+def test_weather_spec_built_outside_a_task_file_uses_the_task_file_rules(
+    points: list[str], weights: list[float] | None, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        build_weather_spec(points, weights, ["temperature"], DEFAULT_CWA_LOCATIONS)
 
 
 def test_task_id_must_match_the_file_name(tmp_path: Path) -> None:

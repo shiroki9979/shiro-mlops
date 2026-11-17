@@ -637,11 +637,23 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 
 | 介面 | 行為 |
 | :--- | :--- |
-| `write_snapshot(task, runtime, as_of, *, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`TaskNotReady` 原樣拋出 |
-| `read_snapshot(task, as_of, *, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原 |
-| `snapshot_path(task, as_of, *, snapshots_dir) -> Path` | 回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
+| `write_snapshot(task, runtime, as_of, *, variant=None, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表，並於 parquet 記錄 `task.weather` 的代表點、權重與欄位；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`TaskNotReady` 原樣拋出 |
+| `read_snapshot(task, as_of, *, variant=None, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原；快照記錄的天氣與 `task.weather` 不同時拋 `SnapshotWeatherMismatchError`；未記錄天氣的舊快照不檢查 |
+| `snapshot_path(task, as_of, *, variant=None, snapshots_dir) -> Path` | 無 `variant` 時回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`，有 `variant` 時回傳 `<snapshots_dir>/<task_id>/<variant>/<as_of>.parquet`；`variant` 限小寫英數與連字號，否則拋 `ValueError`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
 
-`snapshots_dir` 預設 `data/lab/snapshots`（不進版控）。CLI：`uv run --package lab python -m lab.snapshot <task_id> --as-of <ISO>`。
+訓練表只保存加權天氣（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)），代表點或權重不同的候選須各自凍結快照，以 `variant` 區分；放假日等 `[params]` 差異可共用同一份快照。
+
+`snapshots_dir` 預設 `data/lab/snapshots`（不進版控）。CLI：`uv run --package lab python -m lab.snapshot <task_id> --as-of <ISO> [--variant <name> --reference-points <alias>... --weights <w>...]`；`--reference-points` 取代任務設定的代表點並沿用其 `weather.fields`，驗證規則與任務設定相同（`build_weather_spec`），且必須搭配 `--variant`。
+
+### 7.1.1 代表點權重（`lab/regional_weights.py`）
+
+`regional_load_shares(snapshots, *, start, end) -> RegionalLoadShares` 以區域供需快照計算 `source_time` 落在 `[start, end)` 的北中南東用電占比，供 TICKET-303 推算氣象代表點權重。
+
+- **有效樣本**：與逐時實際負載推算相同（`complete_region_loads`）：四區齊全的 `source_time` 才計入，同一 `source_time` 多次擷取只算一次。期間內沒有有效樣本時拋 `ValueError`。
+- **占比**：各區在有效樣本的用電加總除以四區總和。
+- **權重**：`reference_point_weights(region_points=REGION_REFERENCE_POINTS, *, decimals=None)` 將北部、中部、南部對應臺北、臺中、高雄；東部占比依三點比例分配，等同三區占比重新正規化。指定 `decimals` 時逐一四捨五入，差額歸給最大權重，使總和恰為 1。
+
+CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <ISO> [--decimals 3]`，輸出期間、有效樣本數、四區占比、權重，以及可直接傳給 `lab.snapshot` 的 `--reference-points`／`--weights` 參數。
 
 ### 7.2 滾動起點回測（`lab/backtest.py`）
 
