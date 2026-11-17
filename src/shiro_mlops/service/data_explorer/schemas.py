@@ -30,7 +30,14 @@ class DatasetStatus(BaseModel):
     missing_identifiers: list[str] = Field(default_factory=list)
     missing_slot_count: int = 0
     record_count: int | None = None
-    serving_stale: bool | None = None
+    latest_release_stale: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the dataset's newest release was issued more than seven hours ago. "
+            "A coarse dataset-level signal; it does not decide whether a single prediction "
+            "request degrades, which depends on the version supplying each weather value."
+        ),
+    )
     href: str
 
 

@@ -27,6 +27,13 @@ FORECAST_FIELDS = {
 DEFAULT_RESOLUTION_FIELDS = (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
 NON_INTERPOLATED_FORECAST_FIELDS = {"wind_direction"}
 WeatherResolutionMode = Literal["normal", "degraded", "unavailable"]
+FORECAST_STALE_AFTER = timedelta(hours=7)
+FORECAST_DATASET_IDS = ("F-D0047-089", "F-D0047-091")
+
+
+def forecast_is_stale(issued_at: datetime, as_of: datetime) -> bool:
+    """Whether a forecast version issued at ``issued_at`` is too old to serve at ``as_of``."""
+    return as_of - issued_at > FORECAST_STALE_AFTER
 
 
 @dataclass(frozen=True)
@@ -52,18 +59,15 @@ def _row_covers(row: pd.Series, moment: pd.Timestamp) -> bool:
     return start == end and moment == start or start <= moment < end
 
 
-def _latest_rows(frame: pd.DataFrame) -> pd.DataFrame:
+def _fresh_rows(frame: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
+    """Rows whose own forecast version was issued no more than seven hours before the cutoff."""
     if frame.empty:
         return frame
     result = frame.copy()
     for column in ("issued_at", "source_updated_at", "valid_from", "valid_to"):
         result[column] = result[column].map(_as_timestamp)
-    keys = ["dataset_id", "valid_from", "valid_to", "geocode"]
-    return (
-        result.sort_values([*keys, "issued_at", "source_updated_at"])
-        .drop_duplicates(keys, keep="last")
-        .reset_index(drop=True)
-    )
+    stale = result["issued_at"].map(lambda issued_at: forecast_is_stale(issued_at, cutoff))
+    return result.loc[~stale].reset_index(drop=True)
 
 
 def _point_value(
@@ -157,13 +161,16 @@ def resolve_weather(
     """Resolve forecast and degraded weather of one weather reference point for a horizon.
 
     The township forecast area and fallback station both come from the reference
-    point, so the prediction subject never decides where weather is read.
+    point, so the prediction subject never decides where weather is read. Each
+    hour and field takes, in order, a fresh three-day value, a fresh weekly value,
+    the previous-day observation, then climatology; freshness is judged by the
+    forecast version that supplies the value. Only observation fills degrade.
     """
     start = _as_timestamp(start_time)
     cutoff = _as_timestamp(as_of or start)
     moments = [start + timedelta(hours=index) for index in range(horizon_hours)]
     end = moments[-1] if moments else start
-    forecasts = _latest_rows(
+    forecasts = _fresh_rows(
         repository.fetch_cwa_forecast_rows(
             geocode=reference_point.geocode,
             issued_before=cutoff,
@@ -171,22 +178,21 @@ def resolve_weather(
             valid_start=start,
             valid_end=end,
             include_adjacent_points=True,
-        )
+        ),
+        cutoff,
     )
     observations = repository.fetch_cwa_station_observations(
         start_time=start - timedelta(days=366),
         end_time=cutoff,
         station_id=reference_point.station_id,
     )
-    issued = forecasts["issued_at"].max() if not forecasts.empty else None
-    stale = issued is None or cutoff - issued > timedelta(hours=7)
     datasets = {
         dataset_id: (
             forecasts[forecasts["dataset_id"] == dataset_id]
             if "dataset_id" in forecasts.columns
             else pd.DataFrame()
         )
-        for dataset_id in ("F-D0047-089", "F-D0047-091")
+        for dataset_id in FORECAST_DATASET_IDS
     }
     rows: list[dict[str, object]] = []
     sources: list[dict[str, dict[str, str]]] = []
@@ -199,16 +205,13 @@ def resolve_weather(
             value: object = None
             source_row: pd.Series | None = None
             source_kind: str | None = None
-            if not stale:
-                value, source_row = _point_value(datasets["F-D0047-089"], moment, source_column)
+            value, source_row = _point_value(datasets["F-D0047-089"], moment, source_column)
+            if value is not None:
+                source_kind = "three_day"
+            else:
+                value, source_row = _interval_value(datasets["F-D0047-091"], moment, source_column)
                 if value is not None:
-                    source_kind = "three_day"
-                else:
-                    value, source_row = _interval_value(
-                        datasets["F-D0047-091"], moment, source_column
-                    )
-                    if value is not None:
-                        source_kind = "weekly"
+                    source_kind = "weekly"
             if value is None:
                 value, fallback_kind = _fallback_from_observations(
                     observations,

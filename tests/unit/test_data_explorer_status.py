@@ -1,11 +1,12 @@
 """Dataset status dimensions stay independent and explainable."""
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import FORECAST_STALE_AFTER
 from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.status import (
     DatasetFreshness,
@@ -35,8 +36,24 @@ def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
         assert forecasts.completeness == audits.completeness == completeness
         assert forecasts.missing_identifiers == audits.missing_identifiers == list(missing)
         assert forecasts.source_age_seconds == audits.source_age_seconds == (12 - hour) * 3600
-        assert forecasts.serving_stale is False
-        assert audits.serving_stale is None
+        assert forecasts.latest_release_stale is False
+        assert audits.latest_release_stale is None
+
+
+@pytest.mark.parametrize(
+    ("age", "expected"),
+    [(FORECAST_STALE_AFTER, False), (FORECAST_STALE_AFTER + timedelta(minutes=1), True)],
+)
+def test_latest_release_stale_shares_the_resolver_seven_hour_threshold(
+    test_repo: TimeSeriesRepository, age: timedelta, expected: bool
+) -> None:
+    issued_at = datetime(2026, 9, 20, 5)
+    test_repo.upsert_cwa_forecast_release(forecast_release(issued_at, ()))
+
+    statuses = DatasetStatusCatalog(test_repo.engine).status(issued_at + age).datasets
+    forecasts = next(item for item in statuses if item.id == "cwa_forecasts")
+
+    assert forecasts.latest_release_stale is expected
 
 
 @pytest.mark.parametrize("minute", [0, 15])

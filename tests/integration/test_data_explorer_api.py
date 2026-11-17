@@ -761,7 +761,7 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
         for item in client.get("/data/status").json()["datasets"]
         if item["id"] == "cwa_forecasts"
     )
-    assert status["serving_stale"] is False
+    assert status["latest_release_stale"] is False
     assert status["freshness"] in {"fresh", "warning"}
 
 

@@ -73,7 +73,7 @@ const statusPayload = {
       latest_ingested_at: '2026-09-09T19:41:00+08:00',
       ingestion_age_seconds: 300,
       source_age_seconds: 360,
-      serving_stale: false,
+      latest_release_stale: false,
       missing_identifiers: [],
       missing_slot_count: 0,
       href: '/data/weather/forecasts',

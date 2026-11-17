@@ -146,11 +146,12 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 #### 1.3.3 CWA 預報版本選取與逐時投影
 
 - 只能選取 `issued_at <= prediction_time` 的預報版本，禁止使用預測當時尚未發布的資料。
-- 每個有效小時與 typed 欄位優先採用最新可用的 `F-D0047-089`；欄位缺少或超出其涵蓋範圍時，退回最新可用的 `F-D0047-091`。
+- 每個氣象代表點、每個有效小時與 typed 欄位依序取值：發布未超過七小時的 `F-D0047-089` → 發布未超過七小時的 `F-D0047-091` → 測站前日同小時觀測 → 同月份同小時歷史平均。七小時以實際提供該數值的預報版本 `issued_at` 判定，而非兩個 dataset 中較新的版本；門檻只定義於 `shiro_mlops.data.weather_resolution.FORECAST_STALE_AFTER`。
 - `F-D0047-089` 的連續數值點資料在相鄰時間點間線性插值；`F-D0047-091` 的區間平均值展開為有效區間內每小時固定值；風向與文字／代碼不得線性插值。
 - 可消費 `incomplete` header 中已存在的指定行政區資料；指定行政區缺少時，退回上一個含有該行政區資料的版本，不要求該版本 `complete`。
 - 預報與觀測皆取自同一氣象代表點：預報讀其 `geocode`，替代資料讀其 `station_id`。
-- 預報缺少或最新 `issued_at` 超過七小時時，依序使用氣象代表點測站的前日同小時觀測、同月份同小時歷史平均；月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料。
+- 改用 `F-D0047-091` 仍屬正常預報；只有以觀測填補的數值才使整次預報成為 `mode: degraded`，其餘仍有效的預報數值照常採用。月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料；任一數值無替代資料即無法產出。
+- Data Explorer 狀態的 `latest_release_stale` 只表示該資料集最新發布是否超過同一七小時門檻，屬資料集層級的粗略訊號，不等同單次請求的降級判定。
 - 多氣象代表點（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)）：每個代表點各自依上列規則選版、投影與降級，再依任務設定權重逐小時合成加權天氣。任一點降級，整次即為 `mode: degraded`；任一點連替代資料都無法涵蓋某小時，整次即無法產出（HTTP 503），不剔除該點、不重新正規化。
 
 ### 1.4 Feast 特徵庫視圖 (Feature View Schema)
@@ -229,7 +230,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **路徑**：`POST /predict`（動態視界預報任務 `dynamic_horizon_forecast` 的別名，與 §2.4 共用 runner `predict_task` 與錯誤對應；預測 item 即該任務的 item（`PredictionItem`：`datetime`、`predicted_load_mw`、`temperature`、`relative_humidity`、`weather_sources`），同一請求的 `predictions` 與 `POST /tasks/dynamic_horizon_forecast/predict` 相同）
 - **預測對象**：固定為 `nationwide`，並於回應 `subject` 揭露；模型只預測全台負載，不宣稱支援區域負載模型。
 - **相容性欄位**：請求 `location` 為選填，於 OpenAPI 標示 `deprecated`；任何值皆被忽略，不影響預測對象，也不再回傳 HTTP 400。回應不再包含 `location`。
-- **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；最新可用預報發布早於請求時間超過七小時即視為 stale，依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
+- **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；某數值沒有發布未超過七小時的預報版本可提供時（以提供該數值的版本判定，§1.3.3），該數值依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均，並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2.2）時回傳 HTTP 503。
 - **狀態欄位**：`status` 表示請求成功（固定為 `success`）；`mode` 表示預報品質（`normal` 或 `degraded`），兩者不得混用。
 - **來源追溯**：每個預測點的 `weather_sources` 依「氣象欄位 → 氣象代表點別名 → 來源」逐一揭露每個代表點的來源，以及可用的預報發布／更新時間；只有一個代表點時也採同一形狀。同一時點允許不同欄位或不同代表點來自不同產品或降級來源。
 - **請求 Body**：

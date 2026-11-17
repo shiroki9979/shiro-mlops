@@ -12,6 +12,7 @@ from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     recent_completed_hours,
 )
+from shiro_mlops.data.weather_resolution import forecast_is_stale
 from shiro_mlops.service.data_explorer.completeness import (
     audit_missing_identifiers,
     hourly_gaps,
@@ -27,8 +28,6 @@ from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan, to_sql_utc
 from shiro_mlops.service.data_explorer.values import json_list, to_taiwan
-
-FORECAST_SERVING_STALE = timedelta(hours=7)
 
 
 def compose_dataset_status(
@@ -199,7 +198,8 @@ class DatasetStatusCatalog:
         audits = compose_dataset_status("cwa_forecast_audits", as_of, latest, missing)
         if latest:
             source_at = to_taiwan(latest["source_at"])
-            forecasts.serving_stale = (as_of - source_at) > FORECAST_SERVING_STALE
+            # Dataset-level hint only; per-request degradation is judged per supplied value.
+            forecasts.latest_release_stale = forecast_is_stale(source_at, as_of)
         return forecasts, audits
 
     def _observation_audits(self, as_of: datetime) -> DatasetStatus:

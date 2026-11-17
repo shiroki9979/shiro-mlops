@@ -11,7 +11,7 @@ from shiro_mlops.core.config import Settings, settings
 from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import resolve_weather
-from tests.helpers import forecast_release, township_forecast
+from tests.helpers import canonical_observation_batch, forecast_release, township_forecast
 
 TAIPEI = CWALocation("Taipei", "466920", "63000000")
 
@@ -48,6 +48,109 @@ def test_resolver_falls_back_to_weekly_around_a_missing_forecast_point(
 
     assert result.dataframe.loc[0, "temperature"] == 22.0
     assert result.sources[0]["temperature"]["source"] == "weekly"
+
+
+def _store_three_day(
+    repository: TimeSeriesRepository,
+    issued_at: datetime,
+    hours: tuple[int, ...],
+    temperature: float,
+) -> None:
+    points = tuple(
+        replace(township_forecast(datetime(2026, 8, 20, hour), temperature), geocode=TAIPEI.geocode)
+        for hour in hours
+    )
+    repository.upsert_cwa_forecast_release(forecast_release(issued_at, points))
+
+
+def _store_weekly(
+    repository: TimeSeriesRepository, issued_at: datetime, temperature: float
+) -> None:
+    interval = replace(
+        township_forecast(datetime(2026, 8, 20, 12), temperature),
+        valid_to=datetime(2026, 8, 20, 18),
+        geocode=TAIPEI.geocode,
+    )
+    repository.upsert_cwa_forecast_release(
+        replace(forecast_release(issued_at, (interval,)), dataset_id="F-D0047-091")
+    )
+
+
+def test_resolver_uses_fresh_weekly_when_only_three_day_forecast_is_stale(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """Seven hours are judged by the version supplying the value, not the newest of both."""
+    _store_three_day(test_repo, datetime(2026, 8, 20, 2), (12, 13), 30.0)
+    _store_weekly(test_repo, datetime(2026, 8, 20, 10), 25.0)
+
+    result = resolve_weather(
+        test_repo,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=2,
+        as_of=datetime(2026, 8, 20, 12),
+        fields=("temperature",),
+    )
+
+    assert result.mode == "normal"
+    assert result.dataframe["temperature"].tolist() == [25.0, 25.0]
+    assert [point["temperature"]["source"] for point in result.sources] == ["weekly", "weekly"]
+
+
+def test_resolver_degrades_to_observation_when_both_forecasts_are_stale(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    _store_three_day(test_repo, datetime(2026, 8, 20, 2), (12, 13), 30.0)
+    _store_weekly(test_repo, datetime(2026, 8, 20, 4), 25.0)
+    test_repo.upsert_cwa_observation_batch(
+        canonical_observation_batch(
+            pd.DataFrame(
+                {
+                    "datetime": [datetime(2026, 8, 19, 12)],
+                    "location": ["Taipei"],
+                    "temperature": [28.0],
+                    "relative_humidity": [75.0],
+                }
+            )
+        )
+    )
+
+    result = resolve_weather(
+        test_repo,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+        fields=("temperature",),
+    )
+
+    assert result.mode == "degraded"
+    assert result.dataframe.loc[0, "temperature"] == 28.0
+    assert result.sources[0]["temperature"]["source"] == "previous_day_observation"
+
+
+def test_resolver_fills_hours_outside_fresh_three_day_coverage_from_weekly(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    _store_three_day(test_repo, datetime(2026, 8, 20, 10), (12, 13), 30.0)
+    _store_weekly(test_repo, datetime(2026, 8, 20, 10), 25.0)
+
+    result = resolve_weather(
+        test_repo,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=3,
+        as_of=datetime(2026, 8, 20, 12),
+        fields=("temperature",),
+    )
+
+    assert result.mode == "normal"
+    assert result.dataframe["temperature"].tolist() == [30.0, 30.0, 25.0]
+    assert [point["temperature"]["source"] for point in result.sources] == [
+        "three_day",
+        "three_day",
+        "weekly",
+    ]
 
 
 def test_resolver_falls_back_to_latest_release_holding_the_reference_point(
