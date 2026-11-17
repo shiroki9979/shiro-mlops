@@ -17,6 +17,8 @@ from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.runner import fit_task
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import PredictionData, TrainingData
+from shiro_mlops.tasks.types.recursive_regression import TASK_TYPE_NAME as RECURSIVE_REGRESSION
+from shiro_mlops.tasks.types.recursive_regression import training_features
 
 from lab.timestamps import normalize_taiwan_timestamp
 
@@ -85,6 +87,120 @@ def rolling_origin_backtest(
         min_history_overridden=min_history_hours is not None,
         params=task.params,
     )
+
+
+@dataclass(frozen=True)
+class OriginSplit:
+    """Search origins and the later, target-disjoint evaluation origins (SPEC §7.3)."""
+
+    search_origins: tuple[pd.Timestamp, ...]
+    eval_origins: tuple[pd.Timestamp, ...]
+
+    @property
+    def eval_calendar_days(self) -> int:
+        """Distinct calendar dates covered by the evaluation origins."""
+        return len({origin.date() for origin in self.eval_origins})
+
+
+def eligible_origins(
+    task: TaskDefinition,
+    data: TrainingData,
+    horizon_hours: int,
+    *,
+    min_history_hours: int | None = None,
+) -> tuple[pd.Timestamp, ...]:
+    """Every hourly origin that ``rolling_origin_backtest`` would accept for ``data``.
+
+    Runs the same three origin checks as the backtest without fitting a model, so a
+    study can see how many origins its snapshot offers before choosing any.
+    """
+    if horizon_hours < 1:
+        raise ValueError("horizon_hours must be >= 1.")
+    effective_min_history = (
+        task.policies.min_training_hours if min_history_hours is None else min_history_hours
+    )
+    context = _build_context(task, data, horizon_hours, effective_min_history)
+    if context.load.empty:
+        return ()
+    candidates = pd.date_range(
+        context.load[DATETIME_COL].iloc[0],
+        context.load[DATETIME_COL].iloc[-1] - pd.Timedelta(hours=horizon_hours),
+        freq="h",
+    )
+    accepted = []
+    for origin in candidates:
+        try:
+            _check_origin(context, origin)
+        except ValueError:
+            continue
+        accepted.append(origin)
+    return tuple(accepted)
+
+
+def origin_runs(
+    origins: Sequence[pd.Timestamp],
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Group sorted hourly origins into ``(first, last)`` runs of consecutive hours."""
+    runs: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    for origin in origins:
+        if runs and origin - runs[-1][1] == pd.Timedelta(hours=1):
+            runs[-1] = (runs[-1][0], origin)
+        else:
+            runs.append((origin, origin))
+    return runs
+
+
+def split_search_and_eval_origins(
+    eligible: Sequence[pd.Timestamp],
+    *,
+    horizon_hours: int,
+    eval_calendar_days: int,
+    hour_step: int,
+) -> OriginSplit:
+    """Split eligible origins into search origins and evaluation origins on the last calendar days.
+
+    Only origins whose hour is a multiple of ``hour_step`` are used. Evaluation origins
+    are those on the last ``eval_calendar_days`` dates; search origins are the earlier
+    ones whose target window ends before the first evaluation target hour.
+    """
+    sampled = [origin for origin in eligible if origin.hour % hour_step == 0]
+    dates = sorted({origin.date() for origin in sampled})
+    eval_dates = set(dates[-eval_calendar_days:])
+    eval_origins = tuple(origin for origin in sampled if origin.date() in eval_dates)
+    if not eval_origins:
+        raise ValueError(f"no eligible origins on hours that are multiples of {hour_step}")
+    latest_search = eval_origins[0] - pd.Timedelta(hours=horizon_hours)
+    search_origins = tuple(origin for origin in sampled if origin <= latest_search)
+    if not search_origins:
+        raise ValueError(
+            f"no search origins at or before {latest_search.isoformat()}: the eligible origins "
+            f"span {len(dates)} calendar day(s), all taken by {eval_calendar_days} evaluation day(s)"
+        )
+    split = OriginSplit(search_origins=search_origins, eval_origins=eval_origins)
+    verify_non_overlapping_target_windows(split.search_origins, split.eval_origins, horizon_hours)
+    return split
+
+
+def training_row_count(
+    task: TaskDefinition, data: TrainingData, origin: datetime | pd.Timestamp | str
+) -> int:
+    """Rows a recursive-regression backtest trains on at ``origin``.
+
+    Weighted weather has no value in hours where any reference point is missing, and
+    those rows are dropped, so this discloses each candidate's training-row loss.
+    """
+    if task.task_type != RECURSIVE_REGRESSION:
+        raise ValueError(
+            f"training_row_count supports {RECURSIVE_REGRESSION}, not {task.task_type}"
+        )
+    normalized = normalize_taiwan_timestamp(origin)
+    load, weather = _prepare_backtest_frames(task, data)
+    truncated = TrainingData(
+        load=load[load[DATETIME_COL] <= normalized].reset_index(drop=True),
+        weather=weather[weather[DATETIME_COL] <= normalized].reset_index(drop=True),
+        validation_start=normalized + pd.Timedelta(hours=1),
+    )
+    return len(training_features(task.params, truncated))
 
 
 def verify_non_overlapping_target_windows(
@@ -196,6 +312,16 @@ def _evaluate_single_origin(
     context: _BacktestContext,
     origin: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    train_load, horizon_load, aligned_weather = _check_origin(context, origin)
+    forecast = _fit_and_predict_origin(context, origin, train_load, aligned_weather)
+    return horizon_load, forecast
+
+
+def _check_origin(
+    context: _BacktestContext,
+    origin: pd.Timestamp,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Apply the three origin checks (SPEC §7.2); raise ``ValueError`` naming the first failure."""
     train_load = _slice_and_validate_origin_history(
         load=context.load,
         origin=origin,
@@ -214,8 +340,7 @@ def _evaluate_single_origin(
         origin=origin,
         horizon_times=horizon_times,
     )
-    forecast = _fit_and_predict_origin(context, origin, train_load, aligned_weather)
-    return horizon_load, forecast
+    return train_load, horizon_load, aligned_weather
 
 
 def _slice_and_validate_origin_history(

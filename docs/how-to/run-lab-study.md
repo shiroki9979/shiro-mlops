@@ -96,7 +96,19 @@ sha256sum data/lab/snapshots/dynamic_horizon_forecast/2026-11-08T22:00:00.parque
 
 ---
 
-## 3. 讀取快照並執行滾動起點回測 (Rolling-Origin Backtest)
+## 3. 確認快照提供的起點
+
+選擇起點前，先列出快照中每個能通過起點有效性檢查的整點，並確認評估起點能否涵蓋 7 個日曆日：
+
+```bash
+uv run --package lab python -m lab.origins dynamic_horizon_forecast --as-of 2026-11-08T22:00:00
+```
+
+- `run:` 各行為合格起點的連續區間；區間之間的空缺來自負載或觀測氣象缺口。
+- `search origins:`／`eval origins:` 為建議切分；`sufficient: no` 表示評估起點不足，該快照只能產出探索報告。
+- 天氣候選的快照加上與凍結時相同的 `--variant`、`--reference-points` 與 `--weights`；三點加權的合格起點可能比基線少，研究應使用各候選合格起點的交集。
+
+## 4. 讀取快照並執行滾動起點回測 (Rolling-Origin Backtest)
 
 在研究腳本或 Jupytext `.py` 中，使用 `read_snapshot` 還原正式 `TrainingData`，並以 `rolling_origin_backtest` 評估基線與候選參數：
 
@@ -155,7 +167,7 @@ is_adopted = candidate_eval.beats(baseline_eval)
 
 ---
 
-## 4. 建立研究主題目錄與撰寫報告 (`README.md`)
+## 5. 建立研究主題目錄與撰寫報告 (`README.md`)
 
 每個研究主題存放於 `lab/<YYYY-MM-DD>-<topic>/`（例如 [`lab/2026-11-08-dhf-hyperparameter-search/README.md`](../../lab/2026-11-08-dhf-hyperparameter-search/README.md)）：
 

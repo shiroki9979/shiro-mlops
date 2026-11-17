@@ -96,7 +96,7 @@ class RecursiveRegression:
 
     def train(self, params: RecursiveRegressionParams, data: TrainingData) -> Trained:
         """Engineer features, fit on rows before the split, and evaluate one step ahead after it."""
-        features = _training_features(params, data)
+        features = training_features(params, data)
         training_rows, validation_rows = split_at_validation(features, data.validation_start)
         model = RecursiveRegressionModel.fit(params, training_rows, data.weather_columns)
         return Trained(model=model, metrics=model.evaluate(validation_rows))
@@ -220,7 +220,8 @@ class RecursiveRegressionModel:
         )
 
 
-def _training_features(params: RecursiveRegressionParams, data: TrainingData) -> pd.DataFrame:
+def training_features(params: RecursiveRegressionParams, data: TrainingData) -> pd.DataFrame:
+    """Feature rows that `train` splits at `validation_start`; rows lacking a lag or weather are dropped."""
     # Weather joins by time only: it already comes from the subject's weather reference point.
     return build_feature_pipeline(
         load_df=data.load,

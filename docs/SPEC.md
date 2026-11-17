@@ -678,6 +678,17 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 | `min_history_hours`、`min_history_overridden` | 實際使用的最低累積與是否由呼叫端覆寫 |
 | `params` | 所用任務參數 |
 
+起點盤點（不訓練模型）：
+
+| 介面 | 行為 |
+| :--- | :--- |
+| `eligible_origins(task, data, horizon_hours, *, min_history_hours=None)` | 以上述三項起點有效性條件逐一檢查快照內每個整點，回傳 `rolling_origin_backtest` 會接受的全部起點 |
+| `origin_runs(origins)` | 將排序後的起點分組為連續整點區間 `(first, last)` |
+| `split_search_and_eval_origins(eligible, *, horizon_hours, eval_calendar_days, hour_step)` | 只取整點為 `hour_step` 倍數的起點；最後 `eval_calendar_days` 個日曆日為評估起點，搜尋起點為 `<= 第一個評估起點 - horizon_hours` 者，並以 `verify_non_overlapping_target_windows` 驗證；沒有可用的評估或搜尋起點時拋 `ValueError` |
+| `training_row_count(task, data, origin)` | 遞迴回歸任務在 `origin` 截斷後實際訓練的列數（缺任一 lag 或天氣的列已剔除），用於揭露加權天氣嚴格缺值的訓練列損失 |
+
+CLI：`uv run --package lab python -m lab.origins <task_id> --as-of <ISO> [--variant <name> --reference-points ... --weights ...] [--horizon-hours 24] [--eval-days 7] [--hour-step 6]`，輸出合格起點數、日曆日數、連續區間、建議的搜尋／評估切分，以及評估起點是否涵蓋 `--eval-days` 個日曆日（`sufficient: yes|no`）。
+
 `candidate.beats(baseline)`：起點清單與視界相同時，`overall_mape` 嚴格較低即為贏；起點或視界不同時拋 `ValueError`。回測使用觀測氣象，結果為「氣象已知」條件下的條件式數字，不代表正式 serving 誤差，也不是其上界或下界。
 
 ### 7.3 搜尋起點與評估起點

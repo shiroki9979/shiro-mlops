@@ -138,6 +138,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="as_of",
         help="Point-in-time cutoff in Asia/Taipei ISO format (e.g. 2026-11-08T22:00:00).",
     )
+    add_snapshot_selection_arguments(parser)
+    return parse_snapshot_selection(parser, argv)
+
+
+def add_snapshot_selection_arguments(parser: argparse.ArgumentParser) -> None:
+    """Arguments naming one snapshot: its directory, variant, and the weather it froze."""
     parser.add_argument(
         "--snapshots-dir",
         type=Path,
@@ -160,6 +166,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         help="One weight per --reference-points entry, summing to 1.",
     )
+
+
+def parse_snapshot_selection(
+    parser: argparse.ArgumentParser, argv: list[str] | None
+) -> argparse.Namespace:
+    """Parse ``argv``, rejecting weather overrides that would take the shipped weather's file."""
     args = parser.parse_args(argv)
     if args.weights is not None and args.reference_points is None:
         parser.error("--weights needs --reference-points")
@@ -168,14 +180,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def task_for_selection(task: TaskDefinition, args: argparse.Namespace) -> TaskDefinition:
+    """``task`` with the weather given by ``--reference-points``/``--weights``, if any."""
+    if args.reference_points is None:
+        return task
+    weather = build_weather_spec(
+        args.reference_points, args.weights, task.weather.fields, settings.cwa_locations
+    )
+    return replace(task, weather=weather)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    task = deployed_task(args.task_id)
-    if args.reference_points is not None:
-        weather = build_weather_spec(
-            args.reference_points, args.weights, task.weather.fields, settings.cwa_locations
-        )
-        task = replace(task, weather=weather)
+    task = task_for_selection(deployed_task(args.task_id), args)
     runtime = TaskRuntime(repository=TimeSeriesRepository())
     path = write_snapshot(
         task, runtime, args.as_of, variant=args.variant, snapshots_dir=args.snapshots_dir
