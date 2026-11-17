@@ -12,5 +12,6 @@ export const dataAuditsRoute = createRoute({
 function AuditsPage() {
   const search = useRouterState().location.search as { type?: string }
   const datasetId = search.type === 'forecasts' ? 'cwa_forecast_audits' : 'cwa_observation_audits'
-  return <ExplorerPage dataset={datasetById(datasetId)} />
+  // Remount per audit type so page-local state (e.g. the open detail) never leaks across datasets.
+  return <ExplorerPage key={datasetId} dataset={datasetById(datasetId)} />
 }
