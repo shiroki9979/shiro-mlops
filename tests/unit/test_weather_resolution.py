@@ -153,6 +153,44 @@ def test_resolver_fills_hours_outside_fresh_three_day_coverage_from_weekly(
     ]
 
 
+def test_resolver_falls_back_to_latest_release_holding_the_reference_point(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """Vintage fallback depends on the point's own rows, not on the release being complete."""
+
+    def release(issued_at: datetime, geocode: str, temperature: float, *, complete: bool):
+        point = replace(township_forecast(datetime(2026, 8, 20, 23), temperature), geocode=geocode)
+        return replace(
+            forecast_release(issued_at, (point,)),
+            status="complete" if complete else "incomplete",
+            missing_geocodes=() if complete else ("some-other-geocode",),
+        )
+
+    test_repo.upsert_cwa_forecast_release(
+        release(datetime(2026, 8, 20, 16), TAIPEI.geocode, 30.0, complete=True)
+    )
+    test_repo.upsert_cwa_forecast_release(
+        release(datetime(2026, 8, 20, 19), TAIPEI.geocode, 31.0, complete=False)
+    )
+    test_repo.upsert_cwa_forecast_release(
+        release(datetime(2026, 8, 20, 22), "64000000", 32.0, complete=False)
+    )
+
+    result = resolve_weather(
+        test_repo,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 23),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 22),
+        fields=("temperature",),
+    )
+
+    assert result.dataframe.loc[0, "temperature"] == 31.0
+    source = result.sources[0]["temperature"]
+    assert source["source"] == "three_day"
+    assert pd.Timestamp(source["issued_at"]) == pd.Timestamp("2026-08-20 19:00")
+
+
 def test_resolver_interpolates_short_horizon_between_persisted_forecast_points(
     test_repo: TimeSeriesRepository,
 ) -> None:

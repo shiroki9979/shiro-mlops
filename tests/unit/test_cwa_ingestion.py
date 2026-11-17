@@ -697,7 +697,7 @@ def test_repository_json_encodes_xml_forecast_raw_payload(
 def test_forecast_query_uses_previous_complete_release_when_latest_lacks_requested_geocode(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    """A newer incomplete release without Taipei must not hide the prior complete vintage."""
+    """Newer incomplete releases without Taipei must not hide the prior vintage holding it."""
 
     def release(
         issued_at: str,
@@ -733,7 +733,7 @@ def test_forecast_query_uses_previous_complete_release_when_latest_lacks_request
 
     test_repo.upsert_cwa_forecast_release(release("2026-08-20 10:00", "complete", "63000050", 30.0))
     test_repo.upsert_cwa_forecast_release(
-        release("2026-08-20 11:00", "incomplete", "63000050", 31.0)
+        release("2026-08-20 11:00", "incomplete", "64000040", 31.0)
     )
     test_repo.upsert_cwa_forecast_release(
         release("2026-08-20 12:00", "incomplete", "64000040", 32.0)

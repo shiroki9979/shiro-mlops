@@ -243,20 +243,20 @@ def _select_forecast_versions(
     headers: pd.DataFrame,
     available_versions: pd.DataFrame,
 ) -> set[ForecastVersion]:
-    """Select a latest release or its prior complete fallback per forecast dataset."""
+    """Select, per forecast dataset, the newest release holding rows for the geocode.
+
+    Release completeness is judged across the whole allowlist, so an ``incomplete``
+    release still serves any geocode it does hold.
+    """
     if headers.empty:
         return set()
     available = {_forecast_version_key(row) for _, row in available_versions.iterrows()}
     selected: set[ForecastVersion] = set()
     for _, releases in headers.groupby("dataset_id"):
         ordered = releases.sort_values(["issued_at", "source_updated_at"], ascending=False)
-        latest = _forecast_version_key(ordered.iloc[0])
-        if latest in available:
-            selected.add(latest)
-            continue
         for _, release in ordered.iterrows():
             version = _forecast_version_key(release)
-            if release["status"] == "complete" and version in available:
+            if version in available:
                 selected.add(version)
                 break
     return selected
@@ -283,7 +283,7 @@ def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> se
     headers = pd.read_sql_query(
         text(
             f"""
-            SELECT dataset_id, issued_at, source_updated_at, status
+            SELECT dataset_id, issued_at, source_updated_at
             FROM raw_cwa_forecast_release
             WHERE {" AND ".join(clauses)}
             """
