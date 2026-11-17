@@ -1,5 +1,6 @@
 """Unit tests for TimescaleDB configuration, DDL initialization, and database helpers."""
 
+from importlib.resources import files
 from pathlib import Path
 from unittest.mock import patch
 
@@ -114,12 +115,25 @@ def test_timescale_init_ddl_file_not_found(tmp_path):
         get_timescale_init_ddl(sql_path=non_existent)
 
 
-def test_docker_init_sql_file_exists_and_matches():
-    """Verify docker/init-db/01_init_hypertables.sql exists on disk and contains valid DDL."""
-    sql_path = Path("docker/init-db/01_init_hypertables.sql")
-    assert sql_path.exists(), f"Expected {sql_path} to exist"
+PACKAGED_INIT_SQL = files("shiro_mlops.core").joinpath("sql", "01_init_hypertables.sql")
+COMPOSE_FILE = Path(__file__).resolve().parents[2] / "docker" / "docker-compose.yml"
 
-    sql_content = sql_path.read_text(encoding="utf-8")
+
+def test_init_ddl_ships_inside_the_installed_package():
+    """API 映像只複製 src/，DDL 須隨套件安裝才讀得到，不依賴 repo 目錄結構（#112）。"""
+    assert PACKAGED_INIT_SQL.is_file()
+    assert get_timescale_init_ddl() == PACKAGED_INIT_SQL.read_text(encoding="utf-8")
+
+
+def test_postgres_init_mounts_the_packaged_ddl():
+    """資料庫容器首次初始化與應用程式共用同一份 DDL，避免兩份檔案漂移。"""
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert "../src/shiro_mlops/core/sql:/docker-entrypoint-initdb.d:ro" in compose
+
+
+def test_packaged_init_sql_contains_valid_ddl():
+    """Verify the packaged 01_init_hypertables.sql contains the expected table DDL."""
+    sql_content = PACKAGED_INIT_SQL.read_text(encoding="utf-8")
     assert "raw_taipower_load" in sql_content
     assert "raw_cwa_forecast_release" in sql_content
     assert "raw_cwa_township_forecast" in sql_content
@@ -199,8 +213,7 @@ def test_init_db_with_sqlite_custom_ddl(tmp_path):
 
 def test_timescale_ddl_contains_migrate_data():
     """Verify TimescaleDB DDL specifies migrate_data => TRUE for existing volumes."""
-    sql_path = Path("docker/init-db/01_init_hypertables.sql")
-    content = sql_path.read_text(encoding="utf-8")
+    content = PACKAGED_INIT_SQL.read_text(encoding="utf-8")
     assert "migrate_data => TRUE" in content
     # Ensure hypertables have migrate_data set
     assert content.count("migrate_data => TRUE") >= 5
