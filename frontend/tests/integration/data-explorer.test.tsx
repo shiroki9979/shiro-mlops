@@ -309,6 +309,24 @@ describe('Data Explorer routes', () => {
     expect(Object.fromEntries(requests.at(-1)!.searchParams)).toEqual({ ...queryWindow, ...scenario.sent })
   })
 
+  it('closes the open detail when switching audit type from the sidebar', async () => {
+    server.use(http.get('*/data/audits/cwa-observations', () => HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      items: [{ status: 'observation-audit-row' }],
+      has_more: false, next_cursor: null, missing_slots: [],
+    })))
+    const user = userEvent.setup()
+    renderPath('/data/audits?type=observations')
+    await user.click(await screen.findByText('observation-audit-row'))
+    expect(screen.getByText(m.explorer.detail.title)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('link', { name: datasets.cwa_forecast_audits.label }))
+
+    expect(await screen.findByRole('heading', { name: datasets.cwa_forecast_audits.label })).toBeInTheDocument()
+    expect(screen.queryByText(m.explorer.detail.title)).not.toBeInTheDocument()
+    expect(screen.queryAllByText('observation-audit-row')).toHaveLength(0)
+  })
+
   it.each([400, 422, 503])('does not offer cursor recovery for an unrelated %s error', async (status) => {
     server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'failed' }, { status })))
     renderPath(`/data/power/load?${status === 400 ? '' : 'cursor=old'}`)
