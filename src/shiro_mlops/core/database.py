@@ -2,6 +2,8 @@
 
 import logging
 import re
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +19,9 @@ logger = logging.getLogger(__name__)
 # ADR-0009 之前全台負載借用氣象代表點名稱保存；只用於辨識待遷移的舊值。
 LEGACY_NATIONWIDE_SUBJECT = "Taipei"
 
-INIT_SQL_PATH = (
-    Path(__file__).resolve().parents[3] / "docker" / "init-db" / "01_init_hypertables.sql"
-)
+# DDL 隨套件安裝，不依賴 repo 目錄結構：API 映像只含 src/（#112）。
+# docker-compose 亦把同一目錄掛為資料庫容器的 init-db，兩者共用單一來源。
+INIT_SQL_PATH: Traversable = files(__package__).joinpath("sql", "01_init_hypertables.sql")
 
 
 def get_timescale_init_ddl(sql_path: Path | None = None) -> str:
@@ -28,15 +30,16 @@ def get_timescale_init_ddl(sql_path: Path | None = None) -> str:
     Parameters
     ----------
     sql_path : Path | None
-        Optional custom path to the SQL initialization file.
+        Optional custom path to the SQL initialization file. Defaults to the DDL
+        packaged with ``shiro_mlops``.
 
     Returns
     -------
     str
         Contents of the initialization SQL file.
     """
-    target_path = sql_path or INIT_SQL_PATH
-    if not target_path.exists():
+    target_path: Path | Traversable = sql_path or INIT_SQL_PATH
+    if not target_path.is_file():
         raise FileNotFoundError(f"DDL initialization script not found at {target_path}")
     return target_path.read_text(encoding="utf-8")
 

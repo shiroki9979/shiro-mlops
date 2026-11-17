@@ -11,7 +11,8 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db:/docker-entrypoint-initdb.d:ro
+      # 與應用程式共用隨套件安裝的 DDL（src/shiro_mlops/core/sql/）
+      - ../src/shiro_mlops/core/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
