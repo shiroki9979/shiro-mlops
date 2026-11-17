@@ -1,7 +1,7 @@
 # 如何將全台負載的預測對象遷移為 nationwide
 
 - 建立日期：2026-09-27
-- 最後更新：2026-09-27
+- 最後更新：2026-11-17
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -21,7 +21,7 @@
 
 - 可存取 Dagster UI（`http://localhost:3000`）與 `shiro_postgres` 容器。以下指令預設使用 `.env.example` 的 `TIMESCALE_USER=postgres` 與 `TIMESCALE_DB=shiro_timeseries`，若本機設定不同請替換。
 - 已取得含 ADR-0009 預測對象遷移的新版程式碼，但尚未部署。
-- 預留的停機時間短於 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 3 小時）。`hourly_actual_load_job` 每次只重算最近 3 個已結束小時；停機超過此長度時，請見第 6 節補算。
+- 預留的停機時間短於 `HOURLY_LOAD_CATCHUP_MAX_HOURS`（預設 168 小時）。`hourly_actual_load_job` 恢復後會從最後一個已推算小時之後補算到現在，最多回溯此長度；停機超過此長度時，請見第 6 節補算。
 
 ---
 
@@ -99,15 +99,15 @@ COMMIT;
 
 ---
 
-## 6. 停機超過 3 小時時補算缺口
+## 6. 停機超過補算上限時補算缺口
 
-區域快照在停機期間持續累積，缺少的只是推算結果。對每段未涵蓋的 3 小時窗口，在 Dagster UI 以 Launchpad materialize `raw_taipower_load`，並以窗口結束時間（台灣本地時間，不帶時區 offset）設定 `evaluated_at`；該次會重算此時間之前的 3 個已結束小時：
+區域快照在停機期間持續累積，缺少的只是推算結果。`hourly_actual_load_job` 的 run log 會以 warning 列出超出 `HOURLY_LOAD_CATCHUP_MAX_HOURS` 而未推算的區間；以該區間（台灣本地時間）執行一次性重算腳本，先以 `--dry-run` 確認將寫入的小時：
 
-```yaml
-ops:
-  raw_taipower_load:
-    config:
-      evaluated_at: "2026-09-27T12:05:00"
+```bash
+uv run python scripts/rederive_hourly_actual_load.py \
+  --start 2026-09-20T03:00:00 --end 2026-09-26T14:00:00 --dry-run
 ```
+
+確認無誤後去掉 `--dry-run` 再執行一次。腳本只讀已入庫的區域快照、只寫入尚無資料的小時，不覆寫既有列。
 
 完成後，Data Explorer 的逐時用電負載頁（`/data/power/load`）不應再列出停機期間的缺口。

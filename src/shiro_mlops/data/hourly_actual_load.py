@@ -66,6 +66,41 @@ def recent_completed_hours(now: datetime, hours: int) -> HourWindow:
     return HourWindow(start=end - hours * ONE_HOUR, end=end)
 
 
+def catch_up_window(
+    now: datetime,
+    latest_derived_hour: datetime | None,
+    *,
+    recent_hours: int,
+    max_catchup_hours: int,
+) -> HourWindow:
+    """Completed hours to recompute: the recent ``recent_hours`` plus any after ``latest_derived_hour``.
+
+    Starting right after the latest derived hour recovers hours whose samples were
+    stored just before an ingestion outage. The window never reaches back more than
+    ``max_catchup_hours``; with no derived hour yet it spans that whole limit.
+    """
+    if max_catchup_hours < recent_hours:
+        raise ValueError(
+            f"max_catchup_hours ({max_catchup_hours}) must cover recent_hours ({recent_hours})"
+        )
+    recent = recent_completed_hours(now, recent_hours)
+    earliest = recent.end - max_catchup_hours * ONE_HOUR
+    if latest_derived_hour is None:
+        return HourWindow(start=earliest, end=recent.end)
+    start = min(recent.start, latest_derived_hour + ONE_HOUR)
+    return HourWindow(start=max(start, earliest), end=recent.end)
+
+
+def uncovered_gap(latest_derived_hour: datetime | None, window: HourWindow) -> HourWindow | None:
+    """Hours after ``latest_derived_hour`` that ``window`` no longer reaches, if any."""
+    if latest_derived_hour is None:
+        return None
+    gap_start = latest_derived_hour + ONE_HOUR
+    if gap_start >= window.start:
+        return None
+    return HourWindow(start=gap_start, end=window.start)
+
+
 def resolve_evaluation_time(evaluated_at: str | None = None) -> datetime:
     """Resolve a schedule tick (Taiwan-local ISO string) or the current Taiwan-local time."""
     if evaluated_at is None:

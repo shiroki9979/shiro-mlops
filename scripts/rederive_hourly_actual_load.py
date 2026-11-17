@@ -1,8 +1,8 @@
 """Derive hourly actual load for stored regional snapshots the scheduled asset never covered.
 
-The scheduled ``raw_taipower_load`` asset only recomputes the most recent hours, so
-snapshots stored before the derivation went live, or around an ingestion outage, were
-never turned into hourly load. This one-off applies the same derivation to those stored
+The scheduled ``raw_taipower_load`` asset only reaches back ``HOURLY_LOAD_CATCHUP_MAX_HOURS``
+after the latest derived hour, so snapshots stored before the derivation went live, or
+before an outage longer than that limit, are never turned into hourly load. This one-off applies the same derivation to those stored
 snapshots; it never refetches from Taipower and never overwrites a stored hour
 (ADR-0008 Notes).
 
