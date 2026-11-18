@@ -1,7 +1,7 @@
 # 如何在逐時負載冷啟動後恢復訓練與監控排程
 
 - 建立日期：2026-09-26
-- 最後更新：2026-09-27
+- 最後更新：2026-11-18
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -11,7 +11,7 @@
 > - **核心目標**：從空的 `raw_taipower_load` 開始累積全台逐時實際負載，確認累積進度，並在門檻達成後讓 `dynamic_horizon_forecast__training_job` 與 `dynamic_horizon_forecast__monitoring_job` 恢復運作
 > - **排除內容（Avoid）**：推算規則與 28 日門檻的設計理由（見 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)）、排程與失敗政策契約（見 [SPEC §3](../SPEC.md)）
 
-全台逐時實際負載只能由區域供需快照往後累積，無法回補歷史。有效逐時觀測未達任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，即 28 日）前，訓練與 drift 排程每次 tick 都會略過並揭露原因，這是預期行為。
+全台逐時實際負載只能由區域供需快照往後累積，無法回補歷史。有效逐時觀測未達任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，連續無缺漏時約 28 日）前，訓練與 drift 排程每次 tick 都會略過並揭露原因，這是預期行為。
 
 ---
 
@@ -90,15 +90,15 @@ Summary: 9 pass, 3 wait, 0 fail
 
 ## 5. 確認恢復並完成第一次訓練
 
-1. 門檻達成後執行：
+1. 門檻達成後，以 `--task` 只檢查該任務與共用擷取排程：
 
    ```bash
-   make smoke-check ARGS=--require-ready
+   make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"
    ```
 
-   `dynamic_horizon_forecast load accumulation` 與 `tick dynamic_horizon_forecast__training_schedule` 應轉為 `PASS`，此時 `tick dynamic_horizon_forecast__monitoring_schedule` 仍為 `WAIT`（原因為尚無 `dynamic_horizon_forecast__model` materialization），因此結束碼仍為 `1`。
+   各任務門檻不同（`high_load_alert` 需 1344 小時），不帶 `--task` 時，尚在累積的其他任務會以 `WAIT` 讓結束碼維持 `1`。`dynamic_horizon_forecast load accumulation` 與 `tick dynamic_horizon_forecast__training_schedule` 應轉為 `PASS`，此時 `tick dynamic_horizon_forecast__monitoring_schedule` 仍為 `WAIT`（原因為尚無 `dynamic_horizon_forecast__model` materialization），因此結束碼仍為 `1`。
 2. 依 [全地端環境指南第 4 節](run-full-local-stack.md#4-準備資料並訓練模型) 手動啟動已達門檻任務的 `<task_id>__training_job`（`dynamic_horizon_forecast` 與 `load_pattern_anomaly` 需 672 小時，`high_load_alert` 需 1344 小時），不需等待排程自然觸發。smoke check 逐一列出每個已部署任務的項目，各任務的 `tick ...__monitoring_schedule` 都要有該任務的模型才會轉為 `PASS`。
-3. 訓練成功後重跑 `make smoke-check ARGS=--require-ready`，預期所有項目皆為 `PASS` 且結束碼為 `0`。下一個整點起 `dynamic_horizon_forecast__monitoring_job` 會自動觸發。
+3. 訓練成功後重跑同一指令，預期所有項目皆為 `PASS` 且結束碼為 `0`；其他任務達門檻並完成首次訓練後，以各自的 `--task <task_id>` 驗收，全部就緒時不帶 `--task` 的 `--require-ready` 才會回傳 `0`。下一個整點起 `dynamic_horizon_forecast__monitoring_job` 會自動觸發。
 4. 執行 `docker compose -f docker/docker-compose.yml restart api` 載入 `data/models/<task_id>/` 的新模型，再以 `curl -i http://localhost:8000/ready` 與 `curl -i http://localhost:8000/tasks/load_pattern_anomaly/ready` 確認回傳 HTTP 200。既有的 `data/model.joblib` 已失效且不再載入（ADR-0010），因此第一次訓練完成前 `/ready` 一律為 `not_ready`。
 
 ---

@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-17
+- 最後更新：2026-11-18
 - 專案版本：`0.4.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。以下狀態依儲存庫程式碼、已合併 PR 與 GitHub issue 核對；需要正式資料或雲端設定的驗收另行標示，不以 issue 關閉代替現場驗證。
@@ -17,7 +17,7 @@
 | **M3: 加權天氣與放假日特徵** | 能力已完成；採用待研究 | 以全台三區氣象代表點的加權天氣與放假日特徵改善動態視界預報 | `src/shiro_mlops/tasks/`, `src/shiro_mlops/features/`, `src/shiro_mlops/data/`, `lab/` | 能力：多代表點與放假日的離線測試通過；採用：lab 滾動起點回測在至少 7 個評估日贏過基線後修改任務設定 |
 | **M4: 雲端部署與 CI/CD** | 部分完成 | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
 | **M5: 營運資料檢視器** | 已完成 | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
-| **M6: 全台逐時實際負載重建** | 程式已交付；營運待驗收 | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，累積滿 28 日後訓練排程可正常執行 |
+| **M6: 全台逐時實際負載重建** | 程式已交付；營運待驗收 | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，有效逐時觀測達 672 小時（連續無缺漏時約 28 日）後 `dynamic_horizon_forecast` 訓練排程可正常執行 |
 | **M7: ML 任務解耦** | 程式已完成；模型可用性待驗證 | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `src/shiro_mlops/tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
 | **M8: 研究空間 (Lab)** | 實作中 | 建立同庫單向相依的 `lab/` 研究空間、訓練表快照、滾動起點回測與超參數研究流程 | `lab/`, `src/shiro_mlops/tasks/` | 快照無損往返、滾動起點回測與基線／Optuna 研究報告可重現，且 `uv run --package lab pytest lab/tests` 通過 |
 
@@ -41,9 +41,10 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 
 ## 待辦與驗收焦點
 
-1. **M6／M7 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)確認動態預報與異常偵測所需的 672 小時、高負載預警所需的 1344 小時有效逐時資料，以及三個任務的排程、首次訓練與 API 就緒；目前只有程式、離線測試案例及 issue／PR 完成證據，沒有正式環境的驗收結果。
-2. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 已隨 [PR #105](https://github.com/shiroki9979/shiro-mlops/pull/105) 合併，三個任務的 TOML 未變。採用段 TICKET-303 的離線工具已備妥（`lab.regional_weights` 推算權重、`lab.snapshot --variant` 凍結候選天氣快照、`lab.origins` 盤點合格起點，見 [lab 研究指南](how-to/run-lab-study.md)；研究腳本位於 [`lab/2026-11-17-dhf-weather-calendar/`](../lab/2026-11-17-dhf-weather-calendar/README.md)），待正式資料庫的有效評估起點至少涵蓋 7 個日曆日後執行回測。
-3. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。
+1. **M6 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)第 5 節，以 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"` 確認有效逐時觀測達 672 小時，完成首次訓練並確認 `/ready` 回傳 HTTP 200；smoke check 輸出、訓練 run ID 與 `/ready` 回應留於 [GitHub #60](https://github.com/shiroki9979/shiro-mlops/issues/60)。驗收只看門檻，不含累積穩定性；目前沒有正式環境的驗收結果。
+2. **M7 營運驗收**：`load_pattern_anomaly`（672 小時）與 `high_load_alert`（1344 小時）各自以 `--task <task_id>` 驗收排程、首次訓練與 `POST /tasks/{task_id}/predict`、`GET /tasks/{task_id}/ready` 就緒，與 M6 分開結案。
+3. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 已隨 [PR #105](https://github.com/shiroki9979/shiro-mlops/pull/105) 合併，三個任務的 TOML 未變。採用段 TICKET-303 的離線工具已備妥（`lab.regional_weights` 推算權重、`lab.snapshot --variant` 凍結候選天氣快照、`lab.origins` 盤點合格起點，見 [lab 研究指南](how-to/run-lab-study.md)；研究腳本位於 [`lab/2026-11-17-dhf-weather-calendar/`](../lab/2026-11-17-dhf-weather-calendar/README.md)），待正式資料庫的有效評估起點至少涵蓋 7 個日曆日後執行回測。
+4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。
 
 ---
 
@@ -190,7 +191,7 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 
 ### Milestone 6: 全台逐時實際負載重建 (Hourly Actual Load Recovery)
 
-> 依 [ADR-0008](adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)，放棄尋找可回補的官方歷史來源（[GitHub #58](https://github.com/shiroki9979/shiro-mlops/issues/58) not planned）；此里程碑為 M3 MAPE 驗收的前置條件。
+> 依 [ADR-0008](adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)，放棄尋找可回補的官方歷史來源（[GitHub #58](https://github.com/shiroki9979/shiro-mlops/issues/58) not planned）。本里程碑只保證有效逐時觀測達門檻後可以訓練；M3 與 M8 的採用研究另需評估起點涵蓋至少 7 個日曆日，由 TICKET-303 與 TICKET-803 的完成標準要求，不由本里程碑保證。
 
 #### [TICKET-601] 由區域快照推算全台逐時實際負載 ([GitHub #59](https://github.com/shiroki9979/shiro-mlops/issues/59))
 
@@ -206,7 +207,7 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 
 ### Milestone 7: ML 任務解耦 (ML Task Decoupling) ([GitHub #64](https://github.com/shiroki9979/shiro-mlops/issues/64))
 
-> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md) 與 [ADR-0010](adr/0010-persist-models-in-native-non-executable-formats.md)；M6 累積 28 日期間進行，完成後接續 M3。
+> 依 [ADR-0009](adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md) 與 [ADR-0010](adr/0010-persist-models-in-native-non-executable-formats.md)；M6 累積 672 個有效逐時觀測期間進行，完成後接續 M3。
 
 #### [TICKET-701] 拆分預測對象與氣象代表點 ([GitHub #65](https://github.com/shiroki9979/shiro-mlops/issues/65))
 
