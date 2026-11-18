@@ -3,17 +3,19 @@
 Run inside the Dagster container so the loaded code, DAGSTER_HOME instance, and
 TimescaleDB connection are the deployed ones::
 
-    python -m shiro_mlops.pipelines.smoke_check [--require-ready]
+    python -m shiro_mlops.pipelines.smoke_check [--require-ready] [--task TASK_ID]
 
 Exit status is 1 when any check fails, or when ``--require-ready`` is given and a
 check is still waiting (for example during the cold-start accumulation).
+``--task`` keeps the shared ingestion checks and limits task checks to one task, so a
+task whose threshold is met can be accepted while another still accumulates.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -34,7 +36,7 @@ from shiro_mlops.pipelines.schedules import (
 )
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
 from shiro_mlops.tasks.definition import TaskDefinition
-from shiro_mlops.tasks.deployed import deployed_tasks
+from shiro_mlops.tasks.deployed import deployed_task, deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
 
 # 任務的訓練與監控只能讀 raw_taipower_load 資料表；執行下列資產即代表會讀快照表或呼叫外部 API。
@@ -92,19 +94,25 @@ class Deployment:
     now: datetime
 
 
-def run_smoke_check(deployment: Deployment) -> list[CheckResult]:
-    """Run every check against one deployment: code, Dagster instance, and store."""
+# 受檢任務：未指定時為全部已部署任務。
+Tasks = Mapping[str, TaskDefinition]
+
+
+def run_smoke_check(deployment: Deployment, task_id: str | None = None) -> list[CheckResult]:
+    """Run every check against one deployment; ``task_id`` limits task checks to that task."""
+    tasks = deployed_tasks() if task_id is None else {task_id: deployed_task(task_id)}
+    running = running_schedule_names(deployment.instance)
     return [
-        *check_schedule_configuration(deployment.defs, running_schedule_names(deployment.instance)),
-        *check_load_consumer_boundaries(deployment.defs),
-        *check_downstream_readiness(deployment),
+        *check_schedule_configuration(deployment.defs, running, tasks),
+        *check_load_consumer_boundaries(deployment.defs, tasks),
+        *check_downstream_readiness(deployment, tasks),
     ]
 
 
-def expected_schedules() -> dict[str, ExpectedSchedule]:
-    """Ingestion schedules from SPEC §3 plus each deployed task's two schedules."""
+def expected_schedules(tasks: Tasks | None = None) -> dict[str, ExpectedSchedule]:
+    """Ingestion schedules from SPEC §3 plus each checked task's two schedules."""
     expected = dict(EXPECTED_SCHEDULES)
-    for task in deployed_tasks().values():
+    for task in (tasks or deployed_tasks()).values():
         names = TaskPipelineNames(task.task_id)
         expected[names.training_schedule] = ExpectedSchedule(
             names.training_job, task.schedule.training, TAIWAN_TZ
@@ -115,28 +123,34 @@ def expected_schedules() -> dict[str, ExpectedSchedule]:
     return expected
 
 
-def check_schedule_configuration(defs: Definitions, running: frozenset[str]) -> list[CheckResult]:
+def check_schedule_configuration(
+    defs: Definitions, running: frozenset[str], tasks: Tasks | None = None
+) -> list[CheckResult]:
     """Each expected schedule is registered with its job, cron, and timezone, and is running."""
     registered = {schedule.name: schedule for schedule in defs.schedules or ()}
     return [
         _check_schedule(name, expected, registered.get(name), running)
-        for name, expected in expected_schedules().items()
+        for name, expected in expected_schedules(tasks).items()
     ]
 
 
-def check_load_consumer_boundaries(defs: Definitions) -> list[CheckResult]:
+def check_load_consumer_boundaries(
+    defs: Definitions, tasks: Tasks | None = None
+) -> list[CheckResult]:
     """Task training and monitoring jobs read persisted load only, never snapshots or APIs."""
     return [
         _check_load_consumer(defs, job_name, load_reader)
-        for job_name, load_reader in _load_consumer_jobs().items()
+        for job_name, load_reader in _load_consumer_jobs(tasks).items()
     ]
 
 
-def check_downstream_readiness(deployment: Deployment) -> list[CheckResult]:
+def check_downstream_readiness(
+    deployment: Deployment, tasks: Tasks | None = None
+) -> list[CheckResult]:
     """Per task: load accumulation, its freshness, and what the next two ticks do."""
     return [
         result
-        for task in deployed_tasks().values()
+        for task in (tasks or deployed_tasks()).values()
         for result in _check_task_readiness(deployment, task)
     ]
 
@@ -174,6 +188,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also fail while task training or monitoring readiness is still waiting.",
     )
+    parser.add_argument(
+        "--task",
+        choices=sorted(deployed_tasks()),
+        help="Check only this task, plus the shared ingestion schedules.",
+    )
     args = parser.parse_args(argv)
 
     from shiro_mlops.pipelines.definitions import defs
@@ -181,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     now = taiwan_now().to_pydatetime()
     with DagsterInstance.get() as instance:
         deployment = Deployment(defs, TimeSeriesRepository(auto_init=False), instance, now)
-        results = run_smoke_check(deployment)
+        results = run_smoke_check(deployment, task_id=args.task)
     print(format_report(results))
     return exit_code(results, require_ready=args.require_ready)
 
@@ -229,10 +248,10 @@ def _check_load_consumer(defs: Definitions, job_name: str, load_reader: str) -> 
     return CheckResult(check_name, CheckStatus.PASS, f"reads raw_taipower_load via {load_reader}")
 
 
-def _load_consumer_jobs() -> dict[str, str]:
+def _load_consumer_jobs(tasks: Tasks | None = None) -> dict[str, str]:
     """Which asset of each task job reads the raw_taipower_load table."""
     jobs: dict[str, str] = {}
-    for task_id in deployed_tasks():
+    for task_id in tasks or deployed_tasks():
         names = TaskPipelineNames(task_id)
         jobs[names.training_job] = names.features
         jobs[names.monitoring_job] = names.monitoring
