@@ -44,7 +44,7 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 1. **M6 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)第 5 節，以 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"` 確認有效逐時觀測達 672 小時，完成首次訓練並確認 `/ready` 回傳 HTTP 200；smoke check 輸出、訓練 run ID 與 `/ready` 回應留於 [GitHub #60](https://github.com/shiroki9979/shiro-mlops/issues/60)。驗收只看門檻，不含累積穩定性；目前沒有正式環境的驗收結果。
 2. **M7 營運驗收**：`load_pattern_anomaly`（672 小時）與 `high_load_alert`（1344 小時）各自以 `--task <task_id>` 驗收排程、首次訓練與 `POST /tasks/{task_id}/predict`、`GET /tasks/{task_id}/ready` 就緒，與 M6 分開結案。
 3. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 已隨 [PR #105](https://github.com/shiroki9979/shiro-mlops/pull/105) 合併，三個任務的 TOML 未變。採用段 TICKET-303 的離線工具已備妥（`lab.regional_weights` 推算權重、`lab.snapshot --variant` 凍結候選天氣快照、`lab.origins` 盤點合格起點，見 [lab 研究指南](how-to/run-lab-study.md)；研究腳本位於 [`lab/2026-11-17-dhf-weather-calendar/`](../lab/2026-11-17-dhf-weather-calendar/README.md)），待正式資料庫的有效評估起點至少涵蓋 7 個日曆日後執行回測。
-4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。
+4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積；TICKET-405 待 [#127](https://github.com/shiroki9979/shiro-mlops/issues/127) 決定資料契約。
 
 ---
 
@@ -132,6 +132,40 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 - **完成標準 (DoD)**：
   - 完成 GitHub Rulesets 設定，`main` 分支受 PR 與 CI 門禁保護。
   - 新增或更新相關治理文件，記錄 Rulesets 規範與 bypass 例外清單。
+
+#### [TICKET-403] 定時發布已發布預報 ([GitHub #130](https://github.com/shiroki9979/shiro-mlops/issues/130))
+
+- **目標**：依 [ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md) 由地端 Dagster 資產每小時發布動態視界預報，作為預報實績的原始紀錄。
+- **功能範圍**：
+  1. 新增已發布預報的保存結構：發布時刻、負載起點、運行狀態、模型版本識別、目標小時與預測負載；寫入後不可更新。
+  2. 新增每小時執行的發布資產：以發布時刻為 `as_of`、$H = 168$，沿用 `predict_task` 的降級與負載起點過舊規則；無法產出時不寫入、不補發；模型健康檢查為 `WARNING` 時照常發布。
+  3. 定義不依賴 MLflow 的模型版本識別，MLflow 版本另作附註，並更新 SPEC。
+- **完成標準 (DoD)**：
+  - 離線測試涵蓋：已發布預報不可覆寫、隨需 `/predict` 不寫入、負載起點過舊時沒有紀錄、MLflow 不可用時仍有版本識別。
+  - SPEC 記錄保存結構、資產與排程。
+
+#### [TICKET-404] 預報實績彙整 ([GitHub #130](https://github.com/shiroki9979/shiro-mlops/issues/130))
+
+- **目標**：依 ADR-0013 以地端資產將已發布預報對照全台逐時實際負載，產出預報檢視所需的預報實績。
+- **相依**：TICKET-403。
+- **功能範圍**：
+  1. 提前時數自發布時刻起算，不大於 0 的步數不計入；只配對有有效逐時觀測的目標小時；降級預報照常計入。
+  2. 以目標小時判斷最近 30 天的滾動窗，產出提前時數 1–168 的 MAPE 與 MAE、提前 24 小時的 MAPE 與 MAE，以及提前 24 小時預報與實際負載的時序配對。
+  3. 輸出累積天數；有配對的目標日未滿 7 天時不產出指標。輸出不含運行狀態、天氣來源、模型版本與資料缺口。
+- **完成標準 (DoD)**：
+  - 離線測試以 fixtures 涵蓋上列計入規則、30 天窗邊界與 7 天門檻。
+  - SPEC 記錄輸出格式。
+
+#### [TICKET-405] 預報檢視 `/history` 接上預報實績 ([GitHub #130](https://github.com/shiroki9979/shiro-mlops/issues/130))
+
+- **目標**：以 TICKET-404 的預報實績取代 `/history` 的前端合成資料。
+- **相依**：TICKET-404；資料契約與取得通道 Blocked by [GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127)。
+- **功能範圍**：
+  1. MAPE 與 MAE 指標卡（提前 24 小時）、MAPE 對提前時數曲線（MAE 於 tooltip）、提前 24 小時預報與實際負載的 30 天時序圖。
+  2. 累積未滿 7 天時顯示空狀態與累積天數。
+  3. 移除尖峰命中率卡、RMSE 卡、結論卡、沒有出處的基準值、模型名稱與「滾動回測」文案；中英文案改用「預報實績」。
+- **完成標準 (DoD)**：
+  - Vitest 涵蓋有資料與空狀態兩種畫面；前端不再產生任何合成資料。
 
 ---
 
