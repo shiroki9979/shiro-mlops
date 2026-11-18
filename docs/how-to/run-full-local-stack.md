@@ -1,7 +1,7 @@
 # 如何在全地端運行完整 MLOps 容器化環境
 
 - 建立日期：2026-08-23
-- 最後更新：2026-10-25
+- 最後更新：2026-11-18
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -19,6 +19,7 @@
 
 - 已安裝 Docker 與 Docker Compose (v2.0+)
 - 本機可用記憶體建議 $\ge 4 \text{ GB}$
+- 主機需持續運行，不休眠、不關機。全台逐時實際負載只能由每 10 分鐘保存的區域供需快照推算，主機或 Docker 停機期間錯過的快照永久缺失，對應小時不計入訓練所需的有效逐時觀測。主機恢復後，各服務因 `restart: unless-stopped` 自動重啟，Dagster 排程的啟用狀態保存在 `dagster_home` volume，不需手動重新開啟。
 
 ---
 
@@ -89,7 +90,7 @@ make frontend-smoke-ci FRONTEND_SMOKE_PORT=18080
 1. 開啟瀏覽器進入 `http://localhost:3000`。
 2. 先 materialize `raw_cwa_station_observation`，確認三個預設測站觀測已寫入 TimescaleDB。
 3. materialize `raw_cwa_township_forecast`，確認三日與一週預報版本已寫入 TimescaleDB。
-4. 執行 `make smoke-check ARGS=--require-ready`，確認 `dynamic_horizon_forecast load accumulation` 為 `PASS` 後啟動 `dynamic_horizon_forecast__training_job`；訓練與推論只讀已入庫的 canonical tables，不會自行呼叫外部台電或 CWA API。累積不足時 `dynamic_horizon_forecast__features` 會明確失敗且不產出模型。
+4. 執行 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"`，確認 `dynamic_horizon_forecast load accumulation` 為 `PASS` 後啟動 `dynamic_horizon_forecast__training_job`；訓練與推論只讀已入庫的 canonical tables，不會自行呼叫外部台電或 CWA API。累積不足時 `dynamic_horizon_forecast__features` 會明確失敗且不產出模型。
 5. 訓練完成後執行 `docker compose -f docker/docker-compose.yml restart api`，讓 API 載入新產生的任務模型目錄 `data/models/dynamic_horizon_forecast/`（LightGBM 原生文字格式與 JSON metadata）。既有的 `data/model.joblib` 已失效且不再載入，首次重新訓練前 `/ready` 維持 `not_ready`。
 6. 執行 `curl -i http://localhost:8000/ready`，確認回傳 HTTP 200 及 `normal` 或 `degraded` mode。
 7. 至 `http://localhost:5001` 的 experiment `dynamic_horizon_forecast` 檢視最新模型參數與評估指標；Model Registry 的 `dynamic_horizon_forecast` 每次訓練新增一個 version。
