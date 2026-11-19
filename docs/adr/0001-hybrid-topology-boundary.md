@@ -1,8 +1,8 @@
 # ADR 0001: 混合雲地架構之權責邊界切分
 
 - 建立日期：2026-08-23
-- 最後更新：2026-08-23
-- 狀態：已接受 (Accepted)
+- 最後更新：2026-11-19
+- 狀態：已被 [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 取代 (Superseded)
 
 ---
 
@@ -42,3 +42,9 @@
 ### 適用情境
 
 - 適合個人/團隊擁有本地工作站算力，但需對外提供雲端 API 與統一資料資產存取之場景。
+
+---
+
+## Notes
+
+- 2026-11-19：由 [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 取代。雲端不再託管 FastAPI 隨需推論，S3 也不再作為 Data Lake、Feast Registry 或 MLflow artifacts 儲存；雲端只公開預報檢視。本文保留原決策，不以歷史改寫。
