@@ -1,7 +1,7 @@
 # ADR-0014：工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用
 
 > - Created: 2026-11-18
-> - Last Updated: 2026-11-18
+> - Last Updated: 2026-11-19
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -113,3 +113,4 @@ frontend/
 
 - 決策經 2026-11-18 的設計訪談定案（[GitHub #126](https://github.com/shiroki9979/shiro-mlops/issues/126)，地圖 [#123](https://github.com/shiroki9979/shiro-mlops/issues/123)）。地圖原把「拆分兩個 React 應用」列為範圍外，本決策將其納入 M4。
 - 實作追蹤：[ROADMAP M4](../ROADMAP.md) TICKET-406、TICKET-407。雲端部署工單依賴 TICKET-406。
+- 2026-11-19：[ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 決定雲端沒有 FastAPI，`ENVIRONMENT` 的 `aws` 值一併移除，§2.1 後端不變條款的前提不成立，TICKET-407 不再需要；條款原文保留，日後雲端若加 API 時適用。預報檢視不再呼叫任何 API，改讀 `/published/` 下的匯出 JSON；§2.3「預報檢視可能不再打 `/predict`」已確定。

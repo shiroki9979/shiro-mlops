@@ -1,7 +1,7 @@
 # ADR-0013：預報檢視以定時發布的預報實績呈現歷史表現
 
 > - Created: 2026-11-18
-> - Last Updated: 2026-11-18
+> - Last Updated: 2026-11-19
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -43,7 +43,7 @@ M4 要把預報檢視公開上雲（[GitHub #123](https://github.com/shiroki9979
 - **提前時數曲線**：MAPE 對提前時數 1–168 小時，每個提前時數一點；MAE 放在 tooltip。
 - **時序圖**：統計期間內實際負載與提前 24 小時已發布預報的對照。
 - **累積不足**：有已發布預報且有有效逐時觀測的目標日未滿 7 天時，只顯示空狀態與「已累積 N 天」，不顯示指標。
-- **公開欄位**：目標小時、全台逐時實際負載、提前 24 小時的預報值、各提前時數的 MAPE 與 MAE、累積天數。不揭露運行狀態、天氣來源、模型版本與資料缺口。
+- **公開欄位**：目標小時、全台逐時實際負載、提前 24 小時的預報值、各提前時數的 MAPE 與 MAE、累積天數、統計截至時刻（[ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 加入）。不揭露運行狀態、天氣來源、模型版本與資料缺口。
 - **移除**：尖峰命中率、RMSE、寫死的結論卡、沒有出處的基準值、模型名稱與「滾動回測」字樣。
 
 ### Rationale & Alternatives Considered
@@ -87,3 +87,4 @@ M4 要把預報檢視公開上雲（[GitHub #123](https://github.com/shiroki9979
 - 決策經 2026-11-18 的設計訪談定案（[GitHub #130](https://github.com/shiroki9979/shiro-mlops/issues/130)，地圖 [#123](https://github.com/shiroki9979/shiro-mlops/issues/123)）。
 - 實作追蹤：[ROADMAP M4](../ROADMAP.md) TICKET-403–405。
 - 分支 `claude/determined-mayer-nrnxyq` 的 GLOSSARY「預報檢視」定義寫作「歷史回測表現」，併入 `dev` 時須改為「預報實績」。
+- 2026-11-19：[ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 決定雲端只公開預先算好的預報，`/` 顯示最新一份已發布預報，§3 所列「`/` 與 `/history` 來源不同」的風險不再成立。§2.3 的公開欄位加入統計截至時刻；預報實績經地端匯出資產以靜態 JSON 送上雲，超過 24 小時未更新時顯示中性提示。

@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-18
+- 最後更新：2026-11-19
 - 專案版本：`0.4.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。以下狀態依儲存庫程式碼、已合併 PR 與 GitHub issue 核對；需要正式資料或雲端設定的驗收另行標示，不以 issue 關閉代替現場驗證。
@@ -15,7 +15,7 @@
 | **M1: 視覺化儀表板** | 功能已完成；部署未納入 | 實作 React 19 SPA 現代化儀表板，對接 FastAPI 隨需預測 | `frontend/` | 成功啟動並通過 Vitest 測試與 Vite 生產打包建置 |
 | **M2: 上游中斷韌性與降級預報** | 已完成 | CWA 擷取指數退避重試，serving 依常模降級並拒絕過舊負載起點 | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/service/` | CWA 擷取中斷時以 `mode: "degraded"` 產出預報；負載起點過舊時回傳 HTTP 503 |
 | **M3: 加權天氣與放假日特徵** | 能力已完成；採用待研究 | 以全台三區氣象代表點的加權天氣與放假日特徵改善動態視界預報 | `src/shiro_mlops/tasks/`, `src/shiro_mlops/features/`, `src/shiro_mlops/data/`, `lab/` | 能力：多代表點與放假日的離線測試通過；採用：lab 滾動起點回測在至少 7 個評估日贏過基線後修改任務設定 |
-| **M4: 雲端部署與 CI/CD** | 部分完成 | Terraform 基礎設施部署、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/` | PR Merge 自動建置 ECR 映像檔，主分支與標籤保護生效 |
+| **M4: 雲端部署與 CI/CD** | 部分完成 | 以 S3 + CloudFront 公開預先算好的預報檢視、Terraform 基礎設施、GitHub Rulesets 與 CI/CD 串接 | `infra/terraform/`, `.github/`, `frontend/`, `src/shiro_mlops/pipelines/` | release 合併後自動建置並部署預報檢視，雲端顯示地端匯出的最新已發布預報與預報實績；主分支與標籤保護生效 |
 | **M5: 營運資料檢視器** | 已完成 | 建立地端唯讀 Data Explorer，檢查電力與氣象入庫資料 | `src/shiro_mlops/data/`, `src/shiro_mlops/service/`, `frontend/` | 六個 typed datasets 與 CWA audits 可依領域條件分頁檢視，狀態判讀與自動化測試通過 |
 | **M6: 全台逐時實際負載重建** | 程式已交付；營運待驗收 | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程（優先於 M3） | `src/shiro_mlops/pipelines/`, `src/shiro_mlops/data/` | `raw_taipower_load` 每小時產出推算值，有效逐時觀測達 672 小時（連續無缺漏時約 28 日）後 `dynamic_horizon_forecast` 訓練排程可正常執行 |
 | **M7: ML 任務解耦** | 程式已完成；模型可用性待驗證 | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證（優先於 M3） | `src/shiro_mlops/`, `src/shiro_mlops/tasks/` | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 |
@@ -44,7 +44,7 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 1. **M6 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)第 5 節，以 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"` 確認有效逐時觀測達 672 小時，完成首次訓練並確認 `/ready` 回傳 HTTP 200；smoke check 輸出、訓練 run ID 與 `/ready` 回應留於 [GitHub #60](https://github.com/shiroki9979/shiro-mlops/issues/60)。驗收只看門檻，不含累積穩定性；目前沒有正式環境的驗收結果。
 2. **M7 營運驗收**：`load_pattern_anomaly`（672 小時）與 `high_load_alert`（1344 小時）各自以 `--task <task_id>` 驗收排程、首次訓練與 `POST /tasks/{task_id}/predict`、`GET /tasks/{task_id}/ready` 就緒，與 M6 分開結案。
 3. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 已隨 [PR #105](https://github.com/shiroki9979/shiro-mlops/pull/105) 合併，三個任務的 TOML 未變。採用段 TICKET-303 的離線工具已備妥（`lab.regional_weights` 推算權重、`lab.snapshot --variant` 凍結候選天氣快照、`lab.origins` 盤點合格起點，見 [lab 研究指南](how-to/run-lab-study.md)；研究腳本位於 [`lab/2026-11-17-dhf-weather-calendar/`](../lab/2026-11-17-dhf-weather-calendar/README.md)），待正式資料庫的有效評估起點至少涵蓋 7 個日曆日後執行回測。
-4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積；TICKET-405 待 [#127](https://github.com/shiroki9979/shiro-mlops/issues/127) 決定資料契約。工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用（[ADR-0014](adr/0014-keep-engineering-console-local-and-split-frontend-apps.md)）：TICKET-406／407 與 #127 無關，可先行實作；雲端部署工單依賴 TICKET-406。
+4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積。工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用（[ADR-0014](adr/0014-keep-engineering-console-local-and-split-frontend-apps.md)）：TICKET-406 可先行實作；雲端部署工單依賴 TICKET-406。雲端只公開預先算好的預報，地端負責全部運算（[ADR-0015](adr/0015-publish-forecast-view-as-static-precomputed-output.md)，取代 ADR-0001）：TICKET-408 匯出已發布產物，TICKET-405／409 讓預報檢視改讀匯出 JSON，TICKET-410／411 收斂 Terraform 與移除 `ENVIRONMENT=aws`；TICKET-407 因雲端沒有 FastAPI 而不再需要。CloudFront 配置與 Terraform state 待 [#128](https://github.com/shiroki9979/shiro-mlops/issues/128)、[#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 決定後再切 CD 工單。
 
 ---
 
@@ -156,16 +156,18 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
   - 離線測試以 fixtures 涵蓋上列計入規則、30 天窗邊界與 7 天門檻。
   - SPEC 記錄輸出格式。
 
-#### [TICKET-405] 預報檢視 `/history` 接上預報實績 ([GitHub #130](https://github.com/shiroki9979/shiro-mlops/issues/130))
+#### [TICKET-405] 預報檢視 `/history` 接上預報實績 ([GitHub #130](https://github.com/shiroki9979/shiro-mlops/issues/130)、[#127](https://github.com/shiroki9979/shiro-mlops/issues/127))
 
-- **目標**：以 TICKET-404 的預報實績取代 `/history` 的前端合成資料。
-- **相依**：TICKET-404；資料契約與取得通道 Blocked by [GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127)。
+- **目標**：以 TICKET-408 匯出的預報實績 JSON 取代 `/history` 的前端合成資料（[ADR-0015](adr/0015-publish-forecast-view-as-static-precomputed-output.md) §2.4–2.5）。
+- **相依**：TICKET-406、TICKET-408。
 - **功能範圍**：
   1. MAPE 與 MAE 指標卡（提前 24 小時）、MAPE 對提前時數曲線（MAE 於 tooltip）、提前 24 小時預報與實際負載的 30 天時序圖。
   2. 累積未滿 7 天時顯示空狀態與累積天數。
   3. 移除尖峰命中率卡、RMSE 卡、結論卡、沒有出處的基準值、模型名稱與「滾動回測」文案；中英文案改用「預報實績」。
+  4. 顯示統計截至時刻；距觀眾當下超過 24 小時時顯示中性提示，不揭露原因。
+  5. 資料自 `/published/` 下的 JSON 讀取，不呼叫任何 API。
 - **完成標準 (DoD)**：
-  - Vitest 涵蓋有資料與空狀態兩種畫面；前端不再產生任何合成資料。
+  - Vitest 涵蓋有資料、空狀態與超過 24 小時提示三種畫面；前端不再產生任何合成資料，也不呼叫 API。
 
 #### [TICKET-406] 前端拆成預報檢視與工程主控台兩個應用 ([GitHub #126](https://github.com/shiroki9979/shiro-mlops/issues/126))
 
@@ -184,12 +186,62 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 
 #### [TICKET-407] 雲端拒絕開放工程主控台 API ([GitHub #126](https://github.com/shiroki9979/shiro-mlops/issues/126))
 
+> **不再需要**：[ADR-0015](adr/0015-publish-forecast-view-as-static-precomputed-output.md) 決定雲端沒有 FastAPI，且 `ENVIRONMENT` 的 `aws` 值由 TICKET-411 移除，本工單的前提不成立。日後雲端若加 API，依 ADR-0014 §2.1 另行實作。以下保留原內容備查。
+
 - **目標**：依 ADR-0014 §2.1，讓 API 在雲端環境不可能開放營運資料檢視器讀取面。
 - **功能範圍**：
   1. API 啟動時，若 `ENVIRONMENT=aws` 且 `DATA_EXPLORER_ENABLED=true`，直接啟動失敗並寫明原因。
   2. SPEC §2.1 記錄此限制。
 - **完成標準 (DoD)**：
   - 離線測試涵蓋：`ENVIRONMENT=aws` 且 `DATA_EXPLORER_ENABLED=true` 時啟動失敗；`ENVIRONMENT=local` 時照常開放。
+
+#### [TICKET-408] 匯出預報檢視的已發布產物 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
+
+- **目標**：依 [ADR-0015](adr/0015-publish-forecast-view-as-static-precomputed-output.md) §2.3–2.4，由地端 Dagster 資產把最新已發布預報與預報實績匯出為預報檢視的公開 JSON。
+- **相依**：TICKET-403、TICKET-404。
+- **功能範圍**：
+  1. 新增位於已發布預報與預報實績之後、每小時執行的匯出資產；一律寫入地端目錄，有設定 S3 時再上傳到資料 prefix，覆寫固定檔名。
+  2. 最新已發布預報只輸出預報時刻、目標小時與預測負載，且只含目標小時晚於預報時刻的步；預報實績輸出 ADR-0013 §2.3 的公開欄位與統計截至時刻。
+  3. 地端 Nginx 以 `/published/` 提供地端目錄；Compose 掛載該目錄。
+  4. SPEC 記錄兩份 JSON 的格式、檔名、資產與排程，以及地端上傳用的設定項目（不含 key 值）。
+- **完成標準 (DoD)**：
+  - 離線測試涵蓋：沒有 S3 設定時只寫地端目錄；以 mock 驗證 S3 上傳；輸出不含運行狀態、負載起點、天氣值、天氣來源與模型版本；目標小時不晚於預報時刻的步不輸出；還沒有已發布預報時的輸出。
+  - 地端 Nginx smoke check 涵蓋 `/published/` 下的兩份 JSON。
+
+#### [TICKET-409] 預報檢視 `/` 改讀最新已發布預報 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
+
+- **目標**：依 ADR-0015 §2.4–2.5，讓 `/` 顯示 TICKET-408 匯出的最新已發布預報，不再呼叫 `/predict`。
+- **相依**：TICKET-406、TICKET-408。
+- **功能範圍**：
+  1. 資料自 `/published/` 下的 JSON 讀取；移除 `/predict` 呼叫。
+  2. 移除加權氣溫與濕度的曲線、切換、指標卡與明細欄位，只呈現預測負載。
+  3. 保留視界預設按鈕，以預報時刻為起點截取；「一週」顯示該份預報涵蓋的全部未來小時。
+  4. 顯示預報時刻；距觀眾當下超過 24 小時時顯示中性提示，不揭露原因；還沒有已發布預報時顯示空狀態。
+- **完成標準 (DoD)**：
+  - Vitest 涵蓋：有資料、空狀態、超過 24 小時提示；視界截取以預報時刻為起點，不隨觀眾當下改變；建置產物不含 `/predict` 呼叫。
+
+#### [TICKET-410] Terraform 收斂為預報檢視的靜態託管 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
+
+- **目標**：依 ADR-0015 §2.2、§2.6 移除不再需要的雲端資源，補上地端上傳權限、保存規則與成本護欄。CloudFront 與 state backend 由 [#128](https://github.com/shiroki9979/shiro-mlops/issues/128)、[#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 的工單處理。
+- **功能範圍**：
+  1. 移除 `aws_ecr_repository.api`、`aws_ecr_repository.dagster`、App Runner instance role 與其 S3 policy attachment，以及 CI 角色中的 ECR 權限與相關 outputs。
+  2. 新增地端上傳用 IAM 使用者：只允許 `PutObject` 到資料 prefix，沒有刪除與其他 prefix 的權限；access key 不由 Terraform 產生或輸出。
+  3. S3 bucket 保留 versioning，加上舊版本 30 天後過期的 lifecycle 規則。
+  4. 新增 AWS Budgets：月實際支出 5 美元、預測支出 10 美元時寄 email 警示（收件地址以變數傳入）。
+  5. 改寫 [AWS 部署指南](how-to/deploy-aws-infrastructure.md)，移除 ECR 與 App Runner，加入地端 key 的建立與輪替步驟。
+- **完成標準 (DoD)**：
+  - `terraform fmt -check` 與 `terraform validate` 通過；Terraform 中沒有 ECR、App Runner 或運算資源。
+  - 地端 IAM 使用者的 policy 經審查只含資料 prefix 的寫入權限。
+
+#### [TICKET-411] 移除 `ENVIRONMENT=aws` 與 S3 I/O 分支 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
+
+- **目標**：依 ADR-0015 §2.2，移除不再有部署目標的 `aws` 環境值，以及它切換的 Dagster I/O manager 與特徵 Parquet S3 分支。
+- **功能範圍**：
+  1. `ENVIRONMENT` 只保留 `local` 與 `test`；移除 `core/config.py` 的 S3 特徵路徑與 `core/io_managers.py`、`features/storage.py` 的 `s3://` 分支及其測試。
+  2. 匯出資產的 S3 上傳（TICKET-408）以獨立設定啟用，不依賴 `ENVIRONMENT`。
+  3. SPEC 與 `.env` 範例移除 `aws` 環境與相關設定；ROADMAP 註明 TICKET-407 不再需要。
+- **完成標準 (DoD)**：
+  - `uv run pytest tests/ -v` 與 ruff 通過；程式碼中沒有 `ENVIRONMENT == "aws"` 的分支。
 
 ---
 

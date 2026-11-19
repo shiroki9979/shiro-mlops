@@ -1,7 +1,7 @@
 # AGENTS.md
 
 - Created: 2026-08-23
-- Last updated: 2026-11-16
+- Last updated: 2026-11-19
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -9,7 +9,7 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
 
 - **Domain Glossary & Semantics**: Read [GLOSSARY.md](GLOSSARY.md) for business context, power grid terminology, and degraded forecast definitions.
 - **System & Data Specifications**: Read [docs/SPEC.md](docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
-- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, and the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)).
+- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)), and the static, precomputed Forecast View as the only cloud surface ([ADR-0015](docs/adr/0015-publish-forecast-view-as-static-precomputed-output.md), superseding ADR-0001).
 - **Research Workspace (`lab/`)**: `lab/` is a `uv` workspace member that depends unidirectionally on `shiro_mlops` (`src/` must NEVER import `lab`). Use it to freeze point-in-time training table snapshots, run rolling-origin backtests (滾動起點回測), and record hyperparameter studies under `lab/<YYYY-MM-DD>-<topic>/`.
 - **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
 - **Code Review Standards**: When reviewing a change, apply [CODING_STANDARDS.md](CODING_STANDARDS.md) for repo-specific judgement rules; mechanical rules run in CI.
