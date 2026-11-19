@@ -44,7 +44,7 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 1. **M6 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)第 5 節，以 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"` 確認有效逐時觀測達 672 小時，完成首次訓練並確認 `/ready` 回傳 HTTP 200；smoke check 輸出、訓練 run ID 與 `/ready` 回應留於 [GitHub #60](https://github.com/shiroki9979/shiro-mlops/issues/60)。驗收只看門檻，不含累積穩定性；目前沒有正式環境的驗收結果。
 2. **M7 營運驗收**：`load_pattern_anomaly`（672 小時）與 `high_load_alert`（1344 小時）各自以 `--task <task_id>` 驗收排程、首次訓練與 `POST /tasks/{task_id}/predict`、`GET /tasks/{task_id}/ready` 就緒，與 M6 分開結案。
 3. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 已隨 [PR #105](https://github.com/shiroki9979/shiro-mlops/pull/105) 合併，三個任務的 TOML 未變。採用段 TICKET-303 的離線工具已備妥（`lab.regional_weights` 推算權重、`lab.snapshot --variant` 凍結候選天氣快照、`lab.origins` 盤點合格起點，見 [lab 研究指南](how-to/run-lab-study.md)；研究腳本位於 [`lab/2026-11-17-dhf-weather-calendar/`](../lab/2026-11-17-dhf-weather-calendar/README.md)），待正式資料庫的有效評估起點至少涵蓋 7 個日曆日後執行回測。
-4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積；TICKET-405 待 [#127](https://github.com/shiroki9979/shiro-mlops/issues/127) 決定資料契約。
+4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積；TICKET-405 待 [#127](https://github.com/shiroki9979/shiro-mlops/issues/127) 決定資料契約。工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用（[ADR-0014](adr/0014-keep-engineering-console-local-and-split-frontend-apps.md)）：TICKET-406／407 與 #127 無關，可先行實作；雲端部署工單依賴 TICKET-406。
 
 ---
 
@@ -166,6 +166,30 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
   3. 移除尖峰命中率卡、RMSE 卡、結論卡、沒有出處的基準值、模型名稱與「滾動回測」文案；中英文案改用「預報實績」。
 - **完成標準 (DoD)**：
   - Vitest 涵蓋有資料與空狀態兩種畫面；前端不再產生任何合成資料。
+
+#### [TICKET-406] 前端拆成預報檢視與工程主控台兩個應用 ([GitHub #126](https://github.com/shiroki9979/shiro-mlops/issues/126))
+
+- **目標**：依 [ADR-0014](adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) 把 `frontend/` 改為 pnpm workspace，讓雲端只建置與部署預報檢視。
+- **功能範圍**：
+  1. 建立 `apps/forecast-view`（`/`、`/history`）、`apps/engineering-console`（base path `/console/`，含 `/console/monitoring`、`/console/settings`、`/console/data/*`）與 `packages/shared`；兩個應用各有自己的 `package.json`，彼此不得 import。
+  2. `shared` 只收 ADR-0014 §2.3 的項目：shadcn UI 元件、設計 token 與 Tailwind 基底、i18n 機制與語系切換元件、SPEC §6.4 格式函式、`request()` 與 `ApiError`。`useMessages` 改為由各應用傳入字典的工廠函式；字典、API 端點與 schema、外框與頁面元件留在各應用。
+  3. 語系切換移到兩個應用的外框，`/settings` 不再提供語系選單；API 健康徽章、側欄狀態卡與營運資料檢視器導覽只在工程主控台。
+  4. 地端 Nginx 同一來源提供兩個應用：預報檢視在根路徑，工程主控台在 `/console/`，`/api/` 轉送維持一份；舊網址不轉址。
+  5. 更新 Dockerfile、Compose、CI 與 SPEC §6（語系選擇入口與 `frontend/` 結構）。
+- **完成標準 (DoD)**：
+  - ESLint 禁止 `apps/*` 互相 import，也禁止 `packages/shared` import 任何應用。
+  - CI 驗證預報檢視的建置產物不含 `/console`、`/monitoring`、`/data/` 路徑與工程主控台專用相依。
+  - 既有 Vitest 測試依歸屬移入各應用與 `shared` 並全數通過；兩個應用都有語系切換的整合測試。
+  - 地端 Nginx smoke check 涵蓋 `/`、`/history` 與 `/console/`。
+
+#### [TICKET-407] 雲端拒絕開放工程主控台 API ([GitHub #126](https://github.com/shiroki9979/shiro-mlops/issues/126))
+
+- **目標**：依 ADR-0014 §2.1，讓 API 在雲端環境不可能開放營運資料檢視器讀取面。
+- **功能範圍**：
+  1. API 啟動時，若 `ENVIRONMENT=aws` 且 `DATA_EXPLORER_ENABLED=true`，直接啟動失敗並寫明原因。
+  2. SPEC §2.1 記錄此限制。
+- **完成標準 (DoD)**：
+  - 離線測試涵蓋：`ENVIRONMENT=aws` 且 `DATA_EXPLORER_ENABLED=true` 時啟動失敗；`ENVIRONMENT=local` 時照常開放。
 
 ---
 
