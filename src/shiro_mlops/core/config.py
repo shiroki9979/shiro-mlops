@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class Settings(BaseSettings):
-    """Application settings supporting local and AWS environments."""
+    """Application settings for the local stack and the offline test suite."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -23,27 +23,19 @@ class Settings(BaseSettings):
     )
 
     # Environment
-    ENVIRONMENT: Literal["local", "aws", "test"] = "local"
+    ENVIRONMENT: Literal["local", "test"] = "local"
 
-    # Storage paths / AWS S3
+    # Storage paths
     DATA_DIR: Path = Path("data")
-    S3_BUCKET_NAME: str = "shiro-mlops-artifacts"
-    AWS_REGION: str = "ap-northeast-1"
-    FEAST_OFFLINE_STORE_TYPE: Literal["file", "s3"] = "file"
-    FEAST_S3_PREFIX: str = "features"
 
     @property
     def taipower_parquet_uri(self) -> str:
-        """Return the target URI (local path or s3://) for Taipower feature Parquet."""
-        if self.FEAST_OFFLINE_STORE_TYPE == "s3":
-            return f"s3://{self.S3_BUCKET_NAME}/{self.FEAST_S3_PREFIX}/taipower_features.parquet"
+        """Return the local path of the Taipower feature Parquet under DATA_DIR."""
         return str((self.DATA_DIR / "taipower_features.parquet").resolve())
 
     @property
     def weather_parquet_uri(self) -> str:
-        """Return the target URI (local path or s3://) for CWA weather feature Parquet."""
-        if self.FEAST_OFFLINE_STORE_TYPE == "s3":
-            return f"s3://{self.S3_BUCKET_NAME}/{self.FEAST_S3_PREFIX}/weather_features.parquet"
+        """Return the local path of the CWA weather feature Parquet under DATA_DIR."""
         return str((self.DATA_DIR / "weather_features.parquet").resolve())
 
     @property

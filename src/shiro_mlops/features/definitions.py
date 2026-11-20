@@ -17,29 +17,23 @@ location_entity = Entity(
 
 
 # 2. Offline Parquet Sources
-def create_load_source(
-    path: str | None = None, s3_endpoint_override: str | None = None
-) -> FileSource:
-    """Create Taipower load FileSource pointing to local path or S3."""
+def create_load_source(path: str | None = None) -> FileSource:
+    """Create Taipower load FileSource reading the feature Parquet under DATA_DIR."""
     target_path = path or settings.taipower_parquet_uri
     return FileSource(
         name="taipower_load_source",
         path=target_path,
         timestamp_field="datetime",
-        s3_endpoint_override=s3_endpoint_override,
     )
 
 
-def create_weather_source(
-    path: str | None = None, s3_endpoint_override: str | None = None
-) -> FileSource:
-    """Create CWA weather FileSource pointing to local path or S3."""
+def create_weather_source(path: str | None = None) -> FileSource:
+    """Create CWA weather FileSource reading the feature Parquet under DATA_DIR."""
     target_path = path or settings.weather_parquet_uri
     return FileSource(
         name="cwa_weather_source",
         path=target_path,
         timestamp_field="datetime",
-        s3_endpoint_override=s3_endpoint_override,
     )
 
 

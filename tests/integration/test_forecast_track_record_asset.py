@@ -57,7 +57,7 @@ def _compile(repo: TimeSeriesRepository, tmp_path, instance, *, tick: str | None
         [forecast_track_record],
         resources={
             "time_series_repo": repo,
-            "io_manager": get_parquet_io_manager("local", "unused", tmp_path),
+            "io_manager": get_parquet_io_manager(data_dir=tmp_path),
         },
         run_config=run_config,
         instance=instance,
@@ -66,7 +66,7 @@ def _compile(repo: TimeSeriesRepository, tmp_path, instance, *, tick: str | None
 
 def _artifact(tmp_path) -> dict:
     """The track record exactly as a downstream asset reads it as input."""
-    manager = get_parquet_io_manager("local", "unused", tmp_path)
+    manager = get_parquet_io_manager(data_dir=tmp_path)
     return manager.load_input(
         build_input_context(asset_key=AssetKey([FORECAST_TRACK_RECORD_ASSET]))
     )
