@@ -3,6 +3,7 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
 import { defineConfig } from 'vitest/config'
+import { apiDevProxy } from '../../tooling/vite-api-proxy'
 
 // The Engineering Console shares the Forecast View's origin under this prefix (ADR-0014 §2.5).
 // Vite exposes it as import.meta.env.BASE_URL, which the router and in-app links read, including in tests.
@@ -20,13 +21,7 @@ export default defineConfig({
   },
   server: {
     port: 5174,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-    },
+    proxy: apiDevProxy,
   },
   test: {
     globals: true,
