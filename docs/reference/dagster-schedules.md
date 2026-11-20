@@ -14,7 +14,7 @@
      | 種類 | 名稱 | 內容 |
      | :--- | :--- | :--- |
      | 資產 | `{task_id}__features` | 經 runner `load_training_data` 讀取並套用最低累積，輸出 `training_table`（以目標序列與觀測天氣的時間軸聯集為主鍵序列化：`datetime`、`subject`、`load_mw` 與 `weather.fields`，保留負載缺漏小時的觀測天氣；`rows` metadata 為訓練表總列數）；lineage 依賴 `raw_taipower_load` 與 `raw_cwa_station_observation`，但不執行它們 |
-     | 資產 | `{task_id}__model` | 以 `training_data_from_table` 還原上游訓練表後經 `fit_task` 訓練，不再重讀資料庫；模型存入 `DATA_DIR/models/{task_id}/`，並寫入 MLflow（見下）。輸出 `task_id`、`metrics`、`run_id`、`model_version`、`model_path`、`training_rows` |
+     | 資產 | `{task_id}__model` | 以 `training_data_from_table` 還原上游訓練表後經 `fit_task` 訓練，不再重讀資料庫；模型存入 `DATA_DIR/models/{task_id}/`，並寫入 MLflow（見下）。輸出 `task_id`、`metrics`、`run_id`、`model_version`、`model_path`、`training_rows`；materialization metadata 除各 metric 外，另記 `model_sha256`（剛保存的模型目錄雜湊，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）與 `mlflow_model_version`（MLflow model version；MLflow 不可用、`run_id` 為 `local_run` 時為空值，`model_sha256` 照常記錄） |
      | 資產 | `{task_id}__monitoring` | 經 runner `monitor_task` 以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新一列（僅 `source = 'regional_snapshot_sum'`），再由任務類型 `assess_health` 以任務設定 `[health]` 門檻判定；輸出 `task_id`、`status`（`HEALTHY`／`WARNING`）、`health_reason`、`metrics`、`training_rows`、`target_hours`（有效逐時目標觀測數）、`latest_target_time`、`latest_target_value`（目前任務的目標皆為逐時實際負載，單位 MW） |
      | job | `{task_id}__training_job` | selection 為 `{task_id}__features` 及其所有下游（model、monitoring，以及只掛在該任務的資產，例如 Feast 匯出） |
      | job | `{task_id}__monitoring_job` | selection 僅含 `{task_id}__monitoring`；model 輸出取自最近一次訓練的 I/O Manager 產物，不重跑讀取完整歷史的 features |
