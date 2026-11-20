@@ -40,10 +40,10 @@ from shiro_mlops.pipelines.schedules import (
     tick_run_key,
 )
 from shiro_mlops.pipelines.task_pipelines import (
-    MLFLOW_MODEL_VERSION_METADATA,
     MODEL_SHA256_METADATA,
     TIME_SERIES_REPO,
     TaskPipelineNames,
+    latest_recorded_model,
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import LoadedModel, load_model_with_sha256
@@ -107,10 +107,7 @@ def issued_forecast(
             horizon_hours=MAX_HORIZON_HOURS,
         )
     except TaskUnavailableError as error:
-        raise Failure(
-            description=str(error),
-            metadata={"issued_at": MetadataValue.text(issued_at.isoformat())},
-        ) from error
+        raise Failure(description=str(error), metadata=_issued_at_metadata(issued_at)) from error
     forecast = _issued_forecast(
         issued_at,
         outcome,
@@ -163,18 +160,10 @@ def _mlflow_model_version_note(context: AssetExecutionContext, loaded_sha256: st
     loading the model and this read, so a hash mismatch, missing metadata or an
     empty version leaves the note empty rather than naming the wrong model.
     """
-    event = context.instance.get_latest_materialization_event(AssetKey(_MODEL_ASSET))
-    materialization = event.asset_materialization if event is not None else None
-    if materialization is None:
+    recorded = latest_recorded_model(context.instance, ISSUED_FORECAST_TASK)
+    if recorded is None or recorded.sha256 != loaded_sha256:
         return None
-    metadata = materialization.metadata
-    recorded_sha256 = metadata.get(MODEL_SHA256_METADATA)
-    if recorded_sha256 is None or recorded_sha256.value != loaded_sha256:
-        return None
-    version = metadata.get(MLFLOW_MODEL_VERSION_METADATA)
-    if version is None or not isinstance(version.value, str) or not version.value:
-        return None
-    return version.value
+    return recorded.mlflow_model_version
 
 
 def _issued_forecast(
@@ -204,18 +193,23 @@ def _issued_forecast(
     )
 
 
+def _issued_at_metadata(issued_at: datetime) -> dict[str, MetadataValue]:
+    """Every outcome of an issue, success or Failure, names the issue time it was for."""
+    return {"issued_at": MetadataValue.text(issued_at.isoformat())}
+
+
 def _issued_result(
     issued_at: datetime, *, already_issued: bool, forecast: IssuedForecast | None = None
 ) -> MaterializeResult:
     metadata = {
-        "issued_at": MetadataValue.text(issued_at.isoformat()),
+        **_issued_at_metadata(issued_at),
         "already_issued": MetadataValue.bool(already_issued),
     }
     if forecast is not None and not already_issued:
         metadata |= {
             "load_anchor": MetadataValue.text(forecast.load_anchor.isoformat()),
             "status": MetadataValue.text(forecast.status),
-            "model_sha256": MetadataValue.text(forecast.model_sha256),
+            MODEL_SHA256_METADATA: MetadataValue.text(forecast.model_sha256),
             "steps": MetadataValue.int(len(forecast.steps)),
         }
     return MaterializeResult(metadata=metadata)
@@ -238,7 +232,7 @@ issued_forecast_job = define_asset_job(
 )
 def issued_forecast_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
     """Each tick is its own issue time; nothing is issued before the first trained model."""
-    if context.instance.get_latest_materialization_event(AssetKey(_MODEL_ASSET)) is None:
+    if latest_recorded_model(context.instance, ISSUED_FORECAST_TASK) is None:
         return SkipReason(
             f"No {_MODEL_ASSET} materialization yet; {ISSUED_FORECAST_SCHEDULE} waits for "
             "the first successful training run."
