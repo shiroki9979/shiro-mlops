@@ -14,7 +14,7 @@ Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast,
 - **Serving & API**: FastAPI (Dynamic horizon load predictions)
 - **Monitoring**: Evidently AI (Data Drift, Target Drift, and Evaluation Metrics)
 - **Infrastructure**: AWS + Terraform (S3, IAM OIDC; the cloud only serves the precomputed Forecast View, see ADR-0015)
-- **Frontend Dashboard**: `frontend/` (React 19 + TypeScript + Vite + TanStack SPA)
+- **Frontend**: `frontend/` pnpm workspace (React 19 + TypeScript + Vite + TanStack): the Forecast View app, the local-only Engineering Console app under `/console/`, and a shared package (ADR-0014)
 
 ---
 
@@ -47,13 +47,13 @@ make dev
 
 API docs available at: `http://localhost:8000/docs`
 
-### 5. Start Frontend Dashboard
+### 5. Start the Frontend Apps
 
 ```bash
 make frontend
 ```
 
-Dashboard available at: `http://localhost:5173` (proxies `/api` to `http://localhost:8000`)
+Forecast View at `http://localhost:5173` and Engineering Console at `http://localhost:5174/console/` (both proxy `/api` to `http://localhost:8000`)
 
 ### 6. Start Dagster Pipeline Webserver
 
@@ -71,7 +71,7 @@ Dagster UI available at: `http://localhost:3000`
 shiro-mlops/
 ├── .github/workflows/      # CI/CD pipelines
 ├── docker/                 # Docker Compose, Dockerfiles, TimescaleDB init SQL
-├── frontend/               # React 19 + Vite Dashboard SPA
+├── frontend/               # pnpm workspace: apps/forecast-view, apps/engineering-console, packages/shared
 ├── infra/terraform/        # AWS Infrastructure as Code
 ├── src/shiro_mlops/
 │   ├── core/               # Config, DB, IO managers, datetime helpers

@@ -28,7 +28,7 @@
 
 ## 3. 導覽與查詢行為
 
-- **頂層導覽**：Data Explorer 使用獨立 `/data` 路由；`/monitoring` 專注於健康與新鮮度摘要，並可連結至對應資料集的篩選結果。
+- **頂層導覽**：Data Explorer 屬於工程主控台，使用獨立 `/console/data` 路由；`/console/monitoring` 專注於健康與新鮮度摘要，並可連結至對應資料集的篩選結果。前端路由皆在工程主控台的 base path `/console/` 之下（[ADR-0014](../adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) §2.5），本文件其餘段落省略此前綴。
 - **排序與分頁**：八個列表以各資料集固定的完整複合鍵降冪排序，使用 v2 server-side keyset cursor；排序、翻頁比較與 cursor 均保留原始微秒精度。每頁預設 50 筆、上限 200 筆，不提供無界全表載入。
 - **時間窗口**：列表與完整度查詢共用精確閉區間 `[start, end]`；兩端點納入、窗口外一微秒排除，`start = end` 合法。cursor 固定第一次解析的窗口，頁面顯示時間維持既有整秒格式。
 - **歷史可達性**：使用者可透過有界時間範圍與 cursor 逐頁檢視所有保留中的歷史資料。
@@ -48,7 +48,7 @@
 
 ## 5. 介面與 API 邊界
 
-- **前端路由**：提供 `/data/power/load`、`/data/power/supply-demand`、`/data/power/regional`、`/data/power/units`、`/data/weather/observations`、`/data/weather/forecasts` 與 `/data/audits` nested routes，支援重新整理與 deep link。側邊欄在 Data Explorer 啟用時列出上述資料集與 CWA audits。
+- **前端路由**：在 `/console/` 之下提供 `/data/power/load`、`/data/power/supply-demand`、`/data/power/regional`、`/data/power/units`、`/data/weather/observations`、`/data/weather/forecasts` 與 `/data/audits` nested routes，支援重新整理與 deep link。側邊欄在 Data Explorer 啟用時列出上述資料集與 CWA audits。`GET /data/status` 回傳的 `href` 是不含 base path 的工程主控台路由（如 `/data/power/load`），前端產生連結時補上 `/console`。
 - **資料 API**：每個領域 dataset 使用獨立 typed read endpoint：`GET /data/power/load`、`GET /data/power/supply-demand`、`GET /data/power/regional`、`GET /data/power/units`、`GET /data/weather/observations`、`GET /data/weather/forecasts`、`GET /data/audits/cwa-observations` 與 `GET /data/audits/cwa-forecasts`。所有 list endpoints 共用 cursor pagination response envelope；不提供任意 SQL 或任意實體資料表查詢。
 - **Audit 呈現**：CWA observation 與 forecast 資料頁顯示最新 audit 狀態及 Audit History 連結；`/data/audits` 提供批次歷史與 missing identifiers，但不提供完整 `raw_payload`。
 

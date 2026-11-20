@@ -52,7 +52,7 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 
 | 元件名稱 | 容器名稱 | 監聽連接埠 | 驗證方式 |
 | :--- | :--- | :--- | :--- |
-| **React 視覺化儀表板** | `shiro_frontend` (Nginx) | `http://127.0.0.1:8080` | 載入已建置的 SPA；`/api/health` 轉送至 FastAPI 的 `/health`；重新整理 `/data/power/load` 仍顯示 SPA |
+| **預報檢視與工程主控台** | `shiro_frontend` (Nginx) | `http://127.0.0.1:8080` | `/`、`/history` 載入預報檢視；`/console/` 載入工程主控台，重新整理 `/console/data/power/load` 仍顯示工程主控台；`/api/health` 轉送至 FastAPI 的 `/health` |
 | **Dagster Webserver** | `shiro_dagster_webserver` | `http://127.0.0.1:3000` | 瀏覽器開啟檢視資產依賴圖與排程 |
 | **MLflow Server** | `shiro_mlflow` | `http://127.0.0.1:5001` | 瀏覽器開啟檢視實驗指標與 Model Registry |
 | **FastAPI 推論服務** | `shiro_api` | `http://127.0.0.1:8000/docs` | 直接入口的 `/health` 驗證存活、`/ready` 驗證預測就緒；互動文件僅從直接入口存取，Nginx 不提供 `/api/docs` |
@@ -65,13 +65,13 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 make frontend-smoke ARGS='--check-compose-bindings --direct-api-url http://127.0.0.1:8000'
 ```
 
-此檢查會經 Nginx 驗證首頁、深層路由、建置資產、遺失資產的 404 與 `/api/health`，並確認 API 直接入口及 Compose 主機埠綁定。前端程式變更後，從專案根目錄重新建置靜態映像，再重新整理瀏覽器：
+此檢查會經 Nginx 驗證兩個應用的首頁與深層路由（`/`、`/history`、`/console/`、`/console/data/power/load`）、建置資產、遺失資產的 404 與 `/api/health`，並確認 API 直接入口及 Compose 主機埠綁定。前端程式變更後，從專案根目錄重新建置靜態映像，再重新整理瀏覽器：
 
 ```bash
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build frontend
 ```
 
-需要 Vite 熱重載時仍可使用 `make frontend`，由 `http://127.0.0.1:5173` 開啟開發伺服器；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
+需要 Vite 熱重載時可使用 `make frontend`，同時啟動預報檢視（`http://127.0.0.1:5173`）與工程主控台（`http://127.0.0.1:5174/console/`）兩個開發伺服器；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
 
 修改 `frontend/nginx.conf` 或前端映像後，可在本機重現 CI 的 Nginx 檢查。此指令以獨立映像與暫時容器執行，結束後自動移除容器與網路；完整 Compose 環境已占用 8080 時，以 `FRONTEND_SMOKE_PORT` 指定其他空閒連接埠：
 
