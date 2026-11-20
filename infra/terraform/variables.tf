@@ -12,8 +12,8 @@ variable "environment" {
 
 variable "s3_bucket_name" {
   type        = string
-  default     = "shiro-mlops-artifacts-prod"
-  description = "Name of the S3 bucket for artifacts"
+  default     = "shiro-mlops-forecast-view"
+  description = "Name of the S3 bucket for the Forecast View release artefacts"
 }
 
 variable "github_repo" {
@@ -32,4 +32,14 @@ variable "create_oidc_provider" {
   type        = bool
   default     = true
   description = "Whether to create the GitHub OIDC provider in AWS"
+}
+
+variable "budget_alert_email" {
+  type        = string
+  description = "Email address that receives the AWS Budgets cost alerts"
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.budget_alert_email))
+    error_message = "budget_alert_email must be a valid email address."
+  }
 }

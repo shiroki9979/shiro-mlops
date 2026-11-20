@@ -20,21 +20,50 @@ provider "aws" {
   }
 }
 
-# 1. S3 Bucket for Data Assets, Feast Registry, and MLflow Artifacts
-resource "aws_s3_bucket" "artifacts" {
+# 1. S3 bucket for the Forecast View release artefacts (ADR-0015 §2.2).
+#    site/      : forecast-view build output, written by the CI role.
+#    published/ : exported public JSON, written by the on-prem publisher user.
+resource "aws_s3_bucket" "forecast_view" {
   bucket        = var.s3_bucket_name
   force_destroy = var.environment == "dev"
 }
 
-resource "aws_s3_bucket_versioning" "artifacts_versioning" {
-  bucket = aws_s3_bucket.artifacts.id
+resource "aws_s3_bucket_versioning" "forecast_view" {
+  bucket = aws_s3_bucket.forecast_view.id
   versioning_configuration {
     status = "Enabled"
   }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_crypto" {
-  bucket = aws_s3_bucket.artifacts.id
+# Old versions stay recoverable for 30 days, then expire (ADR-0015 §2.6).
+resource "aws_s3_bucket_lifecycle_configuration" "forecast_view" {
+  bucket = aws_s3_bucket.forecast_view.id
+
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    # Remove delete markers left by `sync --delete` once their old versions expire.
+    expiration {
+      expired_object_delete_marker = true
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.forecast_view]
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "forecast_view" {
+  bucket = aws_s3_bucket.forecast_view.id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -43,8 +72,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_crypto"
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "artifacts_public_block" {
-  bucket = aws_s3_bucket.artifacts.id
+resource "aws_s3_bucket_public_access_block" "forecast_view" {
+  bucket = aws_s3_bucket.forecast_view.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -52,26 +81,7 @@ resource "aws_s3_bucket_public_access_block" "artifacts_public_block" {
   restrict_public_buckets = true
 }
 
-# 2. ECR Repositories for Container Images
-resource "aws_ecr_repository" "api" {
-  name                 = "shiro-mlops-api"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "dagster" {
-  name                 = "shiro-mlops-dagster"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-# 3. IAM Role for GitHub Actions OIDC
+# 2. GitHub Actions OIDC provider and CI role: deploys the frontend to site/ only.
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.create_oidc_provider ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
@@ -108,67 +118,94 @@ resource "aws_iam_role" "github_actions_role" {
   })
 }
 
-resource "aws_iam_policy" "mlops_permissions" {
-  name        = "shiro-mlops-permissions"
-  description = "Permissions for S3, ECR and Cloud deployment"
+# `aws s3 sync --delete` to site/ needs to list, put and delete under site/ only.
+resource "aws_iam_policy" "ci_site_deploy" {
+  name        = "shiro-mlops-ci-site-deploy"
+  description = "CI deploys the Forecast View build output to site/ only"
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket",
-          "s3:DeleteObject"
-        ]
-        Resource = [
-          aws_s3_bucket.artifacts.arn,
-          "${aws_s3_bucket.artifacts.arn}/*"
-        ]
+        Sid      = "ListSitePrefix"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.forecast_view.arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["site/", "site/*"]
+          }
+        }
       },
       {
+        Sid    = "WriteSitePrefix"
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
+          "s3:PutObject",
+          "s3:DeleteObject"
         ]
-        Resource = "*"
+        Resource = "${aws_s3_bucket.forecast_view.arn}/site/*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "attach_mlops_policy" {
+resource "aws_iam_role_policy_attachment" "ci_site_deploy" {
   role       = aws_iam_role.github_actions_role.name
-  policy_arn = aws_iam_policy.mlops_permissions.arn
+  policy_arn = aws_iam_policy.ci_site_deploy.arn
 }
 
-# 4. App Runner Service for Serverless FastAPI
-resource "aws_iam_role" "apprunner_instance_role" {
-  name = "shiro-mlops-apprunner-instance-role"
+# 3. On-prem publisher user: uploads the exported JSON to published/ only
+#    (ADR-0015 §2.3). Its access key is created and rotated outside Terraform,
+#    so the secret never enters Terraform state.
+resource "aws_iam_user" "onprem_publisher" {
+  name = "shiro-mlops-onprem-publisher"
+}
 
-  assume_role_policy = jsonencode({
+resource "aws_iam_policy" "onprem_publish" {
+  name        = "shiro-mlops-onprem-publish"
+  description = "On-prem export uploads the public JSON to published/ only"
+
+  policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Principal = {
-          Service = "tasks.apprunner.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
+        Sid      = "PutPublishedPrefix"
+        Effect   = "Allow"
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.forecast_view.arn}/published/*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "apprunner_s3_access" {
-  role       = aws_iam_role.apprunner_instance_role.name
-  policy_arn = aws_iam_policy.mlops_permissions.arn
+resource "aws_iam_user_policy_attachment" "onprem_publish" {
+  user       = aws_iam_user.onprem_publisher.name
+  policy_arn = aws_iam_policy.onprem_publish.arn
+}
+
+# 4. Cost guardrail: email when monthly actual spend reaches 5 USD or
+#    forecasted spend reaches 10 USD (ADR-0015 §2.6).
+resource "aws_budgets_budget" "monthly_cost" {
+  name         = "shiro-mlops-monthly-cost"
+  budget_type  = "COST"
+  limit_amount = "10"
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 5
+    threshold_type             = "ABSOLUTE_VALUE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_alert_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 10
+    threshold_type             = "ABSOLUTE_VALUE"
+    notification_type          = "FORECASTED"
+    subscriber_email_addresses = [var.budget_alert_email]
+  }
 }
