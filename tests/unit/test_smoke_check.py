@@ -16,6 +16,7 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import all_assets, defs
 from shiro_mlops.pipelines.smoke_check import (
     EXPECTED_SCHEDULES,
+    FORECAST_TRACK_RECORD_SCHEDULES,
     ISSUED_FORECAST_SCHEDULES,
     CheckStatus,
     Deployment,
@@ -37,6 +38,7 @@ NOW = datetime(2026, 9, 27, 0, 30)
 ISSUED_SCHEDULE = "issued_forecast_schedule"
 # 全新部署上發布排程停用（WAIT）且 tick 因尚無模型略過（WAIT）。
 ISSUED_WAITS = 2
+TRACK_RECORD_SCHEDULE = "forecast_track_record_schedule"
 ALL_SCHEDULES = frozenset(schedule.name for schedule in defs.schedules)
 
 
@@ -213,10 +215,11 @@ def test_full_run_on_fresh_deployment_flags_stopped_schedules_and_waiting_readin
     assert "[PASS] job dynamic_horizon_forecast__training_job" in report
     assert "[WAIT] dynamic_horizon_forecast load accumulation" in report
     assert f"[WAIT] schedule {ISSUED_SCHEDULE}" in report
+    assert f"[FAIL] schedule {TRACK_RECORD_SCHEDULE}" in report
     # 每個任務：兩個 job 通過、累積／新鮮度／兩個 tick 等待、兩個排程未啟動；
-    # 發布排程停用與其 tick 各等待一項。
+    # 發布排程停用與其 tick 各等待一項；擷取與預報實績排程未啟動。
     tasks = len(deployed_tasks())
-    failed = len(EXPECTED_SCHEDULES) + 2 * tasks
+    failed = len(EXPECTED_SCHEDULES) + len(FORECAST_TRACK_RECORD_SCHEDULES) + 2 * tasks
     waiting = 4 * tasks + ISSUED_WAITS
     assert report.splitlines()[-1] == f"Summary: {2 * tasks} pass, {waiting} wait, {failed} fail"
     assert exit_code(results, require_ready=False) == 1
@@ -267,6 +270,7 @@ def test_task_scope_keeps_ingestion_schedules_and_drops_other_tasks() -> None:
     assert [result.name for result in schedules] == [
         *(f"schedule {name}" for name in EXPECTED_SCHEDULES),
         *(f"schedule {name}" for name in ISSUED_FORECAST_SCHEDULES),
+        *(f"schedule {name}" for name in FORECAST_TRACK_RECORD_SCHEDULES),
         f"schedule {names.training_schedule}",
         f"schedule {names.monitoring_schedule}",
     ]
@@ -288,7 +292,8 @@ def test_full_run_scoped_to_one_task_reports_only_that_task(
     for task_id in set(deployed_tasks()) - {DYNAMIC_HORIZON_FORECAST}:
         assert task_id not in report
     assert f"schedule {ISSUED_SCHEDULE}" in report
-    failed = len(EXPECTED_SCHEDULES) + 2
+    assert f"[FAIL] schedule {TRACK_RECORD_SCHEDULE}" in report
+    failed = len(EXPECTED_SCHEDULES) + len(FORECAST_TRACK_RECORD_SCHEDULES) + 2
     assert report.splitlines()[-1] == f"Summary: 2 pass, {4 + ISSUED_WAITS} wait, {failed} fail"
 
 
@@ -373,4 +378,54 @@ def test_issued_forecast_tick_would_issue_once_a_model_exists_without_launching_
 
     tick = _issued_tick(results)
     assert (tick.status, tick.detail) == (CheckStatus.PASS, "would request a run")
+    assert dagster_instance.get_runs() == []
+
+
+def _track_record_schedule(results):
+    return next(r for r in results if r.name == f"schedule {TRACK_RECORD_SCHEDULE}")
+
+
+def test_stopped_track_record_schedule_fails_because_it_needs_no_model() -> None:
+    """不比照發布排程的 WAIT：彙整不依賴模型，冷啟動時就與擷取排程一起開啟。"""
+    results = check_schedule_configuration(defs, running=ALL_SCHEDULES - {TRACK_RECORD_SCHEDULE})
+
+    stopped = _track_record_schedule(results)
+    assert stopped.status is CheckStatus.FAIL
+    assert "not running" in stopped.detail
+    assert exit_code(results, require_ready=False) == 1
+
+
+def test_unregistered_or_drifted_track_record_schedule_fails() -> None:
+    track_record_job = defs.resolve_job_def("forecast_track_record_job")
+    drifted = Definitions(
+        assets=all_assets,
+        jobs=[track_record_job],
+        schedules=[
+            ScheduleDefinition(
+                name=TRACK_RECORD_SCHEDULE,
+                job=track_record_job,
+                cron_schedule="15 * * * *",
+                execution_timezone="Asia/Taipei",
+            )
+        ],
+    )
+
+    missing = _track_record_schedule(
+        check_schedule_configuration(_scoped_definitions(), running=ALL_SCHEDULES)
+    )
+    cron = _track_record_schedule(check_schedule_configuration(drifted, running=ALL_SCHEDULES))
+
+    assert (missing.status, missing.detail) == (CheckStatus.FAIL, "not registered in Definitions")
+    assert cron.status is CheckStatus.FAIL
+    assert "'25 * * * *'" in cron.detail and "'15 * * * *'" in cron.detail
+
+
+def test_track_record_schedule_check_survives_task_scope_without_launching_a_run(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+) -> None:
+    results = run_smoke_check(
+        Deployment(defs, test_repo, dagster_instance, NOW), task_id=DYNAMIC_HORIZON_FORECAST
+    )
+
+    assert _track_record_schedule(results).status is CheckStatus.FAIL
     assert dagster_instance.get_runs() == []

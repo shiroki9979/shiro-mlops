@@ -1,7 +1,7 @@
 # 如何在全地端運行完整 MLOps 容器化環境
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-18
+- 最後更新：2026-11-20
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -85,7 +85,7 @@ make frontend-smoke-ci FRONTEND_SMOKE_PORT=18080
 
 ## 4. 準備資料並訓練模型
 
-`dynamic_horizon_forecast__training_job` 需要 TimescaleDB 中已有至少任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，約 28 日）個有效的全台逐時實際負載，以及時間重疊的 canonical CWA 測站觀測歷史。逐時負載只能由區域快照往後累積，無法回補；累積期間任務的訓練與監控排程會略過並揭露原因，`/ready` 應維持 HTTP 503，不應以測試 fixture 建立正式模型。開啟排程、追蹤累積進度與預期失敗邊界見 [如何在逐時負載冷啟動後恢復訓練與監控排程](recover-training-after-load-cold-start.md)。
+`dynamic_horizon_forecast__training_job` 需要 TimescaleDB 中已有至少任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，約 28 日）個有效的全台逐時實際負載，以及時間重疊的 canonical CWA 測站觀測歷史。逐時負載只能由區域快照往後累積，無法回補；累積期間任務的訓練與監控排程會略過並揭露原因，`/ready` 應維持 HTTP 503，不應以測試 fixture 建立正式模型。開啟排程、追蹤累積進度與預期失敗邊界見 [如何在逐時負載冷啟動後恢復訓練與監控排程](recover-training-after-load-cold-start.md)。預報實績排程 `forecast_track_record_schedule` 不依賴模型，與擷取排程一起開啟；首次發布前每次彙整的累積天數皆為 0，屬預期結果。發布排程 `issued_forecast_schedule` 則待首次訓練成功後才開啟。
 
 1. 開啟瀏覽器進入 `http://localhost:3000`。
 2. 先 materialize `raw_cwa_station_observation`，確認三個預設測站觀測已寫入 TimescaleDB。
