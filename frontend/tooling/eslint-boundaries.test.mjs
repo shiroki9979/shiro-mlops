@@ -11,7 +11,13 @@ const eslint = new ESLint({ cwd: FRONTEND_ROOT })
 const BOUNDARY_RULES = new Set(['no-restricted-imports', 'no-restricted-syntax'])
 
 async function boundaryErrors(filePath, source) {
-  const [result] = await eslint.lintText(`${source}\nexport {}\n`, { filePath })
+  // A CommonJS file cannot hold an `export` statement.
+  const text = filePath.endsWith('.cjs') ? `${source}\n` : `${source}\nexport {}\n`
+  const [result] = await eslint.lintText(text, { filePath })
+  // A file no config matches comes back as one rule-less warning, and a parse failure as a fatal
+  // message; either would make every case below pass vacuously.
+  const unlinted = result.messages.filter((message) => message.ruleId === null)
+  assert.deepEqual(unlinted, [], `${filePath} was not linted`)
   return result.messages.filter((message) => BOUNDARY_RULES.has(message.ruleId))
 }
 
@@ -45,6 +51,34 @@ describe('shared cannot import any app', () => {
   ]) {
     it(`rejects ${source}`, async () => {
       assert.equal((await boundaryErrors(SHARED_FILE, source)).length, 1)
+    })
+  }
+})
+
+// The boundary must hold for every source a bundler can pick up, not only TypeScript.
+describe('boundaries cover JavaScript sources', () => {
+  for (const [from, source] of [
+    ['apps/forecast-view/src/fixture.js', "import { x } from '@shiro-mlops/engineering-console'"],
+    ['apps/forecast-view/src/fixture.jsx', "import { Page } from '../../engineering-console/src/routes/data'\nconst page = <Page />"],
+    ['apps/forecast-view/src/fixture.mjs', "const page = import('../../engineering-console/src/routes/monitoring')"],
+    ['apps/forecast-view/src/fixture.cjs', "const { x } = require('@shiro-mlops/engineering-console/src/lib/api-client')"],
+    ['apps/engineering-console/src/fixture.js', "import { x } from '../../forecast-view/src/hooks/use-prediction'"],
+    ['apps/engineering-console/src/fixture.cjs', "const { x } = require('../../forecast-view/src/hooks/use-prediction')"],
+    ['packages/shared/src/fixture.js', "import { x } from '@/i18n/messages'"],
+    ['packages/shared/src/fixture.jsx', "import { x } from '@shiro-mlops/forecast-view'\nconst el = <div />"],
+  ]) {
+    it(`rejects ${source} in ${from}`, async () => {
+      assert.equal((await boundaryErrors(from, source)).length, 1)
+    })
+  }
+
+  for (const [from, source] of [
+    ['apps/forecast-view/src/fixture.jsx', "import { Card } from '@shiro-mlops/shared/ui/card'\nconst el = <Card />"],
+    ['apps/engineering-console/src/fixture.cjs', "const { request } = require('@shiro-mlops/shared/api')"],
+    ['packages/shared/src/fixture.mjs', "import { create } from 'zustand'"],
+  ]) {
+    it(`allows ${source} in ${from}`, async () => {
+      assert.deepEqual(await boundaryErrors(from, source), [])
     })
   }
 })

@@ -9,18 +9,27 @@ import tseslint from 'typescript-eslint'
 // (`@shiro-mlops/<app>`) and relative paths that climb into the other package's directory.
 function forbidImports(regex, message) {
   // esquery ends a selector regex at the first `/`, so slashes are written as \x2F there.
-  const selector = `ImportExpression[source.value=/${regex.replaceAll('/', '\\x2F')}/]`
+  const source = `/${regex.replaceAll('/', '\\x2F')}/`
   return {
     'no-restricted-imports': ['error', { patterns: [{ regex, message }] }],
-    // no-restricted-imports does not inspect dynamic import(), which would bundle the module all the same.
-    'no-restricted-syntax': ['error', { selector, message }],
+    // no-restricted-imports inspects neither dynamic import() nor CommonJS require(), and a bundler
+    // follows both all the same.
+    'no-restricted-syntax': [
+      'error',
+      { selector: `ImportExpression[source.value=${source}]`, message },
+      { selector: `CallExpression[callee.name="require"][arguments.0.value=${source}]`, message },
+    ],
   }
 }
+
+// Every source extension a bundler resolves, so a .js/.jsx/.mjs/.cjs file cannot bypass the boundary.
+const SOURCES = '**/*.{ts,tsx,js,jsx,mjs,cjs}'
 
 const pathSegment = (names) => `(^|/)(${names.join('|')})(/|$)`
 
 export default tseslint.config(
-  { ignores: ['**/dist', '**/node_modules', '**/*.config.js', '**/*.config.ts'] },
+  // Config files run in Node, not in a bundle, so they are outside the workspace boundaries.
+  { ignores: ['**/dist', '**/node_modules', '**/*.config.{js,mjs,cjs,ts,mts,cts}'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -45,21 +54,28 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/forecast-view/**/*.{ts,tsx}'],
+    // JavaScript sources get no other rules here; they are parsed only so the boundaries below apply.
+    files: ['apps/**/*.{js,jsx,mjs,cjs}', 'packages/**/*.{js,jsx,mjs,cjs}'],
+    languageOptions: {
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+  },
+  {
+    files: [`apps/forecast-view/${SOURCES}`],
     rules: forbidImports(
       pathSegment(['engineering-console']),
       'The Forecast View must not import the Engineering Console; move shared code to packages/shared (ADR-0014 §2.3).',
     ),
   },
   {
-    files: ['apps/engineering-console/**/*.{ts,tsx}'],
+    files: [`apps/engineering-console/${SOURCES}`],
     rules: forbidImports(
       pathSegment(['forecast-view']),
       'The Engineering Console must not import the Forecast View; move shared code to packages/shared (ADR-0014 §2.3).',
     ),
   },
   {
-    files: ['packages/shared/**/*.{ts,tsx}'],
+    files: [`packages/shared/${SOURCES}`],
     rules: forbidImports(
       `${pathSegment(['apps', 'forecast-view', 'engineering-console'])}|^@/`,
       'packages/shared must not import an app (`@/` resolves into whichever app bundles it); pass app values in as arguments (ADR-0014 §2.2).',
