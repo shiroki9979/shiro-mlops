@@ -131,7 +131,7 @@ describe('Data Explorer routes', () => {
         HttpResponse.json({
           status: 'ok',
           version: '0.1.0',
-          environment: 'aws',
+          environment: 'test',
           model_loaded: true,
           data_explorer_enabled: false,
         }),
@@ -361,7 +361,7 @@ describe('Monitoring Data Source Status', () => {
         HttpResponse.json({
           status: 'ok',
           version: '0.1.0',
-          environment: 'aws',
+          environment: 'test',
           model_loaded: true,
           data_explorer_enabled: false,
         }),
