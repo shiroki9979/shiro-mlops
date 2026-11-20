@@ -225,6 +225,30 @@ def test_api_predict_reads_weather_from_the_weather_reference_point(
     )
 
 
+def test_api_predict_on_demand_does_not_issue_a_forecast(
+    fitted_task_model: TaskModel,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    cwa_forecast_df: pd.DataFrame,
+    monkeypatch,
+) -> None:
+    """Only scheduled issues count (ADR-0013): an on-demand /predict only reads the store."""
+    repository = _serve_fitted_forecaster(
+        fitted_task_model, taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
+
+    response = TestClient(app).post("/predict", json={"horizon_hours": 12})
+
+    assert response.status_code == 200, response.text
+    repository.insert_issued_forecast.assert_not_called()
+    assert {name for name, _args, _kwargs in repository.method_calls} <= {
+        "fetch_latest_load",
+        "fetch_load_range",
+        "fetch_cwa_station_observations",
+        "fetch_cwa_forecast_rows",
+    }
+
+
 def test_openapi_marks_predict_location_as_optional_and_deprecated() -> None:
     schemas = app.openapi()["components"]["schemas"]
     request_schema = schemas["PredictionRequest"]
