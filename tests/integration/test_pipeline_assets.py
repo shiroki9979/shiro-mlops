@@ -5,7 +5,15 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from dagster import Definitions, Failure, build_asset_context, load_assets_from_modules, materialize
+from dagster import (
+    AssetKey,
+    Definitions,
+    Failure,
+    MetadataValue,
+    build_asset_context,
+    load_assets_from_modules,
+    materialize,
+)
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import (
@@ -32,6 +40,7 @@ from shiro_mlops.pipelines.task_pipelines import (
 )
 from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.model_store import model_directory_sha256
 from tests.helpers import derived_hourly_load, override_task_policies
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
@@ -246,21 +255,20 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     assert len(persisted_weather) == len(cwa_obs_df)
 
 
-def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
+def _trainable_task_definitions(
     test_repo: TimeSeriesRepository,
     taipower_raw_df: pd.DataFrame,
     cwa_observation_batch: CWAObservationBatch,
-    dagster_instance,
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Monitoring uses the latest persisted actual load and prior model without running ingestion assets."""
+) -> Definitions:
+    """Task jobs over a repository holding exactly enough history to train."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     test_repo.upsert_taipower_load(taipower_raw_df)
     test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
     pipelines = build_task_pipelines(deployed_tasks())
-    job_defs = Definitions(
+    return Definitions(
         assets=[
             *load_assets_from_modules([assets_module]),
             *(asset for pipeline in pipelines for asset in pipeline.assets),
@@ -273,6 +281,80 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
                 FeastPublicationTarget.local(tmp_path)
             ),
         },
+    )
+
+
+def _latest_model_metadata(instance) -> dict:
+    event = instance.get_latest_materialization_event(AssetKey(NAMES.model))
+    return event.asset_materialization.metadata
+
+
+def test_model_materialization_records_the_saved_model_hash_and_mlflow_version(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+
+    with patch(
+        "shiro_mlops.pipelines.task_pipelines.log_training_run",
+        return_value=TrackedRun(run_id="run-1", model_version="7"),
+    ):
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance
+        )
+
+    assert training.success
+    metadata = _latest_model_metadata(dagster_instance)
+    installed = model_directory_sha256(settings.models_dir / DYNAMIC_HORIZON_FORECAST)
+    assert metadata["model_sha256"] == MetadataValue.text(installed)
+    assert metadata["mlflow_model_version"] == MetadataValue.text("7")
+
+
+def test_model_materialization_keeps_the_model_hash_when_mlflow_is_unavailable(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+
+    with patch(
+        "shiro_mlops.pipelines.task_pipelines.log_training_run",
+        side_effect=ConnectionError("MLflow is down"),
+    ):
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance
+        )
+
+    assert training.success
+    assert training.output_for_node(NAMES.model)["run_id"] == "local_run"
+    metadata = _latest_model_metadata(dagster_instance)
+    installed = model_directory_sha256(settings.models_dir / DYNAMIC_HORIZON_FORECAST)
+    assert metadata["model_sha256"] == MetadataValue.text(installed)
+    assert metadata["mlflow_model_version"] == MetadataValue.null()
+
+
+def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Monitoring uses the latest persisted actual load and prior model without running ingestion assets."""
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
     )
 
     with patch(
