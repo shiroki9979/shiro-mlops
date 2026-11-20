@@ -11,7 +11,8 @@
         "dev": "pnpm --parallel --filter './apps/*' run dev",
         "build": "pnpm --filter @shiro-mlops/shared run typecheck && pnpm --filter './apps/*' run build",
         "lint": "eslint .",
-        "test": "pnpm --recursive run test"
+        "test": "pnpm --recursive run test && pnpm run test:tooling",
+        "test:tooling": "node --test 'tooling/*.test.mjs'"
     },
     "devDependencies": {
         "@eslint/js": "^9.20.0",
