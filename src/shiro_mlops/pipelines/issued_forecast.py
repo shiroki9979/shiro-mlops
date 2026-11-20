@@ -39,7 +39,12 @@ from shiro_mlops.pipelines.schedules import (
     HOURLY_ACTUAL_LOAD_ASSET,
     tick_run_key,
 )
-from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO, TaskPipelineNames
+from shiro_mlops.pipelines.task_pipelines import (
+    MLFLOW_MODEL_VERSION_METADATA,
+    MODEL_SHA256_METADATA,
+    TIME_SERIES_REPO,
+    TaskPipelineNames,
+)
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import LoadedModel, load_model_with_sha256
 from shiro_mlops.tasks.runner import (
@@ -102,8 +107,12 @@ def issued_forecast(
             description=str(error),
             metadata={"issued_at": MetadataValue.text(issued_at.isoformat())},
         ) from error
-    # MLflow 版本附註由 #153 依 `{task}__model` materialization 比對雜湊後填入。
-    forecast = _issued_forecast(issued_at, outcome, loaded, mlflow_model_version=None)
+    forecast = _issued_forecast(
+        issued_at,
+        outcome,
+        loaded,
+        mlflow_model_version=_mlflow_model_version_note(context, loaded.sha256),
+    )
     written = repository.insert_issued_forecast(forecast)
     return _issued_result(issued_at, already_issued=not written, forecast=forecast)
 
@@ -128,6 +137,27 @@ def _load_model() -> LoadedModel:
             description=f"No trained {ISSUED_FORECAST_TASK} model under {settings.models_dir}."
         )
     return loaded
+
+
+def _mlflow_model_version_note(context: AssetExecutionContext, loaded_sha256: str) -> str | None:
+    """The latest model materialization's MLflow version, only if it recorded the loaded model.
+
+    Read from the Dagster instance, never from MLflow. Training may finish between
+    loading the model and this read, so a hash mismatch, missing metadata or an
+    empty version leaves the note empty rather than naming the wrong model.
+    """
+    event = context.instance.get_latest_materialization_event(AssetKey(_MODEL_ASSET))
+    materialization = event.asset_materialization if event is not None else None
+    if materialization is None:
+        return None
+    metadata = materialization.metadata
+    recorded_sha256 = metadata.get(MODEL_SHA256_METADATA)
+    if recorded_sha256 is None or recorded_sha256.value != loaded_sha256:
+        return None
+    version = metadata.get(MLFLOW_MODEL_VERSION_METADATA)
+    if version is None or not isinstance(version.value, str) or not version.value:
+        return None
+    return version.value
 
 
 def _issued_forecast(
