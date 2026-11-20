@@ -95,3 +95,20 @@ def test_issued_forecast_rejects_a_status_other_than_normal_or_degraded() -> Non
 def test_issued_forecast_rejects_a_model_identity_that_is_not_a_full_sha256() -> None:
     with pytest.raises(ValueError, match="model_sha256"):
         replace(_issued_forecast(), model_sha256="abc")
+
+
+def test_latest_issued_forecast_is_the_one_with_the_latest_issue_time(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """Insertion order does not matter: an earlier issue written later is not the latest."""
+    latest = _issued_forecast(ISSUED_AT + timedelta(hours=1))
+    test_repo.insert_issued_forecast(latest)
+    test_repo.insert_issued_forecast(_issued_forecast())
+
+    assert test_repo.fetch_latest_issued_forecast() == latest
+
+
+def test_latest_issued_forecast_is_none_before_the_first_issue(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    assert test_repo.fetch_latest_issued_forecast() is None

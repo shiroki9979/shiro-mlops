@@ -37,6 +37,14 @@ _SELECT_HEADER = text(
     WHERE issued_at = :issued_at
     """
 )
+_SELECT_LATEST_ISSUED_AT = text(
+    """
+    SELECT issued_at
+    FROM issued_forecast
+    ORDER BY issued_at DESC
+    LIMIT 1
+    """
+)
 _SELECT_STEPS = text(
     """
     SELECT target_hour, predicted_load_mw
@@ -130,6 +138,14 @@ class IssuedForecastRepository:
                 for step in steps
             ),
         )
+
+    def fetch_latest(self) -> IssuedForecast | None:
+        """Read the forecast with the latest issue time, or ``None`` before the first issue."""
+        with self.engine.connect() as conn:
+            latest = conn.execute(_SELECT_LATEST_ISSUED_AT).scalar()
+        if latest is None:
+            return None
+        return self.fetch(utc_instant_to_taiwan(latest))
 
     def fetch_steps_after_issue(self, window: TrackRecordWindow) -> tuple[IssuedStep, ...]:
         """Steps targeting the window whose target hour is after their issue time.

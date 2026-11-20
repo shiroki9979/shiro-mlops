@@ -866,6 +866,10 @@ class TimeSeriesRepository:
         """Fetch the forecast issued at a Taiwan-local issue time."""
         return self.issued_forecast_repo.fetch(issued_at)
 
+    def fetch_latest_issued_forecast(self) -> IssuedForecast | None:
+        """Fetch the forecast with the latest issue time, or ``None`` before the first issue."""
+        return self.issued_forecast_repo.fetch_latest()
+
     def fetch_track_record_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
         """Pair issued steps targeting the window with valid hourly observations.
 
