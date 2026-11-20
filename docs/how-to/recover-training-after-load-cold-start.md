@@ -40,7 +40,7 @@
 | `load_pattern_anomaly__training_schedule` | 台灣時間 01:00 訓練用電型態異常偵測模型；門檻未達時略過 |
 | `load_pattern_anomaly__monitoring_schedule` | 每小時整點產生監控報告；門檻未達或尚無模型時略過 |
 
-任務的訓練與監控排程可以在冷啟動當天就開啟，不需等待累積完成。預報實績排程 `forecast_track_record_schedule` 不依賴模型，與擷取排程一起開啟：發布開始前，每次彙整的 materialization metadata 皆為 `accumulated_days = 0`，這是預期結果；發布開始後逐日增加，最多為 31。發布排程 `issued_forecast_schedule` 此時保持停用，待第 5 節首次訓練成功後才開啟。
+任務的訓練與監控排程可以在冷啟動當天就開啟，不需等待累積完成。預報實績排程 `forecast_track_record_schedule` 與擷取排程一起開啟：發布開始前，每次彙整的 materialization metadata 皆為 `accumulated_days = 0`，這是預期結果；發布開始後逐日增加。發布排程 `issued_forecast_schedule` 此時保持停用，待第 5 節首次訓練成功後才開啟。
 
 ---
 
@@ -116,7 +116,7 @@ Summary: 20 pass, 11 wait, 0 fail
 | `raw_taipower_load` 仍有 `source IS NULL` 舊列 | 同上，訊息含 `legacy rows` | 即使筆數足夠也拒絕訓練 | 依 [舊列清除指南](remove-legacy-d015046-load-rows.md) 處理 |
 | 門檻已達但尚無模型 | `dynamic_horizon_forecast__monitoring_schedule` 與 `issued_forecast_schedule` skip 訊息；smoke check `tick issued_forecast_schedule` `WAIT` | 監控與發布略過 | 完成第 5 節的第一次訓練 |
 | 最新推算小時落後超過 `[policies].stale_anchor_max_lag_hours` | smoke check `dynamic_horizon_forecast load freshness` `FAIL` | 累積停滯；`/ready` 與 `/predict` 同時回 HTTP 503 | 檢查 `taipower_supply_demand_snapshot_job` 與 `hourly_actual_load_job` 最近 run 是否失敗；停擺期間錯過的快照永久缺失 |
-| 擷取、預報實績或任務排程未開啟 | smoke check `schedule ...` `FAIL` | 該排程不會 tick；預報實績排程未開啟時，彙整停在最後一次執行的統計截至時刻 | 依第 2 節開啟；預報實績每次從頭重算，開啟後下一個 tick 即補上期間的已發布預報 |
+| 擷取、預報實績或任務排程未開啟 | smoke check `schedule ...` `FAIL` | 該排程不會 tick；預報實績排程未開啟時，彙整停在最後一次執行的統計截至時刻 | 依第 2 節開啟；預報實績排程開啟後，下一個 tick 即計入期間的已發布預報 |
 | 預報實績排程未註冊或 cron 不符 | smoke check `schedule forecast_track_record_schedule` `FAIL` | 部署的程式碼與 [Dagster 排程](../reference/dagster-schedules.md) 契約不符 | 確認 `/workspace` 掛載的程式碼版本後執行 `docker compose -f docker/docker-compose.yml restart dagster-webserver` |
 | 發布排程未開啟 | smoke check `schedule issued_forecast_schedule` `WAIT`；`--require-ready` 結束碼為 `1` | 不寫入已發布預報，缺漏的小時無法回補 | 首次訓練成功後依第 5 節步驟 4 開啟 |
 | 發布排程未註冊或 cron 不符 | smoke check `schedule issued_forecast_schedule` `FAIL` | 部署的程式碼與 [Dagster 排程](../reference/dagster-schedules.md) 契約不符 | 確認 `/workspace` 掛載的程式碼版本後執行 `docker compose -f docker/docker-compose.yml restart dagster-webserver` |

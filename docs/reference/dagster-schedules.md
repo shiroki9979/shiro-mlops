@@ -64,7 +64,7 @@
 7. **`forecast_track_record`（預報實績，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
    - **定義**：固定資產 `forecast_track_record`，位於 `pipelines/forecast_track_record.py`，不進任務資產工廠。lineage 依賴 `issued_forecast` 與 `raw_taipower_load`，但不執行它們；任務的兩個 job 與 `issued_forecast_job` 皆不選取它。
    - **排程**：job `forecast_track_record_job` 與排程 `forecast_track_record_schedule` 同位於 `pipelines/forecast_track_record.py`。排程為 `25 * * * *`（`Asia/Taipei`），排在發布（:15）之後；tick 轉為台灣本地時間 ISO 字串，同時作為 `run_key` 與資產設定 `scheduled_at`。無 tick 的手動排程評估不帶 `run_key` 與設定，run 以執行當下為準。job 只選取 `forecast_track_record`，不選取任何擷取資產，也不選取 `issued_forecast`，因此發布失敗或略過時照常彙整。排程預設停用，冷啟動時與擷取排程一起開啟，不需等待首次訓練。
-   - **重試政策**：`forecast_track_record_job` 失敗時在同一 run 內最多重試兩次，每次間隔六十秒，用盡後仍遠早於下一個 tick。彙整只讀資料庫、從頭重算且不保存歷次結果，重試沿用同一 `scheduled_at`，得到同一統計窗，可吸收短暫的資料庫中斷。`issued_forecast` 刻意不重試（第 6 項），是因為重試會沿用原 tick 為 `as_of` 卻讀到其後入庫的負載；彙整沒有 `as_of`，不受此限。
+   - **重試政策**：`forecast_track_record_job` 失敗時在同一 run 內最多重試兩次，每次間隔六十秒，用盡後仍遠早於下一個 tick。彙整只讀資料庫、從頭重算且不保存歷次結果，可吸收短暫的資料庫中斷。排程觸發的 run 重試時沿用同一 `scheduled_at`，得到同一統計窗；手動執行（未設定 `scheduled_at`）的重試以重試當下取整點，跨過整點時統計窗隨之後移一小時。`issued_forecast` 刻意不重試（第 6 項），是因為重試會沿用原 tick 為 `as_of` 卻讀到其後入庫的負載；彙整沒有 `as_of`，不受此限。
    - **統計截至時刻 E**：執行時點取整點。資產設定 `scheduled_at`（台灣本地時間 ISO 字串）帶入排程 tick 時，執行時點為該 tick；未設定時（手動 materialize）為執行當下。
    - **統計窗**：目標小時 ∈ [E − 720h, E)，以目標小時判斷，與發布時刻無關；窗開始前發布、目標小時落在窗內的步數也計入。
    - **配對與計入**：提前時數 = ⌈(目標小時 − 發布時刻) / 1h⌉，不大於 0 的步數不計入，例如 10:15 發布時 10:00 不計入、11:00 為提前 1、隔天 10:00 為提前 24。只配對有有效逐時觀測的目標小時，即 `raw_taipower_load` 中 `subject = 'nationwide'`、`source = 'regional_snapshot_sum'` 的列。降級預報照常計入。
