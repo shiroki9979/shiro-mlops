@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 from dagster import AssetKey, build_input_context, materialize
 
 from shiro_mlops.core.io_managers import get_parquet_io_manager
@@ -71,7 +72,7 @@ def _artifact(tmp_path) -> dict:
     )
 
 
-TRACK_RECORD_METADATA = ("cutoff", "accumulated_days", "window_pairs")
+TRACK_RECORD_METADATA = ("cutoff", "accumulated_days", "window_pairs", "lead_24_pairs")
 
 
 def _metadata(result) -> dict:
@@ -80,7 +81,7 @@ def _metadata(result) -> dict:
     return {key: materialization.metadata[key].value for key in TRACK_RECORD_METADATA}
 
 
-def test_scheduled_run_counts_up_to_the_tick_hour_and_stores_only_cutoff_and_days(
+def test_scheduled_run_counts_up_to_the_tick_hour_and_below_7_days_stores_no_metrics(
     test_repo: TimeSeriesRepository, tmp_path, dagster_instance
 ) -> None:
     """No run status, weather source, model version or data gaps leave the asset."""
@@ -91,11 +92,16 @@ def test_scheduled_run_counts_up_to_the_tick_hour_and_stores_only_cutoff_and_day
     result = _compile(test_repo, tmp_path, dagster_instance)
 
     assert result.success
-    assert _artifact(tmp_path) == {"cutoff": "2026-11-20T10:00:00", "accumulated_days": 1}
+    assert _artifact(tmp_path) == {
+        "cutoff": "2026-11-20T10:00:00",
+        "accumulated_days": 1,
+        "metrics": None,
+    }
     assert _metadata(result) == {
         "cutoff": "2026-11-20T10:00:00",
         "accumulated_days": 1,
         "window_pairs": 2,
+        "lead_24_pairs": 0,
     }
 
 
@@ -132,6 +138,7 @@ def test_window_spans_the_720_target_hours_before_the_cutoff(
         "cutoff": "2026-11-20T10:00:00",
         "accumulated_days": 2,
         "window_pairs": 2,
+        "lead_24_pairs": 0,
     }
 
 
@@ -170,5 +177,50 @@ def test_without_issued_forecasts_the_record_has_zero_days(
     result = _compile(test_repo, tmp_path, dagster_instance)
 
     assert result.success
-    assert _artifact(tmp_path) == {"cutoff": "2026-11-20T10:00:00", "accumulated_days": 0}
+    assert _artifact(tmp_path) == {
+        "cutoff": "2026-11-20T10:00:00",
+        "accumulated_days": 0,
+        "metrics": None,
+    }
     assert _metadata(result)["window_pairs"] == 0
+
+
+def test_seven_days_of_issued_forecasts_publish_curve_lead_24_metrics_and_series(
+    test_repo: TimeSeriesRepository, tmp_path, dagster_instance
+) -> None:
+    """Daily 09:15 issues with the normal load anchor 08:00 reach lead 167 at most.
+
+    Nothing about run status, weather source, model version or data gaps is published.
+
+    Every step predicts 30000 MW against 25000 MW observed: 20 % and 5000 MW.
+    """
+    issue_days = [datetime(2026, 11, 12, 9, 15) + timedelta(days=day) for day in range(8)]
+    for issued_at in issue_days:
+        anchor = issued_at.replace(minute=0) - timedelta(hours=1)
+        _issue(test_repo, issued_at, [anchor + timedelta(hours=k) for k in range(1, 169)])
+    _observe(test_repo, [CUTOFF - timedelta(hours=offset) for offset in range(1, 200)])
+
+    result = _compile(test_repo, tmp_path, dagster_instance)
+
+    artifact = _artifact(tmp_path)
+    assert artifact.keys() == {"cutoff", "accumulated_days", "metrics"}
+    assert artifact["accumulated_days"] == 9
+    metrics = artifact["metrics"]
+    assert metrics.keys() == {"lead_time_curve", "lead_24", "lead_24_series"}
+    curve = metrics["lead_time_curve"]
+    assert [cell["lead_time_hours"] for cell in curve] == list(range(1, 169))
+    assert curve[166]["mape"] == pytest.approx(20.0)
+    assert curve[166]["mae"] == pytest.approx(5000.0)
+    assert curve[167] == {"lead_time_hours": 168, "mape": None, "mae": None}
+    assert metrics["lead_24"] == curve[23]
+    assert metrics["lead_24"]["mape"] == pytest.approx(20.0)
+    assert metrics["lead_24"]["mae"] == pytest.approx(5000.0)
+    assert metrics["lead_24_series"][0] == {
+        "target_hour": "2026-11-13T09:00:00",
+        "actual_load_mw": 25000.0,
+        "predicted_load_mw": 30000.0,
+    }
+    assert [point["target_hour"] for point in metrics["lead_24_series"]] == [
+        f"2026-11-{day}T09:00:00" for day in range(13, 21)
+    ]
+    assert _metadata(result)["lead_24_pairs"] == 8

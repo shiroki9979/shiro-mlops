@@ -22,6 +22,7 @@ from dagster import (
 
 from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.forecast_track_record import (
+    HEADLINE_LEAD_TIME_HOURS,
     ForecastTrackRecord,
     compile_forecast_track_record,
     track_record_cutoff,
@@ -61,6 +62,9 @@ def forecast_track_record(
             "cutoff": MetadataValue.text(record.cutoff.isoformat()),
             "accumulated_days": MetadataValue.int(record.accumulated_days),
             "window_pairs": MetadataValue.int(len(pairs)),
+            "lead_24_pairs": MetadataValue.int(
+                sum(pair.lead_time_hours == HEADLINE_LEAD_TIME_HOURS for pair in pairs)
+            ),
         },
     )
 

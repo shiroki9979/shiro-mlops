@@ -69,7 +69,7 @@
    - **有界查詢**：repository `fetch_track_record_pairs` 只讀目標小時在窗內、發布時刻晚於窗起點前 168 小時的步數（步數最遠落在負載起點後 168 小時，而負載起點早於發布時刻），以及窗內的逐時負載，不讀整段歷史。
    - **累積天數**：窗內有配對的目標小時，取台灣日期去重後的天數，最多 31。
    - **重算**：每次都從頭重算、不保存歷次結果，因此允許手動執行、重試與重新執行，事後推算補上的小時在下次彙整自然計入。尚無已發布預報時照常成功，累積天數為 0。
-   - **輸出與 metadata**：輸出格式見 [資料契約 §5.1](data-contracts.md#51-預報實績-forecast_track_record)。materialization metadata 記 `cutoff`（統計截至時刻）、`accumulated_days` 與 `window_pairs`（窗內總配對數），只在 Dagster UI 可見，不匯出。
+   - **輸出與 metadata**：輸出格式見 [資料契約 §5.1](data-contracts.md#51-預報實績-forecast_track_record)。materialization metadata 記 `cutoff`（統計截至時刻）、`accumulated_days`、`window_pairs`（窗內總配對數）與 `lead_24_pairs`（窗內提前 24 的配對數，未滿 7 天也記），只在 Dagster UI 可見，不匯出。
 8. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。
    - 三個任務目前只使用氣象代表點 `Taipei`（測站與預報區見 [資料契約 §2](data-contracts.md#2-中央氣象署資料實體-cwa-weather-schemas) 目錄）。任務設定可依 [ML 任務設定 §1](ml-tasks.md#1-任務設定-schemataskstask_idtoml) 列出多個加權代表點（ADR-0012），是否採用由 TICKET-303 的滾動起點回測判定。
