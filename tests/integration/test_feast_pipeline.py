@@ -1,7 +1,7 @@
 """Integration tests for Feast Parquet export, offline feature retrieval, and full pipeline."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -10,7 +10,7 @@ from feast import FeatureStore
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
+from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.features.definitions import (
@@ -54,7 +54,7 @@ def _feast_frames(repository: TimeSeriesRepository, monkeypatch):
 
 def _publish_feast_frames(data_dir: Path, taipower: pd.DataFrame, weather: pd.DataFrame) -> None:
     """Publish Feast frames through the same I/O Manager boundary used by Dagster assets."""
-    manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(data_dir))
+    manager = get_feast_parquet_io_manager(data_dir=data_dir)
     manager.handle_output(
         build_output_context(asset_key=AssetKey(["taipower_features"])),
         taipower,
@@ -336,7 +336,7 @@ def test_full_dagster_mlops_pipeline_materialization(
     # fixture 只有 48 小時；降低訓練最低累積門檻以驗證完整鏈路。
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     repo = TimeSeriesRepository(engine=sqlite_engine)
-    feast_io_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
+    feast_io_manager = get_feast_parquet_io_manager(data_dir=tmp_path)
 
     repo.upsert_taipower_load(taipower_raw_df)
 
@@ -375,164 +375,9 @@ def test_full_dagster_mlops_pipeline_materialization(
     assert report["latest_target_value"] == 29100.0
 
 
-def test_publish_parquet_feature_local_and_s3(tmp_path):
-    """Verify publish_parquet_feature exports matching schemas to local disk and S3."""
-    import io
+def test_feast_feature_view_sources_default_to_data_dir(tmp_path, monkeypatch):
+    """Feast FileSource 預設讀取 DATA_DIR 下的特徵 Parquet，不需雲端儲存。"""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
 
-    from shiro_mlops.features.storage import publish_parquet_feature
-
-    sample_df = pd.DataFrame(
-        [
-            {
-                "datetime": pd.Timestamp("2026-08-20 14:00:00"),
-                "location": "nationwide",
-                "load_mw": 35000.0,
-            }
-        ]
-    )
-
-    local_target = str(tmp_path / "test_feature.parquet")
-    published_local = publish_parquet_feature(sample_df, local_target)
-    assert Path(published_local).exists()
-    local_read_df = pd.read_parquet(published_local)
-    assert len(local_read_df) == 1
-
-    mock_s3 = MagicMock()
-    s3_target = "s3://test-bucket/features/test_feature.parquet"
-    published_s3 = publish_parquet_feature(sample_df, s3_target, s3_client=mock_s3)
-    assert published_s3 == s3_target
-    assert mock_s3.put_object.called
-    kwargs = mock_s3.put_object.call_args[1]
-    assert kwargs["Bucket"] == "test-bucket"
-    assert kwargs["Key"] == "features/test_feature.parquet"
-
-    s3_read_df = pd.read_parquet(io.BytesIO(kwargs["Body"]))
-    pd.testing.assert_frame_equal(local_read_df, s3_read_df)
-
-
-def test_engineered_features_publishes_to_s3_via_io_manager(
-    populated_repo: TimeSeriesRepository,
-    monkeypatch,
-):
-    """Verify Feast I/O Manager publishes feature files to S3 when configured."""
-    frames = _feast_frames(populated_repo, monkeypatch)
-    taipower, weather = frames.taipower, frames.weather
-    mock_s3 = MagicMock()
-    feast_manager = get_feast_parquet_io_manager(
-        FeastPublicationTarget.s3("my-s3-feast-bucket", "features", s3_client=mock_s3)
-    )
-    feast_manager.handle_output(
-        build_output_context(asset_key=AssetKey(["taipower_features"])),
-        taipower,
-    )
-    feast_manager.handle_output(
-        build_output_context(asset_key=AssetKey(["weather_features"])),
-        weather,
-    )
-
-    assert mock_s3.put_object.call_count == 2
-    keys = {call.kwargs["Key"] for call in mock_s3.put_object.call_args_list}
-    assert "features/taipower_features.parquet" in keys
-    assert "features/weather_features.parquet" in keys
-
-
-def test_feast_retrieves_s3_published_features_offline(
-    populated_repo: TimeSeriesRepository,
-    monkeypatch,
-):
-    """Feast retrieves feature contracts from S3 after the I/O Manager publishes them."""
-    import boto3
-    from moto.server import ThreadedMotoServer
-
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-
-    moto_server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
-    moto_server.start()
-    host, port = moto_server.get_host_and_port()
-    endpoint_url = f"http://{host}:{port}"
-
-    try:
-        s3_client = boto3.client("s3", region_name="us-east-1", endpoint_url=endpoint_url)
-        bucket = "feast-offline-test"
-        prefix = "features"
-        s3_client.create_bucket(Bucket=bucket)
-
-        frames = _feast_frames(populated_repo, monkeypatch)
-        taipower, weather = frames.taipower, frames.weather
-        feast_manager = get_feast_parquet_io_manager(
-            FeastPublicationTarget.s3(bucket, prefix, s3_client=s3_client)
-        )
-        feast_manager.handle_output(
-            build_output_context(asset_key=AssetKey(["taipower_features"])),
-            taipower,
-        )
-        feast_manager.handle_output(
-            build_output_context(asset_key=AssetKey(["weather_features"])),
-            weather,
-        )
-
-        store = FeatureStore(repo_path=str(settings.FEAST_REPO_PATH))
-        load_view = create_taipower_load_feature_view(
-            create_load_source(
-                f"s3://{bucket}/{prefix}/taipower_features.parquet",
-                s3_endpoint_override=endpoint_url,
-            )
-        )
-        weather_view = create_weather_feature_view(
-            create_weather_source(
-                f"s3://{bucket}/{prefix}/weather_features.parquet",
-                s3_endpoint_override=endpoint_url,
-            )
-        )
-        store.apply([location_entity, load_view, weather_view])
-
-        entity_df = pd.DataFrame(
-            {
-                "location": ["nationwide"],
-                "datetime": [pd.Timestamp("2026-08-21 12:00:00")],
-            }
-        )
-        result = store.get_historical_features(
-            entity_df=entity_df,
-            features=[
-                "taipower_load_features:load_mw",
-                "cwa_weather_features:temperature",
-            ],
-        ).to_df()
-    finally:
-        moto_server.stop()
-
-    # 匯出直接由目標負載計算，不再隨訓練氣象缺口刪列，故取得 12:00 當時的實際負載。
-    assert result.loc[0, "load_mw"] == 38500.0
-    assert result.loc[0, "temperature"] == 28.0
-
-
-def test_feature_calculation_is_decoupled_from_storage_target(
-    populated_repo: TimeSeriesRepository,
-    monkeypatch,
-):
-    """Feature calculation returns identical Feast contracts regardless of storage settings."""
-    frames_a = _feast_frames(populated_repo, monkeypatch)
-    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
-    frames_b = _feast_frames(populated_repo, monkeypatch)
-
-    pd.testing.assert_frame_equal(frames_a.taipower, frames_b.taipower)
-    pd.testing.assert_frame_equal(frames_a.weather, frames_b.weather)
-
-
-def test_feast_feature_view_source_switching(monkeypatch):
-    """Verify Feast FileSource adapts between local and S3 without requiring a cloud database."""
-    from shiro_mlops.features.definitions import create_load_source, create_weather_source
-
-    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "file")
-    local_load_src = create_load_source()
-    assert not local_load_src.path.startswith("s3://")
-
-    monkeypatch.setattr(settings, "FEAST_OFFLINE_STORE_TYPE", "s3")
-    monkeypatch.setattr(settings, "S3_BUCKET_NAME", "hybrid-s3-bucket")
-    s3_load_src = create_load_source()
-    assert s3_load_src.path == "s3://hybrid-s3-bucket/features/taipower_features.parquet"
-    s3_weather_src = create_weather_source()
-    assert s3_weather_src.path == "s3://hybrid-s3-bucket/features/weather_features.parquet"
+    assert create_load_source().path == str(tmp_path.resolve() / "taipower_features.parquet")
+    assert create_weather_source().path == str(tmp_path.resolve() / "weather_features.parquet")

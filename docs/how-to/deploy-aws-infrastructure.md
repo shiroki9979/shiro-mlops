@@ -1,7 +1,7 @@
 # 如何部署 AWS 基礎設施 (Terraform & IAM OIDC)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-08-23
+- 最後更新：2026-11-20
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -72,9 +72,7 @@ EOF
 
 前往 GitHub Repository 設置（**Settings > Secrets and variables > Actions**），新增 Repository Variables：
 
-- `AWS_REGION`: `ap-northeast-1`
 - `AWS_ROLE_TO_ASSUME`: `<github_actions_role_arn 輸出值>`
-- `S3_BUCKET_NAME`: `<s3_bucket_name 輸出值>`
 
 ---
 

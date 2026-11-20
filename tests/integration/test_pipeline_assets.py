@@ -16,11 +16,7 @@ from dagster import (
 )
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.io_managers import (
-    FeastPublicationTarget,
-    get_feast_parquet_io_manager,
-    get_parquet_io_manager,
-)
+from shiro_mlops.core.io_managers import get_feast_parquet_io_manager, get_parquet_io_manager
 from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
     CWAObservationBatch,
@@ -231,9 +227,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
             assets=[features_asset, feast_feature_export],
             resources={
                 "time_series_repo": test_repo,
-                "feast_io_manager": get_feast_parquet_io_manager(
-                    FeastPublicationTarget.from_settings(settings)
-                ),
+                "feast_io_manager": get_feast_parquet_io_manager(data_dir=settings.DATA_DIR),
             },
             instance=dagster_instance,
         )
@@ -276,10 +270,8 @@ def _trainable_task_definitions(
         jobs=[job for pipeline in pipelines for job in pipeline.jobs],
         resources={
             "time_series_repo": test_repo,
-            "io_manager": get_parquet_io_manager("local", "unused", tmp_path),
-            "feast_io_manager": get_feast_parquet_io_manager(
-                FeastPublicationTarget.local(tmp_path)
-            ),
+            "io_manager": get_parquet_io_manager(data_dir=tmp_path),
+            "feast_io_manager": get_feast_parquet_io_manager(data_dir=tmp_path),
         },
     )
 

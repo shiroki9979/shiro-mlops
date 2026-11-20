@@ -70,7 +70,7 @@ def test_data_explorer_is_unavailable_when_disabled(
 ) -> None:
     """未啟用時不得暴露 Data Explorer 路由。"""
     monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", False)
-    monkeypatch.setattr(settings, "ENVIRONMENT", "aws")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "test")
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     monkeypatch.setattr("shiro_mlops.core.database.init_db", lambda: None)
     with TestClient(app) as client:

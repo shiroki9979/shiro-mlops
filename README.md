@@ -1,15 +1,15 @@
 # shiro-mlops
 
 - Created: 2026-08-23
-- Last updated: 2026-11-19
+- Last updated: 2026-11-20
 
 Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast, Dagster, MLflow, and LightGBM.
 
 ## Architecture
 
 - **Orchestration**: Dagster (Software-Defined Assets for ingestion, feature materialization, training, evaluation, and drift detection)
-- **Feature Store**: Feast (Offline Store: Parquet on S3/Local, Online Store: Docker Redis, Registry: S3/Local)
-- **Tracking & Registry**: MLflow (Self-hosted on PostgreSQL + S3/Local artifact storage)
+- **Feature Store**: Feast (Offline Store: local Parquet under `DATA_DIR`, Online Store: Docker Redis, Registry: local)
+- **Tracking & Registry**: MLflow (Self-hosted on PostgreSQL + local artifact storage)
 - **Forecasting Model**: LightGBM (Recursive multi-step forecasting with dynamic exogenous weather forecasts from CWA)
 - **Serving & API**: FastAPI (Dynamic horizon load predictions)
 - **Monitoring**: Evidently AI (Data Drift, Target Drift, and Evaluation Metrics)

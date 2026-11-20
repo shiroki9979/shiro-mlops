@@ -1,12 +1,11 @@
 """Unit tests for Feast feature frame building and Dagster Feast I/O Manager."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pandas as pd
 from dagster import AssetKey, build_output_context
 
-from shiro_mlops.core.io_managers import FeastPublicationTarget, get_feast_parquet_io_manager
+from shiro_mlops.core.io_managers import get_feast_parquet_io_manager
 from shiro_mlops.features.feast_export import build_feast_feature_frames
 
 
@@ -43,32 +42,32 @@ def test_build_feast_feature_frames_returns_contracts_without_storage_side_effec
     assert not list(tmp_path.glob("**/weather_features.parquet"))
 
 
-def test_feast_parquet_io_manager_writes_identical_contracts_for_file_and_s3(
+def test_feast_parquet_io_manager_writes_contracts_under_data_dir(
     tmp_path: Path, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
 ) -> None:
-    """Local and S3 Feast I/O managers persist the same Parquet contract."""
+    """Feast I/O manager persists the Parquet contract at the DATA_DIR path Feast reads."""
     frames = build_feast_feature_frames(taipower_raw_df, cwa_obs_df)
-    local_manager = get_feast_parquet_io_manager(FeastPublicationTarget.local(tmp_path))
-    mock_s3 = MagicMock()
-    s3_manager = get_feast_parquet_io_manager(
-        FeastPublicationTarget.s3("my-s3-feast-bucket", "features", s3_client=mock_s3)
+    manager = get_feast_parquet_io_manager(data_dir=tmp_path)
+
+    manager.handle_output(
+        build_output_context(asset_key=AssetKey(["taipower_features"])), frames.taipower
     )
 
-    local_context = build_output_context(asset_key=AssetKey(["taipower_features"]))
-    local_manager.handle_output(local_context, frames.taipower)
+    written = pd.read_parquet(tmp_path / "taipower_features.parquet")
+    pd.testing.assert_frame_equal(written, frames.taipower.reset_index(drop=True))
 
-    s3_context = build_output_context(asset_key=AssetKey(["taipower_features"]))
-    s3_manager.handle_output(s3_context, frames.taipower)
 
-    local_path = tmp_path / "taipower_features.parquet"
-    assert local_path.exists()
-    local_df = pd.read_parquet(local_path)
+def test_feast_parquet_io_manager_creates_missing_nested_directories(
+    tmp_path: Path, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
+) -> None:
+    """寫入尚不存在的巢狀目錄時，Feast I/O manager 仍能落地 Parquet。"""
+    frames = build_feast_feature_frames(taipower_raw_df, cwa_obs_df)
+    data_dir = tmp_path / "not_yet_created"
+    manager = get_feast_parquet_io_manager(data_dir=data_dir)
 
-    mock_s3.put_object.assert_called_once()
-    kwargs = mock_s3.put_object.call_args.kwargs
-    assert kwargs["Bucket"] == "my-s3-feast-bucket"
-    assert kwargs["Key"] == "features/taipower_features.parquet"
-    import io
+    manager.handle_output(
+        build_output_context(asset_key=AssetKey(["feast", "weather_features"])), frames.weather
+    )
 
-    s3_df = pd.read_parquet(io.BytesIO(kwargs["Body"]))
-    pd.testing.assert_frame_equal(local_df, s3_df)
+    written = pd.read_parquet(data_dir / "feast" / "weather_features.parquet")
+    pd.testing.assert_frame_equal(written, frames.weather.reset_index(drop=True))

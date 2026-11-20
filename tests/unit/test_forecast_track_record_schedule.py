@@ -66,7 +66,7 @@ def test_scheduled_run_cuts_off_at_the_taiwan_local_tick_hour(
         [forecast_track_record],
         resources={
             "time_series_repo": test_repo,
-            "io_manager": get_parquet_io_manager("local", "unused", tmp_path),
+            "io_manager": get_parquet_io_manager(data_dir=tmp_path),
         },
         run_config=request.run_config,
         instance=dagster_instance,

@@ -8,7 +8,7 @@ if [ ! -x "$HOME/.local/bin/uv" ] && ! command -v uv >/dev/null 2>&1; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
-# 依 uv.lock 同步後端依賴（含 dev extras：pytest、ruff、moto）。
+# 依 uv.lock 同步後端依賴（含 dev extras：pytest、ruff）。
 uv sync --all-extras
 
 # 依 pnpm-lock.yaml 安裝前端依賴，鎖定版本避免漂移。
