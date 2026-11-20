@@ -176,7 +176,7 @@ def _issued_forecast(
     """Keep every step the model produced, unfiltered and without weather."""
     return IssuedForecast(
         issued_at=issued_at,
-        load_anchor=outcome.anchor.to_pydatetime(),
+        load_anchor=outcome.load_anchor.to_pydatetime(),
         status=outcome.mode,
         model_sha256=loaded.sha256,
         mlflow_model_version=mlflow_model_version,

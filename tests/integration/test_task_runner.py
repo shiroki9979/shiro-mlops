@@ -348,7 +348,7 @@ def test_prediction_reports_the_load_anchor_known_at_as_of(
 
     outcome = predict_task(task, model, runtime, as_of=earlier_as_of, horizon_hours=1)
 
-    assert outcome.anchor == ANCHOR - pd.Timedelta(hours=2)
+    assert outcome.load_anchor == ANCHOR - pd.Timedelta(hours=2)
 
 
 def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
