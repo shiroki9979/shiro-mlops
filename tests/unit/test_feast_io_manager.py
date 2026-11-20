@@ -55,3 +55,19 @@ def test_feast_parquet_io_manager_writes_contracts_under_data_dir(
 
     written = pd.read_parquet(tmp_path / "taipower_features.parquet")
     pd.testing.assert_frame_equal(written, frames.taipower.reset_index(drop=True))
+
+
+def test_feast_parquet_io_manager_creates_missing_nested_directories(
+    tmp_path: Path, taipower_raw_df: pd.DataFrame, cwa_obs_df: pd.DataFrame
+) -> None:
+    """寫入尚不存在的巢狀目錄時，Feast I/O manager 仍能落地 Parquet。"""
+    frames = build_feast_feature_frames(taipower_raw_df, cwa_obs_df)
+    data_dir = tmp_path / "not_yet_created"
+    manager = get_feast_parquet_io_manager(data_dir=data_dir)
+
+    manager.handle_output(
+        build_output_context(asset_key=AssetKey(["feast", "weather_features"])), frames.weather
+    )
+
+    written = pd.read_parquet(data_dir / "feast" / "weather_features.parquet")
+    pd.testing.assert_frame_equal(written, frames.weather.reset_index(drop=True))

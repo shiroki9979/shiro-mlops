@@ -30,12 +30,8 @@ def _json_default(obj: Any) -> Any:
 class ParquetIOManager(UPathIOManager):
     """IO Manager for Parquet DataFrames and JSON-compatible Dagster artifacts."""
 
-    def __init__(self, base_path: UPath):
-        super().__init__(base_path=base_path)
-
     def dump_to_path(self, context: OutputContext, obj: Any, path: UPath) -> None:
         """Serialize DataFrame to Parquet format, with fallback for arbitrary Python objects."""
-        path.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(obj, pd.DataFrame):
             with path.open("wb") as f:
                 obj.to_parquet(f, index=False)
@@ -78,15 +74,11 @@ class FeastParquetIOManager(UPathIOManager):
 
     extension = ".parquet"
 
-    def __init__(self, base_path: UPath):
-        super().__init__(base_path=base_path)
-
     def dump_to_path(self, context: OutputContext, obj: Any, path: UPath) -> None:
         """Serialize a Feast feature DataFrame to the offline-store path."""
         if not isinstance(obj, pd.DataFrame):
             raise TypeError(f"Unsupported object type {type(obj)} for FeastParquetIOManager")
 
-        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as f:
             obj.to_parquet(f, index=False)
 
