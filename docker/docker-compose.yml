@@ -74,6 +74,7 @@ services:
     volumes:
       - ..:/workspace:ro
 
+  # One Nginx origin for both frontend apps: Forecast View at /, Engineering Console at /console/ (ADR-0014 §2.5).
   frontend:
     build:
       context: ../frontend
