@@ -1,7 +1,7 @@
 # 專案發展藍圖與任務清單 (ROADMAP.md)
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-19
+- 最後更新：2026-11-20
 - 專案版本：`0.4.0`
 
 本文檔定義 `shiro-mlops` 的階段性里程碑（Milestones）與各項 Tracer-Bullet 工單，每個工單皆為具備獨立完成標準（Definition of Done, DoD）的垂直切片。以下狀態依儲存庫程式碼、已合併 PR 與 GitHub issue 核對；需要正式資料或雲端設定的驗收另行標示，不以 issue 關閉代替現場驗證。
@@ -44,7 +44,7 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 1. **M6 營運驗收**：依[冷啟動驗收指南](how-to/recover-training-after-load-cold-start.md)第 5 節，以 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"` 確認有效逐時觀測達 672 小時，完成首次訓練並確認 `/ready` 回傳 HTTP 200；smoke check 輸出、訓練 run ID 與 `/ready` 回應留於 [GitHub #60](https://github.com/shiroki9979/shiro-mlops/issues/60)。驗收只看門檻，不含累積穩定性；目前沒有正式環境的驗收結果。
 2. **M7 營運驗收**：`load_pattern_anomaly`（672 小時）與 `high_load_alert`（1344 小時）各自以 `--task <task_id>` 驗收排程、首次訓練與 `POST /tasks/{task_id}/predict`、`GET /tasks/{task_id}/ready` 就緒，與 M6 分開結案。
 3. **M3 加權天氣與放假日**：設計已於 2026-11-16 定案（[ADR-0012](adr/0012-combine-weather-reference-points-into-weighted-weather.md)、[GitHub #95](https://github.com/shiroki9979/shiro-mlops/issues/95)）。能力段 TICKET-301／302 已隨 [PR #105](https://github.com/shiroki9979/shiro-mlops/pull/105) 合併，三個任務的 TOML 未變。採用段 TICKET-303 的離線工具已備妥（`lab.regional_weights` 推算權重、`lab.snapshot --variant` 凍結候選天氣快照、`lab.origins` 盤點合格起點，見 [lab 研究指南](how-to/run-lab-study.md)；研究腳本位於 [`lab/2026-11-17-dhf-weather-calendar/`](../lab/2026-11-17-dhf-weather-calendar/README.md)），待正式資料庫的有效評估起點至少涵蓋 7 個日曆日後執行回測。
-4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積。工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用（[ADR-0014](adr/0014-keep-engineering-console-local-and-split-frontend-apps.md)）：TICKET-406 可先行實作；雲端部署工單依賴 TICKET-406。雲端只公開預先算好的預報，地端負責全部運算（[ADR-0015](adr/0015-publish-forecast-view-as-static-precomputed-output.md)，取代 ADR-0001）：TICKET-408 匯出已發布產物，TICKET-405／409 讓預報檢視改讀匯出 JSON，TICKET-410／411 收斂 Terraform 與移除 `ENVIRONMENT=aws`；TICKET-407 因雲端沒有 FastAPI 而不再需要。CloudFront 配置與 Terraform state 待 [#128](https://github.com/shiroki9979/shiro-mlops/issues/128)、[#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 決定後再切 CD 工單。
+4. **M4 雲端與治理**：Terraform 宣告已存在；CI 執行 Python lint／test、前端 lint／test／build，以及本機 Nginx 映像建置與 smoke check（[#81](https://github.com/shiroki9979/shiro-mlops/issues/81)），但未發布 Docker／ECR 映像。本機 Compose 已可經 Nginx 預覽已建置的前端，Terraform 仍無前端託管資源，現有部署工單亦未涵蓋前端上線；需另決定雲端託管方式與 API 路由後才能排入部署管線。Rulesets 與分支保護 API 對此私人儲存庫回傳方案限制的 HTTP 403，設定狀態待可用權限核對，TICKET-401／402 不列為完成。預報檢視 `/history` 改呈現預報實績（[ADR-0013](adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：TICKET-403／404 與雲端通道無關，可先行實作以盡早累積。工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用（[ADR-0014](adr/0014-keep-engineering-console-local-and-split-frontend-apps.md)）：TICKET-406 可先行實作；雲端部署工單依賴 TICKET-406。雲端只公開預先算好的預報，地端負責全部運算（[ADR-0015](adr/0015-publish-forecast-view-as-static-precomputed-output.md)，取代 ADR-0001）：TICKET-408 匯出已發布產物，TICKET-405／409 讓預報檢視改讀匯出 JSON，TICKET-410／411 收斂 Terraform 與移除 `ENVIRONMENT=aws`；TICKET-407 因雲端沒有 FastAPI 而不再需要。CloudFront 經 OAC 從 S3 提供預報檢視，SPA fallback 用 CloudFront Function、不做 invalidation（[#128](https://github.com/shiroki9979/shiro-mlops/issues/128)，[SPEC §8](SPEC.md#8-預報檢視的雲端託管)）：TICKET-412。Terraform state 待 [#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 決定後再切 CD 工單。
 
 ---
 
@@ -166,8 +166,10 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
   3. 移除尖峰命中率卡、RMSE 卡、結論卡、沒有出處的基準值、模型名稱與「滾動回測」文案；中英文案改用「預報實績」。
   4. 顯示統計截至時刻；距觀眾當下超過 24 小時時顯示中性提示，不揭露原因。
   5. 資料自 `/published/` 下的 JSON 讀取，不呼叫任何 API。
+  6. 非 2xx、網路錯誤或 JSON 解析失敗時顯示中性的錯誤狀態，不區分原因；空狀態只由 JSON 內容決定（[SPEC §8.4](SPEC.md#84-前端讀取-published)）。
+  7. Vite dev server 以 proxy 把 `/published` 轉送到地端 Nginx（`:8080`）；與 TICKET-409 由先實作者新增。
 - **完成標準 (DoD)**：
-  - Vitest 涵蓋有資料、空狀態與超過 24 小時提示三種畫面；前端不再產生任何合成資料，也不呼叫 API。
+  - Vitest 涵蓋有資料、空狀態、超過 24 小時提示與讀取失敗四種畫面；前端不再產生任何合成資料，也不呼叫 API。
 
 #### [TICKET-406] 前端拆成預報檢視與工程主控台兩個應用 ([GitHub #126](https://github.com/shiroki9979/shiro-mlops/issues/126))
 
@@ -202,11 +204,11 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
 - **功能範圍**：
   1. 新增位於已發布預報與預報實績之後、每小時執行的匯出資產；一律寫入地端目錄，有設定 S3 時再上傳到資料 prefix，覆寫固定檔名。
   2. 最新已發布預報只輸出預報時刻、目標小時與預測負載，且只含目標小時晚於預報時刻的步；預報實績輸出 ADR-0013 §2.3 的公開欄位與統計截至時刻。
-  3. 地端 Nginx 以 `/published/` 提供地端目錄；Compose 掛載該目錄。
+  3. 地端 Nginx 以 `/published/` 提供地端目錄並回 `Cache-Control: public, max-age=60`（[SPEC §8.2](SPEC.md#82-origin-與-behavior)）；Compose 掛載該目錄。
   4. SPEC 記錄兩份 JSON 的格式、檔名、資產與排程，以及地端上傳用的設定項目（不含 key 值）。
 - **完成標準 (DoD)**：
   - 離線測試涵蓋：沒有 S3 設定時只寫地端目錄；以 mock 驗證 S3 上傳；輸出不含運行狀態、負載起點、天氣值、天氣來源與模型版本；目標小時不晚於預報時刻的步不輸出；還沒有已發布預報時的輸出。
-  - 地端 Nginx smoke check 涵蓋 `/published/` 下的兩份 JSON。
+  - 地端 Nginx smoke check 涵蓋 `/published/` 下的兩份 JSON，以及 `/published/` 下不存在的檔案不回 200。
 
 #### [TICKET-409] 預報檢視 `/` 改讀最新已發布預報 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
 
@@ -217,21 +219,24 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
   2. 移除加權氣溫與濕度的曲線、切換、指標卡與明細欄位，只呈現預測負載。
   3. 保留視界預設按鈕，以預報時刻為起點截取；「一週」顯示該份預報涵蓋的全部未來小時。
   4. 顯示預報時刻；距觀眾當下超過 24 小時時顯示中性提示，不揭露原因；還沒有已發布預報時顯示空狀態。
+  5. 非 2xx、網路錯誤或 JSON 解析失敗時顯示中性的錯誤狀態，不區分原因；空狀態只由 JSON 內容決定（[SPEC §8.4](SPEC.md#84-前端讀取-published)）。
+  6. Vite dev server 以 proxy 把 `/published` 轉送到地端 Nginx（`:8080`）；與 TICKET-405 由先實作者新增。
 - **完成標準 (DoD)**：
-  - Vitest 涵蓋：有資料、空狀態、超過 24 小時提示；視界截取以預報時刻為起點，不隨觀眾當下改變；建置產物不含 `/predict` 呼叫。
+  - Vitest 涵蓋：有資料、空狀態、超過 24 小時提示、讀取失敗；視界截取以預報時刻為起點，不隨觀眾當下改變；建置產物不含 `/predict` 呼叫。
 
 #### [TICKET-410] Terraform 收斂為預報檢視的靜態託管 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
 
-- **目標**：依 ADR-0015 §2.2、§2.6 移除不再需要的雲端資源，補上地端上傳權限、保存規則與成本護欄。CloudFront 與 state backend 由 [#128](https://github.com/shiroki9979/shiro-mlops/issues/128)、[#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 的工單處理。
+- **目標**：依 ADR-0015 §2.2、§2.6 移除不再需要的雲端資源，補上地端上傳權限、保存規則與成本護欄。CloudFront 由 TICKET-412 處理；state backend 由 [#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 的工單處理。
 - **功能範圍**：
   1. 移除 `aws_ecr_repository.api`、`aws_ecr_repository.dagster`、App Runner instance role 與其 S3 policy attachment，以及 CI 角色中的 ECR 權限與相關 outputs。
-  2. 新增地端上傳用 IAM 使用者：只允許 `PutObject` 到資料 prefix，沒有刪除與其他 prefix 的權限；access key 不由 Terraform 產生或輸出。
-  3. S3 bucket 保留 versioning，加上舊版本 30 天後過期的 lifecycle 規則。
-  4. 新增 AWS Budgets：月實際支出 5 美元、預測支出 10 美元時寄 email 警示（收件地址以變數傳入）。
-  5. 改寫 [AWS 部署指南](how-to/deploy-aws-infrastructure.md)，移除 ECR 與 App Runner，加入地端 key 的建立與輪替步驟。
+  2. bucket 改名為 `shiro-mlops-forecast-view`（仍以變數傳入），移除 Data Lake、Feast Registry 與 MLflow 的用途註解；依 [SPEC §8.1](SPEC.md#81-s3-配置與寫入權限)，前端產物放 `site/`、匯出 JSON 放 `published/`，CI 角色的 S3 寫入限定 `site/*`。
+  3. 新增地端上傳用 IAM 使用者：只允許 `PutObject` 到 `published/*`，沒有刪除與其他 prefix 的權限；access key 不由 Terraform 產生或輸出。
+  4. S3 bucket 保留 versioning，加上舊版本 30 天後過期的 lifecycle 規則。
+  5. 新增 AWS Budgets：月實際支出 5 美元、預測支出 10 美元時寄 email 警示（收件地址以變數傳入）。
+  6. 改寫 [AWS 部署指南](how-to/deploy-aws-infrastructure.md)，移除 ECR 與 App Runner，加入地端 key 的建立與輪替步驟。
 - **完成標準 (DoD)**：
   - `terraform fmt -check` 與 `terraform validate` 通過；Terraform 中沒有 ECR、App Runner 或運算資源。
-  - 地端 IAM 使用者的 policy 經審查只含資料 prefix 的寫入權限。
+  - 地端 IAM 使用者的 policy 經審查只含 `published/*` 的寫入權限；CI 角色的 S3 寫入只含 `site/*`。
 
 #### [TICKET-411] 移除 `ENVIRONMENT=aws` 與 S3 I/O 分支 ([GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127))
 
@@ -242,6 +247,22 @@ SQLite 與隔離本機 TimescaleDB 驗收方式見 [操作文件](how-to/verify-
   3. SPEC 與 `.env` 範例移除 `aws` 環境與相關設定；ROADMAP 註明 TICKET-407 不再需要。
 - **完成標準 (DoD)**：
   - `uv run pytest tests/ -v` 與 ruff 通過；程式碼中沒有 `ENVIRONMENT == "aws"` 的分支。
+
+#### [TICKET-412] CloudFront 託管預報檢視 ([GitHub #128](https://github.com/shiroki9979/shiro-mlops/issues/128))
+
+- **目標**：依 [SPEC §8](SPEC.md#8-預報檢視的雲端託管)，以 CloudFront 經 OAC 從 S3 提供預報檢視與匯出 JSON，同一個 AWS 預設網址下 `/`、`/history` 可直接開啟，`/published/` 缺檔時照實回錯誤。
+- **相依**：TICKET-410。
+- **功能範圍**：
+  1. Distribution：同一 bucket 的 `site`（origin path `/site`）與 `published` 兩個 origin，預設、`/assets/*`、`/published/*` 三個 behavior；`PriceClass_200`、`redirect-to-https`、gzip 與 Brotli、HTTP/2 與 HTTP/3、預設 `*.cloudfront.net` 憑證；不設 WAF、地理限制與標準 log。
+  2. Cache policy 與 response headers policy 依 SPEC §8.2 的表格設定 TTL 與瀏覽器 `Cache-Control`；三個 behavior 都套用 AWS 托管 `SecurityHeadersPolicy` 的安全標頭。
+  3. `infra/terraform/functions/spa-rewrite.js`（viewer-request，只掛在預設 behavior），把最後一段沒有副檔名的路徑改寫為 `/index.html`；不使用 custom error response。
+  4. bucket policy 只授權該 distribution 經 OAC 的 `s3:GetObject`，不授權 `s3:ListBucket`。
+  5. SPEC §8.5 的雲端 smoke check 項目寫成可執行的腳本，供 CD 工單呼叫。
+  6. 改寫 [AWS 部署指南](how-to/deploy-aws-infrastructure.md)，加入 CloudFront 網址的取得方式。
+- **完成標準 (DoD)**：
+  - `spa-rewrite.js` 的 `node --test` 離線測試涵蓋 `/`、`/history`、`/history/`、`/assets/x.js`、`/favicon.ico`、`/console/foo`，並在 CI 執行。
+  - `terraform fmt -check` 與 `terraform validate` 通過；沒有 custom error response、WAF 與運算資源。
+  - 實際部署後（依 #129 的 apply 權責）smoke check 通過：首頁、`/history` 回 200 且為 HTML；兩份 JSON 回 200 且預報時刻不超過 24 小時；`/published/` 下不存在的檔案不回 200。
 
 ---
 
