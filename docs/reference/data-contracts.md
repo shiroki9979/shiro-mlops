@@ -190,7 +190,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 ## 5. Dagster Artifact 序列化與信任邊界
 
-- local `DATA_DIR` 與 S3 artifact 均視為讀取時的非信任位元組；檔案系統或 bucket 寫入權限不等同於可安全執行其內容。
+- 本機 `DATA_DIR` 下的 artifact 視為讀取時的非信任位元組；檔案系統寫入權限不等同於可安全執行其內容。
 - DataFrame artifact 使用 Parquet；非 DataFrame artifact 僅允許 JSON-compatible 值，並以 `SHIRO-JSON-V1` envelope 標記後保存。
 - loader 僅接受 Parquet magic 或 `SHIRO-JSON-V1` envelope；未識別格式（包含既有未標記 pickle）必須失敗，禁止執行 pickle 反序列化。
 - 既有 pickle artifact 不提供相容性載入；需重新 materialize Dagster asset 產生新的 JSON artifact。此為明確的遷移策略。
