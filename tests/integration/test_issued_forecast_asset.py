@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from dagster import AssetMaterialization, Definitions, MetadataValue, build_schedule_context
+from sqlalchemy import create_engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -33,6 +34,8 @@ TICK = datetime(2026, 11, 20, 10, 15, tzinfo=TAIPEI)
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 # 負載起點 09:00 落後 12:15 超過 3 小時。
 STALE_TICK = datetime(2026, 11, 20, 12, 15, tzinfo=TAIPEI)
+# 早於第一筆逐時負載的 tick：尚無負載歷史可作起點。
+BEFORE_HISTORY_TICK = datetime(2026, 10, 1, 10, 15, tzinfo=TAIPEI)
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 MLFLOW_VERSION = "7"
 
@@ -86,7 +89,9 @@ def _job(repo: TimeSeriesRepository):
     ).resolve_job_def(ISSUED_FORECAST_JOB)
 
 
-def _issue(repo: TimeSeriesRepository, instance, tick: datetime = TICK):
+def _issue(
+    repo: TimeSeriesRepository, instance, tick: datetime = TICK, extra_tags: dict | None = None
+):
     """Evaluate the schedule at ``tick`` and run the job exactly as the daemon would."""
     execution = issued_forecast_schedule.evaluate_tick(
         build_schedule_context(instance=instance, scheduled_execution_time=tick)
@@ -95,9 +100,17 @@ def _issue(repo: TimeSeriesRepository, instance, tick: datetime = TICK):
     return _job(repo).execute_in_process(
         run_config=request.run_config,
         instance=instance,
-        tags=request.tags,
+        tags={**request.tags, **(extra_tags or {})},
         raise_on_error=False,
     )
+
+
+def _load_only_repo(tmp_path) -> TimeSeriesRepository:
+    """Load accumulated but CWA never ingested: no forecast and no observation to fall back on."""
+    load_only = TimeSeriesRepository(engine=create_engine(f"sqlite:///{tmp_path / 'load.db'}"))
+    load, _weather = hourly_load_with_weather(HOURS, LOAD_ANCHOR)
+    load_only.upsert_taipower_load(load)
+    return load_only
 
 
 def _materialization_metadata(result) -> dict:
@@ -105,9 +118,13 @@ def _materialization_metadata(result) -> dict:
     return {key: value.value for key, value in materialization.metadata.items()}
 
 
-def _failure_description(result) -> str:
+def _failure(result):
     [failure] = [event for event in result.all_events if event.is_step_failure]
-    return failure.step_failure_data.user_failure_data.description
+    return failure.step_failure_data.user_failure_data
+
+
+def _failure_description(result) -> str:
+    return _failure(result).description
 
 
 def test_scheduled_tick_issues_the_168_hour_forecast_from_the_loaded_model(
@@ -145,14 +162,43 @@ def test_issuing_the_same_tick_again_keeps_the_first_record(
     assert repo.fetch_issued_forecast(ISSUED_AT) == first
 
 
-def test_stale_load_anchor_fails_the_issue_and_records_nothing(
-    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel
+@pytest.mark.parametrize(
+    ("issue_from", "tick", "reason"),
+    [
+        pytest.param(lambda repo, _tmp: repo, STALE_TICK, "Stale load anchor", id="stale-anchor"),
+        pytest.param(
+            lambda repo, _tmp: repo,
+            BEFORE_HISTORY_TICK,
+            "No persisted nationwide load history",
+            id="no-load-history",
+        ),
+        pytest.param(
+            lambda _repo, tmp: _load_only_repo(tmp),
+            TICK,
+            "No weather coverage",
+            id="weather-unavailable",
+        ),
+    ],
+)
+def test_forecast_the_runner_cannot_produce_fails_the_issue_and_records_nothing(
+    repo: TimeSeriesRepository,
+    dagster_instance,
+    trained: SavedModel,
+    tmp_path,
+    issue_from,
+    tick: datetime,
+    reason: str,
 ) -> None:
-    result = _issue(repo, dagster_instance, tick=STALE_TICK)
+    issuing_repo = issue_from(repo, tmp_path)
+    issued_at = tick.replace(tzinfo=None)
+
+    result = _issue(issuing_repo, dagster_instance, tick=tick)
 
     assert not result.success
-    assert "Stale load anchor" in _failure_description(result)
-    assert repo.fetch_issued_forecast(datetime(2026, 11, 20, 12, 15)) is None
+    failure = _failure(result)
+    assert reason in failure.description
+    assert failure.metadata["issued_at"] == MetadataValue.text(issued_at.isoformat())
+    assert issuing_repo.fetch_issued_forecast(issued_at) is None
 
 
 def test_issuing_never_calls_mlflow_and_reads_the_note_from_the_materialization(
