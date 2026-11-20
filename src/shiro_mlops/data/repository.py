@@ -874,7 +874,7 @@ class TimeSeriesRepository:
         reads are bounded by the window. Pairs are ordered by target hour, then
         issue time.
         """
-        # 兩表在 SQLite 以不同字串形式保存 UTC（負載帶 +00:00、已發布預報不帶），
+        # TODO(#160): 兩表在 SQLite 以不同字串形式保存 UTC（負載帶 +00:00、已發布預報不帶），
         # SQL join 只在 TimescaleDB 成立，因此各自有界讀取後以台灣本地小時配對。
         issued_steps = self.issued_forecast_repo.fetch_steps_after_issue(window)
         actual_load = self._valid_hourly_load(window)
