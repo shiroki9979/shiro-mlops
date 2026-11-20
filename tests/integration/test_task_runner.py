@@ -341,6 +341,16 @@ def test_rows_persisted_after_as_of_never_anchor_the_forecast(
     assert outcome.predictions["datetime"].tolist() == [ANCHOR - pd.Timedelta(hours=1)]
 
 
+def test_prediction_reports_the_load_anchor_known_at_as_of(
+    task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
+) -> None:
+    earlier_as_of = ANCHOR - pd.Timedelta(hours=1, minutes=30)
+
+    outcome = predict_task(task, model, runtime, as_of=earlier_as_of, horizon_hours=1)
+
+    assert outcome.anchor == ANCHOR - pd.Timedelta(hours=2)
+
+
 def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
     task: TaskDefinition, runtime: TaskRuntime, model: TaskModel, monkeypatch
 ) -> None:
