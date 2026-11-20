@@ -1,6 +1,6 @@
 """Derive nationwide hourly actual load from Taipower regional supply-demand snapshots.
 
-See ADR-0008 and docs/SPEC.md §1.1 for the derivation contract.
+See ADR-0008 and docs/reference/data-contracts.md §1 for the derivation contract.
 """
 
 from __future__ import annotations

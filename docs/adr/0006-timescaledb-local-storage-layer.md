@@ -1,7 +1,7 @@
 # ADR 0006: 地端引入 TimescaleDB 作為時序資料儲存庫與分層儲存架構
 
 - 建立日期：2026-08-26
-- 最後更新：2026-11-19
+- 最後更新：2026-11-20
 - 狀態：已接受 (Accepted)
 - 關聯：[ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)
 
@@ -61,7 +61,7 @@
 
 ## Notes
 
-- 實作與 [SPEC.md](../SPEC.md) / init SQL 採用之 Hypertable 名稱為 `raw_taipower_load`、`raw_cwa_weather`（本 ADR Decision 段落中的 `taipower_load_raw` / `cwa_weather_raw` 為早期命名草圖，不以歷史改寫覆寫 Decision 本文）。
+- 實作與 [資料契約](../reference/data-contracts.md) / init SQL 採用之 Hypertable 名稱為 `raw_taipower_load`、`raw_cwa_weather`（本 ADR Decision 段落中的 `taipower_load_raw` / `cwa_weather_raw` 為早期命名草圖，不以歷史改寫覆寫 Decision 本文）。
 - CWA 外部 API 的排程式入庫與 consumer 隔離邊界由 [ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md) 補充。
 - 最後更新：2026-09-04（補充實作表名對照，不變更既有決策語意）。
 - 最後更新：2026-09-07（新增 ADR-0007 關聯，不變更既有決策語意）。

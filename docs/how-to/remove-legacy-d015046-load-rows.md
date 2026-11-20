@@ -1,7 +1,7 @@
 # 如何移除 d015046 時期的舊負載資料列
 
 - 建立日期：2026-09-26
-- 最後更新：2026-09-26
+- 最後更新：2026-11-20
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -9,7 +9,7 @@
 > - **目標象限**：How-To Guide
 > - **目標讀者**：負責既有 TimescaleDB volume 升級的操作人員
 > - **核心目標**：在啟用 `hourly_actual_load_schedule` 前，確認並清除 `raw_taipower_load` 中 d015046 時期的資料列，並補上 `source` 的 `NOT NULL` 約束
-> - **排除內容（Avoid）**：推算規則的設計理由（見 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)）、欄位契約（見 [SPEC §1.3](../SPEC.md)）
+> - **排除內容（Avoid）**：推算規則的設計理由（見 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)）、欄位契約（見 [資料契約 §3](../reference/data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables)）
 
 本指南適用於在 ADR-0008 之前就已建立 `raw_taipower_load` 的資料庫。全新資料庫建立時 `source` 已是 `NOT NULL`，不需執行本指南。
 

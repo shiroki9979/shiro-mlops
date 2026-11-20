@@ -344,7 +344,7 @@ def test_rows_persisted_after_as_of_never_anchor_the_forecast(
 def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
     task: TaskDefinition, runtime: TaskRuntime, model: TaskModel, monkeypatch
 ) -> None:
-    """Readiness checks weather across the full 168-hour forecast horizon required by SPEC section 5.3."""
+    """Readiness checks weather across the full 168-hour forecast horizon required by docs/reference/ml-tasks.md §3."""
     requested_horizons: list[int] = []
     resolve = runner.resolve_weather
 

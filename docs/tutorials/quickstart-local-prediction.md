@@ -1,7 +1,7 @@
 # 快速上手：本地隨需用電負載預測
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-16
+- 最後更新：2026-11-20
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -136,5 +136,5 @@ curl -X POST http://localhost:8000/predict \
 
 ## 下一步
 
-- 若要了解 API 完整參數與型態，請參閱 [Reference: 系統規格 (SPEC.md)](../SPEC.md)。
+- 若要了解 API 完整參數與型態，請參閱 [Reference: REST API](../reference/rest-api.md)。
 - 若要啟動包含 Dagster 與 MLflow 的全地端容器化環境，請參閱 [How-To: 運行全地端 MLOps Stack](../how-to/run-full-local-stack.md)。

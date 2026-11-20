@@ -1,14 +1,22 @@
 # AGENTS.md
 
 - Created: 2026-08-23
-- Last updated: 2026-11-19
+- Last updated: 2026-11-20
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
 ## Essential Context Pointers
 
 - **Domain Glossary & Semantics**: Read [GLOSSARY.md](GLOSSARY.md) for business context, power grid terminology, and degraded forecast definitions.
-- **System & Data Specifications**: Read [docs/SPEC.md](docs/SPEC.md) for schemas, Feast FeatureViews, REST contracts, and Dagster jobs.
+- **System & Data Specifications**: `docs/reference/` holds the current contracts, one file per area; edit them in the same PR as the code they describe.
+  - [data-contracts.md](docs/reference/data-contracts.md): source schemas, TimescaleDB hypertables, Feast FeatureViews, artifact serialization.
+  - [rest-api.md](docs/reference/rest-api.md): REST contracts.
+  - [dagster-schedules.md](docs/reference/dagster-schedules.md): Dagster assets, jobs, schedules, minimum accumulation.
+  - [data-explorer.md](docs/reference/data-explorer.md): Data Explorer boundaries and query behaviour.
+  - [ml-tasks.md](docs/reference/ml-tasks.md): task config schema, task types, runner, model store.
+  - [frontend-locale.md](docs/reference/frontend-locale.md): frontend locale and formatting.
+  - [lab.md](docs/reference/lab.md): `lab/` snapshot, backtest and report contracts.
+  - [forecast-view-hosting.md](docs/reference/forecast-view-hosting.md): S3 + CloudFront hosting of the Forecast View.
 - **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)), and the static, precomputed Forecast View as the only cloud surface ([ADR-0015](docs/adr/0015-publish-forecast-view-as-static-precomputed-output.md), superseding ADR-0001).
 - **Research Workspace (`lab/`)**: `lab/` is a `uv` workspace member that depends unidirectionally on `shiro_mlops` (`src/` must NEVER import `lab`). Use it to freeze point-in-time training table snapshots, run rolling-origin backtests (滾動起點回測), and record hyperparameter studies under `lab/<YYYY-MM-DD>-<topic>/`.
 - **Roadmap & Work Tickets**: Consult [docs/ROADMAP.md](docs/ROADMAP.md) for tracer-bullet tickets and milestone acceptance criteria.
@@ -53,7 +61,7 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 1. **Red-Green-Refactor**: Always write or update tests before or alongside code changes.
 2. **Offline Unit/Integration Tests**: Tests in `tests/` must NOT depend on external live APIs; use fixtures in `tests/fixtures/`.
-3. **No Implementation Details in GLOSSARY.md**: `GLOSSARY.md` is strictly reserved for business domain terms. Technical details belong in `docs/SPEC.md` or `docs/adr/`.
+3. **No Implementation Details in GLOSSARY.md**: `GLOSSARY.md` is strictly reserved for business domain terms. Technical details belong in `docs/reference/` or `docs/adr/`.
 4. **Diátaxis Discipline**: When adding docs, adhere strictly to the 4 quadrants (Tutorial, How-To, Reference, Explanation).
 
 ## Agent skills

@@ -1,4 +1,4 @@
-"""List the rolling-origin backtest origins a frozen snapshot offers (SPEC §7.2, §7.3).
+"""List the rolling-origin backtest origins a frozen snapshot offers (docs/reference/lab.md §2, §3).
 
 Run before a study to see whether the snapshot leaves room for search origins and
 evaluation origins on enough calendar days, without fitting any model.

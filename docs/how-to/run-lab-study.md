@@ -1,7 +1,7 @@
 # 如何執行一次 lab 研究
 
 - 建立日期：2026-11-09
-- 最後更新：2026-11-17
+- 最後更新：2026-11-20
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -160,7 +160,7 @@ candidate_eval = rolling_origin_backtest(
 is_adopted = candidate_eval.beats(baseline_eval)
 ```
 
-起點與報告欄位的完整規則見 [SPEC §7](../SPEC.md)（研究空間介面與報告契約）；以下只列操作時的檢查步驟：
+起點與報告欄位的完整規則見 [研究空間介面與報告契約](../reference/lab.md)；以下只列操作時的檢查步驟：
 
 1. 先以基線參數對兩組起點各跑一次回測；若拋出 `ValueError`，訊息會指出不合格的起點與條件，改選連續無缺口區間內的起點。
 2. 研究過程若記錄 MLflow run，experiment 名稱使用 `lab/<topic>`，不寫入 model registry。
@@ -179,6 +179,6 @@ is_adopted = candidate_eval.beats(baseline_eval)
    ```
 
 3. 程式變更全部 commit 後，在該 commit 上執行研究腳本，報告中的數字必須來自這次執行。
-4. 依 [SPEC §7.5](../SPEC.md) 的固定段落與重現紀錄欄位撰寫 `README.md`，Git revision 填第 3 步的 commit SHA。
+4. 依 [研究空間 §5](../reference/lab.md#5-研究報告labyyyy-mm-dd-topicreadmemd) 的固定段落與重現紀錄欄位撰寫 `README.md`，Git revision 填第 3 步的 commit SHA。
 5. 引用 `data/lab/snapshots/...` 或 `*.ipynb` 等不進版控的路徑時使用 code span，不用 Markdown 連結，否則 CI 死連結檢查會失敗。
 6. 若結論為採用，在同一個 PR 更新任務設定 TOML 的 `[params]`，並在參數旁加註解連回報告。
