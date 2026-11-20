@@ -15,7 +15,9 @@ const MODULES_REPORT = join(FORECAST_VIEW, 'node_modules/.cache/bundle-modules.j
 const CONSOLE_SOURCE_PREFIX = 'apps/engineering-console/'
 const TEXT_EXTENSIONS = /\.(html|js|mjs|css|json|svg|txt|map|webmanifest)$/
 
-// Engineering Console routes (ADR-0014 §2.5) and the pre-split URLs it replaced.
+// Engineering Console routes (ADR-0014 §2.5) and the pre-split URLs it replaced. `/console` is the
+// console's Vite `base` without its trailing slash (CONSOLE_BASE_PATH in
+// frontend/apps/engineering-console/vite.config.ts); keep in sync.
 export const FORBIDDEN_PATHS = ['/console', '/monitoring', '/data/']
 
 // Runtime dependencies that only the Engineering Console declares. Workspace packages are skipped:

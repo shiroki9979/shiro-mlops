@@ -7,7 +7,8 @@ import { apiDevProxy } from '../../tooling/vite-api-proxy'
 
 // The Engineering Console shares the Forecast View's origin under this prefix (ADR-0014 §2.5).
 // Vite exposes it as import.meta.env.BASE_URL, which the router and in-app links read, including in tests.
-// Must match the `/console/` locations in frontend/nginx.conf.
+// The single source for this path: frontend/nginx.conf, frontend/Dockerfile, scripts/smoke_nginx.py
+// and scripts/check_forecast_view_bundle.mjs cannot import it, so each names this constant instead.
 const CONSOLE_BASE_PATH = '/console/'
 
 // https://vitejs.dev/config/
