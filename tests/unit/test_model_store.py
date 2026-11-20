@@ -1,7 +1,8 @@
-"""Per-task model directories: atomic replacement and no legacy joblib loading."""
+"""Per-task model directories: atomic replacement, content hashes and no legacy joblib loading."""
 
 import ctypes
 import errno
+import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -14,7 +15,12 @@ import pytest
 
 from shiro_mlops.tasks import model_store
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.model_store import load_model, save_model
+from shiro_mlops.tasks.model_store import (
+    load_model,
+    load_model_with_sha256,
+    model_directory_sha256,
+    save_model,
+)
 
 
 @pytest.fixture
@@ -44,8 +50,8 @@ class _RecordingModel:
 def test_saves_into_the_task_directory(root: Path) -> None:
     saved = save_model(root, "sample_task", _RecordingModel("v1"))
 
-    assert saved == root / "sample_task"
-    assert (saved / "version.txt").read_text(encoding="utf-8") == "v1"
+    assert saved.directory == root / "sample_task"
+    assert (saved.directory / "version.txt").read_text(encoding="utf-8") == "v1"
 
 
 def test_resaving_replaces_the_previous_model_and_leaves_no_staging_files(root: Path) -> None:
@@ -170,3 +176,133 @@ def test_untrained_task_loads_no_model_even_beside_a_legacy_joblib(root: Path) -
     (root / "model.joblib").write_bytes(b"legacy pickle bytes")
 
     assert load_model(root, deployed_task(DYNAMIC_HORIZON_FORECAST)) is None
+
+
+def _write_files(directory: Path, files: dict[str, bytes]) -> Path:
+    for relative, content in files.items():
+        path = directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    return directory
+
+
+_MODEL_FILES = {"model.txt": b"booster", "params/task.json": b'{"lags": [1, 24]}'}
+
+
+def test_model_hash_is_the_full_sha256_hex_digest(tmp_path: Path) -> None:
+    digest = model_directory_sha256(_write_files(tmp_path / "model", _MODEL_FILES))
+
+    assert len(digest) == 64
+    assert set(digest) <= set("0123456789abcdef")
+
+
+def test_same_model_files_give_the_same_hash_wherever_and_in_whatever_order_they_were_written(
+    tmp_path: Path,
+) -> None:
+    first = _write_files(tmp_path / "first", _MODEL_FILES)
+    second = _write_files(tmp_path / "second", dict(reversed(list(_MODEL_FILES.items()))))
+
+    assert model_directory_sha256(first) == model_directory_sha256(second)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"model.txt": b"booster v2"}, id="content-changed"),
+        pytest.param({"extra.json": b"{}"}, id="file-added"),
+    ],
+)
+def test_changing_or_adding_a_file_changes_the_hash(
+    tmp_path: Path, change: dict[str, bytes]
+) -> None:
+    directory = _write_files(tmp_path / "model", _MODEL_FILES)
+    before = model_directory_sha256(directory)
+
+    _write_files(directory, change)
+
+    assert model_directory_sha256(directory) != before
+
+
+def test_moving_content_to_another_file_name_changes_the_hash(tmp_path: Path) -> None:
+    original = _write_files(tmp_path / "original", {"a.txt": b"same"})
+    renamed = _write_files(tmp_path / "renamed", {"b.txt": b"same"})
+
+    assert model_directory_sha256(original) != model_directory_sha256(renamed)
+
+
+def test_file_timestamps_do_not_change_the_hash(tmp_path: Path) -> None:
+    directory = _write_files(tmp_path / "model", _MODEL_FILES)
+    before = model_directory_sha256(directory)
+
+    for path in directory.rglob("*"):
+        os.utime(path, (0, 0))
+
+    assert model_directory_sha256(directory) == before
+
+
+def _hash_of_saved(tmp_path: Path, version: str) -> str:
+    """The hash an independently saved copy of one recorded version has."""
+    return save_model(tmp_path / "reference", version, _RecordingModel(version)).sha256
+
+
+def _stub_recording_task_type(
+    monkeypatch: pytest.MonkeyPatch, on_load: Callable[[], None] = lambda: None
+) -> None:
+    def load(directory: Path) -> _RecordingModel:
+        model = _RecordingModel((directory / "version.txt").read_text(encoding="utf-8"))
+        on_load()
+        return model
+
+    monkeypatch.setattr(model_store, "get_task_type", lambda _name: SimpleNamespace(load=load))
+
+
+_RECORDING_TASK = SimpleNamespace(task_id="sample_task", task_type="recording")
+
+
+def test_saving_reports_the_hash_of_the_installed_model(root: Path, tmp_path: Path) -> None:
+    saved = save_model(root, "sample_task", _RecordingModel("v1"))
+
+    assert saved.sha256 == _hash_of_saved(tmp_path, "v1")
+    assert saved.sha256 == model_directory_sha256(root / "sample_task")
+
+
+def test_loading_returns_the_model_with_the_hash_of_its_directory(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_model(root, "sample_task", _RecordingModel("v1"))
+    _stub_recording_task_type(monkeypatch)
+
+    loaded = load_model_with_sha256(root, _RECORDING_TASK)
+
+    assert loaded is not None
+    assert loaded.model.version == "v1"
+    assert loaded.sha256 == _hash_of_saved(tmp_path, "v1")
+
+
+def test_untrained_task_loads_no_model_and_no_hash(root: Path) -> None:
+    assert load_model_with_sha256(root, _RECORDING_TASK) is None
+
+
+def test_retraining_during_a_load_cannot_pair_the_loaded_model_with_another_hash(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A swap requested mid-load waits until both the model and its hash are read."""
+    save_model(root, "sample_task", _RecordingModel("v1"))
+    expected = _hash_of_saved(tmp_path, "v1")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        writers = []
+
+        def retrain_mid_load() -> None:
+            writer = executor.submit(save_model, root, "sample_task", _RecordingModel("v2"))
+            writers.append(writer)
+            with pytest.raises(FutureTimeoutError):
+                writer.result(timeout=0.2)
+
+        _stub_recording_task_type(monkeypatch, on_load=retrain_mid_load)
+        loaded = load_model_with_sha256(root, _RECORDING_TASK)
+        writers[0].result()
+
+    assert loaded is not None
+    assert (loaded.model.version, loaded.sha256) == ("v1", expected)
+    assert model_directory_sha256(root / "sample_task") == _hash_of_saved(tmp_path, "v2")
