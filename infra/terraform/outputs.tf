@@ -8,6 +8,11 @@ output "github_actions_role_arn" {
   description = "IAM Role ARN to assume in GitHub Actions; may write site/ only"
 }
 
+output "aws_region" {
+  value       = var.aws_region
+  description = "AWS region holding the resources; the on-prem publisher's AWS_DEFAULT_REGION must equal it"
+}
+
 output "onprem_publisher_user_name" {
   value       = aws_iam_user.onprem_publisher.name
   description = "IAM user for the on-prem export; may PutObject to published/ only. Its access key is managed outside Terraform"

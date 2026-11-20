@@ -20,6 +20,17 @@ provider "aws" {
   }
 }
 
+locals {
+  # Bucket prefixes (ADR-0015 §2.2); the CI and on-prem policies scope to these.
+  site_prefix      = "site/"
+  published_prefix = "published/"
+
+  # Cost guardrail (ADR-0015 §2.6). The forecasted-spend alert level doubles as
+  # the budget limit, so the two cannot drift apart.
+  budget_forecasted_alert_usd = 10
+  budget_actual_alert_usd     = 5
+}
+
 # 1. S3 bucket for the Forecast View release artefacts (ADR-0015 §2.2).
 #    site/      : forecast-view build output, written by the CI role.
 #    published/ : exported public JSON, written by the on-prem publisher user.
@@ -43,6 +54,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "forecast_view" {
     id     = "expire-noncurrent-versions"
     status = "Enabled"
 
+    # Empty filter: the rule applies to the whole bucket. The provider requires
+    # a filter or prefix on every rule.
     filter {}
 
     noncurrent_version_expiration {
@@ -54,11 +67,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "forecast_view" {
       expired_object_delete_marker = true
     }
 
+    # The publisher key cannot s3:AbortMultipartUpload, so parts left by a failed
+    # large upload would otherwise accrue storage cost indefinitely.
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
   }
 
+  # AWS requires versioning to be enabled before noncurrent-version rules apply.
   depends_on = [aws_s3_bucket_versioning.forecast_view]
 }
 
@@ -109,6 +125,10 @@ resource "aws_iam_role" "github_actions_role" {
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
+          # Accept only tokens minted for AWS STS, not ones issued to another audience.
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
           StringLike = {
             "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*"
           }
@@ -133,7 +153,7 @@ resource "aws_iam_policy" "ci_site_deploy" {
         Resource = aws_s3_bucket.forecast_view.arn
         Condition = {
           StringLike = {
-            "s3:prefix" = ["site/", "site/*"]
+            "s3:prefix" = [local.site_prefix, "${local.site_prefix}*"]
           }
         }
       },
@@ -144,7 +164,7 @@ resource "aws_iam_policy" "ci_site_deploy" {
           "s3:PutObject",
           "s3:DeleteObject"
         ]
-        Resource = "${aws_s3_bucket.forecast_view.arn}/site/*"
+        Resource = "${aws_s3_bucket.forecast_view.arn}/${local.site_prefix}*"
       }
     ]
   })
@@ -162,8 +182,8 @@ resource "aws_iam_user" "onprem_publisher" {
   name = "shiro-mlops-onprem-publisher"
 }
 
-resource "aws_iam_policy" "onprem_publish" {
-  name        = "shiro-mlops-onprem-publish"
+resource "aws_iam_policy" "onprem_publisher_put" {
+  name        = "shiro-mlops-onprem-publisher-put"
   description = "On-prem export uploads the public JSON to published/ only"
 
   policy = jsonencode({
@@ -173,29 +193,30 @@ resource "aws_iam_policy" "onprem_publish" {
         Sid      = "PutPublishedPrefix"
         Effect   = "Allow"
         Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.forecast_view.arn}/published/*"
+        Resource = "${aws_s3_bucket.forecast_view.arn}/${local.published_prefix}*"
       }
     ]
   })
 }
 
-resource "aws_iam_user_policy_attachment" "onprem_publish" {
+resource "aws_iam_user_policy_attachment" "onprem_publisher_put" {
   user       = aws_iam_user.onprem_publisher.name
-  policy_arn = aws_iam_policy.onprem_publish.arn
+  policy_arn = aws_iam_policy.onprem_publisher_put.arn
 }
 
-# 4. Cost guardrail: email when monthly actual spend reaches 5 USD or
-#    forecasted spend reaches 10 USD (ADR-0015 §2.6).
+# 4. Cost guardrail: email when monthly actual or forecasted spend reaches the
+#    levels in locals (ADR-0015 §2.6). AWS Budgets only offers GREATER_THAN,
+#    EQUAL_TO and LESS_THAN; GREATER_THAN is the closest to "reaches" (達).
 resource "aws_budgets_budget" "monthly_cost" {
   name         = "shiro-mlops-monthly-cost"
   budget_type  = "COST"
-  limit_amount = "10"
+  limit_amount = tostring(local.budget_forecasted_alert_usd)
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
   notification {
     comparison_operator        = "GREATER_THAN"
-    threshold                  = 5
+    threshold                  = local.budget_actual_alert_usd
     threshold_type             = "ABSOLUTE_VALUE"
     notification_type          = "ACTUAL"
     subscriber_email_addresses = [var.budget_alert_email]
@@ -203,7 +224,7 @@ resource "aws_budgets_budget" "monthly_cost" {
 
   notification {
     comparison_operator        = "GREATER_THAN"
-    threshold                  = 10
+    threshold                  = local.budget_forecasted_alert_usd
     threshold_type             = "ABSOLUTE_VALUE"
     notification_type          = "FORECASTED"
     subscriber_email_addresses = [var.budget_alert_email]
