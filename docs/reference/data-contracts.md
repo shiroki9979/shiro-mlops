@@ -194,3 +194,38 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - DataFrame artifact 使用 Parquet；非 DataFrame artifact 僅允許 JSON-compatible 值，並以 `SHIRO-JSON-V1` envelope 標記後保存。
 - loader 僅接受 Parquet magic 或 `SHIRO-JSON-V1` envelope；未識別格式（包含既有未標記 pickle）必須失敗，禁止執行 pickle 反序列化。
 - 既有 pickle artifact 不提供相容性載入；需重新 materialize Dagster asset 產生新的 JSON artifact。此為明確的遷移策略。
+
+### 5.1 預報實績 `forecast_track_record`
+
+資產 `forecast_track_record`（[Dagster 排程](dagster-schedules.md)第 7 項，[ADR-0013 §2.3](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#23-預報檢視的最低呈現內容)）回傳 frozen dataclass `ForecastTrackRecord`（`data/forecast_track_record.py`），由 `io_manager` 以 `SHIRO-JSON-V1` 保存為 JSON 物件，下游匯出資產以 input 讀取。累積天數未滿 7 時：
+
+```json
+{"cutoff": "2026-11-20T10:00:00", "accumulated_days": 3, "metrics": null}
+```
+
+累積天數滿 7 時（曲線與時序節錄）：
+
+```json
+{
+  "cutoff": "2026-11-20T10:00:00",
+  "accumulated_days": 9,
+  "metrics": {
+    "lead_time_curve": [
+      {"lead_time_hours": 1, "mape": 2.41, "mae": 612.5},
+      {"lead_time_hours": 168, "mape": null, "mae": null}
+    ],
+    "lead_24": {"lead_time_hours": 24, "mape": 4.87, "mae": 1240.3},
+    "lead_24_series": [
+      {"target_hour": "2026-11-13T09:00:00", "actual_load_mw": 25012.0, "predicted_load_mw": 25830.4}
+    ]
+  }
+}
+```
+
+- `cutoff`（字串）：統計截至時刻，台灣本地時間的整點，ISO 8601 不帶時區。計入的目標小時為 `[cutoff − 720h, cutoff)`。
+- `accumulated_days`（整數，0–31）：累積天數，即窗內有配對（任一提前時數）的目標小時取台灣日期去重後的天數。尚無已發布預報時為 `0`。一律輸出。
+- `metrics`（物件或 `null`）：`accumulated_days` 未滿 7 時為 `null`，曲線、提前 24 指標與時序都不產出，由資料源頭決定，不交給前端隱藏。滿 7 時為下列三個欄位：
+  - `lead_time_curve`（陣列）：提前時數 1–168 固定 168 格，依提前時數排序。每格 `mape`（%）= mean(|預測 − 實際| / 實際) × 100、`mae`（MW）= mean(|預測 − 實際|)；窗內同一提前時數的所有配對混在一起算，不先按日或按發布時刻平均。沒有配對的格子 `mape` 與 `mae` 皆為 `null`，不設每格最少配對數。提前 168 在正常營運下恆為 `null`：負載起點至少落後發布時刻一小時，提前時數最大只到 167。
+  - `lead_24`（物件）：提前 24 的 MAPE 與 MAE，即 `lead_time_curve` 第 24 格，欄位相同；窗內沒有提前 24 配對時 `mape` 與 `mae` 為 `null`。
+  - `lead_24_series`（陣列）：窗內同時有提前 24 已發布預報與有效逐時觀測的目標小時，每點 `target_hour`（字串，格式同 `cutoff`）、`actual_load_mw`、`predicted_load_mw`（MW），依目標小時排序，每個目標小時恰好一點。缺的小時直接省略，不補 `null`。同一目標小時有兩份發布都落在提前 24 時（只在發布間隔不足一小時時發生）取發布時刻較晚者；曲線仍計入兩者。
+- 不含運行狀態、天氣來源、模型版本與資料缺口；窗內配對數與提前 24 配對數只記在 materialization metadata，不在輸出內。

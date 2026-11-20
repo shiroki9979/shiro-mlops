@@ -27,6 +27,7 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     resolve_cwa_location,
 )
+from shiro_mlops.data.forecast_track_record import TrackRecordPair, TrackRecordWindow
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
@@ -864,6 +865,44 @@ class TimeSeriesRepository:
     def fetch_issued_forecast(self, issued_at: datetime) -> IssuedForecast | None:
         """Fetch the forecast issued at a Taiwan-local issue time."""
         return self.issued_forecast_repo.fetch(issued_at)
+
+    def fetch_track_record_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
+        """Pair issued steps targeting the window with valid hourly observations.
+
+        Only steps whose target hour is after their issue time count, and only
+        target hours with a nationwide ``regional_snapshot_sum`` load row. Both
+        reads are bounded by the window. Pairs are ordered by target hour, then
+        issue time.
+        """
+        # TODO(#160): 兩表在 SQLite 以不同字串形式保存 UTC（負載帶 +00:00、已發布預報不帶），
+        # SQL join 只在 TimescaleDB 成立，因此各自有界讀取後以台灣本地小時配對。
+        issued_steps = self.issued_forecast_repo.fetch_steps_after_issue(window)
+        actual_load = self._valid_hourly_load(window)
+        return tuple(
+            TrackRecordPair(
+                issued_at=issued.issued_at,
+                target_hour=issued.step.target_hour,
+                predicted_load_mw=issued.step.predicted_load_mw,
+                actual_load_mw=actual_load[issued.step.target_hour],
+            )
+            for issued in issued_steps
+            if issued.step.target_hour in actual_load
+        )
+
+    def _valid_hourly_load(self, window: TrackRecordWindow) -> dict[datetime, float]:
+        """Nationwide derived load in the window keyed by Taiwan-local hour."""
+        frame = self.fetch_load_range(
+            window.start,
+            window.end,
+            subject=NATIONWIDE_SUBJECT,
+            source=REGIONAL_SNAPSHOT_SUM_SOURCE,
+        )
+        # fetch_load_range 的終點含端點；窗為半開，排除恰在窗終點的那一小時。
+        in_window = frame[frame["time"] < window.end]
+        return {
+            hour.to_pydatetime(): float(load_mw)
+            for hour, load_mw in zip(in_window["time"], in_window["load_mw"], strict=True)
+        }
 
 
 __all__ = [
