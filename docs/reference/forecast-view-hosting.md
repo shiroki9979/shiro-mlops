@@ -17,9 +17,20 @@
 | prefix | 內容 | 寫入者 |
 | :--- | :--- | :--- |
 | `site/` | `forecast-view` 建置產物（`index.html`、`assets/*` 等） | CI 角色（GitHub OIDC），只能寫 `site/*` |
-| `published/` | 匯出的兩份公開 JSON（TICKET-408） | 地端上傳用 IAM 使用者，只能 `PutObject` 到 `published/*` |
+| `published/` | 匯出的兩份公開 JSON（[資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished)） | 地端上傳用 IAM 使用者，只能 `PutObject` 到 `published/*` |
 
 bucket policy 只授權 CloudFront 服務主體經該 distribution 的 `s3:GetObject`，不授權 `s3:ListBucket`；不存在的物件因此回 403 而非 404，前端不依狀態碼區分缺檔原因（§4）。
+
+地端匯出資產 `forecast_view_export`（[Dagster 排程](dagster-schedules.md)第 8 項）讀取下列設定項目。值只放在地端 `.env`，由 Compose 傳入 `dagster-webserver` 容器，不提交到 repo；`.env.example` 只列名稱。
+
+| 設定 | 用途 | 未設定時 |
+| :--- | :--- | :--- |
+| `FORECAST_VIEW_S3_BUCKET` | 上傳目標 bucket（即 `shiro-mlops-forecast-view` 或 Terraform 傳入的名稱）；key 固定為 `published/<檔名>` | 只寫地端目錄 `DATA_DIR/published/`，不建立 S3 client |
+| `AWS_ACCESS_KEY_ID` | 地端上傳用 IAM 使用者的 access key ID | 交給 boto3 的預設憑證鏈；找不到憑證時上傳失敗 |
+| `AWS_SECRET_ACCESS_KEY` | 同一把 key 的 secret；設定物件以 `SecretStr` 保存，不出現在其 repr | 同上 |
+
+- 區域固定為 `ap-northeast-1`（ADR-0015 §2.2），prefix 固定為 `published/`，兩者都不開放設定，以免與 IAM policy 及 CloudFront behavior 脫鉤。
+- key 為長期 access key，手動輪替（ADR-0015 §2.3）；輪替後更新 `.env` 並重建 `dagster-webserver` 容器。
 
 ## 2. Origin 與 behavior
 
@@ -32,7 +43,7 @@ bucket policy 只授權 CloudFront 服務主體經該 distribution 的 `s3:GetOb
 | `/published/*` | `published` | 無 | 60 秒 | `public, max-age=60` |
 
 - **快取規則集中在 CloudFront**：TTL 由 cache policy 決定，瀏覽器標頭由 response headers policy 覆寫；上傳端（CI 與地端匯出）不設定物件的 `Cache-Control` metadata。
-- **地端對應**：地端 Nginx 的 `/assets/`、`/index.html` 沿用既有標頭，`/published/` 同樣回 `public, max-age=60`。
+- **地端對應**：地端 Nginx 的 `/assets/`、`/index.html` 沿用既有標頭，`/published/` 同樣回 `public, max-age=60`。Compose 把主機的 `data/published/`（即 Dagster 的 `DATA_DIR/published/`）唯讀掛載到 frontend 容器的 `/usr/share/nginx/published`，`/published/` 以 `try_files $uri =404` 提供，缺檔回 404，不落到 SPA fallback；目錄本身不列出檔案。掛載整個目錄而非單檔，因為匯出以 rename 替換檔案，單檔 bind mount 會一直指向舊檔。
 - **SPA fallback**：`spa-rewrite` 把最後一段沒有副檔名的路徑（含 `/`、`/history`、`/history/`）內部改寫為 `/index.html`，等價於地端 Nginx 的 `try_files $uri $uri/ /index.html`。不使用 custom error response，因其作用於整個 distribution，會讓 `/published/` 下的缺檔回 200 與 HTML。`/api/*`、`/console/*` 不特別處理，落到預報檢視的 not-found 頁。
 - **原始碼與測試**：`infra/terraform/functions/spa-rewrite.js` 由 Terraform `file()` 讀入；同目錄以 `node --test` 撰寫離線測試，涵蓋 `/`、`/history`、`/history/`、`/assets/x.js`、`/favicon.ico`、`/console/foo`，於 CI 執行。
 
