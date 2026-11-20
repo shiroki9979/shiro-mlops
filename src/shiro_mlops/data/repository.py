@@ -27,12 +27,14 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     resolve_cwa_location,
 )
+from shiro_mlops.data.forecast_track_record import TrackRecordPair
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
 )
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
+from shiro_mlops.data.repository_utils import utc_instant_to_taiwan
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -864,6 +866,51 @@ class TimeSeriesRepository:
     def fetch_issued_forecast(self, issued_at: datetime) -> IssuedForecast | None:
         """Fetch the forecast issued at a Taiwan-local issue time."""
         return self.issued_forecast_repo.fetch(issued_at)
+
+    def fetch_track_record_pairs(
+        self, window_start: datetime, window_end: datetime
+    ) -> tuple[TrackRecordPair, ...]:
+        """Pair issued steps targeting ``[window_start, window_end)`` with valid hourly observations.
+
+        Only steps whose target hour is after their issue time count, and only
+        target hours with a nationwide ``regional_snapshot_sum`` load row. Both
+        reads are bounded by the window. Pairs are ordered by target hour, then
+        issue time.
+        """
+        # 兩表在 SQLite 以不同字串形式保存 UTC（負載帶 +00:00、已發布預報不帶），
+        # SQL join 只在 TimescaleDB 成立，因此各自有界讀取後以台灣本地小時配對。
+        steps = self.issued_forecast_repo.fetch_steps_after_issue(window_start, window_end)
+        actual_load = self._valid_hourly_load(window_start, window_end)
+        return tuple(
+            TrackRecordPair(
+                issued_at=issued_at,
+                target_hour=step.target_hour,
+                predicted_load_mw=step.predicted_load_mw,
+                actual_load_mw=actual_load[step.target_hour],
+            )
+            for issued_at, step in steps
+            if step.target_hour in actual_load
+        )
+
+    def _valid_hourly_load(self, start: datetime, end: datetime) -> dict[datetime, float]:
+        """Nationwide derived load in ``[start, end)`` keyed by Taiwan-local hour."""
+        query = text(
+            """
+            SELECT time, load_mw
+            FROM raw_taipower_load
+            WHERE subject = :subject AND source = :source
+              AND time >= :start AND time < :end
+            """
+        )
+        params = {
+            "subject": NATIONWIDE_SUBJECT,
+            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+            "start": _taiwan_instant_to_utc(start),
+            "end": _taiwan_instant_to_utc(end),
+        }
+        with self.engine.connect() as conn:
+            rows = conn.execute(query, params).all()
+        return {utc_instant_to_taiwan(row.time): float(row.load_mw) for row in rows}
 
 
 __all__ = [

@@ -194,3 +194,15 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - DataFrame artifact 使用 Parquet；非 DataFrame artifact 僅允許 JSON-compatible 值，並以 `SHIRO-JSON-V1` envelope 標記後保存。
 - loader 僅接受 Parquet magic 或 `SHIRO-JSON-V1` envelope；未識別格式（包含既有未標記 pickle）必須失敗，禁止執行 pickle 反序列化。
 - 既有 pickle artifact 不提供相容性載入；需重新 materialize Dagster asset 產生新的 JSON artifact。此為明確的遷移策略。
+
+### 5.1 預報實績 `forecast_track_record`
+
+資產 `forecast_track_record`（[Dagster 排程](dagster-schedules.md)第 7 項，[ADR-0013 §2.3](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#23-預報檢視的最低呈現內容)）回傳 frozen dataclass `ForecastTrackRecord`（`data/forecast_track_record.py`），由 `io_manager` 以 `SHIRO-JSON-V1` 保存為 JSON 物件，下游匯出資產以 input 讀取：
+
+```json
+{"cutoff": "2026-11-20T10:00:00", "accumulated_days": 3}
+```
+
+- `cutoff`（字串）：統計截至時刻，台灣本地時間的整點，ISO 8601 不帶時區。計入的目標小時為 `[cutoff − 720h, cutoff)`。
+- `accumulated_days`（整數，0–31）：累積天數，即窗內有配對（任一提前時數）的目標小時取台灣日期去重後的天數。尚無已發布預報時為 `0`。
+- 不含運行狀態、天氣來源、模型版本與資料缺口；窗內配對數只記在 materialization metadata，不在輸出內。
