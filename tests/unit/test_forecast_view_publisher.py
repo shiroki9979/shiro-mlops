@@ -16,7 +16,7 @@ def test_without_a_bucket_the_publisher_writes_only_under_data_dir(tmp_path: Pat
     assert publisher.uploads_to_s3 is False
 
 
-def test_with_a_bucket_the_publisher_uploads_with_the_configured_key_and_region(
+def test_with_a_bucket_the_publisher_uploads_with_the_configured_key_and_default_region(
     tmp_path: Path, mocker
 ) -> None:
     create_client = mocker.patch("boto3.client", wraps=boto3.client)
@@ -40,6 +40,21 @@ def test_with_a_bucket_the_publisher_uploads_with_the_configured_key_and_region(
         aws_access_key_id="AKIAEXAMPLEONLY",
         aws_secret_access_key="offline-test-secret",
     )
+
+
+def test_the_upload_region_follows_aws_default_region(tmp_path: Path) -> None:
+    """Terraform's aws_region may differ from the default; the publisher must sign for it."""
+    publisher = ForecastViewPublisher.from_settings(
+        Settings(
+            _env_file=None,
+            DATA_DIR=tmp_path,
+            FORECAST_VIEW_S3_BUCKET="bucket",
+            AWS_DEFAULT_REGION="us-west-2",
+        )
+    )
+
+    assert publisher.s3 is not None
+    assert publisher.s3.client.meta.region_name == "us-west-2"
 
 
 def test_with_a_bucket_but_no_key_boto3_falls_back_to_its_credential_chain(

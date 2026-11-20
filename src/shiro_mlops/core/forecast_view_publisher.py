@@ -21,8 +21,6 @@ if TYPE_CHECKING:
 # 地端上傳用 IAM 使用者只能 PutObject 到此 prefix，CloudFront 的 /published/* behavior
 # 也以無 origin path 的 origin 對應到它（docs/reference/forecast-view-hosting.md 第 1、2 節）。
 PUBLISHED_S3_PREFIX = "published/"
-# 雲端區域固定（ADR-0015 §2.2），不開放設定。
-FORECAST_VIEW_S3_REGION = "ap-northeast-1"
 JSON_CONTENT_TYPE = "application/json"
 
 
@@ -48,7 +46,7 @@ class ForecastViewPublisher:
             return cls(settings.published_dir)
         client = boto3.client(
             "s3",
-            region_name=FORECAST_VIEW_S3_REGION,
+            region_name=settings.AWS_DEFAULT_REGION,
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID or None,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY.get_secret_value() or None,
         )

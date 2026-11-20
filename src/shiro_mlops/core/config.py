@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # The dedicated upload user's key; empty values leave boto3 to its default credential chain.
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: SecretStr = SecretStr("")
+    # The bucket's region: Terraform's aws_region variable (infra/terraform/variables.tf), whose
+    # aws_region output this must equal. Keep the default in sync with that variable's default.
+    AWS_DEFAULT_REGION: str = "ap-northeast-1"
 
     # MLflow
     MLFLOW_TRACKING_URI: str = "http://localhost:5001"

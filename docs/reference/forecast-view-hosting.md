@@ -12,7 +12,7 @@
 
 ## 1. S3 配置與寫入權限
 
-單一 bucket `shiro-mlops-forecast-view`（bucket 名稱以變數傳入），維持 public access block，只經 CloudFront Origin Access Control（OAC）讀取，不使用 S3 website endpoint。
+單一 bucket，名稱由 Terraform 變數 `s3_bucket_name` 傳入，部署後以 `terraform output -raw s3_bucket_name` 取得；維持 public access block，只經 CloudFront Origin Access Control（OAC）讀取，不使用 S3 website endpoint。
 
 | prefix | 內容 | 寫入者 |
 | :--- | :--- | :--- |
@@ -21,16 +21,17 @@
 
 bucket policy 只授權 CloudFront 服務主體經該 distribution 的 `s3:GetObject`，不授權 `s3:ListBucket`；不存在的物件因此回 403 而非 404，前端不依狀態碼區分缺檔原因（§4）。
 
-地端匯出資產 `forecast_view_export`（[Dagster 排程](dagster-schedules.md)第 8 項）讀取下列設定項目。值只放在地端 `.env`，由 Compose 傳入 `dagster-webserver` 容器，不提交到 repo；`.env.example` 只列名稱。
+地端匯出資產 `forecast_view_export`（[Dagster 排程](dagster-schedules.md)第 8 項）讀取下列設定項目。值只放在地端 `.env`，由 Compose 傳入 `dagster-webserver` 容器，不提交到 repo；`.env.example` 只列名稱與區域預設值。
 
 | 設定 | 用途 | 未設定時 |
 | :--- | :--- | :--- |
-| `FORECAST_VIEW_S3_BUCKET` | 上傳目標 bucket（即 `shiro-mlops-forecast-view` 或 Terraform 傳入的名稱）；key 固定為 `published/<檔名>` | 只寫地端目錄 `DATA_DIR/published/`，不建立 S3 client |
+| `FORECAST_VIEW_S3_BUCKET` | 上傳目標 bucket，填 Terraform 輸出 `s3_bucket_name` 的值；key 固定為 `published/<檔名>` | 只寫地端目錄 `DATA_DIR/published/`，不建立 S3 client |
+| `AWS_DEFAULT_REGION` | bucket 所在區域，須等於 Terraform 輸出 `aws_region`（來自變數 `aws_region`） | `ap-northeast-1`，即該變數的預設值 |
 | `AWS_ACCESS_KEY_ID` | 地端上傳用 IAM 使用者的 access key ID | 交給 boto3 的預設憑證鏈；找不到憑證時上傳失敗 |
 | `AWS_SECRET_ACCESS_KEY` | 同一把 key 的 secret；設定物件以 `SecretStr` 保存，不出現在其 repr | 同上 |
 
-- 區域固定為 `ap-northeast-1`（ADR-0015 §2.2），prefix 固定為 `published/`，兩者都不開放設定，以免與 IAM policy 及 CloudFront behavior 脫鉤。
-- key 為長期 access key，手動輪替（ADR-0015 §2.3）；輪替後更新 `.env` 並重建 `dagster-webserver` 容器。
+- 區域由 Terraform 變數 `aws_region` 決定，地端以 `AWS_DEFAULT_REGION` 對齊；prefix 固定為 `published/`，不開放設定，以免與 IAM policy 及 CloudFront behavior 脫鉤。
+- key 為長期 access key，手動輪替（ADR-0015 §2.3）；任一設定變更後更新 `.env`，再以 `docker compose --env-file .env -f docker/docker-compose.yml up -d --force-recreate dagster-webserver` 重建容器。單純重新啟動（`restart`）不會重新讀取 `.env`，容器仍沿用舊值。
 
 ## 2. Origin 與 behavior
 

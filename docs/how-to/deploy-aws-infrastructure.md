@@ -98,9 +98,10 @@ aws iam create-access-key \
   --user-name "$(terraform output -raw onprem_publisher_user_name)"
 ```
 
-把回傳的 `AccessKeyId` 與 `SecretAccessKey` 寫入地端主機的 `.env`（勿提交），`AWS_DEFAULT_REGION` 填 `terraform output -raw aws_region` 的值：
+把回傳的 `AccessKeyId` 與 `SecretAccessKey` 寫入地端主機的 `.env`（勿提交），`FORECAST_VIEW_S3_BUCKET` 填 `terraform output -raw s3_bucket_name` 的值，`AWS_DEFAULT_REGION` 填 `terraform output -raw aws_region` 的值。`FORECAST_VIEW_S3_BUCKET` 留空時匯出只寫地端目錄，不會上傳：
 
 ```dotenv
+FORECAST_VIEW_S3_BUCKET=<s3_bucket_name 輸出值>
 AWS_ACCESS_KEY_ID=<AccessKeyId>
 AWS_SECRET_ACCESS_KEY=<SecretAccessKey>
 AWS_DEFAULT_REGION=<aws_region 輸出值>
@@ -131,6 +132,14 @@ done
 
 再執行一次迴圈中的 `list-object-versions`，應沒有任何輸出。
 
+最後在地端專案根目錄重建執行匯出的 `dagster-webserver` 容器，讓它讀入 `.env` 的新設定（`restart` 不會重新讀取 `.env`）：
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.yml up -d --force-recreate dagster-webserver
+```
+
+下一次每小時匯出（每小時第 35 分）後，地端 Dagster 中 `forecast_view_export` 的 materialization metadata `uploaded_to_s3` 應為 `true`。
+
 ---
 
 ## 6. 輪替地端 access key
@@ -139,7 +148,11 @@ IAM 使用者最多同時有兩把 access key，輪替時先建新 key、確認�
 
 1. **建立新 key**：以第 5 節的 `create-access-key` 指令建立。
 
-2. **更新地端 `.env`**：換上新的 `AWS_ACCESS_KEY_ID` 與 `AWS_SECRET_ACCESS_KEY`，重新啟動執行匯出的地端服務，確認下一次每小時匯出成功上傳（地端 Dagster 執行紀錄無錯誤）。
+2. **更新地端 `.env`**：換上新的 `AWS_ACCESS_KEY_ID` 與 `AWS_SECRET_ACCESS_KEY`，重建執行匯出的 `dagster-webserver` 容器（`restart` 不會重新讀取 `.env`），確認下一次每小時匯出成功上傳（地端 Dagster 執行紀錄無錯誤）：
+
+   ```bash
+   docker compose --env-file .env -f docker/docker-compose.yml up -d --force-recreate dagster-webserver
+   ```
 
 3. **停用舊 key**：列出 key，找出舊的 `AccessKeyId` 並停用：
 

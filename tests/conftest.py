@@ -44,12 +44,13 @@ def mock_mlflow_offline_backend(
 
 @pytest.fixture(autouse=True)
 def isolate_forecast_view_upload_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A host bucket or AWS key must never turn a test's export into a real upload."""
+    """A host bucket, AWS key or region must never turn a test's export into a real upload."""
     for name in (
         "FORECAST_VIEW_S3_BUCKET",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
+        "AWS_DEFAULT_REGION",
     ):
         monkeypatch.delenv(name, raising=False)
 

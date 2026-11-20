@@ -108,6 +108,8 @@ services:
       FORECAST_VIEW_S3_BUCKET: ${FORECAST_VIEW_S3_BUCKET:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # 須等於 terraform output aws_region；預設值與 infra/terraform/variables.tf 的 aws_region 同步。
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-ap-northeast-1}
       REDIS_HOST: redis
       MLFLOW_TRACKING_URI: http://mlflow:5000
       TIMESCALE_HOST: postgres
