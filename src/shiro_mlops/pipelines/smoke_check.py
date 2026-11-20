@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -47,13 +47,25 @@ FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
 )
 
 
+class CheckStatus(StrEnum):
+    PASS = "PASS"
+    WAIT = "WAIT"
+    FAIL = "FAIL"
+
+
 @dataclass(frozen=True)
 class ExpectedSchedule:
-    """Deployed schedule contract from docs/reference/dagster-schedules.md."""
+    """Deployed schedule contract from docs/reference/dagster-schedules.md.
+
+    Only job, cron and timezone are compared with the registered schedule; the
+    remaining fields say how a registered schedule that is not running reports.
+    """
 
     job_name: str
     cron_schedule: str
     execution_timezone: str | None
+    status_when_stopped: CheckStatus = field(default=CheckStatus.FAIL, compare=False, repr=False)
+    turn_on_after: str | None = field(default=None, compare=False, repr=False)
 
 
 # 擷取排程的固定契約；任務排程的期望值由任務設定推導（見 expected_schedules）。
@@ -74,16 +86,17 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
 
 # 發布排程的固定契約：與擷取排程一樣不受 --task 篩選。冷啟動期間刻意停用，首次訓練成功後才開啟，
 # 因此停用時回報 WAIT 而非 FAIL；未開啟的每一小時都不會留下已發布預報，且無法回補。
+# 名稱與 cron 刻意重述而不引用 pipelines/issued_forecast.py，才能檢出部署漂移；
+# 變更時須同步 pipelines/issued_forecast.py 與 docs/reference/dagster-schedules.md 第 6 項。
 ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
-    "issued_forecast_schedule": ExpectedSchedule("issued_forecast_job", "15 * * * *", TAIWAN_TZ),
+    "issued_forecast_schedule": ExpectedSchedule(
+        "issued_forecast_job",
+        "15 * * * *",
+        TAIWAN_TZ,
+        status_when_stopped=CheckStatus.WAIT,
+        turn_on_after="the first successful training run",
+    ),
 }
-_ENABLE_AFTER_FIRST_TRAINING = "after the first successful training run"
-
-
-class CheckStatus(StrEnum):
-    PASS = "PASS"
-    WAIT = "WAIT"
-    FAIL = "FAIL"
 
 
 @dataclass(frozen=True)
@@ -237,18 +250,10 @@ def _check_schedule(
     timezone = expected.execution_timezone or "UTC"
     summary = f"{expected.job_name} at '{expected.cron_schedule}' ({timezone})"
     if name not in running:
-        if name in ISSUED_FORECAST_SCHEDULES:
-            return CheckResult(
-                check_name,
-                CheckStatus.WAIT,
-                f"{summary} is registered but not running; turn it on in the Dagster UI "
-                f"{_ENABLE_AFTER_FIRST_TRAINING}",
-            )
-        return CheckResult(
-            check_name,
-            CheckStatus.FAIL,
-            f"{summary} is registered but not running; turn it on in the Dagster UI",
-        )
+        detail = f"{summary} is registered but not running; turn it on in the Dagster UI"
+        if expected.turn_on_after is not None:
+            detail += f" after {expected.turn_on_after}"
+        return CheckResult(check_name, expected.status_when_stopped, detail)
     return CheckResult(check_name, CheckStatus.PASS, f"{summary}, running")
 
 

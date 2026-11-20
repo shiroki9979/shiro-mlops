@@ -19,6 +19,7 @@ from dagster import (
     AssetKey,
     AssetsDefinition,
     AssetSelection,
+    DagsterInstance,
     Failure,
     MetadataValue,
     Output,
@@ -223,6 +224,36 @@ def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefini
         )
 
     return model
+
+
+@dataclass(frozen=True)
+class RecordedModel:
+    """What the latest ``{task_id}__model`` materialization recorded about the model it saved."""
+
+    sha256: str | None
+    mlflow_model_version: str | None
+
+
+def latest_recorded_model(instance: DagsterInstance, task_id: str) -> RecordedModel | None:
+    """Read the metadata the model asset wrote; ``None`` until the task has trained once.
+
+    Missing, null or empty entries read as ``None``.
+    """
+    event = instance.get_latest_materialization_event(AssetKey(TaskPipelineNames(task_id).model))
+    materialization = event.asset_materialization if event is not None else None
+    if materialization is None:
+        return None
+    metadata = materialization.metadata
+    return RecordedModel(
+        sha256=_text_metadata(metadata.get(MODEL_SHA256_METADATA)),
+        mlflow_model_version=_text_metadata(metadata.get(MLFLOW_MODEL_VERSION_METADATA)),
+    )
+
+
+def _text_metadata(entry: MetadataValue | None) -> str | None:
+    if entry is None or not isinstance(entry.value, str) or not entry.value:
+        return None
+    return entry.value
 
 
 def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefinition:

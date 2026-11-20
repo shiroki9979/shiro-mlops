@@ -8,6 +8,7 @@ from dagster import AssetKey, AssetMaterialization, build_schedule_context
 from shiro_mlops.pipelines.definitions import defs
 from shiro_mlops.pipelines.issued_forecast import (
     ISSUED_FORECAST_ASSET,
+    issued_forecast,
     issued_forecast_job,
     issued_forecast_schedule,
 )
@@ -97,7 +98,8 @@ def test_issued_forecast_lineage_depends_only_on_ingested_inputs() -> None:
     assert parents == {HOURLY_ACTUAL_LOAD_ASSET, *CWA_INGESTION_ASSETS}
 
 
-def test_issued_forecast_job_never_retries() -> None:
+def test_issued_forecast_never_retries() -> None:
     """A retry keeps the original tick as as_of but would read load stored after it."""
+    assert issued_forecast.op.retry_policy is None
     assert issued_forecast_job.op_retry_policy is None
     assert defs.resolve_job_def("issued_forecast_job").tags.get("dagster/max_retries") is None
