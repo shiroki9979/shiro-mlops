@@ -31,6 +31,8 @@ from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
 )
+from shiro_mlops.data.issued_forecast import IssuedForecast
+from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -356,6 +358,7 @@ class TimeSeriesRepository:
         self.unit_generation_repo = TaipowerUnitGenerationRepository(
             engine=self.engine, auto_init=False
         )
+        self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
 
     def upsert_taipower_load(
         self,
@@ -854,9 +857,18 @@ class TimeSeriesRepository:
         """Fetch unit net-generation snapshots for a Taiwan-local observation slot."""
         return self.unit_generation_repo.fetch(observed_at)
 
+    def insert_issued_forecast(self, forecast: IssuedForecast) -> bool:
+        """Write an issued forecast once; ``False`` when its issue time already exists."""
+        return self.issued_forecast_repo.insert(forecast)
+
+    def fetch_issued_forecast(self, issued_at: datetime) -> IssuedForecast | None:
+        """Fetch the forecast issued at a Taiwan-local issue time."""
+        return self.issued_forecast_repo.fetch(issued_at)
+
 
 __all__ = [
     "TimeSeriesRepository",
+    "IssuedForecastRepository",
     "TaipowerSupplyDemandRepository",
     "TaipowerRegionalSupplyDemandRepository",
     "TaipowerUnitGenerationRepository",

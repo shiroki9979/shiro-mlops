@@ -59,6 +59,7 @@
 - **相容性欄位**：請求 `location` 為選填，於 OpenAPI 標示 `deprecated`；任何值皆被忽略，不影響預測對象，也不再回傳 HTTP 400。回應不再包含 `location`。
 - **資料來源**：只讀 canonical TimescaleDB tables。負載歷史與遞迴起點只取 `source = 'regional_snapshot_sum'` 的列，`source IS NULL` 的 d015046 舊列一律忽略。氣象以請求時間為 `as_of`：只採用請求當下已發布且已更新的預報版本；某數值沒有發布未超過七小時的預報版本可提供時（以提供該數值的版本判定，[資料契約 §3.3](data-contracts.md#33-cwa-預報版本選取與逐時投影)），該數值依序退回氣象代表點測站的前日同小時觀測、同月份同小時歷史平均，並回傳 `mode: "degraded"`；替代資料皆不存在，或負載起點過舊（§2）時回傳 HTTP 503。
 - **狀態欄位**：`status` 表示請求成功（固定為 `success`）；`mode` 表示預報品質（`normal` 或 `degraded`），兩者不得混用。
+- **不寫入已發布預報**：隨需預報只讀不寫；已發布預報只由每小時的 `issued_forecast_schedule` 產生（[Dagster 排程](dagster-schedules.md)、ADR-0013）。
 - **來源追溯**：每個預測點的 `weather_sources` 依「氣象欄位 → 氣象代表點別名 → 來源」逐一揭露每個代表點的來源，以及可用的預報發布／更新時間；只有一個代表點時也採同一形狀。同一時點允許不同欄位或不同代表點來自不同產品或降級來源。
 - **請求 Body**：
 

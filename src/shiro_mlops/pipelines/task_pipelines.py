@@ -19,6 +19,7 @@ from dagster import (
     AssetKey,
     AssetsDefinition,
     AssetSelection,
+    DagsterInstance,
     Failure,
     MetadataValue,
     Output,
@@ -59,6 +60,9 @@ TIME_SERIES_REPO = "time_series_repo"
 TARGET_SOURCE_ASSETS = {HOURLY_ACTUAL_LOAD_TARGET: HOURLY_ACTUAL_LOAD_ASSET}
 # MLflow 不可用時訓練仍保存模型，run 以此標示未被追蹤。
 UNTRACKED_RUN_ID = "local_run"
+# `{task}__model` materialization metadata：模型版本識別與 MLflow 版本附註（後者可為空）。
+MODEL_SHA256_METADATA = "model_sha256"
+MLFLOW_MODEL_VERSION_METADATA = "mlflow_model_version"
 
 
 @dataclass(frozen=True)
@@ -197,21 +201,59 @@ def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefini
     def model(context: AssetExecutionContext, features: pd.DataFrame) -> Output[dict]:
         trained = fit_task(task, training_data_from_table(task, features))
         metrics = {name: float(value) for name, value in trained.metrics.items()}
-        model_dir = save_model(settings.models_dir, task.task_id, trained.model)
-        run_id, model_version = _track(context, task, metrics, model_dir)
+        saved = save_model(settings.models_dir, task.task_id, trained.model)
+        run_id, model_version = _track(context, task, metrics, saved.directory)
         return Output(
             value=TrainedModelRecord(
                 task_id=task.task_id,
                 metrics=metrics,
                 run_id=run_id,
                 model_version=model_version,
-                model_path=str(model_dir),
+                model_path=str(saved.directory),
                 training_rows=len(features),
             ),
-            metadata={name: MetadataValue.float(value) for name, value in metrics.items()},
+            metadata={
+                **{name: MetadataValue.float(value) for name, value in metrics.items()},
+                MODEL_SHA256_METADATA: MetadataValue.text(saved.sha256),
+                MLFLOW_MODEL_VERSION_METADATA: (
+                    MetadataValue.null()
+                    if model_version is None
+                    else MetadataValue.text(model_version)
+                ),
+            },
         )
 
     return model
+
+
+@dataclass(frozen=True)
+class RecordedModel:
+    """What the latest ``{task_id}__model`` materialization recorded about the model it saved."""
+
+    sha256: str | None
+    mlflow_model_version: str | None
+
+
+def latest_recorded_model(instance: DagsterInstance, task_id: str) -> RecordedModel | None:
+    """Read the metadata the model asset wrote; ``None`` until the task has trained once.
+
+    Missing, null or empty entries read as ``None``.
+    """
+    event = instance.get_latest_materialization_event(AssetKey(TaskPipelineNames(task_id).model))
+    materialization = event.asset_materialization if event is not None else None
+    if materialization is None:
+        return None
+    metadata = materialization.metadata
+    return RecordedModel(
+        sha256=_text_metadata(metadata.get(MODEL_SHA256_METADATA)),
+        mlflow_model_version=_text_metadata(metadata.get(MLFLOW_MODEL_VERSION_METADATA)),
+    )
+
+
+def _text_metadata(entry: MetadataValue | None) -> str | None:
+    if entry is None or not isinstance(entry.value, str) or not entry.value:
+        return None
+    return entry.value
 
 
 def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefinition:

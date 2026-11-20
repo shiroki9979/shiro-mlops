@@ -1,4 +1,4 @@
-"""Container smoke check: schedule configuration and per-task training/monitoring readiness.
+"""Container smoke check: schedule configuration, per-task readiness, and forecast issuing.
 
 Run inside the Dagster container so the loaded code, DAGSTER_HOME instance, and
 TimescaleDB connection are the deployed ones::
@@ -6,9 +6,11 @@ TimescaleDB connection are the deployed ones::
     python -m shiro_mlops.pipelines.smoke_check [--require-ready] [--task TASK_ID]
 
 Exit status is 1 when any check fails, or when ``--require-ready`` is given and a
-check is still waiting (for example during the cold-start accumulation).
-``--task`` keeps the shared ingestion checks and limits task checks to one task, so a
-task whose threshold is met can be accepted while another still accumulates.
+check is still waiting (for example during the cold-start accumulation, or while
+``issued_forecast_schedule`` stays off until the first successful training run).
+``--task`` keeps the shared ingestion and issuing checks and limits task checks to one
+task, so a task whose threshold is met can be accepted while another still accumulates.
+The check only evaluates schedule functions; it never launches a run.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -45,13 +47,25 @@ FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
 )
 
 
+class CheckStatus(StrEnum):
+    PASS = "PASS"
+    WAIT = "WAIT"
+    FAIL = "FAIL"
+
+
 @dataclass(frozen=True)
 class ExpectedSchedule:
-    """Deployed schedule contract from docs/reference/dagster-schedules.md."""
+    """Deployed schedule contract from docs/reference/dagster-schedules.md.
+
+    Only job, cron and timezone are compared with the registered schedule; the
+    remaining fields say how a registered schedule that is not running reports.
+    """
 
     job_name: str
     cron_schedule: str
     execution_timezone: str | None
+    status_when_stopped: CheckStatus = field(default=CheckStatus.FAIL, compare=False, repr=False)
+    turn_on_after: str | None = field(default=None, compare=False, repr=False)
 
 
 # 擷取排程的固定契約；任務排程的期望值由任務設定推導（見 expected_schedules）。
@@ -70,11 +84,19 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
     ),
 }
 
-
-class CheckStatus(StrEnum):
-    PASS = "PASS"
-    WAIT = "WAIT"
-    FAIL = "FAIL"
+# 發布排程的固定契約：與擷取排程一樣不受 --task 篩選。冷啟動期間刻意停用，首次訓練成功後才開啟，
+# 因此停用時回報 WAIT 而非 FAIL；未開啟的每一小時都不會留下已發布預報，且無法回補。
+# 名稱與 cron 刻意重述而不引用 pipelines/issued_forecast.py，才能檢出部署漂移；
+# 變更時須同步 pipelines/issued_forecast.py 與 docs/reference/dagster-schedules.md 第 6 項。
+ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
+    "issued_forecast_schedule": ExpectedSchedule(
+        "issued_forecast_job",
+        "15 * * * *",
+        TAIWAN_TZ,
+        status_when_stopped=CheckStatus.WAIT,
+        turn_on_after="the first successful training run",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -106,12 +128,13 @@ def run_smoke_check(deployment: Deployment, task_id: str | None = None) -> list[
         *check_schedule_configuration(deployment.defs, running, tasks),
         *check_load_consumer_boundaries(deployment.defs, tasks),
         *check_downstream_readiness(deployment, tasks),
+        *check_issued_forecast_ticks(deployment),
     ]
 
 
 def expected_schedules(tasks: Tasks | None = None) -> dict[str, ExpectedSchedule]:
-    """Ingestion schedules from docs/reference/dagster-schedules.md plus each checked task's two schedules."""
-    expected = dict(EXPECTED_SCHEDULES)
+    """Ingestion and issuing schedules from docs/reference/dagster-schedules.md plus each checked task's two schedules."""
+    expected = {**EXPECTED_SCHEDULES, **ISSUED_FORECAST_SCHEDULES}
     for task in (tasks or deployed_tasks()).values():
         names = TaskPipelineNames(task.task_id)
         expected[names.training_schedule] = ExpectedSchedule(
@@ -155,6 +178,11 @@ def check_downstream_readiness(
     ]
 
 
+def check_issued_forecast_ticks(deployment: Deployment) -> list[CheckResult]:
+    """What the next issuing tick does, for example skipping until the first trained model."""
+    return [_check_tick(deployment, name) for name in ISSUED_FORECAST_SCHEDULES]
+
+
 def running_schedule_names(instance: DagsterInstance) -> frozenset[str]:
     """Names of schedules the instance's daemon will tick."""
     states = instance.all_instigator_state(instigator_type=InstigatorType.SCHEDULE)
@@ -186,12 +214,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-ready",
         action="store_true",
-        help="Also fail while task training or monitoring readiness is still waiting.",
+        help="Also fail while any check is still waiting, including a stopped issuing schedule.",
     )
     parser.add_argument(
         "--task",
         choices=sorted(deployed_tasks()),
-        help="Check only this task, plus the shared ingestion schedules.",
+        help="Check only this task, plus the shared ingestion and issuing schedules.",
     )
     args = parser.parse_args(argv)
 
@@ -222,11 +250,10 @@ def _check_schedule(
     timezone = expected.execution_timezone or "UTC"
     summary = f"{expected.job_name} at '{expected.cron_schedule}' ({timezone})"
     if name not in running:
-        return CheckResult(
-            check_name,
-            CheckStatus.FAIL,
-            f"{summary} is registered but not running; turn it on in the Dagster UI",
-        )
+        detail = f"{summary} is registered but not running; turn it on in the Dagster UI"
+        if expected.turn_on_after is not None:
+            detail += f" after {expected.turn_on_after}"
+        return CheckResult(check_name, expected.status_when_stopped, detail)
     return CheckResult(check_name, CheckStatus.PASS, f"{summary}, running")
 
 

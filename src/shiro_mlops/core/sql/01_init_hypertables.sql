@@ -201,3 +201,30 @@ SELECT create_hypertable(
     if_not_exists => TRUE,
     migrate_data => TRUE
 );
+
+-- 6. 已發布預報（ADR-0013）：每個發布時刻一份 header 與其步數，同一 transaction 只新增、不更新。
+CREATE TABLE IF NOT EXISTS issued_forecast (
+    issued_at TIMESTAMPTZ NOT NULL,
+    load_anchor TIMESTAMPTZ NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    model_sha256 VARCHAR(64) NOT NULL,
+    mlflow_model_version VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (issued_at)
+);
+
+CREATE TABLE IF NOT EXISTS issued_forecast_step (
+    issued_at TIMESTAMPTZ NOT NULL,
+    target_hour TIMESTAMPTZ NOT NULL,
+    predicted_load_mw DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (issued_at, target_hour)
+);
+
+SELECT create_hypertable(
+    'issued_forecast_step',
+    'issued_at',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE,
+    migrate_data => TRUE
+);

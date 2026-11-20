@@ -16,7 +16,7 @@ help:
 	@echo "  make format        Format code with ruff"
 	@echo "  make compose-up    Start full local stack with built frontend preview"
 	@echo "  make compose-down  Stop full local stack"
-	@echo "  make smoke-check   Verify schedules and per-task training/monitoring readiness in the Dagster container"
+	@echo "  make smoke-check   Verify schedules, per-task readiness and forecast issuing in the Dagster container"
 	@echo "  make frontend-smoke Verify built SPA and same-origin API routing through Nginx"
 	@echo "  make frontend-smoke-ci Build the frontend image and run the CI Nginx smoke (FRONTEND_SMOKE_PORT=$(FRONTEND_SMOKE_PORT))"
 	@echo "  make clean         Clean temporary files and caches"

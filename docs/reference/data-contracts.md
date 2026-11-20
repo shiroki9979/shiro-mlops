@@ -131,6 +131,24 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
      - 功率與比率以來源單位保存：`capacity_mw`、`net_generation_mw`（可為 NULL，含 `N/A` 或 `-`）、`capacity_ratio_pct`（可為 NULL；來源百分比字串去除 `%` 後保存）、`remark`（可為 NULL；空白備註視為空值）。零發電（`0.0`）為合法數值並保留停機／歲修等備註。
      - `raw_payload` (JSONB, NOT NULL) 保存該次成功回應的完整 JSON，包含頂層 `DateTime` 與全部 `aaData` 機組列。
      - 永久保留歷史快照，不設定資料保留政策。
+  9. `issued_forecast`（已發布預報 header，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：
+     - 每個發布時刻一列，由 `issued_forecast_job`（[Dagster 排程](dagster-schedules.md)）寫入；隨需 `/predict` 不寫入。一般資料表，非 hypertable。
+     - `issued_at` (TIMESTAMPTZ, NOT NULL)：發布時刻，即排程 tick 時刻與預報的 `as_of`，不取整點（例如 `10:15`）。
+     - `load_anchor` (TIMESTAMPTZ, NOT NULL)：負載起點，即遞迴預報起算的最新實際負載小時。
+     - `status` (VARCHAR(16), NOT NULL)：運行狀態 `normal`／`degraded`，即預報當時的天氣解析模式（§3.3）。
+     - `model_sha256` (VARCHAR(64), NOT NULL)：模型版本識別，發布時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)），不依賴 MLflow。
+     - `mlflow_model_version` (VARCHAR(64))：MLflow 版本附註，可為 `NULL`；只作參考，模型版本以 `model_sha256` 為準。發布時從 Dagster instance 讀 `dynamic_horizon_forecast__model` 最新一次 materialization 的 metadata（[Dagster 排程](dagster-schedules.md)）：只有其 `model_sha256` 等於本次實際載入模型的雜湊時，才填入其 `mlflow_model_version`；雜湊不符（例如訓練恰在載入模型後完成）、缺少 metadata 或 MLflow 版本為空時為 `NULL`（寧缺勿錯）。不另呼叫 MLflow，附註的有無不影響是否發布。
+     - **Constraint**: `PRIMARY KEY (issued_at)`；只新增、沒有更新路徑。同一發布時刻已存在時以 `ON CONFLICT (issued_at) DO NOTHING` 略過，header 與步數皆不改動。
+     - 永久保留，不設定資料保留政策。
+  10. `issued_forecast_step`（已發布預報步數）：
+      - 與同一發布時刻的 header 於同一 transaction 寫入；header 已存在時不寫入任何步數。
+      - `issued_at` (TIMESTAMPTZ, NOT NULL)：所屬 header 的發布時刻。
+      - `target_hour` (TIMESTAMPTZ, NOT NULL)：目標小時，負載起點後第 1 至 168 小時。
+      - `predicted_load_mw` (DOUBLE PRECISION, NOT NULL)：預測負載（MW）。
+      - **Constraint**: `PRIMARY KEY (issued_at, target_hour)`。
+      - **Hypertable**: `create_hypertable('issued_forecast_step', 'issued_at')`，以發布時刻分區。
+      - 模型產出的步數原樣全存：不過濾目標小時不晚於發布時刻的步，也不保存天氣值與天氣來源。
+      - 永久保留，不設定資料保留政策。
 
 ### 3.1 CWA 既有資料遷移
 

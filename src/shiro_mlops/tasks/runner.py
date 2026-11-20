@@ -106,9 +106,10 @@ class Readiness:
 
 @dataclass(frozen=True)
 class PredictionOutcome:
-    """A task prediction with the weather it used and that weather's provenance."""
+    """A task prediction with its load anchor, the weather it used and that weather's provenance."""
 
     subject: str
+    load_anchor: pd.Timestamp
     mode: WeatherResolutionMode
     predictions: pd.DataFrame
     weather: pd.DataFrame
@@ -290,6 +291,7 @@ def predict_task(
     weather = request.weather_path.align(predictions, weather)
     return PredictionOutcome(
         subject=task.subject,
+        load_anchor=data.anchor,
         mode=weather.mode,
         predictions=predictions,
         weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],

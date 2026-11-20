@@ -78,7 +78,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 | `training_table(data)`／`training_data_from_table(task, table)` | 以目標序列與觀測天氣的時間軸聯集將 `TrainingData` 攤平序列化以便跨 run 保存（包含無負載但有觀測天氣的小時），並無損還原：`load` 只保留有 `load_mw` 的列、`weather` 只保留有任一氣象欄位值的列（完全沒有觀測天氣的小時仍為缺口而非 NaN 列），`validation_start` 由還原後的目標小時以相同切分規則重算 |
 | `monitor_task(task, runtime, metrics, *, as_of) -> MonitoringReport` | 未達門檻拋 `TaskNotReady`；以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新目標列，交由任務類型 `assess_health` 依 `[health]` 判定；結果含 `health`、`metrics`、`target_hours`、`latest_target_time`、`latest_target_value` |
 | `check_task_ready(task, model, runtime, *, as_of) -> Readiness` | 模型、負載起點、任務類型宣告的 `history_coverage` 與完整 168 小時天氣皆可用時 `ready`，並回報 `mode`；`OBSERVED` 任務只需 lookback 內有測站觀測，`mode` 固定 `normal` |
-| `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；資料庫錯誤（`SQLAlchemyError`）原樣拋出，不得轉為空資料而偽裝成資料缺口（API 同樣對應 503）；結果含 `mode`、預測、逐時天氣與其來源，三者逐列對應 |
+| `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；資料庫錯誤（`SQLAlchemyError`）原樣拋出，不得轉為空資料而偽裝成資料缺口（API 同樣對應 503）；結果含負載起點 `load_anchor`、`mode`、預測、逐時天氣與其來源，後三者逐列對應 |
 
 serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史。
 
@@ -86,7 +86,9 @@ serving 以 `fetch_latest_load(..., at_or_before=as_of)` 取得負載起點，�
 
 ## 4. 模型保存（`tasks/model_store.py`）
 
-- `save_model(root, task_id, model) -> Path`：模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗；僅程序於兩次 rename 之間中止時，任務於下次訓練成功前沒有模型，遺留的舊目錄 `.<task_id>.previous` 於下次保存（持排他鎖、安裝前）清除。每任務檔案鎖保護交換與讀取；交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
-- `load_model(root, task) -> TaskModel | None`：在同一把鎖下讀取 `root/<task_id>`，替換期間只會載入完整的前一版或新模型；目錄不存在時回傳 `None`（任務尚未訓練）；既有 `model.joblib` 不載入。
+- **模型版本識別**：`model_directory_sha256(directory) -> str` 為模型目錄檔案內容的 SHA-256（完整 64 字元小寫十六進位），不依賴 MLflow。目錄內所有檔案（含子目錄）依相對 POSIX 路徑排序，每個檔案依序餵入 UTF-8 相對路徑、一個 NUL 位元組、檔案大小（8 位元組 big-endian）與檔案內容；因此雜湊只取決於相對路徑與內容，不受檔案時間戳、列舉順序或目錄所在位置影響，改動任一檔案內容、新增或更名檔案則雜湊改變。訓練固定 seed，相同模型得到相同識別。
+- `save_model(root, task_id, model) -> SavedModel`：回傳 `SavedModel(directory, sha256)`，`sha256` 取自暫存目錄（即安裝的同一組檔案）。模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗；僅程序於兩次 rename 之間中止時，任務於下次訓練成功前沒有模型，遺留的舊目錄 `.<task_id>.previous` 於下次保存（持排他鎖、安裝前）清除。每任務檔案鎖保護交換與讀取；交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
+- `load_model_with_sha256(root, task) -> LoadedModel | None`：在同一把共享鎖下讀取 `root/<task_id>` 並計算該目錄雜湊，回傳 `LoadedModel(model, sha256)`；交換須等鎖釋放，故載入的模型與雜湊必屬同一目錄版本，不會是半新半舊的組合。目錄不存在時回傳 `None`（任務尚未訓練）；既有 `model.joblib` 不載入。
+- `load_model(root, task) -> TaskModel | None`：同上，只回傳模型；替換期間只會載入完整的前一版或新模型。
 - 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）；`direct_classification` 同為 `model.txt`（二元分類 Booster 文字格式）與 `metadata.json`（格式版本、任務類型、完整 `[params]`、`max_lead_hours`、特徵名稱、氣象欄位）；`unsupervised_reconstruction` 為 `model.npz`（`coef_{i}`、`intercept_{i}` 各層權重與偏差，`scaler_mean`、`scaler_scale` 標準化參數；以 `allow_pickle=False` 讀取）與 `metadata.json`（格式版本、任務類型、激活函數、層數、`window_hours`、氣象欄位、特徵名稱、`threshold`），推論以 numpy 前向計算，不重建 sklearn 物件。
 - `src/` 不得 import `pickle` 或 `joblib`，由測試強制。
