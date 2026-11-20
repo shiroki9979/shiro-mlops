@@ -2,7 +2,7 @@
 // Engineering Console trace in an otherwise clean bundle and expects the check to name it.
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { consoleOnlyDependencies, findBundleViolations } from './check-forecast-view-bundle.mjs'
+import { consoleOnlyDependencies, findBundleViolations } from '../../scripts/check_forecast_view_bundle.mjs'
 
 const CLEAN_FILES = [
   { path: 'index.html', text: '<script type="module" src="/assets/index-abc.js"></script>' },

@@ -72,7 +72,8 @@ jobs:
         run: pnpm run build
 
       - name: Check the Forecast View bundle carries no Engineering Console paths or dependencies
-        run: pnpm run check:bundle
+        working-directory: .
+        run: make frontend-bundle-check
 
   nginx:
     runs-on: ubuntu-latest

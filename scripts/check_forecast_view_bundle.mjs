@@ -1,12 +1,13 @@
 // Verifies the Forecast View build (the only frontend deployed to the cloud) carries no Engineering
 // Console trace (ADR-0014 §4): no console route paths in the built files, and no console source module
-// or console-only dependency among the bundled modules. Run after `pnpm build`; CI runs it in the
-// frontend job via `pnpm run check:bundle`.
+// or console-only dependency among the bundled modules. Run after the frontend build, via
+// `make frontend-bundle-check` locally and in the CI frontend job. Its negative controls live in
+// frontend/tooling/check-forecast-view-bundle.test.mjs.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const FRONTEND_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const FRONTEND_ROOT = join(dirname(dirname(fileURLToPath(import.meta.url))), 'frontend')
 const FORECAST_VIEW = join(FRONTEND_ROOT, 'apps/forecast-view')
 const DIST = join(FORECAST_VIEW, 'dist')
 // Written by the bundle-modules-report plugin in apps/forecast-view/vite.config.ts; keep the two in sync.
@@ -70,7 +71,7 @@ function builtFiles(dir) {
 
 function main() {
   if (!existsSync(DIST) || !existsSync(MODULES_REPORT)) {
-    console.error('Forecast View build output not found; run `pnpm build` first.')
+    console.error('Forecast View build output not found; run `make frontend-build` first.')
     return 1
   }
   const consoleOnly = consoleOnlyDependencies({

@@ -11,8 +11,8 @@ frontend/
 │   ├── forecast-view/          # 預報檢視：/、/history；雲端只部署這個應用
 │   └── engineering-console/    # 工程主控台：base path /console/，只在地端
 ├── packages/
-│   └── shared/                 # UI 元件、設計 token、i18n 機制與語系切換、格式函式、request()
-└── tooling/                    # workspace 邊界與 bundle 檢查（node --test）
+│   └── shared/                 # UI 元件、設計 token、i18n 機制與語系切換、格式函式、request()；testing/ 為測試輔助
+└── tooling/                    # Vite 共用 /api 代理、workspace 邊界與 bundle 檢查的測試（node --test）
 ```
 
 兩個應用都可依賴 `packages/shared`，彼此不得 import，`shared` 也不得 import 任何應用；ESLint 強制此規則。`shared` 的收錄標準見 ADR-0014 §2.3，語系與格式規則見 [前端語系與格式](../docs/reference/frontend-locale.md)。
@@ -60,8 +60,8 @@ pnpm run test
 # shared 型別檢查，再對兩個應用執行 TypeScript 型別檢查與生產打包
 pnpm run build
 
-# 確認預報檢視的建置產物不含工程主控台的路徑與專用相依（需先 build）
-pnpm run check:bundle
+# 確認預報檢視的建置產物不含工程主控台的路徑與專用相依（需先 build；腳本在 scripts/，CI 呼叫同一 Makefile target）
+make -C .. frontend-bundle-check
 
 # 程式碼風格、Lint 與 workspace 邊界檢查
 pnpm run lint

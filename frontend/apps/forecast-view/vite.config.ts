@@ -8,7 +8,7 @@ import { defineConfig } from 'vitest/config'
 import { apiDevProxy } from '../../tooling/vite-api-proxy'
 
 const FRONTEND_ROOT = resolve(__dirname, '../..')
-// Read by tooling/check-forecast-view-bundle.mjs; kept out of dist so it is never deployed.
+// Read by scripts/check_forecast_view_bundle.mjs; kept out of dist so it is never deployed.
 const BUNDLE_MODULES_REPORT = resolve(__dirname, 'node_modules/.cache/bundle-modules.json')
 
 // Records every module bundled into the cloud build, so CI can prove no Engineering Console code

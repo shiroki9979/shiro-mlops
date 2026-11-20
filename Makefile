@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint format clean compose-up compose-down smoke-check frontend-smoke frontend-smoke-ci dagster mlflow api frontend frontend-test frontend-build
+.PHONY: help install dev test lint format clean compose-up compose-down smoke-check frontend-smoke frontend-smoke-ci dagster mlflow api frontend frontend-test frontend-build frontend-bundle-check
 
 FRONTEND_SMOKE_IMAGE ?= shiro-frontend-smoke
 FRONTEND_SMOKE_PORT ?= 8080
@@ -9,6 +9,8 @@ help:
 	@echo "  make dev           Run FastAPI locally in development mode"
 	@echo "  make frontend      Run the Forecast View and Engineering Console Vite dev servers"
 	@echo "  make frontend-test Run frontend Vitest suites and workspace tooling tests"
+	@echo "  make frontend-build Type-check and build both frontend apps"
+	@echo "  make frontend-bundle-check Verify the built Forecast View carries no Engineering Console trace (after frontend-build)"
 	@echo "  make dagster       Run Dagster webserver locally"
 	@echo "  make mlflow        Run MLflow UI locally"
 	@echo "  make test          Run Python test suite with pytest"
@@ -35,6 +37,9 @@ frontend-test:
 
 frontend-build:
 	pnpm --dir frontend run build
+
+frontend-bundle-check:
+	node scripts/check_forecast_view_bundle.mjs
 
 dagster:
 	DAGSTER_HOME=.dagster_home uv run dagster dev -f src/shiro_mlops/pipelines/definitions.py
