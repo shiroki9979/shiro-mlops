@@ -12,7 +12,8 @@
         "build": "pnpm --filter @shiro-mlops/shared run typecheck && pnpm --filter './apps/*' run build",
         "lint": "eslint .",
         "test": "pnpm --recursive run test && pnpm run test:tooling",
-        "test:tooling": "node --test 'tooling/*.test.mjs'"
+        "test:tooling": "node --test 'tooling/*.test.mjs'",
+        "check:bundle": "node tooling/check-forecast-view-bundle.mjs"
     },
     "devDependencies": {
         "@eslint/js": "^9.20.0",

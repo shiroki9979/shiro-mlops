@@ -65,11 +65,14 @@ jobs:
       - name: Lint frontend
         run: pnpm run lint
 
-      - name: Run frontend tests
+      - name: Run frontend tests (each package and workspace tooling)
         run: pnpm run test
 
       - name: Build frontend
         run: pnpm run build
+
+      - name: Check the Forecast View bundle carries no Engineering Console paths or dependencies
+        run: pnpm run check:bundle
 
   nginx:
     runs-on: ubuntu-latest
@@ -82,7 +85,7 @@ jobs:
         with:
           version: "latest"
 
-      - name: Build image and smoke test SPA, API gateway, and upstream recreation
+      - name: Build image and smoke test both apps, API gateway, and upstream recreation
         run: make frontend-smoke-ci
 
   docs:
