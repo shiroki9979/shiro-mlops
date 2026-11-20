@@ -9,6 +9,7 @@ import argparse
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -20,15 +21,36 @@ REQUEST_TIMEOUT_SECONDS = 10
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 LOOPBACK_HOST = "127.0.0.1"
 REQUIRED_HOST_PORTS = (("frontend", "8080"), ("api", "8000"))
-FORECAST_VIEW_ROOT = "/"
-FORECAST_VIEW_ASSETS = "/assets/"
-FORECAST_VIEW_ROUTE = "/history"
-# A pre-split console URL: not redirected, so it falls through to the Forecast View like any unknown path.
-LEGACY_CONSOLE_ROUTE = "/monitoring"
-CONSOLE_ROOT = "/console/"
-CONSOLE_ASSETS = "/console/assets/"
-CONSOLE_NESTED_ROUTE = "/console/data/power/load"
+# The console's Vite `base` (CONSOLE_BASE_PATH in frontend/apps/engineering-console/vite.config.ts),
+# which frontend/nginx.conf and frontend/Dockerfile follow too; keep in sync.
+CONSOLE_BASE_PATH = "/console/"
 MISSING_ASSET_NAME = "definitely-missing-smoke-check.js"
+
+
+@dataclass(frozen=True)
+class App:
+    """One built app on the shared origin, as Nginx serves it."""
+
+    name: str
+    base_path: str
+    # Client-side routes that must fall back to this app's own index.html.
+    routes: tuple[str, ...]
+
+    @property
+    def assets_prefix(self) -> str:
+        return self.base_path + "assets/"
+
+
+APPS = (
+    App(
+        "Forecast View",
+        "/",
+        # /monitoring is a pre-split console URL: not redirected, so it falls through to the
+        # Forecast View like any unknown path.
+        ("/history", "/monitoring"),
+    ),
+    App("Engineering Console", CONSOLE_BASE_PATH, (CONSOLE_BASE_PATH + "data/power/load",)),
+)
 
 
 class AssetFinder(HTMLParser):
@@ -75,29 +97,35 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def check_spa(base_url: str) -> None:
-    forecast_view = check_app_index(base_url, FORECAST_VIEW_ROOT, "Forecast View")
-    check_route_serves(base_url, FORECAST_VIEW_ROUTE, forecast_view, "Forecast View")
-    check_route_serves(base_url, LEGACY_CONSOLE_ROUTE, forecast_view, "Forecast View")
-    check_built_asset(base_url, forecast_view, FORECAST_VIEW_ASSETS)
-    check_missing_asset(base_url, FORECAST_VIEW_ASSETS)
-
-    console = check_app_index(base_url, CONSOLE_ROOT, "Engineering Console")
-    require(console != forecast_view, f"{CONSOLE_ROOT} serves the Forecast View, not the console")
-    check_route_serves(base_url, CONSOLE_NESTED_ROUTE, console, "Engineering Console")
-    check_built_asset(base_url, console, CONSOLE_ASSETS)
-    check_missing_asset(base_url, CONSOLE_ASSETS)
+def check_apps(base_url: str) -> None:
+    served: list[str] = []
+    for app in APPS:
+        served.append(check_app(base_url, app, served))
 
 
-def check_app_index(base_url: str, path: str, app: str) -> str:
+def check_app(base_url: str, app: App, other_indexes: list[str]) -> str:
+    index = check_app_index(base_url, app)
+    require(
+        index not in other_indexes,
+        f"{app.name} root {app.base_path} serves another app's index.html",
+    )
+    for route in app.routes:
+        check_route_serves(base_url, route, index, app.name)
+    check_built_asset(base_url, index, app.assets_prefix)
+    check_missing_asset(base_url, app.assets_prefix)
+    return index
+
+
+def check_app_index(base_url: str, app: App) -> str:
+    path = app.base_path
     status, document, headers = fetch(base_url, path)
-    require(status == 200, f"{app} root {path} returned HTTP {status}")
-    require("text/html" in headers.get("Content-Type", ""), f"{app} root {path} is not HTML")
-    require('<div id="root"></div>' in document, f"{app} root document is missing at {path}")
+    require(status == 200, f"{app.name} root {path} returned HTTP {status}")
+    require("text/html" in headers.get("Content-Type", ""), f"{app.name} root {path} is not HTML")
+    require('<div id="root"></div>' in document, f"{app.name} root document is missing at {path}")
     cache_control = headers.get("Cache-Control", "")
     require(
         "no-cache" in cache_control or "no-store" in cache_control,
-        f"{app} index.html at {path} can be cached long-term",
+        f"{app.name} index.html at {path} can be cached long-term",
     )
     return document
 
@@ -197,7 +225,7 @@ def main() -> int:
     try:
         if args.check_compose_bindings:
             check_compose_bindings()
-        check_spa(args.base_url)
+        check_apps(args.base_url)
         check_api(args.base_url, args.expected_upstream_path)
         if args.direct_api_url:
             check_direct_api(args.direct_api_url)
