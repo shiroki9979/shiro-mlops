@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Smoke-test a built frontend image: Nginx config syntax, SPA and `/api` gateway through Nginx,
-# then recovery after the API container is recreated. Shared by CI and `make frontend-smoke-ci`;
-# the Makefile owns the default image name and host port.
+# Smoke-test a built frontend image: Nginx config syntax, SPA, `/published/` exports and `/api`
+# gateway through Nginx, then recovery after the API container is recreated. Shared by CI and
+# `make frontend-smoke-ci`; the Makefile owns the default image name and host port.
 #
 # Usage: scripts/ci_nginx_smoke.sh <image> <host-port>
 #   host-port  published on loopback only
@@ -22,6 +22,8 @@ readonly STUB_IMAGE="python:3.11-alpine"
 readonly API_ALIAS="api"
 # Must match `listen` in frontend/nginx.conf.
 readonly NGINX_PORT=80
+# Must match the `/published/` root in frontend/nginx.conf and the Compose frontend volume.
+readonly PUBLISHED_MOUNT=/usr/share/nginx/published
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 readonly RUN_ID="nginx-smoke-$$"
@@ -43,11 +45,13 @@ main() {
 
   echo "==> Starting stub API and gateway (${IMAGE} on ${BASE_URL})"
   start_stub_api "$API_FIRST"
+  # The fixtures stand in for the export's local directory that Compose mounts.
   docker run -d --name "$GATEWAY" --network "$NETWORK" \
-    -p "127.0.0.1:${HOST_PORT}:${NGINX_PORT}" "$IMAGE" >/dev/null
+    -p "127.0.0.1:${HOST_PORT}:${NGINX_PORT}" \
+    -v "${REPO_ROOT}/tests/fixtures/published:${PUBLISHED_MOUNT}:ro" "$IMAGE" >/dev/null
   wait_for_gateway
 
-  echo "==> Checking SPA and API gateway"
+  echo "==> Checking SPA, published exports and API gateway"
   # Same invocation as `make frontend-smoke`; keep the two in sync.
   uv run --no-project python "${REPO_ROOT}/scripts/smoke_nginx.py" \
     --base-url "$BASE_URL" --expected-upstream-path /health
