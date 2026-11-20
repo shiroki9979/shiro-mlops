@@ -6,7 +6,10 @@ import pytest
 
 from shiro_mlops.data.forecast_track_record import (
     TrackRecordPair,
+    TrackRecordWindow,
     compile_forecast_track_record,
+    count_headline_pairs,
+    track_record_window,
 )
 
 CUTOFF = datetime(2026, 11, 20, 10, 0)
@@ -28,6 +31,24 @@ def _one_pair_per_day(days: int) -> list[TrackRecordPair]:
         _pair(datetime(2026, 11, 20, 9, 0) - timedelta(days=offset), 1, 30000.0, 25000.0)
         for offset in range(days)
     ]
+
+
+def test_window_covers_the_720_target_hours_before_the_cutoff() -> None:
+    assert track_record_window(CUTOFF) == TrackRecordWindow(
+        start=datetime(2026, 10, 21, 10, 0), end=CUTOFF
+    )
+
+
+def test_headline_pairs_count_only_lead_24() -> None:
+    target = datetime(2026, 11, 20, 9, 0)
+    pairs = [
+        _pair(target, 24, 30000.0, 25000.0),
+        _pair(target - timedelta(hours=1), 24, 30000.0, 25000.0),
+        _pair(target, 23, 30000.0, 25000.0),
+        _pair(target, 25, 30000.0, 25000.0),
+    ]
+
+    assert count_headline_pairs(pairs) == 2
 
 
 def test_six_accumulated_days_publish_no_metrics() -> None:

@@ -27,14 +27,13 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     resolve_cwa_location,
 )
-from shiro_mlops.data.forecast_track_record import TrackRecordPair
+from shiro_mlops.data.forecast_track_record import TrackRecordPair, TrackRecordWindow
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
 )
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
-from shiro_mlops.data.repository_utils import utc_instant_to_taiwan
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -867,10 +866,8 @@ class TimeSeriesRepository:
         """Fetch the forecast issued at a Taiwan-local issue time."""
         return self.issued_forecast_repo.fetch(issued_at)
 
-    def fetch_track_record_pairs(
-        self, window_start: datetime, window_end: datetime
-    ) -> tuple[TrackRecordPair, ...]:
-        """Pair issued steps targeting ``[window_start, window_end)`` with valid hourly observations.
+    def fetch_track_record_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
+        """Pair issued steps targeting the window with valid hourly observations.
 
         Only steps whose target hour is after their issue time count, and only
         target hours with a nationwide ``regional_snapshot_sum`` load row. Both
@@ -879,38 +876,33 @@ class TimeSeriesRepository:
         """
         # 兩表在 SQLite 以不同字串形式保存 UTC（負載帶 +00:00、已發布預報不帶），
         # SQL join 只在 TimescaleDB 成立，因此各自有界讀取後以台灣本地小時配對。
-        steps = self.issued_forecast_repo.fetch_steps_after_issue(window_start, window_end)
-        actual_load = self._valid_hourly_load(window_start, window_end)
+        issued_steps = self.issued_forecast_repo.fetch_steps_after_issue(window)
+        actual_load = self._valid_hourly_load(window)
         return tuple(
             TrackRecordPair(
-                issued_at=issued_at,
-                target_hour=step.target_hour,
-                predicted_load_mw=step.predicted_load_mw,
-                actual_load_mw=actual_load[step.target_hour],
+                issued_at=issued.issued_at,
+                target_hour=issued.step.target_hour,
+                predicted_load_mw=issued.step.predicted_load_mw,
+                actual_load_mw=actual_load[issued.step.target_hour],
             )
-            for issued_at, step in steps
-            if step.target_hour in actual_load
+            for issued in issued_steps
+            if issued.step.target_hour in actual_load
         )
 
-    def _valid_hourly_load(self, start: datetime, end: datetime) -> dict[datetime, float]:
-        """Nationwide derived load in ``[start, end)`` keyed by Taiwan-local hour."""
-        query = text(
-            """
-            SELECT time, load_mw
-            FROM raw_taipower_load
-            WHERE subject = :subject AND source = :source
-              AND time >= :start AND time < :end
-            """
+    def _valid_hourly_load(self, window: TrackRecordWindow) -> dict[datetime, float]:
+        """Nationwide derived load in the window keyed by Taiwan-local hour."""
+        frame = self.fetch_load_range(
+            window.start,
+            window.end,
+            subject=NATIONWIDE_SUBJECT,
+            source=REGIONAL_SNAPSHOT_SUM_SOURCE,
         )
-        params = {
-            "subject": NATIONWIDE_SUBJECT,
-            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
-            "start": _taiwan_instant_to_utc(start),
-            "end": _taiwan_instant_to_utc(end),
+        # fetch_load_range 的終點含端點；窗為半開，排除恰在窗終點的那一小時。
+        in_window = frame[frame["time"] < window.end]
+        return {
+            hour.to_pydatetime(): float(load_mw)
+            for hour, load_mw in zip(in_window["time"], in_window["load_mw"], strict=True)
         }
-        with self.engine.connect() as conn:
-            rows = conn.execute(query, params).all()
-        return {utc_instant_to_taiwan(row.time): float(row.load_mw) for row in rows}
 
 
 __all__ = [

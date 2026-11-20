@@ -26,6 +26,14 @@ class IssuedForecastStep:
 
 
 @dataclass(frozen=True)
+class IssuedStep:
+    """One step together with the issue time of the forecast it belongs to."""
+
+    issued_at: datetime
+    step: IssuedForecastStep
+
+
+@dataclass(frozen=True)
 class IssuedForecast:
     """One issue time's forecast and the model version that produced it.
 

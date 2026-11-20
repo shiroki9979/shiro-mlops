@@ -16,10 +16,18 @@ from datetime import datetime, timedelta
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 
 TRACK_RECORD_WINDOW = timedelta(hours=720)
-MIN_ACCUMULATED_DAYS = 7
+TRACK_RECORD_MIN_DAYS = 7
 CURVE_LEAD_TIMES = range(1, MAX_HORIZON_HOURS + 1)
 HEADLINE_LEAD_TIME_HOURS = 24
 _ONE_HOUR = timedelta(hours=1)
+
+
+@dataclass(frozen=True)
+class TrackRecordWindow:
+    """The target hours ``[start, end)`` one compilation covers."""
+
+    start: datetime
+    end: datetime
 
 
 @dataclass(frozen=True)
@@ -79,7 +87,7 @@ class ForecastTrackRecord:
 
     ``accumulated_days`` counts the distinct Taiwan dates of target hours with
     at least one pair in the window, so it never exceeds 31. Below
-    ``MIN_ACCUMULATED_DAYS`` the record carries no ``metrics`` at all.
+    ``TRACK_RECORD_MIN_DAYS`` the record carries no ``metrics`` at all.
     """
 
     cutoff: datetime
@@ -92,9 +100,9 @@ def track_record_cutoff(moment: datetime) -> datetime:
     return moment.replace(minute=0, second=0, microsecond=0)
 
 
-def track_record_window(cutoff: datetime) -> tuple[datetime, datetime]:
-    """Target hours ``[start, end)`` the track record covers: the 720 hours before the cutoff."""
-    return cutoff - TRACK_RECORD_WINDOW, cutoff
+def track_record_window(cutoff: datetime) -> TrackRecordWindow:
+    """The 720 target hours before the cutoff."""
+    return TrackRecordWindow(start=cutoff - TRACK_RECORD_WINDOW, end=cutoff)
 
 
 def compile_forecast_track_record(
@@ -103,8 +111,13 @@ def compile_forecast_track_record(
     """Summarize the pairs fetched for ``track_record_window(cutoff)``."""
     pairs = tuple(pairs)
     accumulated_days = len({pair.target_hour.date() for pair in pairs})
-    metrics = _metrics(pairs) if accumulated_days >= MIN_ACCUMULATED_DAYS else None
+    metrics = _metrics(pairs) if accumulated_days >= TRACK_RECORD_MIN_DAYS else None
     return ForecastTrackRecord(cutoff=cutoff, accumulated_days=accumulated_days, metrics=metrics)
+
+
+def count_headline_pairs(pairs: Iterable[TrackRecordPair]) -> int:
+    """How many pairs sit at the headline lead time 24."""
+    return sum(pair.lead_time_hours == HEADLINE_LEAD_TIME_HOURS for pair in pairs)
 
 
 def _metrics(pairs: Sequence[TrackRecordPair]) -> TrackRecordMetrics:

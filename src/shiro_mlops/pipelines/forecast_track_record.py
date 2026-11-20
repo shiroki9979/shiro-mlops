@@ -30,9 +30,9 @@ from dagster import (
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
 from shiro_mlops.data.forecast_track_record import (
-    HEADLINE_LEAD_TIME_HOURS,
     ForecastTrackRecord,
     compile_forecast_track_record,
+    count_headline_pairs,
     track_record_cutoff,
     track_record_window,
 )
@@ -68,7 +68,7 @@ def forecast_track_record(
     """Recompile from scratch; with no issued forecast yet, the record has 0 accumulated days."""
     cutoff = track_record_cutoff(_run_time(config))
     repository = getattr(context.resources, TIME_SERIES_REPO)
-    pairs = repository.fetch_track_record_pairs(*track_record_window(cutoff))
+    pairs = repository.fetch_track_record_pairs(track_record_window(cutoff))
     record = compile_forecast_track_record(cutoff, pairs)
     return Output(
         record,
@@ -76,9 +76,7 @@ def forecast_track_record(
             "cutoff": MetadataValue.text(record.cutoff.isoformat()),
             "accumulated_days": MetadataValue.int(record.accumulated_days),
             "window_pairs": MetadataValue.int(len(pairs)),
-            "lead_24_pairs": MetadataValue.int(
-                sum(pair.lead_time_hours == HEADLINE_LEAD_TIME_HOURS for pair in pairs)
-            ),
+            "lead_24_pairs": MetadataValue.int(count_headline_pairs(pairs)),
         },
     )
 

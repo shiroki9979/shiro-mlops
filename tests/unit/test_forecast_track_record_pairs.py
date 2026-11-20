@@ -5,12 +5,14 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 
+from shiro_mlops.data.forecast_track_record import TrackRecordWindow
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 from shiro_mlops.data.repository import TimeSeriesRepository
 
 WINDOW_START = datetime(2026, 11, 18, 0, 0)
 WINDOW_END = datetime(2026, 11, 21, 0, 0)
+WINDOW = TrackRecordWindow(start=WINDOW_START, end=WINDOW_END)
 
 
 def _issue(
@@ -54,7 +56,7 @@ def _observe(
 def _pairs(repo: TimeSeriesRepository) -> list[tuple[datetime, datetime, int]]:
     return [
         (pair.issued_at, pair.target_hour, pair.lead_time_hours)
-        for pair in repo.fetch_track_record_pairs(WINDOW_START, WINDOW_END)
+        for pair in repo.fetch_track_record_pairs(WINDOW)
     ]
 
 
@@ -102,9 +104,7 @@ def test_target_hour_without_a_valid_hourly_observation_is_not_paired(
     _observe(test_repo, [observed])
     observe_other(test_repo, unobserved)
 
-    assert [
-        pair.target_hour for pair in test_repo.fetch_track_record_pairs(WINDOW_START, WINDOW_END)
-    ] == [observed]
+    assert [pair.target_hour for pair in test_repo.fetch_track_record_pairs(WINDOW)] == [observed]
 
 
 def test_degraded_forecast_pairs_like_a_normal_one(test_repo: TimeSeriesRepository) -> None:
@@ -113,7 +113,7 @@ def test_degraded_forecast_pairs_like_a_normal_one(test_repo: TimeSeriesReposito
     _issue(test_repo, datetime(2026, 11, 19, 11, 15), [target], status="normal")
     _observe(test_repo, [target])
 
-    pairs = test_repo.fetch_track_record_pairs(WINDOW_START, WINDOW_END)
+    pairs = test_repo.fetch_track_record_pairs(WINDOW)
 
     assert [
         (pair.lead_time_hours, pair.predicted_load_mw, pair.actual_load_mw) for pair in pairs

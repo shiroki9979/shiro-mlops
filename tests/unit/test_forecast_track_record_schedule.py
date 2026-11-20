@@ -3,7 +3,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dagster import build_schedule_context, materialize
+from dagster import DefaultScheduleStatus, build_schedule_context, materialize
 
 from shiro_mlops.core.io_managers import get_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -39,6 +39,13 @@ def test_schedule_compiles_at_twenty_five_past_every_taiwan_hour() -> None:
     assert schedule.cron_schedule == "25 * * * *"
     assert schedule.execution_timezone == "Asia/Taipei"
     assert schedule.job_name == "forecast_track_record_job"
+
+
+def test_schedule_is_off_until_an_operator_turns_it_on() -> None:
+    """Like every schedule here, compiling starts only once the deployment enables it."""
+    schedule = defs.resolve_schedule_def("forecast_track_record_schedule")
+
+    assert schedule.default_status == DefaultScheduleStatus.STOPPED
 
 
 def test_schedule_tick_becomes_the_taiwan_local_run_time() -> None:

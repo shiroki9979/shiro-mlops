@@ -8,7 +8,8 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
-from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
+from shiro_mlops.data.forecast_track_record import TrackRecordWindow
+from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep, IssuedStep
 from shiro_mlops.data.repository_utils import taiwan_instant_to_utc, utc_instant_to_taiwan
 
 logger = logging.getLogger(__name__)
@@ -46,16 +47,16 @@ _SELECT_STEPS = text(
 )
 
 # 步數最遠落在負載起點後 168 小時，而負載起點早於發布時刻，
-# 所以目標小時不早於 target_from 的步數，其發布時刻必晚於 target_from − 168h。
+# 所以目標小時不早於窗起點的步數，其發布時刻必晚於窗起點 − 168h。
 # 以此限定 hypertable 的分區欄位，查詢不必掃過整段歷史。
 _SELECT_STEPS_AFTER_ISSUE = text(
     """
     SELECT issued_at, target_hour, predicted_load_mw
     FROM issued_forecast_step
     WHERE issued_at > :earliest_issued_at
-      AND issued_at < :target_until
-      AND target_hour >= :target_from
-      AND target_hour < :target_until
+      AND issued_at < :window_end
+      AND target_hour >= :window_start
+      AND target_hour < :window_end
       AND target_hour > issued_at
     ORDER BY target_hour, issued_at
     """
@@ -130,25 +131,23 @@ class IssuedForecastRepository:
             ),
         )
 
-    def fetch_steps_after_issue(
-        self, target_from: datetime, target_until: datetime
-    ) -> tuple[tuple[datetime, IssuedForecastStep], ...]:
-        """Steps targeting ``[target_from, target_until)`` whose target hour is after their issue time.
+    def fetch_steps_after_issue(self, window: TrackRecordWindow) -> tuple[IssuedStep, ...]:
+        """Steps targeting the window whose target hour is after their issue time.
 
         Each step comes with its Taiwan-local issue time, ordered by target hour
         then issue time.
         """
         params = {
-            "earliest_issued_at": taiwan_instant_to_utc(target_from - _HORIZON),
-            "target_from": taiwan_instant_to_utc(target_from),
-            "target_until": taiwan_instant_to_utc(target_until),
+            "earliest_issued_at": taiwan_instant_to_utc(window.start - _HORIZON),
+            "window_start": taiwan_instant_to_utc(window.start),
+            "window_end": taiwan_instant_to_utc(window.end),
         }
         with self.engine.connect() as conn:
             rows = conn.execute(_SELECT_STEPS_AFTER_ISSUE, params).mappings().all()
         return tuple(
-            (
-                utc_instant_to_taiwan(row["issued_at"]),
-                IssuedForecastStep(
+            IssuedStep(
+                issued_at=utc_instant_to_taiwan(row["issued_at"]),
+                step=IssuedForecastStep(
                     target_hour=utc_instant_to_taiwan(row["target_hour"]),
                     predicted_load_mw=float(row["predicted_load_mw"]),
                 ),
