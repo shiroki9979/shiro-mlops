@@ -8,8 +8,9 @@ TimescaleDB connection are the deployed ones::
 Exit status is 1 when any check fails, or when ``--require-ready`` is given and a
 check is still waiting (for example during the cold-start accumulation, or while
 ``issued_forecast_schedule`` stays off until the first successful training run).
-``--task`` keeps the shared ingestion and issuing checks and limits task checks to one
-task, so a task whose threshold is met can be accepted while another still accumulates.
+``--task`` keeps the shared ingestion, issuing and track record checks and limits task
+checks to one task, so a task whose threshold is met can be accepted while another
+still accumulates.
 The check only evaluates schedule functions; it never launches a run.
 """
 
@@ -99,6 +100,17 @@ ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
 }
 
 
+# 預報實績排程的固定契約：與擷取排程一樣不受 --task 篩選，停用時也回報 FAIL。
+# 彙整不依賴模型，尚無已發布預報時照常產出 0 天，因此冷啟動時就與擷取排程一起開啟。
+# 名稱與 cron 刻意重述而不引用 pipelines/forecast_track_record.py，才能檢出部署漂移；
+# 變更時須同步 pipelines/forecast_track_record.py 與 docs/reference/dagster-schedules.md 第 7 項。
+FORECAST_TRACK_RECORD_SCHEDULES: dict[str, ExpectedSchedule] = {
+    "forecast_track_record_schedule": ExpectedSchedule(
+        "forecast_track_record_job", "25 * * * *", TAIWAN_TZ
+    ),
+}
+
+
 @dataclass(frozen=True)
 class CheckResult:
     name: str
@@ -133,8 +145,12 @@ def run_smoke_check(deployment: Deployment, task_id: str | None = None) -> list[
 
 
 def expected_schedules(tasks: Tasks | None = None) -> dict[str, ExpectedSchedule]:
-    """Ingestion and issuing schedules from docs/reference/dagster-schedules.md plus each checked task's two schedules."""
-    expected = {**EXPECTED_SCHEDULES, **ISSUED_FORECAST_SCHEDULES}
+    """Ingestion, issuing and track record schedules from docs/reference/dagster-schedules.md plus each checked task's two schedules."""
+    expected = {
+        **EXPECTED_SCHEDULES,
+        **ISSUED_FORECAST_SCHEDULES,
+        **FORECAST_TRACK_RECORD_SCHEDULES,
+    }
     for task in (tasks or deployed_tasks()).values():
         names = TaskPipelineNames(task.task_id)
         expected[names.training_schedule] = ExpectedSchedule(
@@ -219,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--task",
         choices=sorted(deployed_tasks()),
-        help="Check only this task, plus the shared ingestion and issuing schedules.",
+        help="Check only this task, plus the shared ingestion, issuing and track record schedules.",
     )
     args = parser.parse_args(argv)
 

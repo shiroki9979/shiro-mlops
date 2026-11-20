@@ -10,7 +10,11 @@ from shiro_mlops.core.io_managers import (
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets
-from shiro_mlops.pipelines.forecast_track_record import forecast_track_record
+from shiro_mlops.pipelines.forecast_track_record import (
+    forecast_track_record,
+    forecast_track_record_job,
+    forecast_track_record_schedule,
+)
 from shiro_mlops.pipelines.issued_forecast import (
     issued_forecast,
     issued_forecast_job,
@@ -62,6 +66,7 @@ defs = Definitions(
         cwa_observation_schedule,
         cwa_forecast_schedule,
         issued_forecast_schedule,
+        forecast_track_record_schedule,
     ],
     jobs=[
         *(job for pipeline in task_pipelines for job in pipeline.jobs),
@@ -70,6 +75,7 @@ defs = Definitions(
         cwa_observation_job,
         cwa_forecast_job,
         issued_forecast_job,
+        forecast_track_record_job,
     ],
     resources={
         "io_manager": io_manager,
