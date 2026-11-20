@@ -13,6 +13,11 @@ from upath import UPath
 _PARQUET_MAGIC = b"PAR1"
 _JSON_ARTIFACT_HEADER = b"SHIRO-JSON-V1\n"
 
+# AssetIn metadata key: set to True and the input loads as None while its upstream asset has
+# never materialized, instead of failing on the missing artifact. A materialized asset whose
+# artifact is gone still fails, so lost data is never mistaken for a fresh instance.
+NONE_BEFORE_FIRST_MATERIALIZATION = "none_before_first_materialization"
+
 
 def _json_default(obj: Any) -> Any:
     """Convert domain objects to JSON values supported by Dagster artifacts."""
@@ -29,6 +34,16 @@ def _json_default(obj: Any) -> Any:
 
 class ParquetIOManager(UPathIOManager):
     """IO Manager for Parquet DataFrames and JSON-compatible Dagster artifacts."""
+
+    def load_input(self, context: InputContext) -> Any:
+        """Honour ``NONE_BEFORE_FIRST_MATERIALIZATION`` before the usual load."""
+        if (
+            context.definition_metadata.get(NONE_BEFORE_FIRST_MATERIALIZATION)
+            and context.has_asset_key
+            and context.instance.get_latest_materialization_event(context.asset_key) is None
+        ):
+            return None
+        return super().load_input(context)
 
     def dump_to_path(self, context: OutputContext, obj: Any, path: UPath) -> None:
         """Serialize DataFrame to Parquet format, with fallback for arbitrary Python objects."""

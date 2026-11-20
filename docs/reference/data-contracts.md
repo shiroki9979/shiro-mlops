@@ -286,4 +286,5 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 - `cutoff`：統計截至時刻；`accumulated_days`：累積天數；`metrics`：未滿 7 天時為 `null`。各欄位的計算規則見 §5.1，數值原樣輸出、不另行四捨五入。
 - 還沒有已發布預報時為 `{"cutoff": "<統計截至時刻>", "accumulated_days": 0, "metrics": null}`。
+- `forecast_track_record` 從未 materialize 過時（全新環境）同為此空狀態，`cutoff` 取匯出執行當下的整點，即該時刻彙整在首次發布前會得到的結果。
 - 窗內配對數與提前 24 配對數不輸出（只在 §5.1 的 materialization metadata）。

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from botocore.stub import Stubber
+from botocore.stub import ANY, Stubber
 from dagster import materialize
 
 from shiro_mlops.core.config import Settings
@@ -217,6 +217,50 @@ def test_before_the_first_issue_both_documents_are_empty_states(
 
     assert result.success
     assert _published(tmp_path, LATEST_ISSUED_FORECAST_FILE) == {"issued_at": None, "steps": []}
+    assert _published(tmp_path, FORECAST_TRACK_RECORD_FILE) == {
+        "cutoff": "2026-11-20T10:00:00+08:00",
+        "accumulated_days": 0,
+        "metrics": None,
+    }
+
+
+def test_before_the_track_record_first_compiles_the_export_still_publishes_the_forecast(
+    test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, mocker
+) -> None:
+    """A fresh instance whose track record has never materialized still uploads the forecast.
+
+    The track record file is the not-yet-accumulated state, cut off at the export's hour.
+    """
+    mocker.patch(
+        "shiro_mlops.pipelines.forecast_view_export.taiwan_now",
+        return_value=pd.Timestamp("2026-11-20T10:35:12"),
+    )
+    test_repo.insert_issued_forecast(_issued_forecast())
+    publisher, stubber = _stubbed_s3_publisher(tmp_path)
+    for name in (LATEST_ISSUED_FORECAST_FILE, FORECAST_TRACK_RECORD_FILE):
+        stubber.add_response(
+            "put_object",
+            {},
+            {"Bucket": BUCKET, "Key": f"published/{name}", "Body": ANY, "ContentType": ANY},
+        )
+
+    with stubber:
+        result = materialize(
+            [forecast_track_record, forecast_view_export],
+            selection=[FORECAST_VIEW_EXPORT_ASSET],
+            resources={
+                "time_series_repo": test_repo,
+                "io_manager": get_parquet_io_manager(data_dir=tmp_path),
+                "forecast_view_publisher": publisher,
+            },
+            instance=dagster_instance,
+        )
+
+    assert result.success
+    stubber.assert_no_pending_responses()
+    assert _published(tmp_path, LATEST_ISSUED_FORECAST_FILE)["issued_at"] == (
+        "2026-11-20T10:15:00+08:00"
+    )
     assert _published(tmp_path, FORECAST_TRACK_RECORD_FILE) == {
         "cutoff": "2026-11-20T10:00:00+08:00",
         "accumulated_days": 0,

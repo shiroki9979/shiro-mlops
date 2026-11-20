@@ -9,7 +9,10 @@ are all safe.
 The track record arrives as this asset's input, read from the latest
 ``forecast_track_record`` artifact; the latest issued forecast is read from the
 database. Its job selects only this asset, so a failed or skipped compilation
-still lets the newest issued forecast reach the page.
+still lets the newest issued forecast reach the page. Before the track record
+first materializes (a fresh instance), the input is ``None`` and the export
+publishes the track record's not-yet-accumulated state, cut off at the export's
+own hour: the same document the track record compiles before the first issue.
 """
 
 from dagster import (
@@ -27,8 +30,10 @@ from dagster import (
     schedule,
 )
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
 from shiro_mlops.core.forecast_view_publisher import ForecastViewPublisher
+from shiro_mlops.core.io_managers import NONE_BEFORE_FIRST_MATERIALIZATION
+from shiro_mlops.data.forecast_track_record import track_record_cutoff
 from shiro_mlops.data.forecast_view import (
     FORECAST_TRACK_RECORD_FILE,
     LATEST_ISSUED_FORECAST_FILE,
@@ -56,15 +61,24 @@ FORECAST_VIEW_EXPORT_RETRY_POLICY = RetryPolicy(max_retries=2, delay=60)
     group_name=FORECAST_VIEW_EXPORT_ASSET,
     description="Export the latest issued forecast and the forecast track record as public JSON",
     required_resource_keys={TIME_SERIES_REPO, FORECAST_VIEW_PUBLISHER},
-    ins={"track_record": AssetIn(key=FORECAST_TRACK_RECORD_ASSET)},
+    ins={
+        "track_record": AssetIn(
+            key=FORECAST_TRACK_RECORD_ASSET,
+            metadata={NONE_BEFORE_FIRST_MATERIALIZATION: True},
+        )
+    },
     deps=[AssetKey(ISSUED_FORECAST_ASSET)],
 )
-def forecast_view_export(context: AssetExecutionContext, track_record: dict) -> MaterializeResult:
-    """Before the first issue, the forecast document is empty and the export still succeeds."""
+def forecast_view_export(
+    context: AssetExecutionContext, track_record: dict | None
+) -> MaterializeResult:
+    """Before the first issue or the first compilation, the export still writes both files."""
     repository = getattr(context.resources, TIME_SERIES_REPO)
     publisher: ForecastViewPublisher = getattr(context.resources, FORECAST_VIEW_PUBLISHER)
     forecast = latest_issued_forecast_document(repository.fetch_latest_issued_forecast())
-    record = forecast_track_record_document(track_record)
+    record = forecast_track_record_document(
+        _uncompiled_track_record() if track_record is None else track_record
+    )
     publisher.publish(
         {
             LATEST_ISSUED_FORECAST_FILE: encode_document(forecast),
@@ -81,6 +95,12 @@ def forecast_view_export(context: AssetExecutionContext, track_record: dict) -> 
             "uploaded_to_s3": MetadataValue.bool(publisher.uploads_to_s3),
         }
     )
+
+
+def _uncompiled_track_record() -> dict:
+    """Zero accumulated days, cut off at the export's hour, as before the first issue."""
+    cutoff = track_record_cutoff(taiwan_now().to_pydatetime())
+    return {"cutoff": cutoff, "accumulated_days": 0, "metrics": None}
 
 
 forecast_view_export_job = define_asset_job(

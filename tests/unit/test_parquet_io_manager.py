@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from dagster import AssetKey, build_input_context, build_output_context
+from dagster import AssetKey, DagsterInstance, build_input_context, build_output_context
 from pyarrow.lib import ArrowInvalid
 
-from shiro_mlops.core.io_managers import get_parquet_io_manager
+from shiro_mlops.core.io_managers import NONE_BEFORE_FIRST_MATERIALIZATION, get_parquet_io_manager
 
 
 def test_parquet_io_manager_roundtrip_dataframe_and_json_objects(
@@ -99,3 +99,23 @@ def test_parquet_io_manager_rejects_legacy_pickle_artifact(tmp_path: Path) -> No
     context = build_input_context(asset_key=AssetKey(["legacy"]))
     with pytest.raises(ValueError, match="legacy pickle"):
         manager.load_input(context)
+
+
+def test_an_opted_in_input_loads_as_none_before_its_asset_first_materializes(
+    tmp_path: Path,
+) -> None:
+    """Only an input that opts in; every other input of a never-materialized asset still fails."""
+    manager = get_parquet_io_manager(data_dir=tmp_path)
+    instance = DagsterInstance.ephemeral()
+
+    opted_in = build_input_context(
+        asset_key=AssetKey(["never_materialized"]),
+        definition_metadata={NONE_BEFORE_FIRST_MATERIALIZATION: True},
+        instance=instance,
+    )
+    assert manager.load_input(opted_in) is None
+
+    with pytest.raises(FileNotFoundError):
+        manager.load_input(
+            build_input_context(asset_key=AssetKey(["never_materialized"]), instance=instance)
+        )
