@@ -82,6 +82,11 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
+    volumes:
+      # 預報檢視匯出寫入 Dagster 的 DATA_DIR/published（主機的 data/published），Nginx 以 /published/ 提供。
+      # 掛載整個目錄而非單檔：匯出以 rename 原子替換檔案，單檔 bind mount 會一直指向舊檔。
+      # 容器內路徑須與 frontend/nginx.conf 的 /published/ root 一致。
+      - ../data/published:/usr/share/nginx/published:ro
 
   dagster-webserver:
     build:
@@ -99,6 +104,10 @@ services:
       DATA_DIR: /workspace/data
       CWA_API_KEY: ${CWA_API_KEY:-}
       CWA_LOCATION_ALLOWLIST: ${CWA_LOCATION_ALLOWLIST:-}
+      # 預報檢視匯出的 S3 上傳；bucket 留空時只寫地端目錄（ADR-0015 §2.3）。
+      FORECAST_VIEW_S3_BUCKET: ${FORECAST_VIEW_S3_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       REDIS_HOST: redis
       MLFLOW_TRACKING_URI: http://mlflow:5000
       TIMESCALE_HOST: postgres

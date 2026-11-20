@@ -3,6 +3,7 @@
 from dagster import Definitions, load_assets_from_modules, resource
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.forecast_view_publisher import ForecastViewPublisher
 from shiro_mlops.core.io_managers import get_feast_parquet_io_manager, get_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets
@@ -10,6 +11,12 @@ from shiro_mlops.pipelines.forecast_track_record import (
     forecast_track_record,
     forecast_track_record_job,
     forecast_track_record_schedule,
+)
+from shiro_mlops.pipelines.forecast_view_export import (
+    FORECAST_VIEW_PUBLISHER,
+    forecast_view_export,
+    forecast_view_export_job,
+    forecast_view_export_schedule,
 )
 from shiro_mlops.pipelines.issued_forecast import (
     issued_forecast,
@@ -37,6 +44,7 @@ all_assets = [
     *(asset for pipeline in task_pipelines for asset in pipeline.assets),
     issued_forecast,
     forecast_track_record,
+    forecast_view_export,
 ]
 
 io_manager = get_parquet_io_manager(data_dir=settings.DATA_DIR)
@@ -49,6 +57,12 @@ def time_series_repo_resource(_context):
     return TimeSeriesRepository()
 
 
+@resource
+def forecast_view_publisher_resource(_context):
+    """Build the S3 client, if any, when a run needs it, not while loading definitions."""
+    return ForecastViewPublisher.from_settings(settings)
+
+
 defs = Definitions(
     assets=all_assets,
     schedules=[
@@ -59,6 +73,7 @@ defs = Definitions(
         cwa_forecast_schedule,
         issued_forecast_schedule,
         forecast_track_record_schedule,
+        forecast_view_export_schedule,
     ],
     jobs=[
         *(job for pipeline in task_pipelines for job in pipeline.jobs),
@@ -68,10 +83,12 @@ defs = Definitions(
         cwa_forecast_job,
         issued_forecast_job,
         forecast_track_record_job,
+        forecast_view_export_job,
     ],
     resources={
         "io_manager": io_manager,
         "feast_io_manager": feast_io_manager,
         "time_series_repo": time_series_repo_resource,
+        FORECAST_VIEW_PUBLISHER: forecast_view_publisher_resource,
     },
 )
