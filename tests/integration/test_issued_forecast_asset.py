@@ -201,6 +201,28 @@ def test_forecast_the_runner_cannot_produce_fails_the_issue_and_records_nothing(
     assert issuing_repo.fetch_issued_forecast(issued_at) is None
 
 
+@pytest.mark.parametrize(
+    "lineage_tags",
+    [
+        pytest.param(
+            {"dagster/parent_run_id": "failed-run", "dagster/root_run_id": "failed-run"},
+            id="ui-re-execution",
+        ),
+        pytest.param({"dagster/parent_run_id": "failed-run"}, id="parent-only"),
+        pytest.param({"dagster/root_run_id": "failed-run"}, id="root-only"),
+    ],
+)
+def test_re_executed_scheduled_run_fails_and_issues_nothing(
+    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel, lineage_tags: dict
+) -> None:
+    """Re-execution copies the tick's tags and issue time, yet would read load stored after it."""
+    result = _issue(repo, dagster_instance, extra_tags=lineage_tags)
+
+    assert not result.success
+    assert "re-execut" in _failure_description(result)
+    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+
+
 def test_issuing_never_calls_mlflow_and_reads_the_note_from_the_materialization(
     repo: TimeSeriesRepository,
     dagster_instance,

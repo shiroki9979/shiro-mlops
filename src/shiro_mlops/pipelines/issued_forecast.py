@@ -62,6 +62,8 @@ ISSUED_FORECAST_TASK = DYNAMIC_HORIZON_FORECAST
 _MODEL_ASSET = TaskPipelineNames(ISSUED_FORECAST_TASK).model
 # Dagster 對排程 tick 產生的每個 run 加上此標籤（`DagsterRun.tags_for_schedule`）。
 SCHEDULE_NAME_TAG = "dagster/schedule_name"
+# 重新執行的 run（`DagsterInstance.create_reexecuted_run`）帶這兩個標籤，並沿用原 run 的標籤與設定。
+REEXECUTION_TAGS = ("dagster/parent_run_id", "dagster/root_run_id")
 
 
 class IssuedForecastConfig(Config):
@@ -118,13 +120,26 @@ def issued_forecast(
 
 
 def _scheduled_issue_time(context: AssetExecutionContext, config: IssuedForecastConfig) -> datetime:
-    """Only a run launched by the schedule's tick carries an issue time that counts."""
-    scheduled = context.run.tags.get(SCHEDULE_NAME_TAG) == ISSUED_FORECAST_SCHEDULE
+    """Only the run the schedule's tick launched carries an issue time that counts.
+
+    A re-execution copies that run's tags and issue time but runs later, so it
+    would issue at the original tick from load stored after it.
+    """
+    tags = context.run.tags
+    scheduled = tags.get(SCHEDULE_NAME_TAG) == ISSUED_FORECAST_SCHEDULE
     if config.issued_at is None or not scheduled:
         raise Failure(
             description=(
                 f"{ISSUED_FORECAST_ASSET} issues only from {ISSUED_FORECAST_SCHEDULE} "
                 "scheduled ticks; a run without a scheduled tick writes nothing."
+            )
+        )
+    if any(tag in tags for tag in REEXECUTION_TAGS):
+        raise Failure(
+            description=(
+                f"{ISSUED_FORECAST_ASSET} is never re-executed: a re-executed run keeps the "
+                f"tick {config.issued_at} as as_of but would read load stored after it, "
+                "so it writes nothing."
             )
         )
     return datetime.fromisoformat(config.issued_at)

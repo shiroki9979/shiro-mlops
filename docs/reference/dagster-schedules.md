@@ -57,7 +57,7 @@
    - **發布時刻**：發布時刻即排程 tick 時刻，也是預報的 `as_of`，不取整點：負載依小時時間戳而非入庫時間篩選，發布時刻早於資料實際入庫時刻會破壞 point-in-time。
    - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。
    - **lineage**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，以免無 tick 的 `{task_id}__training_job` 帶出發布。`issued_forecast_job` 不選取任何擷取資產。
-   - **只有定時發布才算**：資產只接受由 `issued_forecast_schedule` tick 產生的 run（設定帶 `issued_at` 且 run 帶 `dagster/schedule_name` 標籤）；手動 materialize 或在 launchpad 自填 `issued_at` 的 run 以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過。隨需 `/predict` 不寫入。
+   - **只有定時發布才算**：資產只接受由 `issued_forecast_schedule` tick 產生的 run（設定帶 `issued_at` 且 run 帶 `dagster/schedule_name` 標籤）；手動 materialize、在 launchpad 自填 `issued_at` 的 run，以及重新執行的 run（帶 `dagster/parent_run_id` 或 `dagster/root_run_id` 標籤，即使沿用原 tick 的設定與標籤）皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過。隨需 `/predict` 不寫入。
    - **無法產出**：尚無 `dynamic_horizon_forecast__model` materialization 時，排程以 `SkipReason` 略過。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入；模型目錄不存在時同樣以 `Failure` 結束。
    - **不設重試政策**：重試時 `as_of` 仍是原 tick，卻會讀到 tick 後才入庫的負載。
    - **冪等性**：同一發布時刻已有紀錄（例如 commit 後崩潰被重跑）時不預報、不寫入、不覆寫，資產成功並以 metadata `already_issued = true` 標示；新寫入時 metadata 另記 `load_anchor`、`status`、`model_sha256` 與步數。
