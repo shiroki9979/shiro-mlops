@@ -1,9 +1,27 @@
 # Issue tracker: GitHub
 
 - 建立日期：2026-08-25
-- 最後更新：2026-10-25
+- 最後更新：2026-11-20
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+
+## Where planning and contracts live
+
+Each kind of information has exactly one home, so nothing has to be kept in sync by hand:
+
+| Information | Home |
+| :--- | :--- |
+| A work ticket: goal, scope, Definition of Done | A GitHub issue. Milestone-level work hangs off a tracking issue as sub-issues. |
+| Dependencies between tickets | GitHub native issue dependencies; where they can't be set, a `Blocked by: #<n>, #<n>` line at the top of the body (see **Blocking** below). |
+| Whether a ticket's code is delivered | The issue's open/closed state. |
+| Whether a milestone works in the running environment | An **operational acceptance** issue (below). |
+| Milestone goals, acceptance criteria, cross-milestone priority and its reasons | [`docs/ROADMAP.md`](../ROADMAP.md). It carries no status column and no ticket bodies. |
+| What the system does now: schemas, API, schedules, task config | [`docs/reference/`](../reference/), changed in the same PR as the code it describes. |
+| Why a hard-to-reverse choice was made | [`docs/adr/`](../adr/). |
+
+**Operational acceptance (營運驗收)**: closing a ticket only means its code merged. When a milestone also has to be proven with production data in the running environment (an accumulation threshold reached, a first training run, `/ready` returning 200), open a separate issue titled `[營運驗收] <milestone>: <what is proven>` with the label `ops-acceptance`. Its body states the threshold, the steps, and a checklist of evidence; the evidence (command output, run IDs, responses) is posted as comments, and the issue is closed only once the evidence is in. Keep it standalone rather than a sub-issue of an already-closed tracking issue, and link it from the milestone row in `docs/ROADMAP.md`.
+
+Older docs and ADRs cite tickets as `TICKET-<nnn>`; those issues keep the ID as a title prefix (e.g. `[TICKET-403] ...`), so searching the ID finds them. New tickets are referred to by issue number only.
 
 ## Conventions
 

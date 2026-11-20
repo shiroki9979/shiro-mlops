@@ -1,7 +1,7 @@
 # Tech Debt
 
 - 建立日期：2026-11-16
-- 最後更新：2026-11-16
+- 最後更新：2026-11-20
 
 How this repo records, triages, and pays down tech debt. The registry is the GitHub issue tracker (see [issue-tracker.md](issue-tracker.md)); there is no separate Markdown list to drift out of date.
 
@@ -11,7 +11,7 @@ Tech debt is a known shortcut or gap in code, infrastructure, or tooling that we
 
 It is **not**:
 
-- A missing feature or milestone gap: that belongs in [ROADMAP.md](../ROADMAP.md) or a feature issue.
+- A missing feature or milestone gap: that belongs in a feature issue (milestones are indexed in [ROADMAP.md](../ROADMAP.md)).
 - A bug (behaviour differs from the spec): open a bug issue.
 - An ADR "Out of Scope / Deferred" item that costs nothing while it stays undone, such as a capability nobody needs yet. Only deferred items with an ongoing cost are debt.
 

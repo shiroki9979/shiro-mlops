@@ -1,7 +1,7 @@
 # Triage Labels
 
 - 建立日期：2026-08-25
-- 最後更新：2026-11-16
+- 最後更新：2026-11-20
 
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
 
@@ -21,6 +21,7 @@ Edit the "Label in our tracker" column to match whatever vocabulary you actually
 
 Category labels describe what an issue is, not where it is in triage, and combine with any role above.
 
-| Label       | Meaning                                                                        |
-| ----------- | ------------------------------------------------------------------------------ |
-| `tech-debt` | A known shortcut or gap with an ongoing cost; see [tech-debt.md](tech-debt.md) |
+| Label            | Meaning                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tech-debt`      | A known shortcut or gap with an ongoing cost; see [tech-debt.md](tech-debt.md)                                                                   |
+| `ops-acceptance` | Proves a milestone with production data in the running environment; closed once the evidence is posted. See [issue-tracker.md](issue-tracker.md) |
