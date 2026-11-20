@@ -65,7 +65,7 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 make frontend-smoke ARGS='--check-compose-bindings --direct-api-url http://127.0.0.1:8000'
 ```
 
-此檢查會經 Nginx 驗證首頁、深層路由、建置資產、遺失資產的 404、`/published/` 下的兩份匯出 JSON 與缺檔不回 200，以及 `/api/health`，並確認 API 直接入口及 Compose 主機埠綁定。兩份 JSON 要在第一次匯出後才存在；全新環境請先依第 4 節開啟 `forecast_track_record_schedule` 與 `forecast_view_export_schedule`，待第 35 分鐘的匯出完成，或在 Dagster UI 依序手動 materialize `forecast_track_record` 與 `forecast_view_export`，再執行此檢查，否則會停在 `/published/latest_issued_forecast.json returned HTTP 404`。前端程式變更後，從專案根目錄重新建置靜態映像，再重新整理瀏覽器：
+輸出最後一行為 `Nginx smoke check passed` 即通過，檢查項目見 [`scripts/smoke_nginx.py`](../../scripts/smoke_nginx.py)。其中 `/published/` 的兩份 JSON 要在第一次匯出後才存在；全新環境請先依第 4 節開啟 `forecast_view_export_schedule` 並待第 35 分鐘的匯出完成，或在 Dagster UI 手動 materialize `forecast_view_export`，再執行此檢查，否則會停在 `/published/latest_issued_forecast.json returned HTTP 404`。前端程式變更後，從專案根目錄重新建置靜態映像，再重新整理瀏覽器：
 
 ```bash
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build frontend
@@ -85,7 +85,7 @@ make frontend-smoke-ci FRONTEND_SMOKE_PORT=18080
 
 ## 4. 準備資料並訓練模型
 
-`dynamic_horizon_forecast__training_job` 需要 TimescaleDB 中已有至少任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，約 28 日）個有效的全台逐時實際負載，以及時間重疊的 canonical CWA 測站觀測歷史。逐時負載只能由區域快照往後累積，無法回補；累積期間任務的訓練與監控排程會略過並揭露原因，`/ready` 應維持 HTTP 503，不應以測試 fixture 建立正式模型。開啟排程、追蹤累積進度與預期失敗邊界見 [如何在逐時負載冷啟動後恢復訓練與監控排程](recover-training-after-load-cold-start.md)。預報實績排程 `forecast_track_record_schedule` 與匯出排程 `forecast_view_export_schedule` 與擷取排程一起開啟；首次發布前每次彙整的累積天數皆為 0，匯出的最新已發布預報為空狀態，屬預期結果。匯出結果寫在 `data/published/`，由 Nginx 以 `http://127.0.0.1:8080/published/` 提供；要同時上傳到 S3，於 `.env` 設定 [預報檢視託管 §1](../reference/forecast-view-hosting.md#1-s3-配置與寫入權限) 的三個項目後重建 `dagster-webserver` 容器。發布排程 `issued_forecast_schedule` 則待首次訓練成功後才開啟。
+`dynamic_horizon_forecast__training_job` 需要 TimescaleDB 中已有至少任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，約 28 日）個有效的全台逐時實際負載，以及時間重疊的 canonical CWA 測站觀測歷史。逐時負載只能由區域快照往後累積，無法回補；累積期間任務的訓練與監控排程會略過並揭露原因，`/ready` 應維持 HTTP 503，不應以測試 fixture 建立正式模型。開啟排程、追蹤累積進度與預期失敗邊界見 [如何在逐時負載冷啟動後恢復訓練與監控排程](recover-training-after-load-cold-start.md)。預報實績排程 `forecast_track_record_schedule` 與匯出排程 `forecast_view_export_schedule` 與擷取排程一起開啟；首次發布前每次彙整的累積天數皆為 0，匯出的最新已發布預報為空狀態，屬預期結果。匯出結果寫在 `data/published/`，由 Nginx 以 `http://127.0.0.1:8080/published/` 提供；要同時上傳到 S3，於 `.env` 設定 [預報檢視託管 §1](../reference/forecast-view-hosting.md#1-s3-配置與寫入權限) 的上傳設定，再以 `docker compose --env-file .env -f docker/docker-compose.yml up -d --force-recreate dagster-webserver` 重建容器（`restart` 不會重新讀取 `.env`）。發布排程 `issued_forecast_schedule` 則待首次訓練成功後才開啟。
 
 1. 開啟瀏覽器進入 `http://localhost:3000`。
 2. 先 materialize `raw_cwa_station_observation`，確認三個預設測站觀測已寫入 TimescaleDB。
