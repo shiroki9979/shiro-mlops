@@ -56,6 +56,8 @@ from shiro_mlops.tasks.runner import (
 from shiro_mlops.tasks.types.recursive_regression import PREDICTION_COL
 
 ISSUED_FORECAST_ASSET = "issued_forecast"
+# job、排程名稱與 cron 由 smoke_check.ISSUED_FORECAST_SCHEDULES 重述為部署契約；
+# 變更時須同步該處與 docs/reference/dagster-schedules.md 第 6 項。
 ISSUED_FORECAST_JOB = "issued_forecast_job"
 ISSUED_FORECAST_SCHEDULE = "issued_forecast_schedule"
 ISSUED_FORECAST_TASK = DYNAMIC_HORIZON_FORECAST

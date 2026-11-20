@@ -74,6 +74,8 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
 
 # 發布排程的固定契約：與擷取排程一樣不受 --task 篩選。冷啟動期間刻意停用，首次訓練成功後才開啟，
 # 因此停用時回報 WAIT 而非 FAIL；未開啟的每一小時都不會留下已發布預報，且無法回補。
+# 名稱與 cron 刻意重述而不引用 pipelines/issued_forecast.py，才能檢出部署漂移；
+# 變更時須同步 pipelines/issued_forecast.py 與 docs/reference/dagster-schedules.md 第 6 項。
 ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
     "issued_forecast_schedule": ExpectedSchedule("issued_forecast_job", "15 * * * *", TAIWAN_TZ),
 }
