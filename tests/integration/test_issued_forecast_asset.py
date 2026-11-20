@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from dagster import AssetMaterialization, Definitions, build_schedule_context
+from dagster import AssetMaterialization, Definitions, MetadataValue, build_schedule_context
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -34,6 +34,7 @@ ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 # 負載起點 09:00 落後 12:15 超過 3 小時。
 STALE_TICK = datetime(2026, 11, 20, 12, 15, tzinfo=TAIPEI)
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
+MLFLOW_VERSION = "7"
 
 
 @pytest.fixture
@@ -50,16 +51,18 @@ def repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
 def trained(
     repo: TimeSeriesRepository, dagster_instance, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> SavedModel:
-    """A trained model on disk and the materialization the schedule waits for."""
+    """A trained model on disk and the materialization that recorded it in MLflow."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
     saved = _train_and_save(repo, n_estimators=20)
-    dagster_instance.report_runless_asset_event(
-        AssetMaterialization(
-            NAMES.model,
-            metadata={MODEL_SHA256_METADATA: saved.sha256, MLFLOW_MODEL_VERSION_METADATA: None},
-        )
+    _report_model_materialization(
+        dagster_instance,
+        {MODEL_SHA256_METADATA: saved.sha256, MLFLOW_MODEL_VERSION_METADATA: MLFLOW_VERSION},
     )
     return saved
+
+
+def _report_model_materialization(instance, metadata: dict) -> None:
+    instance.report_runless_asset_event(AssetMaterialization(NAMES.model, metadata=metadata))
 
 
 def _train_and_save(repo: TimeSeriesRepository, *, n_estimators: int) -> SavedModel:
@@ -119,7 +122,7 @@ def test_scheduled_tick_issues_the_168_hour_forecast_from_the_loaded_model(
     assert issued.load_anchor == LOAD_ANCHOR
     assert issued.status == "degraded"  # 沒有 CWA 預報，天氣降級
     assert issued.model_sha256 == trained.sha256
-    assert issued.mlflow_model_version is None
+    assert issued.mlflow_model_version == MLFLOW_VERSION
     assert len(issued.steps) == 168
     assert issued.steps[0].target_hour == LOAD_ANCHOR + timedelta(hours=1)
     assert issued.steps[-1].target_hour == LOAD_ANCHOR + timedelta(hours=168)
@@ -152,7 +155,7 @@ def test_stale_load_anchor_fails_the_issue_and_records_nothing(
     assert repo.fetch_issued_forecast(datetime(2026, 11, 20, 12, 15)) is None
 
 
-def test_issued_forecast_keeps_its_model_identity_while_mlflow_is_unavailable(
+def test_issuing_never_calls_mlflow_and_reads_the_note_from_the_materialization(
     repo: TimeSeriesRepository,
     dagster_instance,
     trained: SavedModel,
@@ -164,6 +167,44 @@ def test_issued_forecast_keeps_its_model_identity_while_mlflow_is_unavailable(
     monkeypatch.setattr(settings, "MLFLOW_TRACKING_URI", "http://127.0.0.1:9")
     monkeypatch.setattr("mlflow.set_tracking_uri", unreachable)
     monkeypatch.setattr("mlflow.MlflowClient", unreachable)
+
+    result = _issue(repo, dagster_instance)
+
+    assert result.success
+    issued = repo.fetch_issued_forecast(ISSUED_AT)
+    assert issued is not None
+    assert issued.model_sha256 == trained.sha256
+    assert issued.mlflow_model_version == MLFLOW_VERSION
+
+
+@pytest.mark.parametrize(
+    "latest_metadata",
+    [
+        pytest.param(
+            lambda _loaded: {
+                MODEL_SHA256_METADATA: "0" * 64,
+                MLFLOW_MODEL_VERSION_METADATA: "8",
+            },
+            id="training-finished-after-the-model-was-loaded",
+        ),
+        pytest.param(lambda _loaded: {}, id="materialization-without-metadata"),
+        pytest.param(
+            lambda loaded: {
+                MODEL_SHA256_METADATA: loaded,
+                MLFLOW_MODEL_VERSION_METADATA: MetadataValue.null(),
+            },
+            id="mlflow-was-unavailable-at-training",
+        ),
+        pytest.param(
+            lambda loaded: {MODEL_SHA256_METADATA: loaded, MLFLOW_MODEL_VERSION_METADATA: ""},
+            id="empty-mlflow-version",
+        ),
+    ],
+)
+def test_mlflow_note_stays_empty_unless_the_latest_materialization_names_the_loaded_model(
+    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel, latest_metadata
+) -> None:
+    _report_model_materialization(dagster_instance, latest_metadata(trained.sha256))
 
     result = _issue(repo, dagster_instance)
 
