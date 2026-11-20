@@ -1,4 +1,4 @@
-"""Minimum-accumulation gate over persisted hourly actual load (ADR-0008, SPEC §3.1).
+"""Minimum-accumulation gate over persisted hourly actual load (ADR-0008, docs/reference/dagster-schedules.md).
 
 The runner applies it before training, and schedules and the container smoke
 check read it through the runner, so a skip reason, an asset failure, and a

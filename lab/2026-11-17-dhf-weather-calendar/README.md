@@ -1,7 +1,7 @@
 # `dynamic_horizon_forecast` 加權天氣與放假日採用研究
 
 > [!NOTE]
-> **狀態：尚未執行。** 研究腳本已備妥，待正式資料的有效評估起點涵蓋至少 7 個日曆日後執行（[GitHub #98](https://github.com/shiroki9979/shiro-mlops/issues/98)）。執行後依 [SPEC §7.5](../../docs/SPEC.md) 的固定段落與重現紀錄欄位改寫本檔，下列各段的數字必須來自同一次執行。
+> **狀態：尚未執行。** 研究腳本已備妥，待正式資料的有效評估起點涵蓋至少 7 個日曆日後執行（[GitHub #98](https://github.com/shiroki9979/shiro-mlops/issues/98)）。執行後依 [研究空間 §5](../../docs/reference/lab.md#5-研究報告labyyyy-mm-dd-topicreadmemd) 的固定段落與重現紀錄欄位改寫本檔，下列各段的數字必須來自同一次執行。
 
 ---
 

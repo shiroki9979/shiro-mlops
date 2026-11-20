@@ -2,7 +2,7 @@
 # 架構檢視：module 加深候選紀錄
 
 - 建立日期：2026-09-27
-- 最後更新：2026-11-16
+- 最後更新：2026-11-20
 - 文件類型：Explanation（架構現況與取捨分析）
 - 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估，分別登記為技術債 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)、[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)
 - 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)
@@ -141,7 +141,7 @@ After ：畫面操作 → 查詢 module〔窗口／cursor 有效性／URL〕→ 
 
 ## 既有決策與保留項目
 
-領域名稱依 [GLOSSARY.md](../../GLOSSARY.md)，行為契約依 [SPEC.md](../SPEC.md)。三項候選均須維持：
+領域名稱依 [GLOSSARY.md](../../GLOSSARY.md)，行為契約依 [Reference 文件](../reference/)。三項候選均須維持：
 
 - [ADR-0006](../adr/0006-timescaledb-local-storage-layer.md)：地端 TimescaleDB 與 Parquet／Feast 分工。
 - [ADR-0007](../adr/0007-isolate-cwa-access-behind-scheduled-ingestion.md)：CWA 只經排程入庫，預報消費 canonical 資料；ingestion 新鮮度與預報七小時 stale 規則分開。

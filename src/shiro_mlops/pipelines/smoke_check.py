@@ -47,7 +47,7 @@ FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
 
 @dataclass(frozen=True)
 class ExpectedSchedule:
-    """Deployed schedule contract from docs/SPEC.md §3."""
+    """Deployed schedule contract from docs/reference/dagster-schedules.md."""
 
     job_name: str
     cron_schedule: str
@@ -110,7 +110,7 @@ def run_smoke_check(deployment: Deployment, task_id: str | None = None) -> list[
 
 
 def expected_schedules(tasks: Tasks | None = None) -> dict[str, ExpectedSchedule]:
-    """Ingestion schedules from SPEC §3 plus each checked task's two schedules."""
+    """Ingestion schedules from docs/reference/dagster-schedules.md plus each checked task's two schedules."""
     expected = dict(EXPECTED_SCHEDULES)
     for task in (tasks or deployed_tasks()).values():
         names = TaskPipelineNames(task.task_id)

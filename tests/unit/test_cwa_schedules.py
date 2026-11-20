@@ -22,7 +22,7 @@ def test_cwa_schedules_are_staggered_and_timezone_aware() -> None:
 
 
 def test_cwa_jobs_use_bounded_exponential_retry_policy() -> None:
-    """SPEC §3.4–3.5: three retries backing off exponentially from thirty seconds."""
+    """docs/reference/dagster-schedules.md items 3–4: three retries backing off exponentially from thirty seconds."""
     assert CWA_INGESTION_RETRY_POLICY.max_retries == 3
     assert CWA_INGESTION_RETRY_POLICY.delay == 30
     assert CWA_INGESTION_RETRY_POLICY.backoff == Backoff.EXPONENTIAL

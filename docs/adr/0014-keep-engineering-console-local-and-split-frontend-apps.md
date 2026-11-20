@@ -1,7 +1,7 @@
 # ADR-0014：工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用
 
 > - Created: 2026-11-18
-> - Last Updated: 2026-11-19
+> - Last Updated: 2026-11-20
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -55,7 +55,7 @@ frontend/
 - **收錄**：
   - shadcn UI 元件、設計 token 與 Tailwind 基底樣式。
   - i18n 機制與語系切換元件。語系偏好的 `localStorage` key 只在這裡定義。
-  - [SPEC §6.4](../SPEC.md#64-數字與日期時間) 的數字與日期時間格式函式。
+  - [前端語系 §4](../reference/frontend-locale.md#4-數字與日期時間) 的數字與日期時間格式函式。
   - `request()` 與 `ApiError`。
 - **不收錄，留在各應用**：語系字典、API 端點與 zod schema、外框版面、頁面元件。這些會隨各工作區的需求分道揚鑣；例如 #127 之後，預報檢視可能不再打 `/predict`。
 

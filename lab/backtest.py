@@ -91,7 +91,7 @@ def rolling_origin_backtest(
 
 @dataclass(frozen=True)
 class OriginSplit:
-    """Search origins and the later, target-disjoint evaluation origins (SPEC §7.3)."""
+    """Search origins and the later, target-disjoint evaluation origins (docs/reference/lab.md §3)."""
 
     search_origins: tuple[pd.Timestamp, ...]
     eval_origins: tuple[pd.Timestamp, ...]
@@ -321,7 +321,7 @@ def _check_origin(
     context: _BacktestContext,
     origin: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Apply the three origin checks (SPEC §7.2); raise ``ValueError`` naming the first failure."""
+    """Apply the three origin checks (docs/reference/lab.md §2); raise ``ValueError`` naming the first failure."""
     train_load = _slice_and_validate_origin_history(
         load=context.load,
         origin=origin,
