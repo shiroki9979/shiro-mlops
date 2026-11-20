@@ -85,7 +85,7 @@ services:
     volumes:
       # 預報檢視匯出寫入 Dagster 的 DATA_DIR/published（主機的 data/published），Nginx 以 /published/ 提供。
       # 掛載整個目錄而非單檔：匯出以 rename 原子替換檔案，單檔 bind mount 會一直指向舊檔。
-      # 容器內路徑須與 frontend/nginx.conf 的 /published/ root 一致。
+      # 容器內路徑須與 frontend/nginx.conf 的 /published/ root 及 scripts/ci_nginx_smoke.sh 的 PUBLISHED_MOUNT 一致。
       - ../data/published:/usr/share/nginx/published:ro
 
   dagster-webserver:

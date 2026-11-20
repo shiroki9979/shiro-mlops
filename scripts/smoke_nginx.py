@@ -22,6 +22,7 @@ MISSING_ASSET_PATH = "/assets/definitely-missing-smoke-check.js"
 # 預報檢視匯出的兩個固定檔名；此腳本以 `uv run --no-project` 執行、不能 import shiro_mlops，
 # 變更時須同步 src/shiro_mlops/data/forecast_view.py 與 tests/fixtures/published/。
 PUBLISHED_FILES = ("latest_issued_forecast.json", "forecast_track_record.json")
+# 重述 frontend/nginx.conf 中 /published/ 的 add_header Cache-Control；變更時須同步該處。
 PUBLISHED_CACHE_CONTROL = "public, max-age=60"
 MISSING_PUBLISHED_PATH = "/published/definitely-missing-smoke-check.json"
 
