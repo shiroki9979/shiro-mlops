@@ -4,20 +4,21 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 
-// Workspace boundaries (ADR-0014 §2.2): apps may depend on packages/shared, never on each other,
-// and shared never depends on an app. Each regex matches both the package name
-// (`@shiro-mlops/<app>`) and relative paths that climb into the other package's directory.
-function forbidImports(regex, message) {
+// Each restriction's regex is matched against import sources: both package names
+// (`@shiro-mlops/<app>`) and relative paths that climb into another package's directory.
+function forbidImports(restrictions) {
   // esquery ends a selector regex at the first `/`, so slashes are written as \x2F there.
-  const source = `/${regex.replaceAll('/', '\\x2F')}/`
+  const literal = (regex) => `/${regex.replaceAll('/', '\\x2F')}/`
   return {
-    'no-restricted-imports': ['error', { patterns: [{ regex, message }] }],
+    'no-restricted-imports': ['error', { patterns: restrictions }],
     // no-restricted-imports inspects neither dynamic import() nor CommonJS require(), and a bundler
     // follows both all the same.
     'no-restricted-syntax': [
       'error',
-      { selector: `ImportExpression[source.value=${source}]`, message },
-      { selector: `CallExpression[callee.name="require"][arguments.0.value=${source}]`, message },
+      ...restrictions.flatMap(({ regex, message }) => [
+        { selector: `ImportExpression[source.value=${literal(regex)}]`, message },
+        { selector: `CallExpression[callee.name="require"][arguments.0.value=${literal(regex)}]`, message },
+      ]),
     ],
   }
 }
@@ -26,6 +27,36 @@ function forbidImports(regex, message) {
 const SOURCES = '**/*.{ts,tsx,js,jsx,mjs,cjs}'
 
 const pathSegment = (names) => `(^|/)(${names.join('|')})(/|$)`
+
+// Workspace boundaries (ADR-0014 §2.2): apps may depend on packages/shared, never on each other,
+// and shared never depends on an app.
+const WORKSPACE_BOUNDARIES = [
+  {
+    dir: 'apps/forecast-view',
+    regex: pathSegment(['engineering-console']),
+    message:
+      'The Forecast View must not import the Engineering Console; move shared code to packages/shared (ADR-0014 §2.3).',
+  },
+  {
+    dir: 'apps/engineering-console',
+    regex: pathSegment(['forecast-view']),
+    message:
+      'The Engineering Console must not import the Forecast View; move shared code to packages/shared (ADR-0014 §2.3).',
+  },
+  {
+    dir: 'packages/shared',
+    regex: `${pathSegment(['apps', 'forecast-view', 'engineering-console'])}|^@/`,
+    message:
+      'packages/shared must not import an app (`@/` resolves into whichever app bundles it); pass app values in as arguments (ADR-0014 §2.2).',
+  },
+]
+
+// packages/shared/testing is imported by tests and vitest setup only; production sources (each
+// package's src/) must not pull it into a bundle, by package name or by relative path.
+const TEST_SUPPORT = {
+  regex: '(^@shiro-mlops/shared|^\\.\\.?(/\\.\\.)*)/testing(/|$)',
+  message: 'Test support must stay out of production bundles; import it from tests and vitest setup only.',
+}
 
 export default tseslint.config(
   // Config files run in Node, not in a bundle, so they are outside the workspace boundaries.
@@ -60,25 +91,16 @@ export default tseslint.config(
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
-  {
-    files: [`apps/forecast-view/${SOURCES}`],
-    rules: forbidImports(
-      pathSegment(['engineering-console']),
-      'The Forecast View must not import the Engineering Console; move shared code to packages/shared (ADR-0014 §2.3).',
-    ),
-  },
-  {
-    files: [`apps/engineering-console/${SOURCES}`],
-    rules: forbidImports(
-      pathSegment(['forecast-view']),
-      'The Engineering Console must not import the Forecast View; move shared code to packages/shared (ADR-0014 §2.3).',
-    ),
-  },
-  {
-    files: [`packages/shared/${SOURCES}`],
-    rules: forbidImports(
-      `${pathSegment(['apps', 'forecast-view', 'engineering-console'])}|^@/`,
-      'packages/shared must not import an app (`@/` resolves into whichever app bundles it); pass app values in as arguments (ADR-0014 §2.2).',
-    ),
-  },
+  // A later config object replaces an earlier one's rule options, so each file gets one combined list.
+  ...WORKSPACE_BOUNDARIES.flatMap(({ dir, regex, message }) => [
+    {
+      files: [`${dir}/${SOURCES}`],
+      ignores: [`${dir}/src/**`],
+      rules: forbidImports([{ regex, message }]),
+    },
+    {
+      files: [`${dir}/src/${SOURCES}`],
+      rules: forbidImports([{ regex, message }, TEST_SUPPORT]),
+    },
+  ]),
 )

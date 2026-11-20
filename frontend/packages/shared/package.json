@@ -9,7 +9,8 @@
         "./i18n/*": "./src/i18n/*.ts",
         "./ui/*": "./src/ui/*.tsx",
         "./utils": "./src/lib/utils.ts",
-        "./styles.css": "./src/styles.css"
+        "./styles.css": "./src/styles.css",
+        "./testing/*": "./testing/*.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

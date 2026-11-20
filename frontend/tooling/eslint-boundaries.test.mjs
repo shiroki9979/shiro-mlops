@@ -98,3 +98,26 @@ describe('allowed dependency directions', () => {
     })
   }
 })
+
+// Test support lives in packages/shared/testing and must never reach a production bundle.
+describe('production sources cannot import test support', () => {
+  for (const [from, source] of [
+    [FORECAST_VIEW_FILE, "import { resetLocaleForTest } from '@shiro-mlops/shared/testing/locale'"],
+    [CONSOLE_FILE, "const helpers = import('@shiro-mlops/shared/testing/locale')"],
+    ['packages/shared/src/i18n/fixture.ts', "import { resetLocaleForTest } from '../../testing/locale'"],
+  ]) {
+    it(`rejects ${source} in ${from}`, async () => {
+      assert.equal((await boundaryErrors(from, source)).length, 1)
+    })
+  }
+
+  for (const [from, source] of [
+    ['apps/forecast-view/vitest.setup.ts', "import { resetLocaleForTest } from '@shiro-mlops/shared/testing/locale'"],
+    ['apps/engineering-console/tests/unit/fixture.test.ts', "import { resetLocaleForTest } from '@shiro-mlops/shared/testing/locale'"],
+    ['packages/shared/vitest.setup.ts', "import { resetLocaleForTest } from './testing/locale'"],
+  ]) {
+    it(`allows ${source} in ${from}`, async () => {
+      assert.deepEqual(await boundaryErrors(from, source), [])
+    })
+  }
+})

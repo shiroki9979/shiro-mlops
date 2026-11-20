@@ -49,7 +49,7 @@
 ## 6. 測試約定
 
 - vitest 全域 `TZ=UTC`，以已知時間點斷言兩語系皆顯示正確的臺北時間。
-- 每個測試前將語系重設為 `zh-TW`（jsdom 預設語言為 `en-US`）；整合測試以字典值斷言，不寫死顯示文字。
+- 每個測試前將語系重設為預設的 `zh-TW`（`DEFAULT_LOCALE`；jsdom 預設語言為 `en-US`）：三個套件的 vitest setup 共用 `@shiro-mlops/shared/testing/locale` 的 `resetLocaleForTest()`。整合測試以字典值斷言，不寫死顯示文字。
 - `shared` 以替身字典測試格式函式、語系 store、`createMessages()`、`syncDocumentLocale()` 與 `LocaleSwitcher`；兩個應用各有一支語系切換整合測試（`tests/integration/locale-switch.test.tsx`），從應用外框切換並斷言導覽、`<html lang>`、`document.title` 與保存的偏好。
 
 ## 7. `frontend/` 結構
@@ -57,6 +57,7 @@
 | 位置 | 內容 |
 | :--- | :--- |
 | `packages/shared/src/i18n/` | `locale-store.ts`（語系、偵測與 `LOCALE_STORAGE_KEY`）、`format.ts`（§4）、`messages.ts`（`createMessages()`）、`document-locale.ts`、`locale-switcher.tsx` |
+| `packages/shared/testing/` | 測試輔助（`locale.ts`）；ESLint 禁止各套件 `src/` 匯入，不進入正式 bundle |
 | `apps/forecast-view/src/i18n/` | 預報檢視的 `zh-TW.ts`、`en.ts` 與 `messages.ts` |
 | `apps/engineering-console/src/i18n/` | 工程主控台的 `zh-TW.ts`、`en.ts` 與 `messages.ts`；Data Explorer 欄名與資料集名稱也在此 |
 
