@@ -89,6 +89,31 @@ jobs:
       - name: Build image and smoke test both apps, API gateway, and upstream recreation
         run: make frontend-smoke-ci
 
+  infra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Pinned version satisfies required_version in infra/terraform/main.tf.
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive
+
+      # -backend=false: validation needs only the providers, not the state backend or AWS credentials.
+      - name: Initialise Terraform without a backend
+        run: terraform init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        run: terraform validate
+
   docs:
     runs-on: ubuntu-latest
     steps:
