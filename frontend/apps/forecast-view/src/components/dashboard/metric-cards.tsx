@@ -1,24 +1,25 @@
-import { PredictionItem } from '@/schemas/api'
+import type { ForecastStep } from '@/schemas/published'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
-import { EMPTY_VALUE, formatDateTime, formatLoadMW, formatTemperature } from '@shiro-mlops/shared/i18n/format'
+import { EMPTY_VALUE, formatDateTime, formatLoadMW } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
-import { Activity, ArrowUpRight, Gauge, ThermometerSun, Zap } from 'lucide-react'
+import { Activity, ArrowUpRight, Gauge, Zap } from 'lucide-react'
 
 interface MetricCardsProps {
-  predictions?: PredictionItem[]
+  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
+  steps: ForecastStep[]
   isLoading: boolean
 }
 
-export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
+export function MetricCards({ steps, isLoading }: MetricCardsProps) {
   const m = useMessages()
   const locale = useLocale()
   const metricsText = m.dashboard.metrics
 
-  if (isLoading || !predictions || predictions.length === 0) {
+  if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[1, 2, 3, 4].map((i) => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[1, 2, 3].map((i) => (
           <Card key={i} className="animate-pulse bg-slate-900/50 border-slate-800">
             <CardContent className="p-5 space-y-3">
               <div className="h-4 w-24 bg-slate-800 rounded" />
@@ -31,19 +32,17 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
     )
   }
 
-  // Calculate metrics
-  const loads = predictions.map((p) => p.predicted_load_mw)
-  const temperatures = predictions.map((p) => p.temperature)
+  // Computed over the steps of the selected preset only.
+  const loads = steps.map((step) => step.predicted_load_mw)
 
   const peakLoad = Math.max(...loads)
   const avgLoad = loads.reduce((a, b) => a + b, 0) / loads.length
   const minLoad = Math.min(...loads)
-  const maxTemp = Math.max(...temperatures)
 
-  const peakItem = predictions.find((p) => p.predicted_load_mw === peakLoad)
+  const peakStep = steps.find((step) => step.predicted_load_mw === peakLoad)
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {/* Peak Load Card */}
       <Card className="border-cyan-500/20 bg-gradient-to-br from-slate-900 via-slate-900 to-cyan-950/30">
         <CardContent className="p-5 space-y-2">
@@ -63,7 +62,7 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
             <span className="text-xs text-slate-400">MW</span>
           </div>
           <p className="text-[11px] text-slate-500 truncate">
-            {metricsText.peakTime(peakItem ? formatDateTime(peakItem.datetime, locale) : EMPTY_VALUE)}
+            {metricsText.peakTime(peakStep ? formatDateTime(peakStep.target_hour, locale) : EMPTY_VALUE)}
           </p>
         </CardContent>
       </Card>
@@ -108,28 +107,6 @@ export function MetricCards({ predictions, isLoading }: MetricCardsProps) {
           </div>
           <p className="text-[11px] text-slate-500">
             {metricsText.peakValleySpread(formatLoadMW(peakLoad - minLoad, locale))}
-          </p>
-        </CardContent>
-      </Card>
-
-      {/* Max Temperature Card */}
-      <Card className="border-amber-500/20 bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/30">
-        <CardContent className="p-5 space-y-2">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1.5 font-medium">
-              <ThermometerSun className="h-4 w-4 text-amber-400" />
-              {metricsText.maxTemperatureTitle}
-            </span>
-            <span className="text-[11px] text-amber-400 font-mono">{metricsText.maxTemperatureTag}</span>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-100 font-mono tracking-tight">
-              {formatTemperature(maxTemp, locale)}
-            </span>
-            <span className="text-xs text-slate-400">{metricsText.celsius}</span>
-          </div>
-          <p className="text-[11px] text-slate-500">
-            {metricsText.temperatureNote}
           </p>
         </CardContent>
       </Card>

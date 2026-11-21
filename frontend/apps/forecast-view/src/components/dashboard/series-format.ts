@@ -1,4 +1,4 @@
-import { formatHumidity, formatLoadMW, formatNumber, formatTemperature } from '@shiro-mlops/shared/i18n/format'
+import { formatLoadMW, formatNumber } from '@shiro-mlops/shared/i18n/format'
 import type { Locale } from '@shiro-mlops/shared/i18n/locale-store'
 
 type SeriesFormatter = (value: number, locale: Locale) => string
@@ -6,8 +6,6 @@ type SeriesFormatter = (value: number, locale: Locale) => string
 // Units follow the plotted field, not the translated series name.
 const SERIES_FORMATTERS = {
   predicted_load_mw: (value, locale) => `${formatLoadMW(value, locale)} MW`,
-  temperature: formatTemperature,
-  relative_humidity: formatHumidity,
 } satisfies Record<string, SeriesFormatter>
 
 type SeriesKey = keyof typeof SERIES_FORMATTERS

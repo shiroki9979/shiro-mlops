@@ -32,7 +32,7 @@ describe('apps cannot import each other', () => {
     [FORECAST_VIEW_FILE, "import { x } from '../../engineering-console/src/lib/api-client'"],
     [FORECAST_VIEW_FILE, "export { x } from '../../../apps/engineering-console/src/routes/data'"],
     [FORECAST_VIEW_FILE, "const page = import('../../engineering-console/src/routes/monitoring')"],
-    [CONSOLE_FILE, "import { x } from '@shiro-mlops/forecast-view/src/hooks/use-prediction'"],
+    [CONSOLE_FILE, "import { x } from '@shiro-mlops/forecast-view/src/hooks/use-latest-issued-forecast'"],
     [CONSOLE_FILE, "import { x } from '../../forecast-view/src/components/dashboard/metric-cards'"],
   ]) {
     it(`rejects ${source} in ${from}`, async () => {
@@ -62,8 +62,8 @@ describe('boundaries cover JavaScript sources', () => {
     ['apps/forecast-view/src/fixture.jsx', "import { Page } from '../../engineering-console/src/routes/data'\nconst page = <Page />"],
     ['apps/forecast-view/src/fixture.mjs', "const page = import('../../engineering-console/src/routes/monitoring')"],
     ['apps/forecast-view/src/fixture.cjs', "const { x } = require('@shiro-mlops/engineering-console/src/lib/api-client')"],
-    ['apps/engineering-console/src/fixture.js', "import { x } from '../../forecast-view/src/hooks/use-prediction'"],
-    ['apps/engineering-console/src/fixture.cjs', "const { x } = require('../../forecast-view/src/hooks/use-prediction')"],
+    ['apps/engineering-console/src/fixture.js', "import { x } from '../../forecast-view/src/hooks/use-latest-issued-forecast'"],
+    ['apps/engineering-console/src/fixture.cjs', "const { x } = require('../../forecast-view/src/hooks/use-latest-issued-forecast')"],
     ['packages/shared/src/fixture.js', "import { x } from '@/i18n/messages'"],
     ['packages/shared/src/fixture.jsx', "import { x } from '@shiro-mlops/forecast-view'\nconst el = <div />"],
   ]) {

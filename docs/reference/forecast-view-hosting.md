@@ -1,7 +1,7 @@
 # 預報檢視的雲端託管
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 8 節拆出。
@@ -64,8 +64,10 @@ bucket policy 只授權 CloudFront 服務主體經該 distribution 的 `s3:GetOb
 ## 4. 前端讀取 `/published/`
 
 - 預報檢視以相對路徑 `/published/` 讀取 JSON，沒有 API base URL 設定；`VITE_API_BASE_URL` 只供工程主控台使用。
-- 非 2xx、網路錯誤或 JSON 解析失敗一律顯示中性的錯誤狀態（例如「目前無法取得預報」），不區分原因；空狀態只由匯出 JSON 的內容決定，不由 HTTP 狀態碼推斷。
-- `pnpm dev` 時，Vite dev server 以 proxy 把 `/published` 轉送到地端 Compose 的 Nginx（`:8080`）；Vitest 使用 fixtures。
+- 讀到的 JSON 依 schema 驗證；非 2xx、網路錯誤、JSON 解析失敗或 schema 不符都視為同一種讀取失敗。失敗的讀取重試一次；尚無已載入的預報時一律顯示中性的錯誤狀態（例如「目前無法取得預報」），不區分原因，不顯示狀態碼或伺服器訊息；已有預報時，背景重新讀取失敗保留原內容。空狀態只由匯出 JSON 的內容決定（`issued_at` 為 `null`），不由 HTTP 狀態碼推斷。請求不設快取標頭，快取交給 Nginx 與 CloudFront。
+- 載入中只取決於讀取是否完成。已發布預報在所選預測時效內沒有目標小時（包括 `steps` 為空）時，`/` 顯示一行中性提示，不顯示載入中，也不補造任何列。
+- 觀眾當下距預報時刻超過 24 小時時，`/` 顯示一行中性的過舊提示（例如「預報已超過 24 小時未更新」），舊內容照常顯示，正好 24 小時不顯示；提示不揭露、也不暗示原因（ADR-0015 §2.5），只在渲染時比較，不另設計時器。
+- `pnpm dev` 時，Vite dev server 把 `/published` 原路徑轉送到地端 Compose 的 Nginx（`:8080`，設定於 `frontend/tooling/vite-dev-proxy.ts`）；預報檢視不設 `/api` proxy。Vitest 以 MSW 提供 fixtures。
 
 ## 5. 部署與驗證
 

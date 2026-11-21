@@ -1,7 +1,7 @@
 # shiro-mlops Frontend
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 
 React 19 + TypeScript + Vite + TanStack 的 pnpm workspace，依 [ADR-0014](../docs/adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) 拆成兩個應用與一個共用套件：
 
@@ -12,7 +12,7 @@ frontend/
 │   └── engineering-console/    # 工程主控台：base path /console/，只在地端
 ├── packages/
 │   └── shared/                 # UI 元件、設計 token、i18n 機制與語系切換、格式函式、request()；testing/ 為測試輔助
-└── tooling/                    # Vite 共用 /api 代理、workspace 邊界與 bundle 檢查的測試（node --test）
+└── tooling/                    # Vite dev 代理（/api、/published）、workspace 邊界與 bundle 檢查的測試（node --test）
 ```
 
 兩個應用都可依賴 `packages/shared`，彼此不得 import，`shared` 也不得 import 任何應用；ESLint 強制此規則。`shared` 的收錄標準見 ADR-0014 §2.3，語系與格式規則見 [前端語系與格式](../docs/reference/frontend-locale.md)。
@@ -30,7 +30,7 @@ frontend/
 
 預報檢視（`apps/forecast-view`）：
 
-1. **即時預測總覽 (`/`)**：1~72 小時動態用電負載與氣溫雙軸曲線、尖離峰指標卡、逐時明細表與 CSV 匯出。
+1. **即時預測總覽 (`/`)**：最新已發布預報的預測負載、預報時刻、尖離峰指標卡、逐時明細表與 CSV 匯出；讀取 `/published/latest_issued_forecast.json`，`pnpm dev` 時經 Vite proxy 轉送到地端 Compose 的 Nginx（`:8080`）。
 2. **歷史回測與評估 (`/history`)**：目前以瀏覽器產生的 72 小時示範序列與固定指標呈現回測介面，尚未讀取實際評估結果。
 
 工程主控台（`apps/engineering-console`，`/console/` 開啟監控頁）：
@@ -50,7 +50,7 @@ frontend/
 corepack enable
 pnpm install --frozen-lockfile
 
-# 同時啟動兩個 Vite 開發伺服器（/api 皆代理至 FastAPI http://localhost:8000）
+# 同時啟動兩個 Vite 開發伺服器（預報檢視的 /published 代理至地端 Nginx http://localhost:8080，工程主控台的 /api 代理至 FastAPI http://localhost:8000）
 #   預報檢視 http://localhost:5173、工程主控台 http://localhost:5174/console/
 pnpm run dev
 
@@ -60,7 +60,7 @@ pnpm run test
 # shared 型別檢查，再對兩個應用執行 TypeScript 型別檢查與生產打包
 pnpm run build
 
-# 確認預報檢視的建置產物不含工程主控台的路徑與專用相依（需先 build；腳本在 scripts/，CI 呼叫同一 Makefile target）
+# 確認預報檢視的建置產物不含工程主控台的路徑與專用相依，也不含隨需推論的 /predict（需先 build；腳本在 scripts/，CI 呼叫同一 Makefile target）
 make -C .. frontend-bundle-check
 
 # 程式碼風格、Lint 與 workspace 邊界檢查

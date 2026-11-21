@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PredictionItem } from '@/schemas/api'
+import type { ForecastStep } from '@/schemas/published'
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import {
@@ -10,22 +10,19 @@ import {
   TableHeader,
   TableRow,
 } from '@shiro-mlops/shared/ui/table'
-import { formatDateTime, formatHumidity, formatLoadMW, formatTemperature } from '@shiro-mlops/shared/i18n/format'
+import { formatDateTime, formatLoadMW } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
 import { Download, FileSpreadsheet } from 'lucide-react'
 
-interface PredictionTableProps {
-  predictions?: PredictionItem[]
+interface ForecastTableProps {
+  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
+  steps: ForecastStep[]
   isLoading: boolean
-  subject?: string
+  issuedAt: string | null
 }
 
-export function PredictionTable({
-  predictions,
-  isLoading,
-  subject = 'nationwide',
-}: PredictionTableProps) {
+export function ForecastTable({ steps, isLoading, issuedAt }: ForecastTableProps) {
   const [page, setPage] = useState(0)
   const m = useMessages()
   const locale = useLocale()
@@ -33,28 +30,25 @@ export function PredictionTable({
   const pageSize = 10
 
   const handleExportCSV = () => {
-    if (!predictions || predictions.length === 0) return
+    if (steps.length === 0 || issuedAt === null) return
 
-    const headers = ['Datetime', 'Predicted Load (MW)', 'Temperature (C)', 'Relative Humidity (%)']
-    const rows = predictions.map((p) => [
-      p.datetime,
-      p.predicted_load_mw.toFixed(2),
-      p.temperature.toFixed(2),
-      p.relative_humidity.toFixed(2),
-    ])
+    // Values stay as published: target hours keep their +08:00 offset, whatever the interface locale.
+    const headers = ['Target Hour', 'Predicted Load (MW)']
+    const rows = steps.map((step) => [step.target_hour, step.predicted_load_mw.toFixed(2)])
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.setAttribute('href', url)
-    link.setAttribute('download', `load_forecast_${subject}_${new Date().toISOString().slice(0, 10)}.csv`)
+    // Named after the forecast's Taipei issue date (the offset-carrying string's own date), not the viewer's clock.
+    link.setAttribute('download', `issued_forecast_${issuedAt.slice(0, 10)}.csv`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
   }
 
-  if (isLoading || !predictions) {
+  if (isLoading) {
     return (
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>
@@ -69,8 +63,8 @@ export function PredictionTable({
     )
   }
 
-  const totalPages = Math.ceil(predictions.length / pageSize)
-  const paginatedItems = predictions.slice(page * pageSize, (page + 1) * pageSize)
+  const totalPages = Math.ceil(steps.length / pageSize)
+  const paginatedItems = steps.slice(page * pageSize, (page + 1) * pageSize)
 
   return (
     <Card className="border-slate-800 bg-slate-900/60 backdrop-blur-md">
@@ -78,7 +72,7 @@ export function PredictionTable({
         <div className="flex items-center gap-2">
           <FileSpreadsheet className="h-4 w-4 text-cyan-400" />
           <CardTitle className="text-base font-semibold text-slate-200">
-            {tableText.title(predictions.length)}
+            {tableText.title(steps.length)}
           </CardTitle>
         </div>
         <Button
@@ -95,32 +89,18 @@ export function PredictionTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{tableText.timestamp}</TableHead>
+              <TableHead>{tableText.targetHour}</TableHead>
               <TableHead className="text-right">{tableText.load}</TableHead>
-              <TableHead className="text-right">{tableText.temperature}</TableHead>
-              <TableHead className="text-right">{tableText.humidity}</TableHead>
-              <TableHead className="text-center">{tableText.status}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {paginatedItems.map((item, idx) => (
-              <TableRow key={idx}>
+            {paginatedItems.map((item) => (
+              <TableRow key={item.target_hour}>
                 <TableCell className="font-mono text-xs text-slate-300">
-                  {formatDateTime(item.datetime, locale)}
+                  {formatDateTime(item.target_hour, locale)}
                 </TableCell>
                 <TableCell className="text-right font-mono font-bold text-cyan-300 text-xs">
                   {formatLoadMW(item.predicted_load_mw, locale)}
-                </TableCell>
-                <TableCell className="text-right font-mono text-amber-300 text-xs">
-                  {formatTemperature(item.temperature, locale)}
-                </TableCell>
-                <TableCell className="text-right font-mono text-slate-300 text-xs">
-                  {formatHumidity(item.relative_humidity, locale)}
-                </TableCell>
-                <TableCell className="text-center">
-                  <span className="inline-block px-2 py-0.5 text-[10px] font-semibold rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                    {tableText.inferred}
-                  </span>
                 </TableCell>
               </TableRow>
             ))}
@@ -130,7 +110,7 @@ export function PredictionTable({
         {/* Pagination Controls */}
         <div className="flex items-center justify-between pt-4 text-xs text-slate-400 border-t border-slate-800/80 mt-2">
           <span>
-            {tableText.range(page * pageSize + 1, Math.min((page + 1) * pageSize, predictions.length), predictions.length)}
+            {tableText.range(page * pageSize + 1, Math.min((page + 1) * pageSize, steps.length), steps.length)}
           </span>
           <div className="flex items-center gap-2">
             <Button
