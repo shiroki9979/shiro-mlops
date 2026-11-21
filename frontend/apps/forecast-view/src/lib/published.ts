@@ -29,3 +29,15 @@ export async function readPublished<T>(
   if (!parsed.success) throw new PublishedReadError(fileName, { cause: parsed.error })
   return parsed.data
 }
+
+export const publishedQueryKey = (fileName: string) => ['published', fileName] as const
+
+// One threshold for both the comparison and the notices that state it (ADR-0015 §2.5).
+export const STALE_AFTER_HOURS = 24
+
+// A published timestamp (ISO 8601 with offset, such as the track record cutoff or a forecast's
+// issued_at) is stale once it is strictly more than 24 hours behind the viewer's clock; exactly 24
+// hours is not. Compared as absolute instants, so the browser's time zone never matters.
+export function isPublishedTimestampStale(timestamp: string, now: number = Date.now()): boolean {
+  return now - Date.parse(timestamp) > STALE_AFTER_HOURS * 3_600_000
+}

@@ -31,7 +31,7 @@ frontend/
 預報檢視（`apps/forecast-view`）：
 
 1. **即時預測總覽 (`/`)**：最新已發布預報的預測負載、預報時刻、尖離峰指標卡、逐時明細表與 CSV 匯出；讀取 `/published/latest_issued_forecast.json`，`pnpm dev` 時經 Vite proxy 轉送到地端 Compose 的 Nginx（`:8080`）。
-2. **歷史回測與評估 (`/history`)**：目前以瀏覽器產生的 72 小時示範序列與固定指標呈現回測介面，尚未讀取實際評估結果。
+2. **預報實績 (`/history`)**：讀取 `/published/forecast_track_record.json`，顯示統計截至時刻、提前 24 小時的 MAPE 與 MAE 指標卡、MAPE 對提前時數曲線與最近 30 天提前 24 小時已發布預報與實際負載的對照；累積未滿 7 天時只顯示累積天數，統計截至時刻超過 24 小時時顯示中性的過舊提示。不呼叫 API；讀取規則見[預報檢視託管 §4](../docs/reference/forecast-view-hosting.md#4-前端讀取-published)。
 
 工程主控台（`apps/engineering-console`，`/console/` 開啟監控頁）：
 

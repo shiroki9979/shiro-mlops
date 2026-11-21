@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { http, HttpResponse } from 'msw'
 import { syncDocumentLocale } from '@shiro-mlops/shared/i18n/document-locale'
 import { LOCALE_STORAGE_KEY } from '@shiro-mlops/shared/i18n/locale-store'
 import { createAppRouter } from '@/router'
+import { server } from '@/mocks/server'
 import { documentTitleFor } from '@/i18n/messages'
 import { en } from '@/i18n/en'
 import { zhTW } from '@/i18n/zh-TW'
@@ -17,6 +19,15 @@ function renderAppAt(path: string) {
   const router = createAppRouter(createMemoryHistory({ initialEntries: [path] }))
   return render(<RouterProvider router={router} />)
 }
+
+// /history reads the published track record; serving it keeps every request in these tests handled.
+beforeEach(() => {
+  server.use(
+    http.get('/published/forecast_track_record.json', () =>
+      HttpResponse.json({ cutoff: '2026-11-20T10:00:00+08:00', accumulated_days: 0, metrics: null }),
+    ),
+  )
+})
 
 afterEach(() => stopDocumentSync())
 

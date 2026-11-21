@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { readPublished } from '@/lib/published'
+import { publishedQueryKey, readPublished } from '@/lib/published'
 import { LATEST_ISSUED_FORECAST_FILE, LatestIssuedForecastSchema } from '@/schemas/published'
 import { useDashboardStore } from '@/store/dashboard-store'
 
@@ -8,7 +8,7 @@ export function useLatestIssuedForecast() {
   const { autoRefresh, refreshIntervalSec } = useDashboardStore()
 
   return useQuery({
-    queryKey: ['published', LATEST_ISSUED_FORECAST_FILE],
+    queryKey: publishedQueryKey(LATEST_ISSUED_FORECAST_FILE),
     queryFn: () => readPublished(LATEST_ISSUED_FORECAST_FILE, LatestIssuedForecastSchema),
     refetchInterval: autoRefresh ? refreshIntervalSec * 1000 : false,
     // Matches the max-age=60 Nginx and CloudFront serve the file with; keep in sync with the
