@@ -79,7 +79,7 @@ export function SeriesStackedAreaChart({ series, brush }: ChartBodyProps) {
             />
           )}
           <Tooltip content={({ active, payload }) => <SeriesTooltip active={active} row={payload?.[0]?.payload as ChartRow | undefined} series={series} locale={locale} />} />
-          <Legend verticalAlign="top" align="right" wrapperStyle={{ paddingBottom: 8, fontSize: '12px' }} />
+          <Legend verticalAlign="bottom" iconType="square" wrapperStyle={{ paddingTop: 8, fontSize: '12px' }} />
           {series.map((item) => (
             <Area
               key={item.key}
