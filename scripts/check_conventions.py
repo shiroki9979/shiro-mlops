@@ -2,6 +2,11 @@
 
 Checks:
   python-uv  Makefile recipes and CI `run:` commands must not start with a host python/python3.
+  docker-pins
+             Each package a `pip install` or `uv pip install` in docker/Dockerfile* names must be
+             pinned to an exact version with ==, unless the command reads a constraints file
+             with -c (as exported from uv.lock); or read a lock file with -r instead. Values of
+             options such as -r and -e (a local project) are not checked.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
   doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
              earlier than the newest author date of their commits in that range.
@@ -52,10 +57,12 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import TypeVar
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAKEFILE = "Makefile"
 WORKFLOW_GLOB = ".github/workflows/*.yml"
+DOCKERFILE_GLOB = "docker/Dockerfile*"
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
 COMMENT_KINDS_DIRS = ("src", "scripts")
@@ -78,6 +85,33 @@ RUN_KEY = re.compile(r"^(?P<indent>\s*)(?:-\s+)?run:\s*(?P<value>.*)$")
 BLOCK_SCALAR = re.compile(r"^(?P<style>[|>])[-+0-9]*\s*(?:#.*)?$")
 FOLDED_STYLE = ">"
 YAML_QUOTES = "\"'"
+
+# WHY-NOT(DOCKERFILE_RUN): RUN's own flags (--mount=..., --network=...) are skipped, or a
+# `RUN --mount=... pip install` would hide its unpinned packages behind the flag.
+DOCKERFILE_RUN = re.compile(r"^\s*RUN\s+(?:--\S+\s+)*(?P<command>.*)$", re.IGNORECASE)
+DOCKERFILE_COMMENT = re.compile(r"^\s*#")
+PIP_PROGRAM = re.compile(r"(?:.*/)?pip(?:3(?:\.\d+)?)?")
+UV_PROGRAM = re.compile(r"(?:.*/)?uv")
+EXACT_PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]*\])?===?[^\s,;<>=!~*]+")
+# WHY-NOT(CONSTRAINT_OPTION): names installed under -c are not checked for == pins, since the
+# constraints file (exported from uv.lock) pins them; requiring == as well would duplicate the lock.
+CONSTRAINT_OPTION = re.compile(r"-c.*|--constraint(?:=.*)?")
+REDIRECTION = re.compile(r"[<>&]*[<>][<>&]*")
+SHELL_PUNCTUATION = frozenset("();<>|&")
+# WHY-NOT(PIP_VALUE_OPTIONS): the values of -r and -e are skipped like any option value rather
+# than checked for pins; checking them would report `-r requirements.txt` and `-e .` as unpinned
+# packages, though a lock file or a local project pins through its own files.
+PIP_VALUE_OPTIONS = frozenset(
+    {"-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-i", "--index-url"}
+    | {"--extra-index-url", "-f", "--find-links", "-t", "--target", "--prefix", "--root"}
+    | {"--python", "-p", "--python-version", "--platform", "--implementation", "--abi"}
+    | {"--only-binary", "--no-binary", "--src", "--upgrade-strategy", "--cache-dir", "--log"}
+    | {"--proxy", "--cert", "--client-cert", "--timeout", "--retries", "--trusted-host"}
+    | {"--exists-action", "-C", "--config-settings", "--config-setting", "--report"}
+    | {"--index", "--default-index", "--index-strategy", "--keyring-provider", "--override"}
+    | {"-P", "--upgrade-package", "--reinstall-package", "--resolution", "--prerelease"}
+    | {"--extra", "--group", "--config-file", "--exclude-newer", "--link-mode"}
+)
 
 DEBT_MARKER = re.compile(r"\b(?P<marker>TODO|FIXME|HACK|XXX)\b(?!\(#\d+\))")
 DEBT_MARKER_SUFFIXES = frozenset(
@@ -156,6 +190,12 @@ class SourceLine:
 
 
 @dataclass(frozen=True)
+class UnpinnedInstall:
+    line: int
+    packages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TermHit:
     line: int
     term: str
@@ -172,9 +212,13 @@ class HeaderDate:
         return date.fromisoformat(self.raw)
 
 
+HitT = TypeVar("HitT", SourceLine, UnpinnedInstall)
+
+
 # Check name -> runner; the single list of checks the CLI accepts.
 CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "python-uv": lambda args: check_python_uv(REPO_ROOT),
+    "docker-pins": lambda args: check_docker_pins(REPO_ROOT),
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
@@ -241,18 +285,22 @@ def check_python_uv(repo_root: Path) -> list[Violation]:
     return [
         violation
         for path, find in sources
-        for violation in host_python_violations(relative(path, repo_root), path, find)
+        for violation in file_violations(repo_root, path, find, host_python_message)
     ]
 
 
-def host_python_violations(
-    label: str, path: Path, find: Callable[[str], list[SourceLine]]
+def file_violations(
+    repo_root: Path,
+    path: Path,
+    find: Callable[[str], list[HitT]],
+    message: Callable[[HitT], str],
 ) -> list[Violation]:
+    label = relative(path, repo_root)
     try:
-        commands = find(path.read_text(encoding="utf-8"))
+        hits = find(path.read_text(encoding="utf-8"))
     except ValueError as error:
         raise ValueError(f"{label}: {error}") from error
-    return [Violation(label, command.line, host_python_message(command)) for command in commands]
+    return [Violation(label, hit.line, message(hit)) for hit in hits]
 
 
 def host_python_message(command: SourceLine) -> str:
@@ -370,17 +418,119 @@ def starts_host_python(command: SourceLine) -> bool:
 
 
 def command_words(tokens: list[str]) -> list[str]:
-    words = []
-    at_command_start = True
+    return [command[0] for command in simple_commands(tokens)]
+
+
+def check_docker_pins(repo_root: Path) -> list[Violation]:
+    return [
+        violation
+        for path in sorted(repo_root.glob(DOCKERFILE_GLOB))
+        for violation in file_violations(
+            repo_root, path, find_unpinned_pip_installs, unpinned_message
+        )
+    ]
+
+
+def unpinned_message(hit: UnpinnedInstall) -> str:
+    packages = ", ".join(hit.packages)
+    return f"pin pip installs with ==, or install under a lock file with -c or -r: {packages}"
+
+
+def find_unpinned_pip_installs(text: str) -> list[UnpinnedInstall]:
+    hits = []
+    for run in dockerfile_run_commands(text):
+        tokens = shell_tokens(run.text)
+        if tokens is None:
+            raise ValueError(f"line {run.line}: cannot parse shell command {run.text!r}")
+        packages = tuple(
+            package for command in simple_commands(tokens) for package in unpinned_packages(command)
+        )
+        if packages:
+            hits.append(UnpinnedInstall(run.line, packages))
+    return hits
+
+
+def dockerfile_run_commands(text: str) -> list[SourceLine]:
+    """Join each RUN instruction's continuation lines into one shell command."""
+    runs: list[SourceLine] = []
+    pending: list[SourceLine] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if pending and DOCKERFILE_COMMENT.match(line):
+            continue
+        if not pending:
+            match = DOCKERFILE_RUN.match(line)
+            if match is None:
+                continue
+            line = match["command"]
+        pending.append(SourceLine(number, line.strip()))
+        if not line.rstrip().endswith(LINE_CONTINUATION):
+            runs.append(SourceLine(pending[0].line, join_lines(pending)))
+            pending = []
+    if pending:
+        runs.append(SourceLine(pending[0].line, join_lines(pending)))
+    return runs
+
+
+def simple_commands(tokens: list[str]) -> list[list[str]]:
+    """Split shell tokens into commands, each starting at its command word."""
+    commands: list[list[str]] = [[]]
     for token in tokens:
         if token in COMMAND_SEPARATORS:
-            at_command_start = True
-        elif at_command_start and (token in RESERVED_WORDS or ENV_ASSIGNMENT.match(token)):
-            continue
-        elif at_command_start:
-            words.append(token)
-            at_command_start = False
-    return words
+            commands.append([])
+        elif commands[-1] or not (token in RESERVED_WORDS or ENV_ASSIGNMENT.match(token)):
+            commands[-1].append(token)
+    return [command for command in commands if command]
+
+
+def unpinned_packages(command: list[str]) -> list[str]:
+    packages = []
+    takes_value = False
+    for token in without_redirections(pip_install_arguments(command)):
+        if takes_value:
+            takes_value = False
+        elif CONSTRAINT_OPTION.fullmatch(token):
+            return []
+        elif token.startswith("-"):
+            takes_value = token in PIP_VALUE_OPTIONS
+        elif not EXACT_PIN.fullmatch(token):
+            packages.append(token)
+    return packages
+
+
+def without_redirections(arguments: list[str]) -> list[str]:
+    kept: list[str] = []
+    skip_target = False
+    for token in arguments:
+        if skip_target:
+            skip_target = False
+        elif REDIRECTION.fullmatch(token):
+            if kept and kept[-1].isdigit():
+                kept.pop()
+            skip_target = True
+        elif not set(token) <= SHELL_PUNCTUATION:
+            kept.append(token)
+    return kept
+
+
+def pip_install_arguments(command: list[str]) -> list[str]:
+    """Return the arguments after `install` when the command runs a pip installer, else []."""
+    program, *rest = command
+    if PIP_PROGRAM.fullmatch(program):
+        subcommand = ["install"]
+    elif UV_PROGRAM.fullmatch(program):
+        subcommand = ["pip", "install"]
+    elif HOST_PYTHON.fullmatch(program):
+        subcommand = ["-m", "pip", "install"]
+    else:
+        return []
+    position = 0
+    for word in subcommand:
+        while position < len(rest) and rest[position] != word and rest[position].startswith("-"):
+            position += 1
+        if position == len(rest) or rest[position] != word:
+            return []
+        position += 1
+    return rest[position:]
 
 
 def check_terms(repo_root: Path) -> list[Violation]:
