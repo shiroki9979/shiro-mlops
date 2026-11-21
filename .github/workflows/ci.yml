@@ -115,7 +115,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # doc-dates diffs against the PR base and reads commit dates in the PR range.
+          # doc-dates and comment-kinds diff against the PR base; doc-dates also reads commit
+          # dates in the PR range.
           fetch-depth: 0
 
       - name: Lint Markdown
@@ -145,3 +146,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: uv run --no-project python scripts/check_conventions.py doc-dates --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Check kinds of changed comments
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: uv run --no-project python scripts/check_conventions.py comment-kinds --base "$BASE_SHA" --head "$HEAD_SHA"

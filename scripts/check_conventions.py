@@ -11,6 +11,10 @@ Checks:
   comment-refs
              Paths starting with a tracked top-level directory and ADR-NNNN numbers in tracked
              Python comments must exist; paths with glob or placeholder characters are skipped.
+  comment-kinds
+             Comment blocks in src/ and scripts/ Python files that --base..--head adds or modifies
+             must start with WHY-NOT(<name>): <reason>, SYNC(<path>[, <path>...]): <note>,
+             TODO(#<issue>), or a tool directive; noqa and type: ignore need a reason.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ MAKEFILE = "Makefile"
 WORKFLOW_GLOB = ".github/workflows/*.yml"
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
+COMMENT_KINDS_DIRS = ("src", "scripts")
+DIFF_CHECKS = ("doc-dates", "comment-kinds")
 
 # Single source for terminology: banned term -> preferred replacement.
 BANNED_TERMS = {
@@ -65,14 +71,35 @@ DEBT_MARKER_EXEMPT = frozenset(
     }
 )
 
-# A path written in a comment, ending at the first character neither a path nor a pattern uses.
+# WHY-NOT(PATH_CANDIDATE): glob and placeholder characters continue the match instead of ending
+# it, so a pattern is skipped whole rather than cut down to a concrete-looking directory.
 PATH_CANDIDATE = re.compile(
     r"(?<![A-Za-z0-9_./${}<>*?\[\]-])(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_./${}<>*?\[\]-]*)"
 )
-# Glob and placeholder characters mark an illustrative pattern rather than one concrete path.
+# WHY-NOT(PATH_PATTERN_CHARS): a path holding any of these is an illustrative pattern, not one
+# concrete file, so it is skipped rather than resolved.
 PATH_PATTERN_CHARS = frozenset("*?[]<>{}$")
 ADR_REF = re.compile(r"\bADR-(?P<number>\d{4})\b")
 ADR_FILE = re.compile(r"docs/adr/\d{4}-[^/]+\.md")
+
+WHY_NOT_TAG = "WHY-NOT"
+WHY_NOT = re.compile(r"WHY-NOT\((?P<name>[A-Za-z_][A-Za-z0-9_.]*)\):\s*\S")
+SYNC_TAG = "SYNC"
+SYNC = re.compile(r"SYNC\((?P<paths>[^()\s,][^()]*)\):\s*\S")
+TODO_WITH_ISSUE = re.compile(r"TODO\(#\d+\)")
+SUPPRESSION = re.compile(
+    r"(?P<directive>noqa(?::\s*[A-Z]+[0-9]+(?:\s*,\s*[A-Z]+[0-9]+)*)?|type:\s*ignore(?:\[[^\]]*\])?)"
+    r"(?P<reason>.*)"
+)
+REASON_SEPARATORS = " \t-:;,\u2013\u2014"
+TOOL_DIRECTIVE = re.compile(r"(?:pragma\b|fmt:|ruff:)")
+ALLOWED_COMMENT_KINDS = (
+    "WHY-NOT(<name>): <reason>, SYNC(<path>[, <path>...]): <note>, TODO(#<issue>), "
+    "or a tool directive (noqa or type: ignore followed by a reason, pragma, fmt:, ruff:)"
+)
+HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+DIFF_FILE_HEADER = "diff --git "
+DIFF_NEW_PATH = "+++ b/"
 
 LAST_UPDATED = re.compile(
     r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
@@ -121,6 +148,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
     "comment-refs": lambda args: check_comment_refs(REPO_ROOT),
+    "comment-kinds": lambda args: check_comment_kinds(GitRange(REPO_ROOT, args.base, args.head)),
 }
 
 
@@ -139,11 +167,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("checks", nargs="+", choices=list(CHECKS))
-    parser.add_argument("--base", help="base ref for doc-dates, e.g. origin/dev or a PR base SHA")
-    parser.add_argument("--head", default="HEAD", help="head ref for doc-dates (default: HEAD)")
+    parser.add_argument(
+        "--base", help="base ref for doc-dates and comment-kinds, e.g. origin/dev or a PR base SHA"
+    )
+    parser.add_argument(
+        "--head", default="HEAD", help="head ref for doc-dates and comment-kinds (default: HEAD)"
+    )
     args = parser.parse_args(argv)
-    if "doc-dates" in args.checks and not args.base:
-        parser.error("doc-dates requires --base")
+    for name in DIFF_CHECKS:
+        if name in args.checks and not args.base:
+            parser.error(f"{name} requires --base")
     return args
 
 
@@ -165,9 +198,6 @@ def describe(error: Exception) -> str:
     if isinstance(error, subprocess.CalledProcessError):
         return f"{' '.join(error.cmd)} exited {error.returncode}: {(error.stderr or '').strip()}"
     return str(error)
-
-
-# --- python-uv -------------------------------------------------------------
 
 
 def check_python_uv(repo_root: Path) -> list[Violation]:
@@ -322,9 +352,6 @@ def command_words(tokens: list[str]) -> list[str]:
     return words
 
 
-# --- terms -----------------------------------------------------------------
-
-
 def check_terms(repo_root: Path) -> list[Violation]:
     return [
         Violation(path, hit.line, f"banned term '{hit.term}'; use '{hit.replacement}'")
@@ -349,9 +376,6 @@ def find_banned_terms(text: str) -> list[TermHit]:
         for term, replacement in BANNED_TERMS.items()
         if term in line
     ]
-
-
-# --- debt-markers ----------------------------------------------------------
 
 
 def check_debt_markers(repo_root: Path) -> list[Violation]:
@@ -381,9 +405,6 @@ def find_unlinked_debt_markers(text: str) -> list[SourceLine]:
     ]
 
 
-# --- comment-refs ----------------------------------------------------------
-
-
 def check_comment_refs(repo_root: Path) -> list[Violation]:
     tracked = tracked_files(repo_root)
     tree = TrackedTree(tracked)
@@ -398,8 +419,12 @@ def check_comment_refs(repo_root: Path) -> list[Violation]:
 
 
 def file_comments(repo_root: Path, path: str) -> list[Comment]:
+    return source_comments(path, (repo_root / path).read_text(encoding="utf-8"))
+
+
+def source_comments(path: str, source: str) -> list[Comment]:
     try:
-        return list(python_comments((repo_root / path).read_text(encoding="utf-8")))
+        return list(python_comments(source))
     except ValueError as error:
         raise ValueError(f"{path}: {error}") from error
 
@@ -445,7 +470,89 @@ class TrackedTree:
         return stripped in self.dirs or (stripped == path and path in self.files)
 
 
-# --- doc-dates -------------------------------------------------------------
+def check_comment_kinds(revisions: GitRange) -> list[Violation]:
+    return [
+        violation
+        for path, added in revisions.added_lines(*COMMENT_KINDS_DIRS).items()
+        if is_comment_kinds_source(path)
+        for violation in comment_kind_violations(path, revisions.read_at_head(path), added)
+    ]
+
+
+def is_comment_kinds_source(path: str) -> bool:
+    return path.endswith(".py") and Path(path).parts[0] in COMMENT_KINDS_DIRS
+
+
+def comment_kind_violations(path: str, source: str, added: set[int]) -> list[Violation]:
+    """Check each comment block of `source` that has a line among the `added` line numbers."""
+    return [
+        Violation(path, block.first.line, problem)
+        for block in comment_blocks(source_comments(path, source))
+        if block.lines & added
+        for problem in [comment_kind_problem(block)]
+        if problem is not None
+    ]
+
+
+@dataclass(frozen=True)
+class CommentBlock:
+    """Comments read as one unit; only the first one carries the kind tag."""
+
+    comments: tuple[Comment, ...]
+
+    @property
+    def first(self) -> Comment:
+        return self.comments[0]
+
+    @property
+    def lines(self) -> set[int]:
+        return {comment.line for comment in self.comments}
+
+
+def comment_blocks(comments: Iterable[Comment]) -> list[CommentBlock]:
+    """Group full-line comments on adjacent lines at one indent; a trailing comment stands alone."""
+    groups: list[list[Comment]] = []
+    for comment in comments:
+        previous = groups[-1][-1] if groups else None
+        if previous is not None and continues_block(previous, comment):
+            groups[-1].append(comment)
+        else:
+            groups.append([comment])
+    return [CommentBlock(tuple(group)) for group in groups]
+
+
+def continues_block(previous: Comment, comment: Comment) -> bool:
+    return (
+        previous.full_line
+        and comment.full_line
+        and comment.line == previous.line + 1
+        and comment.column == previous.column
+    )
+
+
+def comment_kind_problem(block: CommentBlock) -> str | None:
+    body = block.first.body
+    if body.startswith(WHY_NOT_TAG):
+        if WHY_NOT.match(body):
+            return None
+        return "WHY-NOT comment must read `WHY-NOT(<name>): <reason>`, naming the code it protects"
+    if body.startswith(SYNC_TAG):
+        if SYNC.match(body):
+            return None
+        return "SYNC comment must read `SYNC(<path>[, <path>...]): <note>` with repo-rooted paths"
+    if TODO_WITH_ISSUE.match(body) or TOOL_DIRECTIVE.match(body):
+        return None
+    suppression = SUPPRESSION.match(body)
+    if suppression is not None:
+        if suppression["reason"].strip(REASON_SEPARATORS):
+            return None
+        directive = suppression["directive"]
+        return f"`{directive}` needs a reason after it, e.g. `# {directive} — <why it is needed>`"
+    return (
+        f"comment block does not start with an allowed kind ({ALLOWED_COMMENT_KINDS}); "
+        "tag its first line with one of them, or delete the comment if the code already says it "
+        "(see CODING_STANDARDS.md, 程式碼註解)"
+    )
 
 
 def check_doc_dates(revisions: GitRange) -> list[Violation]:
@@ -499,6 +606,42 @@ class GitRange:
     def read_at_head(self, path: str) -> str:
         return git(self.repo_root, "show", f"{self.head}:{path}")
 
+    def added_lines(self, *pathspecs: str) -> dict[str, set[int]]:
+        """Head-side line numbers added or modified in each changed file, renames followed."""
+        output = git(
+            self.repo_root,
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            "--diff-filter=AMR",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            f"{self.base}...{self.head}",
+            "--",
+            *pathspecs,
+        )
+        return parse_added_lines(output)
+
+
+def parse_added_lines(diff: str) -> dict[str, set[int]]:
+    added: dict[str, set[int]] = {}
+    lines: set[int] = set()
+    in_file_header = False
+    for line in diff.split("\n"):
+        if line.startswith(DIFF_FILE_HEADER):
+            in_file_header = True
+        elif in_file_header and line.startswith(DIFF_NEW_PATH):
+            lines = added.setdefault(line.removeprefix(DIFF_NEW_PATH), set())
+        elif (hunk := HUNK_HEADER.match(line)) is not None:
+            in_file_header = False
+            start = int(hunk["start"])
+            lines.update(range(start, start + int(hunk["count"] or 1)))
+    return added
+
 
 def is_doc_date_excluded(path: str) -> bool:
     return bool(DOC_DATES_EXCLUDED_DIRS.intersection(Path(path).parts[:1]))
@@ -529,9 +672,6 @@ def find_last_updated(text: str) -> HeaderDate | None:
         if match is not None:
             return HeaderDate(number, match["value"])
     return None
-
-
-# --- shared ----------------------------------------------------------------
 
 
 @dataclass(frozen=True)
