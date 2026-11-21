@@ -30,7 +30,7 @@
 1. **M6、M7 優先於 M3**：M3 的採用要靠回測判定，回測需要足夠的正式資料，資料又要等 M6 累積。M7 在 M6 累積 672 小時的期間進行，完成後再接 M3。
 2. **M3 採用需要足夠的評估起點**：M6 只保證累積達門檻後可以訓練。M3 的採用研究另外要求有效評估起點涵蓋至少 7 個日曆日，且贏過基線才修改任務設定（[#98](https://github.com/shiroki9979/shiro-mlops/issues/98)）。
 3. **M4 展示依賴 M6 營運驗收**：預報檢視要有內容可看，需先完成首次訓練（[#146](https://github.com/shiroki9979/shiro-mlops/issues/146)）。
-4. **M4 內部順序**：與雲端通道無關的地端工作先做，盡早開始累積預報實績，也就是發布已發布預報、預報實績彙整、前端拆分。CD 工單（[#183](https://github.com/shiroki9979/shiro-mlops/issues/183)）依賴前端拆分與 Terraform state 的決定（[#129](https://github.com/shiroki9979/shiro-mlops/issues/129)）。工單之間的相依寫在各 issue 開頭的 `Blocked by:`。
+4. **M4 內部順序**：與雲端通道無關的地端工作先做，盡早開始累積預報實績，也就是發布已發布預報、預報實績彙整、前端拆分。雲端部署最後做：Terraform state 與 apply 權責由 [#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 定案，CD 由 [#183](https://github.com/shiroki9979/shiro-mlops/issues/183) 實作。工單之間的相依寫在各 issue 開頭的 `Blocked by:`。
 
 ## 雲端方向
 
