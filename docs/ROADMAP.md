@@ -22,6 +22,7 @@
 | **M6: 全台逐時實際負載重建** | 由區域供需快照推算逐時負載，恢復訓練與 drift 排程 | 有效逐時觀測達 672 小時後 `dynamic_horizon_forecast` 完成首次訓練，`/ready` 回傳 HTTP 200 | [#59](https://github.com/shiroki9979/shiro-mlops/issues/59)、[#60](https://github.com/shiroki9979/shiro-mlops/issues/60) | [#146](https://github.com/shiroki9979/shiro-mlops/issues/146) |
 | **M7: ML 任務解耦** | 以任務設定與任務類型解耦單一負載任務，並以高負載預警、用電型態異常偵測驗證 | 三個 ML 任務皆由任務設定產生資產與排程，並經 `POST /tasks/{task_id}/predict` 提供推論 | [#64](https://github.com/shiroki9979/shiro-mlops/issues/64) | [#147](https://github.com/shiroki9979/shiro-mlops/issues/147)、[#148](https://github.com/shiroki9979/shiro-mlops/issues/148) |
 | **M8: 研究空間 (Lab)** | 同庫單向相依的 `lab/` 研究空間：訓練表快照、滾動起點回測與超參數研究 | 快照無損往返、滾動起點回測與研究報告可重現，`uv run --package lab pytest lab/tests` 通過 | [#89](https://github.com/shiroki9979/shiro-mlops/issues/89) | — |
+| **M9: 營運資料檢視器視覺化** | Data Explorer 加入圖表、快速時間導覽與緊湊表格，支援趨勢、聚合與分組比較等探索分析 | 八個資料集皆有預設圖，可在圖上框選窗口並在資料集內設定欄位、分組、粒度與聚合；series endpoint 與前端整合測試通過，各工單附本機真實資料截圖 | [#212](https://github.com/shiroki9979/shiro-mlops/issues/212) | — |
 
 ---
 
@@ -31,6 +32,7 @@
 2. **M3 採用需要足夠的評估起點**：M6 只保證累積達門檻後可以訓練。M3 的採用研究另外要求有效評估起點涵蓋至少 7 個日曆日，且贏過基線才修改任務設定（[#98](https://github.com/shiroki9979/shiro-mlops/issues/98)）。
 3. **M4 展示依賴 M6 營運驗收**：預報檢視要有內容可看，需先完成首次訓練（[#146](https://github.com/shiroki9979/shiro-mlops/issues/146)）。
 4. **M4 內部順序**：與雲端通道無關的地端工作先做，盡早開始累積預報實績，也就是發布已發布預報、預報實績彙整、前端拆分。雲端部署最後做：Terraform state 與 apply 權責由 [#129](https://github.com/shiroki9979/shiro-mlops/issues/129) 定案，CD 由 [#183](https://github.com/shiroki9979/shiro-mlops/issues/183) 實作。工單之間的相依寫在各 issue 開頭的 `Blocked by:`。
+5. **M9 與其他里程碑無相依**：M9 只改 Data Explorer 的讀取端點與前端，與 M3、M6、M7 的關鍵路徑無相依，可平行進行，不改變上述順序。
 
 ## 雲端方向
 
