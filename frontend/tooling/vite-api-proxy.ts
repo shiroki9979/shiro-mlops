@@ -10,10 +10,12 @@ export const apiDevProxy = {
 }
 
 // The `vite dev` stand-in for the Forecast View's `/published/` reads: forwards the path unchanged to
-// the local Compose Nginx, which serves the exported JSON at `/published/` itself
-// (docs/reference/forecast-view-hosting.md §4). The Engineering Console never reads `/published/`.
+// the local Compose Nginx, which serves the exported JSON at `/published/` itself. The key keeps the
+// trailing slash, so it matches like Nginx `location ^~ /published/` rather than every path that
+// starts with `/published` (docs/reference/forecast-view-hosting.md §4). The Engineering Console
+// never reads `/published/`.
 export const publishedDevProxy = {
-  '/published': {
+  '/published/': {
     target: 'http://localhost:8080',
     changeOrigin: true,
   },

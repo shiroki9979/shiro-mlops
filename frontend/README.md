@@ -31,7 +31,7 @@ frontend/
 預報檢視（`apps/forecast-view`）：
 
 1. **即時預測總覽 (`/`)**：1~72 小時動態用電負載與氣溫雙軸曲線、尖離峰指標卡、逐時明細表與 CSV 匯出。
-2. **預報實績 (`/history`)**：讀取 `/published/forecast_track_record.json`，顯示提前 24 小時的 MAPE 與 MAE 指標卡與統計截至時刻，不呼叫 API；讀取規則見[預報檢視託管 §4](../docs/reference/forecast-view-hosting.md#4-前端讀取-published)。
+2. **預報實績 (`/history`)**：讀取 `/published/forecast_track_record.json`，顯示統計截至時刻、提前 24 小時的 MAPE 與 MAE 指標卡、MAPE 對提前時數曲線與最近 30 天提前 24 小時已發布預報與實際負載的對照；累積未滿 7 天時只顯示累積天數，統計截至時刻超過 24 小時時顯示中性的過舊提示。不呼叫 API；讀取規則見[預報檢視託管 §4](../docs/reference/forecast-view-hosting.md#4-前端讀取-published)。
 
 工程主控台（`apps/engineering-console`，`/console/` 開啟監控頁）：
 
