@@ -21,7 +21,7 @@
      | 排程 | `{task_id}__training_schedule` | cron 取自 `[schedule].training`，時區 `Asia/Taipei`；最低累積未達時以 `SkipReason` 揭露差距 |
      | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需 `{task_id}__model` 已有 materialization |
 
-   - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）或 `forecast_track_record`（見第 7 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
+   - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）、`forecast_track_record`（見第 7 項）或 `forecast_view_export`（見第 8 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
    - **排程 run_key**：排程 tick 轉為台灣本地時間 ISO 字串作為 `run_key`，同一 tick 重複評估不重跑；無 tick 的手動評估不帶 `run_key`。
    - **MLflow**：每個任務擁有獨立 experiment 與 registered model，名稱皆等於 `task_id`。每次訓練以 `{task_id}_training` 為 run 名稱記錄 metrics、攤平的 `[params]`（巢狀鍵以 `.` 連接，另含 `task_id`、`task_type`）與模型目錄（artifact path `model`），並以該 artifact URI 建立新的 model version（模型為原生檔案而非 MLflow logged model，ADR-0010）。MLflow 不可用時記錄警告、`run_id` 標為 `local_run`，已保存的模型仍有效。
    - **動態視界預報任務**：`dynamic_horizon_forecast__training_schedule` 為 `0 0 * * *`（`Asia/Taipei`，與舊版 `0 16 * * *` UTC 同一時刻），`dynamic_horizon_forecast__monitoring_schedule` 為 `0 * * * *`；健康門檻 `max_mape = 10.0`。
@@ -72,10 +72,17 @@
    - **累積天數**：窗內有配對的目標小時，取台灣日期去重後的天數，最多 31。
    - **重算**：每次都從頭重算、不保存歷次結果，因此允許手動執行、重試與重新執行，事後推算補上的小時在下次彙整自然計入。尚無已發布預報時照常成功，累積天數為 0。
    - **輸出與 metadata**：輸出格式見 [資料契約 §5.1](data-contracts.md#51-預報實績-forecast_track_record)。materialization metadata 記 `cutoff`（統計截至時刻）、`accumulated_days`、`window_pairs`（窗內總配對數）與 `lead_24_pairs`（窗內提前 24 的配對數，未滿 7 天也記），只在 Dagster UI 可見，不匯出。
-8. **CWA 消費邊界**：
+8. **`forecast_view_export`（預報檢視匯出，[ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)）**：
+   - **定義**：固定資產 `forecast_view_export`、job `forecast_view_export_job` 與排程 `forecast_view_export_schedule`，位於 `pipelines/forecast_view_export.py`，不進任務資產工廠。以 input 讀取最近一次 `forecast_track_record` 的 artifact，lineage 另依賴 `issued_forecast`，兩者都不執行；最新已發布預報由 repository `fetch_latest_issued_forecast` 讀取。任務的兩個 job、`issued_forecast_job` 與 `forecast_track_record_job` 皆不選取它。
+   - **排程**：`35 * * * *`（`Asia/Taipei`），排在發布（:15）與預報實績彙整（:25，含重試約於 :28 前結束）之後。tick 轉為台灣本地時間 ISO 字串作為 `run_key`，不帶資產設定：匯出的是執行當下最新的已發布預報與預報實績，與 tick 時刻無關。job 只選取 `forecast_view_export`，因此彙整失敗或略過時照常匯出最新已發布預報，預報實績則沿用上一次成功彙整的統計截至時刻。排程預設停用，冷啟動時與 `forecast_track_record_schedule` 一起開啟，不需等待首次訓練。
+   - **先寫地端，再上傳**：兩份 JSON（格式見 [資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished)）先寫入 `DATA_DIR/published/`，每個檔案先寫暫存檔再以 rename 替換，Nginx 不會讀到寫一半的檔案；全部寫完後，有設定 `FORECAST_VIEW_S3_BUCKET` 時再以 `PutObject` 上傳同樣的位元組到 bucket 的 `published/` prefix（`Content-Type: application/json`，不設 `Cache-Control`）。未設定 bucket 時不建立 S3 client。上傳設定見 [預報檢視託管 §1](forecast-view-hosting.md#1-s3-配置與寫入權限)。
+   - **失敗與重試**：上傳失敗時 run 失敗、在地端 Dagster 執行紀錄可見，地端目錄已是本次內容。`forecast_view_export_job` 失敗時在同一 run 內最多重試兩次、每次間隔六十秒；匯出覆寫固定檔名，重試、手動執行與重新執行皆安全。從未 materialize 過 `forecast_track_record` 時（全新環境），input 為空，匯出照常寫出並上傳最新已發布預報，預報實績寫出累積 0 天、統計截至時刻為匯出執行當下整點的空狀態（[資料契約 §6.2](data-contracts.md#62-預報實績-forecast_track_recordjson)）。曾 materialize 過但 artifact 遺失時，input 讀取失敗，run 以錯誤結束，不當成全新環境。
+   - **尚無已發布預報**：照常成功，最新已發布預報輸出空狀態（[資料契約 §6.1](data-contracts.md#61-最新已發布預報-latest_issued_forecastjson)）。
+   - **metadata**：`issued_at`（無已發布預報時為空字串）、`published_steps`、`cutoff`、`accumulated_days`、`local_dir` 與 `uploaded_to_s3`。
+9. **CWA 消費邊界**：
    - 外部 CWA API 僅由兩個 ingestion jobs 呼叫；模型訓練與線上預測一律讀取 canonical TimescaleDB tables，不得在缺資料時繞過 ingestion 邊界直接呼叫 CWA。
    - 三個任務目前只使用氣象代表點 `Taipei`（測站與預報區見 [資料契約 §2](data-contracts.md#2-中央氣象署資料實體-cwa-weather-schemas) 目錄）。任務設定可依 [ML 任務設定 §1](ml-tasks.md#1-任務設定-schemataskstask_idtoml) 列出多個加權代表點（ADR-0012），是否採用由 TICKET-303 的滾動起點回測判定。
-9. **本機冷啟動**：
-   - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
-   - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
-   - 操作人員以 `python -m shiro_mlops.pipelines.smoke_check`（`make smoke-check`）在 Dagster 容器內檢查排程註冊與啟用狀態（任務排程的期望 cron 由任務設定推導）、各任務訓練與監控 job 的 selection 邊界，以及每個任務的累積進度（`{task_id} load accumulation`）、新鮮度（`{task_id} load freshness`）與兩個任務排程下一次 tick 的結果，並檢查 `issued_forecast_schedule`（第 6 項）的註冊、啟用狀態、期望 cron 與下一次 tick 的結果（例如尚無模型時的略過原因）；此檢查唯讀，只評估排程函式，不啟動 run。發布排程未註冊或 cron 不符為 `FAIL`；已註冊但未開啟為 `WAIT`，因冷啟動期間首次訓練成功後才開啟。另檢查 `forecast_track_record_schedule`（第 7 項）的註冊、啟用狀態與期望 cron；未註冊、cron 不符或未開啟皆為 `FAIL`，比照擷取排程而非發布排程，因彙整不依賴模型，冷啟動時就與擷取排程一起開啟。`--require-ready` 讓任一 `WAIT` 也回傳結束碼 `1`；`--task <task_id>` 保留擷取、發布與預報實績排程檢查，任務相關檢查只涵蓋該任務，未知任務為用法錯誤（結束碼 `2`）並列出已部署任務。操作步驟見 [冷啟動恢復指南](../how-to/recover-training-after-load-cold-start.md)。
+10. **本機冷啟動**：
+    - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
+    - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
+    - 操作人員以 `python -m shiro_mlops.pipelines.smoke_check`（`make smoke-check`）在 Dagster 容器內檢查排程註冊與啟用狀態（任務排程的期望 cron 由任務設定推導）、各任務訓練與監控 job 的 selection 邊界，以及每個任務的累積進度（`{task_id} load accumulation`）、新鮮度（`{task_id} load freshness`）與兩個任務排程下一次 tick 的結果，並檢查 `issued_forecast_schedule`（第 6 項）的註冊、啟用狀態、期望 cron 與下一次 tick 的結果（例如尚無模型時的略過原因）；此檢查唯讀，只評估排程函式，不啟動 run。發布排程未註冊或 cron 不符為 `FAIL`；已註冊但未開啟為 `WAIT`，因冷啟動期間首次訓練成功後才開啟。另檢查 `forecast_track_record_schedule`（第 7 項）的註冊、啟用狀態與期望 cron；未註冊、cron 不符或未開啟皆為 `FAIL`，比照擷取排程而非發布排程，因彙整不依賴模型，冷啟動時就與擷取排程一起開啟。`forecast_view_export_schedule`（第 8 項）比照預報實績排程：未註冊、cron 不符或未開啟皆為 `FAIL`。`--require-ready` 讓任一 `WAIT` 也回傳結束碼 `1`；`--task <task_id>` 保留擷取、發布、預報實績與匯出排程檢查，任務相關檢查只涵蓋該任務，未知任務為用法錯誤（結束碼 `2`）並列出已部署任務。操作步驟見 [冷啟動恢復指南](../how-to/recover-training-after-load-cold-start.md)。

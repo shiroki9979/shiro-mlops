@@ -42,6 +42,19 @@ def mock_mlflow_offline_backend(
     yield uri
 
 
+@pytest.fixture(autouse=True)
+def isolate_forecast_view_upload_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host bucket, AWS key or region must never turn a test's export into a real upload."""
+    for name in (
+        "FORECAST_VIEW_S3_BUCKET",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_DEFAULT_REGION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
     """Lower every deployed task's training accumulation threshold and return the value."""

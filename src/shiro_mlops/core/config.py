@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import PositiveInt
+from pydantic import PositiveInt, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 if TYPE_CHECKING:
@@ -42,6 +42,20 @@ class Settings(BaseSettings):
     def models_dir(self) -> Path:
         """Root of the per-task model directories (ADR-0010)."""
         return self.DATA_DIR / "models"
+
+    @property
+    def published_dir(self) -> Path:
+        """Local directory of the Forecast View's published JSON, served under ``/published/``."""
+        return self.DATA_DIR / "published"
+
+    # Forecast View export upload (ADR-0015 §2.3). An empty bucket exports locally only.
+    FORECAST_VIEW_S3_BUCKET: str = ""
+    # The dedicated upload user's key; empty values leave boto3 to its default credential chain.
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: SecretStr = SecretStr("")
+    # The bucket's region: Terraform's aws_region variable (infra/terraform/variables.tf), whose
+    # aws_region output this must equal. Keep the default in sync with that variable's default.
+    AWS_DEFAULT_REGION: str = "ap-northeast-1"
 
     # MLflow
     MLFLOW_TRACKING_URI: str = "http://localhost:5001"

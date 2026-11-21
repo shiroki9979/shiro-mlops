@@ -17,6 +17,7 @@ from shiro_mlops.pipelines.definitions import all_assets, defs
 from shiro_mlops.pipelines.smoke_check import (
     EXPECTED_SCHEDULES,
     FORECAST_TRACK_RECORD_SCHEDULES,
+    FORECAST_VIEW_EXPORT_SCHEDULES,
     ISSUED_FORECAST_SCHEDULES,
     CheckStatus,
     Deployment,
@@ -39,6 +40,13 @@ ISSUED_SCHEDULE = "issued_forecast_schedule"
 # 全新部署上發布排程停用（WAIT）且 tick 因尚無模型略過（WAIT）。
 ISSUED_WAITS = 2
 TRACK_RECORD_SCHEDULE = "forecast_track_record_schedule"
+EXPORT_SCHEDULE = "forecast_view_export_schedule"
+# 擷取、預報實績與匯出排程停用時皆為 FAIL；冷啟動時一起開啟。
+ALWAYS_ON_SCHEDULES = (
+    len(EXPECTED_SCHEDULES)
+    + len(FORECAST_TRACK_RECORD_SCHEDULES)
+    + len(FORECAST_VIEW_EXPORT_SCHEDULES)
+)
 ALL_SCHEDULES = frozenset(schedule.name for schedule in defs.schedules)
 
 
@@ -216,10 +224,11 @@ def test_full_run_on_fresh_deployment_flags_stopped_schedules_and_waiting_readin
     assert "[WAIT] dynamic_horizon_forecast load accumulation" in report
     assert f"[WAIT] schedule {ISSUED_SCHEDULE}" in report
     assert f"[FAIL] schedule {TRACK_RECORD_SCHEDULE}" in report
+    assert f"[FAIL] schedule {EXPORT_SCHEDULE}" in report
     # 每個任務：兩個 job 通過、累積／新鮮度／兩個 tick 等待、兩個排程未啟動；
-    # 發布排程停用與其 tick 各等待一項；擷取與預報實績排程未啟動。
+    # 發布排程停用與其 tick 各等待一項；擷取、預報實績與匯出排程未啟動。
     tasks = len(deployed_tasks())
-    failed = len(EXPECTED_SCHEDULES) + len(FORECAST_TRACK_RECORD_SCHEDULES) + 2 * tasks
+    failed = ALWAYS_ON_SCHEDULES + 2 * tasks
     waiting = 4 * tasks + ISSUED_WAITS
     assert report.splitlines()[-1] == f"Summary: {2 * tasks} pass, {waiting} wait, {failed} fail"
     assert exit_code(results, require_ready=False) == 1
@@ -271,6 +280,7 @@ def test_task_scope_keeps_ingestion_schedules_and_drops_other_tasks() -> None:
         *(f"schedule {name}" for name in EXPECTED_SCHEDULES),
         *(f"schedule {name}" for name in ISSUED_FORECAST_SCHEDULES),
         *(f"schedule {name}" for name in FORECAST_TRACK_RECORD_SCHEDULES),
+        *(f"schedule {name}" for name in FORECAST_VIEW_EXPORT_SCHEDULES),
         f"schedule {names.training_schedule}",
         f"schedule {names.monitoring_schedule}",
     ]
@@ -293,7 +303,8 @@ def test_full_run_scoped_to_one_task_reports_only_that_task(
         assert task_id not in report
     assert f"schedule {ISSUED_SCHEDULE}" in report
     assert f"[FAIL] schedule {TRACK_RECORD_SCHEDULE}" in report
-    failed = len(EXPECTED_SCHEDULES) + len(FORECAST_TRACK_RECORD_SCHEDULES) + 2
+    assert f"[FAIL] schedule {EXPORT_SCHEDULE}" in report
+    failed = ALWAYS_ON_SCHEDULES + 2
     assert report.splitlines()[-1] == f"Summary: 2 pass, {4 + ISSUED_WAITS} wait, {failed} fail"
 
 
@@ -429,3 +440,41 @@ def test_track_record_schedule_check_survives_task_scope_without_launching_a_run
 
     assert _track_record_schedule(results).status is CheckStatus.FAIL
     assert dagster_instance.get_runs() == []
+
+
+def _export_schedule(results):
+    return next(r for r in results if r.name == f"schedule {EXPORT_SCHEDULE}")
+
+
+def test_stopped_export_schedule_fails_because_it_needs_no_model() -> None:
+    """匯出不依賴模型，尚無已發布預報時照常輸出空狀態，因此比照預報實績排程。"""
+    results = check_schedule_configuration(defs, running=ALL_SCHEDULES - {EXPORT_SCHEDULE})
+
+    stopped = _export_schedule(results)
+    assert stopped.status is CheckStatus.FAIL
+    assert "not running" in stopped.detail
+
+
+def test_unregistered_or_drifted_export_schedule_fails() -> None:
+    export_job = defs.resolve_job_def("forecast_view_export_job")
+    drifted = Definitions(
+        assets=all_assets,
+        jobs=[export_job],
+        schedules=[
+            ScheduleDefinition(
+                name=EXPORT_SCHEDULE,
+                job=export_job,
+                cron_schedule="25 * * * *",
+                execution_timezone="Asia/Taipei",
+            )
+        ],
+    )
+
+    missing = _export_schedule(
+        check_schedule_configuration(_scoped_definitions(), running=ALL_SCHEDULES)
+    )
+    cron = _export_schedule(check_schedule_configuration(drifted, running=ALL_SCHEDULES))
+
+    assert (missing.status, missing.detail) == (CheckStatus.FAIL, "not registered in Definitions")
+    assert cron.status is CheckStatus.FAIL
+    assert "'35 * * * *'" in cron.detail and "'25 * * * *'" in cron.detail

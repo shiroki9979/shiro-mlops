@@ -26,6 +26,13 @@ REQUIRED_HOST_PORTS = (("frontend", "8080"), ("api", "8000"))
 CONSOLE_BASE_PATH = "/console/"
 MISSING_ASSET_NAME = "definitely-missing-smoke-check.js"
 
+# 預報檢視匯出的兩個固定檔名；此腳本以 `uv run --no-project` 執行、不能 import shiro_mlops，
+# 變更時須同步 src/shiro_mlops/data/forecast_view.py 與 tests/fixtures/published/。
+PUBLISHED_FILES = ("latest_issued_forecast.json", "forecast_track_record.json")
+# 重述 frontend/nginx.conf 中 /published/ 的 add_header Cache-Control；變更時須同步該處。
+PUBLISHED_CACHE_CONTROL = "public, max-age=60"
+MISSING_PUBLISHED_PATH = "/published/definitely-missing-smoke-check.json"
+
 
 @dataclass(frozen=True)
 class App:
@@ -160,6 +167,30 @@ def check_missing_asset(base_url: str, prefix: str) -> None:
     require(status == 404, f"Missing static asset {path} returned HTTP {status}, expected 404")
 
 
+def check_published(base_url: str) -> None:
+    for name in PUBLISHED_FILES:
+        check_published_file(base_url, f"/published/{name}")
+    check_missing_published_file(base_url)
+
+
+def check_published_file(base_url: str, path: str) -> None:
+    status, body, headers = fetch(base_url, path)
+    require(status == 200, f"{path} returned HTTP {status}; has the export run yet?")
+    require("application/json" in headers.get("Content-Type", ""), f"{path} is not JSON")
+    cache_control = headers.get("Cache-Control", "")
+    require(
+        cache_control == PUBLISHED_CACHE_CONTROL,
+        f"{path} has Cache-Control {cache_control!r}, expected {PUBLISHED_CACHE_CONTROL!r}",
+    )
+    require(isinstance(json.loads(body), dict), f"{path} is not a JSON object")
+
+
+def check_missing_published_file(base_url: str) -> None:
+    """A missing export must not fall back to index.html with 200, as CloudFront does not."""
+    status, _, _ = fetch(base_url, MISSING_PUBLISHED_PATH)
+    require(status != 200, f"Missing published file {MISSING_PUBLISHED_PATH} returned HTTP 200")
+
+
 def check_api(base_url: str, expected_upstream_path: str | None) -> None:
     check_api_health(base_url, expected_upstream_path)
     check_api_prefix_redirect(base_url)
@@ -226,6 +257,7 @@ def main() -> int:
         if args.check_compose_bindings:
             check_compose_bindings()
         check_apps(args.base_url)
+        check_published(args.base_url)
         check_api(args.base_url, args.expected_upstream_path)
         if args.direct_api_url:
             check_direct_api(args.direct_api_url)

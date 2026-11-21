@@ -197,7 +197,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 ### 5.1 預報實績 `forecast_track_record`
 
-資產 `forecast_track_record`（[Dagster 排程](dagster-schedules.md)第 7 項，[ADR-0013 §2.3](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#23-預報檢視的最低呈現內容)）回傳 frozen dataclass `ForecastTrackRecord`（`data/forecast_track_record.py`），由 `io_manager` 以 `SHIRO-JSON-V1` 保存為 JSON 物件，下游匯出資產以 input 讀取。累積天數未滿 7 時：
+資產 `forecast_track_record`（[Dagster 排程](dagster-schedules.md)第 7 項，[ADR-0013 §2.3](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#23-預報檢視的最低呈現內容)）回傳 frozen dataclass `ForecastTrackRecord`（`data/forecast_track_record.py`），由 `io_manager` 以 `SHIRO-JSON-V1` 保存為 JSON 物件，下游的 `forecast_view_export` 以 input 讀取並投影為公開的預報實績 JSON（第 6 節）。累積天數未滿 7 時：
 
 ```json
 {"cutoff": "2026-11-20T10:00:00", "accumulated_days": 3, "metrics": null}
@@ -229,3 +229,62 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   - `lead_24`（物件）：提前 24 的 MAPE 與 MAE，即 `lead_time_curve` 第 24 格，欄位相同；窗內沒有提前 24 配對時 `mape` 與 `mae` 為 `null`。
   - `lead_24_series`（陣列）：窗內同時有提前 24 已發布預報與有效逐時觀測的目標小時，每點 `target_hour`（字串，格式同 `cutoff`）、`actual_load_mw`、`predicted_load_mw`（MW），依目標小時排序，每個目標小時恰好一點。缺的小時直接省略，不補 `null`。同一目標小時有兩份發布都落在提前 24 時（只在發布間隔不足一小時時發生）取發布時刻較晚者；曲線仍計入兩者。
 - 不含運行狀態、天氣來源、模型版本與資料缺口；窗內配對數與提前 24 配對數只記在 materialization metadata，不在輸出內。
+
+## 6. 預報檢視公開 JSON（`/published/`）
+
+資產 `forecast_view_export`（[Dagster 排程](dagster-schedules.md)第 8 項，[ADR-0015 §2.4](../adr/0015-publish-forecast-view-as-static-precomputed-output.md#24-公開資料契約)）每次執行都覆寫下列兩個固定檔名，不保留歷史。預報檢視只以相對路徑 `/published/<檔名>` 讀取；地端由 Nginx 提供地端目錄，雲端由 CloudFront 提供 S3（[預報檢視託管](forecast-view-hosting.md)）。
+
+| 檔名 | 內容 | 地端路徑 | S3 key |
+| :--- | :--- | :--- | :--- |
+| `latest_issued_forecast.json` | 最新已發布預報（§6.1） | `DATA_DIR/published/latest_issued_forecast.json` | `published/latest_issued_forecast.json` |
+| `forecast_track_record.json` | 預報實績（§6.2） | `DATA_DIR/published/forecast_track_record.json` | `published/forecast_track_record.json` |
+
+- **欄位逐一列舉**：兩份 JSON 由 `data/forecast_view.py` 逐欄投影產生，上游新增的欄位不會自動公開。運行狀態、負載起點、天氣值、天氣來源、模型版本與資料缺口都不輸出。
+- **時刻格式**：所有時刻為台灣本地時間、ISO 8601 帶 `+08:00` offset（例如 `2026-11-20T10:15:00+08:00`），觀眾瀏覽器不論位於哪個時區都能換算距當下的時間。與 §5.1 的 Dagster artifact（不帶時區）不同。
+- **編碼**：UTF-8 JSON，不含 `NaN` 或無限大；出現時匯出失敗，不寫出無效 JSON。HTTP `Content-Type` 為 `application/json`；`Cache-Control` 由 Nginx 與 CloudFront 決定，上傳端不設定物件 metadata。
+- **空狀態只由內容決定**：還沒有已發布預報、或累積天數未滿 7 時，兩份 JSON 仍照常輸出（見各小節），前端不以 HTTP 狀態碼推斷空狀態。
+- **fixtures**：`tests/fixtures/published/` 是兩份 JSON 的範例，由單元測試核對與匯出結果一致，也供 Nginx smoke check 掛載。
+
+### 6.1 最新已發布預報 `latest_issued_forecast.json`
+
+發布時刻最晚的一份已發布預報（[§3](#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast`），不論距今多久；過舊提示由前端依 `issued_at` 判斷。
+
+```json
+{
+  "issued_at": "2026-11-20T10:15:00+08:00",
+  "steps": [
+    {"target_hour": "2026-11-20T11:00:00+08:00", "predicted_load_mw": 31250.5},
+    {"target_hour": "2026-11-20T12:00:00+08:00", "predicted_load_mw": 31980.0}
+  ]
+}
+```
+
+- `issued_at`（字串或 `null`）：預報時刻，即發布時刻。
+- `steps`（陣列）：只含目標小時晚於 `issued_at` 的步，依目標小時排序；每步 `target_hour`（字串）與 `predicted_load_mw`（MW）。負載起點落後 $k$ 小時時，目標小時不晚於發布時刻的前 $k$ 步不輸出，因此步數為 $168 - k$。
+- 還沒有任何已發布預報時為 `{"issued_at": null, "steps": []}`。
+
+### 6.2 預報實績 `forecast_track_record.json`
+
+最近一次 `forecast_track_record` materialization（§5.1）的公開欄位，即 [ADR-0013 §2.3](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#23-預報檢視的最低呈現內容) 的公開欄位加上統計截至時刻。結構與 §5.1 相同，差別只在時刻帶 `+08:00`：
+
+```json
+{
+  "cutoff": "2026-11-20T10:00:00+08:00",
+  "accumulated_days": 9,
+  "metrics": {
+    "lead_time_curve": [
+      {"lead_time_hours": 1, "mape": 2.41, "mae": 612.5},
+      {"lead_time_hours": 168, "mape": null, "mae": null}
+    ],
+    "lead_24": {"lead_time_hours": 24, "mape": 4.87, "mae": 1240.3},
+    "lead_24_series": [
+      {"target_hour": "2026-11-13T09:00:00+08:00", "actual_load_mw": 25012.0, "predicted_load_mw": 25830.4}
+    ]
+  }
+}
+```
+
+- `cutoff`：統計截至時刻；`accumulated_days`：累積天數；`metrics`：未滿 7 天時為 `null`。各欄位的計算規則見 §5.1，數值原樣輸出、不另行四捨五入。
+- 還沒有已發布預報時為 `{"cutoff": "<統計截至時刻>", "accumulated_days": 0, "metrics": null}`。
+- `forecast_track_record` 從未 materialize 過時（全新環境）同為此空狀態，`cutoff` 取匯出執行當下的整點，即該時刻彙整在首次發布前會得到的結果。
+- 窗內配對數與提前 24 配對數不輸出（只在 §5.1 的 materialization metadata）。
