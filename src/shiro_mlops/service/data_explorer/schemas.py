@@ -56,3 +56,33 @@ class ListEnvelope(BaseModel):
     has_more: bool
     missing_slots: list[str] = Field(default_factory=list)
     timezone: Literal["Asia/Taipei"] = "Asia/Taipei"
+
+
+class SeriesPoint(BaseModel):
+    """One bucket start (RFC 3339, +08:00) and its value; `null` marks a missing bucket."""
+
+    t: str
+    v: float | None
+
+
+class Series(BaseModel):
+    """Time-ordered points for one whitelisted field and one group key."""
+
+    field: str
+    unit: str
+    group: dict[str, str] = Field(
+        default_factory=dict,
+        description="Group column to value, e.g. {'subject': 'nationwide'}; empty when ungrouped.",
+    )
+    points: list[SeriesPoint]
+
+
+class SeriesResponse(BaseModel):
+    """Bounded chart series for one dataset window, with the bucket actually applied."""
+
+    bucket: Literal["raw", "1h", "1d"]
+    agg: Literal["avg", "min", "max"] | None = Field(
+        description="Aggregation applied inside each bucket; null for raw, which ignores agg."
+    )
+    series: list[Series]
+    timezone: Literal["Asia/Taipei"] = "Asia/Taipei"

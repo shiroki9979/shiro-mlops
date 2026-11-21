@@ -14,13 +14,29 @@ from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError, ExplorerQueryError
-from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
+from shiro_mlops.service.data_explorer.hourly_load import (
+    HOURLY_LOAD_SERIES,
+    HourlyLoadReader,
+    HourlyLoadSeriesField,
+)
 from shiro_mlops.service.data_explorer.power import (
     NationalSupplyDemandReader,
     RegionalSupplyDemandReader,
     UnitGenerationReader,
 )
-from shiro_mlops.service.data_explorer.schemas import ListEnvelope, StatusResponse
+from shiro_mlops.service.data_explorer.schemas import (
+    ListEnvelope,
+    SeriesResponse,
+    StatusResponse,
+)
+from shiro_mlops.service.data_explorer.series import (
+    Agg,
+    Bucket,
+    SeriesReader,
+    SeriesRequest,
+    SeriesSpec,
+    TooManyPointsError,
+)
 from shiro_mlops.service.data_explorer.weather import (
     ForecastAuditReader,
     ForecastReader,
@@ -64,6 +80,36 @@ def _run_list(request: Request, reader_cls: type[DatasetReader]) -> ListEnvelope
         raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
 
 
+def _run_series(
+    request: Request,
+    spec: SeriesSpec,
+    *,
+    fields: list[str] | None,
+    bucket: Bucket,
+    agg: Agg,
+) -> SeriesResponse:
+    _ensure_enabled()
+    try:
+        series_request = SeriesRequest.build(
+            spec, _series_query_params(request), fields=fields, bucket=bucket, agg=agg
+        )
+        return SeriesReader(_engine(request), spec).read(series_request)
+    except TooManyPointsError as exc:
+        suggested = exc.suggested_bucket.value if exc.suggested_bucket else None
+        raise HTTPException(
+            status_code=422, detail={"message": str(exc), "suggested_bucket": suggested}
+        ) from exc
+    except ExplorerQueryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (DatabaseUnavailableError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
+
+
+def _series_query_params(request: Request) -> dict[str, str]:
+    """Single-valued view of the query string; `fields` is read separately as a list."""
+    return {key: value for key, value in request.query_params.items() if value != ""}
+
+
 @router.get("/status", response_model=StatusResponse)
 def get_status(request: Request) -> StatusResponse:
     """Return shared dataset availability, freshness, and completeness."""
@@ -86,6 +132,32 @@ def list_hourly_load(
     """List persisted hourly electricity load rows."""
     del start, end, subject, limit, cursor
     return _run_list(request, HourlyLoadReader)
+
+
+@router.get("/power/load/series", response_model=SeriesResponse)
+def hourly_load_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    subject: str | None = None,
+    fields: list[HourlyLoadSeriesField] | None = Query(default=None),
+    bucket: Bucket = Bucket.AUTO,
+    agg: Agg = Agg.AVG,
+) -> SeriesResponse:
+    """Chart series of hourly load per subject over an exact closed window of up to 92 days.
+
+    `bucket=auto` picks the finest of raw, 1h and 1d that keeps every series within 1,200
+    points and all series within 10,000 points; an explicit bucket over those limits is
+    rejected with 422 and a machine-readable `suggested_bucket`.
+    """
+    del start, end, subject
+    return _run_series(
+        request,
+        HOURLY_LOAD_SERIES,
+        fields=[field.value for field in fields] if fields else None,
+        bucket=bucket,
+        agg=agg,
+    )
 
 
 @router.get("/power/supply-demand", response_model=ListEnvelope)
