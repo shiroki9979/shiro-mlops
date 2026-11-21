@@ -10,7 +10,8 @@ threshold, and holdout, where the clean false positive rate and the recall on
 injected synthetic anomalies are measured.
 
 Models are persisted as ``.npz`` arrays (``allow_pickle=False``) plus JSON and
-served by a numpy forward pass (ADR-0010).
+served by a numpy forward pass (ADR-0010; tests/unit/test_model_persistence_boundary.py
+enforces ``allow_pickle=False`` on every ``np.load``).
 """
 
 from __future__ import annotations
