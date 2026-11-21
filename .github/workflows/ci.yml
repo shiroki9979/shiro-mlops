@@ -154,3 +154,143 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: uv run --no-project python scripts/check_conventions.py comment-kinds --base "$BASE_SHA" --head "$HEAD_SHA"
+
+  # Applies the main Terraform configuration, then uploads the Forecast View and smoke-checks it
+  # (docs/reference/terraform-state-and-deployment.md, "CD 部署 (main)"). Not offline-tested;
+  # the first release's ops acceptance verifies it. A failed step fails the run; nothing rolls back.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Every pre-existing job, so no failing release reaches the cloud. Not terraform-plan: it runs on
+    # pull requests only, and needing a skipped job would skip this one.
+    needs: [lint-and-test, frontend, nginx, infra, docs]
+    runs-on: ubuntu-latest
+    # Serialises deploys so two runs never write the state or site/ at once. A deploy in progress is
+    # never cancelled; GitHub keeps one pending run per group, so a newer push replaces a queued one.
+    concurrency:
+      group: deploy-forecast-view
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      # Until ops acceptance sets the variable, AWS is not provisioned: skip with a notice so main
+      # stays green, and start deploying as soon as it is set.
+      - name: Check that AWS deployment is configured
+        id: aws
+        env:
+          APPLY_ROLE_ARN: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+        run: |
+          if [[ -z "$APPLY_ROLE_ARN" ]]; then
+            echo "::notice title=Deploy skipped::AWS_TERRAFORM_APPLY_ROLE_ARN is not set, so the Forecast View was not deployed"
+            echo "Deploy skipped: repository variable AWS_TERRAFORM_APPLY_ROLE_ARN is not set." >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.aws.outputs.configured == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        if: steps.aws.outputs.configured == 'true'
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+
+      # The wrapper would mix its own lines into `terraform show -json` and `terraform output -raw`.
+      - name: Set up Terraform
+        if: steps.aws.outputs.configured == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.4"
+          terraform_wrapper: false
+
+      - name: Assume the Terraform apply role
+        if: steps.aws.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Initialise the main Terraform configuration with the S3 state backend
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: infra/terraform
+        run: terraform init -input=false -backend-config="bucket=${TF_STATE_BUCKET}"
+
+      - name: Plan the main Terraform configuration
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: infra/terraform
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Render the saved plan as JSON
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: infra/terraform
+        run: terraform show -json tfplan > tfplan.json
+
+      # Exit 1 on any delete, replacement or forget stops the job before apply; those changes are
+      # applied by hand (docs/reference/terraform-state-and-deployment.md).
+      - name: Check the plan has no deletes, replacements or forgets
+        if: steps.aws.outputs.configured == 'true'
+        run: uv run --no-project python scripts/check_plan_safety.py infra/terraform/tfplan.json >> "$GITHUB_STEP_SUMMARY"
+
+      # Applies the saved plan that passed the check, not a fresh plan.
+      - name: Apply the checked plan
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: infra/terraform
+        run: terraform apply -input=false tfplan
+
+      # Read now: the site deploy role assumed below cannot read the state.
+      - name: Read Terraform outputs
+        if: steps.aws.outputs.configured == 'true'
+        id: outputs
+        working-directory: infra/terraform
+        run: |
+          echo "s3_bucket_name=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "forecast_view_url=$(terraform output -raw forecast_view_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: steps.aws.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/package.json
+
+      - name: Enable pinned pnpm
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: frontend
+        run: corepack enable
+
+      - name: Install frontend dependencies
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the Forecast View
+        if: steps.aws.outputs.configured == 'true'
+        working-directory: frontend
+        run: pnpm --filter @shiro-mlops/forecast-view run build
+
+      - name: Assume the site deploy role
+        if: steps.aws.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_SITE_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload the Forecast View to site/
+        if: steps.aws.outputs.configured == 'true'
+        env:
+          S3_BUCKET_NAME: ${{ steps.outputs.outputs.s3_bucket_name }}
+        run: scripts/upload_forecast_view_site.sh frontend/apps/forecast-view/dist "$S3_BUCKET_NAME"
+
+      # Run directly rather than through `make cloud-smoke`, which reports every failure as exit 2.
+      - name: Smoke-check the deployed Forecast View
+        if: steps.aws.outputs.configured == 'true'
+        env:
+          FORECAST_VIEW_URL: ${{ steps.outputs.outputs.forecast_view_url }}
+        run: uv run --no-project python scripts/smoke_cloudfront.py --base-url "$FORECAST_VIEW_URL"

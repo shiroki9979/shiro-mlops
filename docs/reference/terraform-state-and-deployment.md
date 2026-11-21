@@ -78,3 +78,27 @@
 - apply 角色的 IAM 權限只限 `shiro-mlops-*`，並對 state bucket、OIDC provider、plan 與 apply 角色有明確 Deny；在 state bucket 內只能存取主設定的 state 與 lockfile。
 - state bucket 開啟 versioning、SSE 與完整的 public access block。
 - 網站上傳角色只能寫 `site/*`；`budget_alert_email` 為 sensitive。
+
+## 5. CD 部署 (main)
+
+`.github/workflows/ci.yml` 的 `deploy` job 在 release 合併到 `main` 後 apply 主設定並部署預報檢視；實作於 [GitHub #188](https://github.com/shiroki9979/shiro-mlops/issues/188)。這個 job 的順序、`needs` 與 `concurrency` 不做離線測試，由營運驗收的第一次 release 驗證。
+
+- **觸發條件**：只在 `main` 分支的 push 執行；每次 push 都執行，不加 path filter，沒有基礎設施變更時 apply 是 no-op，同時能發現 drift。
+- **`needs`**：`lint-and-test`、`frontend`、`nginx`、`infra`、`docs` 全部通過才執行，任一失敗就不部署。不依賴 PR plan job：它只在 pull request 執行，push 時被略過，依賴被略過的 job 會讓部署 job 一起被略過。
+- **權限**：只有這個 job 授予 `id-token: write`（另有 `contents: read`）；workflow 層級不另授權限。
+
+步驟依序執行，任一步失敗即停止：
+
+| 順序 | 角色 | 步驟 |
+| :--- | :--- | :--- |
+| 1 | apply 角色 | 對主設定 `terraform init`（state bucket 以 `-backend-config="bucket=…"` 從 repository variable `TF_STATE_BUCKET` 傳入）→ `plan -out=tfplan`（取得 lockfile）→ `show -json` → plan 安全檢查（摘要寫進 job summary）→ `apply tfplan`。套用的是剛通過檢查的那份已存 plan；含刪除、替換或 `forget` 時檢查以結束碼 1 失敗，不 apply |
+| 2 | apply 角色 | 以 `terraform output -raw` 讀取 `s3_bucket_name` 與 `forecast_view_url`；網站上傳角色讀不到 state，因此在換角色前讀取 |
+| 3 | 無 | 建置預報檢視（`pnpm --filter @shiro-mlops/forecast-view run build`） |
+| 4 | 網站上傳角色 | `scripts/upload_forecast_view_site.sh` 依[預報檢視的雲端託管 §5](forecast-view-hosting.md#5-部署與驗證) 上傳 `site/`：先上傳 `index.html` 以外的檔案，再上傳 `index.html`，最後以 `sync --delete` 刪除前一版的 assets；不做 invalidation。建置目錄沒有 `index.html` 時以結束碼 2 停止，不執行 `sync --delete` |
+| 5 | 無 | 以 `forecast_view_url` 直接執行 `scripts/smoke_cloudfront.py`，跑完整項目（含 `/published/` 新鮮度） |
+
+`budget_alert_email` 由 Actions secret `BUDGET_ALERT_EMAIL` 以環境變數 `TF_VAR_budget_alert_email` 傳入；變數與 secret 的完整清單見本文件「Repository variables 與 secrets」一節。
+
+- **串行**：`concurrency` group `deploy-forecast-view`，`cancel-in-progress: false`，兩次部署不會同時寫 state 或 `site/`，執行中的部署不會被取消。GitHub 每個 group 只保留一個等待中的執行，排隊期間又有新的 push 時，較舊的等待中執行會被取消，由較新的 `main` 取代。
+- **失敗不回滾**：任一步失敗只讓 workflow 失敗。apply 之後的步驟失敗時，已套用的基礎設施變更與已上傳的 `site/` 維持原狀；需要復原時由人以 bucket 的舊版本手動處理。plan 含刪除或替換時改由人在本機 apply（第 1 節）。
+- **略過條件**：repository variable `AWS_TERRAFORM_APPLY_ROLE_ARN` 未設定時，job 的第一步寫一行 `::notice::` 與一行 job summary，其餘步驟都不執行，job 以成功結束，`main` 不因尚未開通 AWS 而變紅。營運驗收設定這個變數後，下一次 `main` push 起自動部署；其他變數或 secret 缺漏時，對應步驟失敗。

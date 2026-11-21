@@ -162,6 +162,9 @@ state bucket 由 bootstrap 層自己建立，因此第一次以本機 state appl
 
 網站上傳角色只接受 `main` 分支 push 的 workflow 執行，PR 或其他分支的 workflow 無法 assume。
 
+> [!IMPORTANT]
+> **第一次 release 前，地端 key 與匯出須先上線**：設定 `AWS_TERRAFORM_APPLY_ROLE_ARN` 後，每次 `main` push 都會 apply、上傳 `site/` 並執行雲端 smoke check（見 [Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)的「CD 部署 (main)」一節）。先依第 6 節建立地端 access key，並確認匯出已上傳到 `published/`，再合併第一次 release；否則 smoke check 的 `/published/` JSON 與預報時刻新鮮度項目會失敗，workflow 標紅。
+
 ---
 
 ## 6. 建立地端上傳用 access key
