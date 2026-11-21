@@ -1,3 +1,5 @@
+import { formatNumber } from '@shiro-mlops/shared/i18n/format'
+import type { Locale } from '@shiro-mlops/shared/i18n/locale-store'
 import type { Series } from '@/schemas/data-explorer'
 
 // A series ready to draw: the container has already resolved its display name and colour,
@@ -9,6 +11,19 @@ export interface PlottedSeries {
   color: string
   unit: string
   points: Series['points']
+  // A second reading for the tooltip, e.g. MW also shown in Taipower's 萬瓩.
+  tooltipAlternate?: TooltipAlternate
+}
+
+export interface TooltipAlternate {
+  divisor: number
+  format: (value: string) => string
+}
+
+// Gray bands mark buckets where no series has data; amber bands, where some series do and some do not.
+export interface ChartBands {
+  gaps: GapRange[]
+  incomplete: GapRange[]
 }
 
 export type ChartRow = { t: number } & Record<string, number | null>
@@ -73,4 +88,29 @@ function mergeRanges(ranges: GapRange[]): GapRange[] {
     else merged.push({ ...range })
   }
   return merged
+}
+
+// Each bucket is classified across all series; a run of one class spans to the next bucket start.
+export function bucketBands(series: PlottedSeries[]): ChartBands {
+  const rows = toChartRows(series)
+  const keys = series.map((item) => item.key)
+  const bands: ChartBands = { gaps: [], incomplete: [] }
+  rows.forEach((row, index) => {
+    const nulls = keys.filter((key) => row[key] === null).length
+    if (nulls === 0) return
+    const target = nulls === keys.length ? bands.gaps : bands.incomplete
+    const to = index + 1 < rows.length ? rows[index + 1].t : trailingEnd(rows)
+    const last = target[target.length - 1]
+    if (last && last.to === row.t) last.to = to
+    else target.push({ from: row.t, to })
+  })
+  return bands
+}
+
+// Tooltips of every renderer show a value in its unit, then the alternate reading if the series has one.
+export function formatSeriesValue(item: PlottedSeries, value: number, locale: Locale): string {
+  const primary = `${formatNumber(value, locale)} ${item.unit}`
+  const alternate = item.tooltipAlternate
+  if (!alternate) return primary
+  return `${primary}${alternate.format(formatNumber(value / alternate.divisor, locale))}`
 }

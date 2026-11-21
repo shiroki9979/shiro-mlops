@@ -11,9 +11,9 @@ import {
 } from 'recharts'
 import { EMPTY_VALUE, formatDateTime, formatNumber } from '@shiro-mlops/shared/i18n/format'
 import { type Locale, useLocale } from '@shiro-mlops/shared/i18n/locale-store'
-import { CHART_AXIS, CHART_BRUSH, CHART_GAP_BAND, CHART_GRID } from '@/lib/chart-palette'
+import { CHART_AXIS, CHART_BRUSH, CHART_GAP_BAND, CHART_GRID, CHART_INCOMPLETE_BAND } from '@/lib/chart-palette'
 import type { ChartBrush } from './chart-brush'
-import { type ChartRow, type PlottedSeries, gapRanges, toChartRows } from './chart-series'
+import { type ChartBands, type ChartRow, type GapRange, type PlottedSeries, formatSeriesValue, gapRanges, toChartRows } from './chart-series'
 
 // Dots only while they stay legible; denser lines are read from the line and the tooltip.
 const MAX_POINTS_WITH_DOTS = 48
@@ -23,12 +23,18 @@ const BRUSH_OPACITY = 0.2
 export interface ChartBodyProps {
   series: PlottedSeries[]
   brush: ChartBrush
+  // Present when the chart separates all-null gaps from partly null buckets; otherwise any null is a gap.
+  bands?: ChartBands
 }
 
 // The first unit takes the left axis and a second unit the right one; the spec asks for two
 // axes when a chart mixes units.
-export function SeriesLineChart({ series, brush }: ChartBodyProps) {
+export function SeriesLineChart({ series, brush, bands }: ChartBodyProps) {
   const locale = useLocale()
+  const shaded: [GapRange[], string][] = [
+    [bands?.gaps ?? gapRanges(series), CHART_GAP_BAND],
+    [bands?.incomplete ?? [], CHART_INCOMPLETE_BAND],
+  ]
   const rows = toChartRows(series)
   const units = [...new Set(series.map((item) => item.unit))].slice(0, 2)
   const showDots = rows.length <= MAX_POINTS_WITH_DOTS
@@ -61,18 +67,20 @@ export function SeriesLineChart({ series, brush }: ChartBodyProps) {
               label={{ value: unit, position: 'top', offset: 14, fill: CHART_AXIS, fontSize: 11 }}
             />
           ))}
-          {gapRanges(series).map((gap) => (
-            <ReferenceArea
-              key={gap.from}
-              x1={gap.from}
-              x2={gap.to}
-              yAxisId={units[0]}
-              fill={CHART_GAP_BAND}
-              fillOpacity={GAP_BAND_OPACITY}
-              stroke="none"
-              ifOverflow="extendDomain"
-            />
-          ))}
+          {shaded.flatMap(([ranges, fill]) =>
+            ranges.map((gap) => (
+              <ReferenceArea
+                key={`${fill}-${gap.from}`}
+                x1={gap.from}
+                x2={gap.to}
+                yAxisId={units[0]}
+                fill={fill}
+                fillOpacity={GAP_BAND_OPACITY}
+                stroke="none"
+                ifOverflow="extendDomain"
+              />
+            )),
+          )}
           {brush.selection && (
             <ReferenceArea
               x1={brush.selection.from}
@@ -125,7 +133,7 @@ export function SeriesTooltip({ active, row, series, locale }: SeriesTooltipProp
             <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
             <span>{item.name}</span>
             <span className="ml-auto font-mono">
-              {value === null || value === undefined ? EMPTY_VALUE : `${formatNumber(value, locale)} ${item.unit}`}
+              {value === null || value === undefined ? EMPTY_VALUE : formatSeriesValue(item, value, locale)}
             </span>
           </p>
         )

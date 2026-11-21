@@ -247,6 +247,27 @@ export const handlers = [
     }),
   ),
 
+  http.get('*/data/power/supply-demand/series', () =>
+    HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      bucket: 'raw',
+      agg: null,
+      series: ['curr_load_mw', 'real_hr_maxi_sply_capacity_mw'].map((field, index) => ({
+        field,
+        unit: 'MW',
+        group: {},
+        points: [
+          { t: '2026-09-09T19:50:00+08:00', v: 32000 + index * 4000 },
+          { t: '2026-09-09T20:00:00+08:00', v: 32421 + index * 4000 },
+        ],
+      })),
+    }),
+  ),
+
+  http.get('*/data/power/regional/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: 'raw', agg: null, series: [] }),
+  ),
+
   http.get('*/data/power/regional', () =>
     HttpResponse.json({ timezone: 'Asia/Taipei', items: [], next_cursor: null, has_more: false, missing_slots: [] }),
   ),

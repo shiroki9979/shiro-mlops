@@ -1,7 +1,7 @@
 # API 介面規格 (REST Interface)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 2 節拆出。
@@ -193,7 +193,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 參數 | 型別 | 預設 | 說明 |
 | --- | --- | --- | --- |
 | `start`、`end` | RFC 3339 | `end` = 現在，`start` = `end` − 24 小時 | 與 list 相同的精確閉區間；無 offset 時視為台北時間。窗口最長 92 天，與各 list 的天數上限無關。 |
-| `fields` | 可重複的列舉 | 該資料集的預設欄位（見 §5.4） | `fields=a&fields=b`；重複的欄位只產生一條 series。 |
+| `fields` | 可重複的列舉 | 該資料集的預設欄位（§5.4） | `fields=a&fields=b`；重複的欄位只產生一條 series，series 依請求順序排列。 |
 | `group_by` | 依資料集的列舉 | 該資料集的預設分組 | 只有允許切換分組的資料集接受（見 §5.4）；其餘資料集帶此參數回 422。 |
 | `bucket` | `auto` \| `raw` \| `1h` \| `1d` | `auto` | `auto` 解析為同時符合兩個點數上限的最細粒度（依 `raw`、`1h`、`1d` 順序）。 |
 | `agg` | `avg` \| `min` \| `max` | `avg` | bucket 內的時間聚合；`raw` 忽略此參數。 |
@@ -245,7 +245,9 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 
 | 資料集 | 路徑 | `fields` 白名單（單位） | 分組 | 篩選 | 補值 |
 | --- | --- | --- | --- | --- | --- |
-| 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW） | 固定依 `subject` | `subject` | 有（節奏 1 小時） |
+| 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW）。預設 `load_mw` | 固定依 `subject` | `subject` | 有（節奏 1 小時） |
+| 全台供需 | `GET /data/power/supply-demand/series` | 功率（MW，萬瓩 × 10）：`curr_load_mw`、`real_hr_maxi_sply_capacity_mw`、`fore_maxi_sply_capacity_mw`、`fore_peak_dema_load_mw`、`fore_peak_resv_capacity_mw`、`yday_maxi_sply_capacity_mw`、`yday_peak_dema_load_mw`、`yday_peak_resv_capacity_mw`；百分比（%）：`curr_util_rate_pct`、`fore_peak_resv_rate_pct`、`yday_peak_resv_rate_pct`。預設 `curr_load_mw`、`real_hr_maxi_sply_capacity_mw` | 無（`group` 為 `{}`） | 無 | 有（節奏 10 分鐘） |
+| 區域供需 | `GET /data/power/regional/series` | `load_mw`、`generation_mw`（MW，萬瓩 × 10）。預設 `load_mw` | 固定依 `region`，不提供四區合成 | `region`（四區之一，驗證同 list）；不接受 `completeness` | 有（節奏 10 分鐘）；某區缺少該時段時，該區的點為 `null` |
 | 機組發電 | `GET /data/power/units/series` | `net_generation_mw`（MW，預設）、`capacity_mw`（MW） | `group_by=unit_type`（預設，依機組類型）或 `group_by=none`（所有成員的總和，`group` 為 `{}`） | `unit_type`、`unit_name`（精確比對，縮小合成的成員範圍） | 有（節奏 10 分鐘） |
 | CWA 觀測批次審計 | `GET /data/audits/cwa-observations/series` | 不接受；固定為 `batch_count`（`count`） | 固定依 `status` | `status`、`missing_station_id` | 無 |
 | CWA 預報版本審計 | `GET /data/audits/cwa-forecasts/series` | 不接受；固定為 `version_count`（`count`） | 固定依 `status` | `dataset_id`、`status`、`missing_geocode` | 無 |

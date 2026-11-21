@@ -10,6 +10,8 @@ export const CHART_SURFACE = '#0b1224'
 export const CHART_GRID = '#334155'
 export const CHART_AXIS = '#64748b'
 export const CHART_GAP_BAND = '#64748b'
+// Buckets where only some series have data, e.g. a region missing from a regional slot.
+export const CHART_INCOMPLETE_BAND = '#f59e0b'
 // The pending brush range, in the console accent so it reads as a selection rather than data.
 export const CHART_BRUSH = '#22d3ee'
 

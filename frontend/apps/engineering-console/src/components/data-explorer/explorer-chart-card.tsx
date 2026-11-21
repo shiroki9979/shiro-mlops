@@ -10,7 +10,9 @@ import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
 import type { Series, SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { type ChartBrush, useChartBrush } from './chart-brush'
-import { gapRanges, type PlottedSeries } from './chart-series'
+import { ChartFieldPicker } from './chart-field-picker'
+import { isDefaultFieldSelection, selectedChartFields } from './chart-fields'
+import { bucketBands, type ChartBands, gapRanges, type PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { SeriesStackedAreaChart } from './series-stacked-area-chart'
@@ -31,6 +33,9 @@ const GROUP_LABELS: Record<NonNullable<ExplorerChartConfig['groupLabels']>, (val
 const BUCKET_OPTIONS = ['auto', 'raw', '1h', '1d'] as const
 const AGG_OPTIONS = ['avg', 'min', 'max'] as const
 const INVALID_QUERY_STATUS = 422
+// SYNC(src/shiro_mlops/service/data_explorer/values.py): WAN_KW_TO_MW.
+const MW_PER_WAN_KW = 10
+const POWER_UNIT = 'MW'
 const DATABASE_UNAVAILABLE_STATUS = 503
 
 type BucketOption = (typeof BUCKET_OPTIONS)[number]
@@ -41,7 +46,7 @@ interface ExplorerChartCardProps {
   // The same window and filters the table uses, so chart and table always show one slice.
   query: Record<string, string | undefined>
   chartSearch: ChartSearch
-  onSettingChange: (key: ChartSearchKey, value: string) => void
+  onSettingChange: (key: ChartSearchKey, value: string | string[] | undefined) => void
   // A brushed range becomes the shared window, the same URL path as the quick ranges and shifts.
   onWindowChange: (window: ExplorerWindow) => void
 }
@@ -58,7 +63,8 @@ export function ExplorerChartCard({
   const chartText = m.explorer.chart
   const bucket = optionOr(chartSearch.bucket, BUCKET_OPTIONS, 'auto')
   const agg = optionOr(chartSearch.agg, AGG_OPTIONS, 'avg')
-  const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch))
+  const fields = selectedChartFields(chartSearch.fields, chart.fields)
+  const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch, fields))
   const plotted = seriesQuery.data ? plotSeries(seriesQuery.data.series, chart, m) : []
   const resolvedBucket = seriesQuery.data?.bucket
   const brush = useChartBrush((selection) => {
@@ -95,6 +101,13 @@ export function ExplorerChartCard({
               options={chart.groupOptions.map((option) => [option, chartText.groupOptions[option]])}
               // The API default grouping stays out of the URL, like the default bucket and agg.
               onChange={(value) => onSettingChange('group_by', value === chart.groupOptions?.[0] ? '' : value)}
+            />
+          )}
+          {chart.fieldOptions && chart.fieldOptions.length > 1 && (
+            <ChartFieldPicker
+              options={chart.fieldOptions}
+              selected={fields}
+              onChange={(next) => onSettingChange('fields', isDefaultFieldSelection(next, chart.fields) ? undefined : next)}
             />
           )}
           <ChartSelect
@@ -134,16 +147,24 @@ function ChartBody({ chart, query, plotted, brush, text }: ChartBodyStateProps) 
   if (query.isError) return <p className="text-sm text-rose-300">{seriesErrorMessage(query.error, text)}</p>
   if (plotted.length === 0) return <p className="text-sm text-slate-300">{text.empty}</p>
   const Renderer = CHART_RENDERERS[chart.type]
+  const bands: ChartBands | undefined = chart.markIncompleteBuckets ? bucketBands(plotted) : undefined
+  const gaps = bands?.gaps ?? gapRanges(plotted)
   return (
     <>
       <div className="cursor-crosshair select-none">
-        <Renderer series={plotted} brush={brush} />
+        <Renderer series={plotted} brush={brush} bands={bands} />
       </div>
       <p className="mt-2 text-xs text-slate-500">{text.brushHint}</p>
-      {gapRanges(plotted).length > 0 && (
+      {gaps.length > 0 && (
         <p className="mt-2 flex items-center gap-2 text-xs text-slate-400">
           <span className="inline-block h-3 w-4 rounded-sm bg-slate-500/30" />
           {text.gapLegend}
+        </p>
+      )}
+      {bands && bands.incomplete.length > 0 && (
+        <p className="mt-2 flex items-center gap-2 text-xs text-slate-400">
+          <span className="inline-block h-3 w-4 rounded-sm bg-amber-500/30" />
+          {text.incompleteLegend}
         </p>
       )}
     </>
@@ -182,11 +203,16 @@ function ChartSelect({ label, value, options, disabled, onChange }: ChartSelectP
   )
 }
 
-function seriesParams(chart: ExplorerChartConfig, query: Record<string, string | undefined>, chartSearch: ChartSearch): QueryParams {
-  if (chart.measure === 'count') return { ...query, bucket: withoutDefault('bucket', chartSearch.bucket) }
+function seriesParams(
+  chart: ExplorerChartConfig,
+  query: Record<string, string | undefined>,
+  chartSearch: ChartSearch,
+  fields: string[],
+): QueryParams {
+  if (chart.measure === 'count') return { ...seriesFilterValues(chart, query), bucket: withoutDefault('bucket', chartSearch.bucket) }
   return {
-    ...query,
-    fields: chartSearch.fields ?? chart.fields,
+    ...seriesFilterValues(chart, query),
+    fields,
     group_by: chartSearch.group_by,
     bucket: withoutDefault('bucket', chartSearch.bucket),
     agg: withoutDefault('agg', chartSearch.agg),
@@ -196,6 +222,14 @@ function seriesParams(chart: ExplorerChartConfig, query: Record<string, string |
 function appliedAggText(chart: ExplorerChartConfig, agg: SeriesResponse['agg'], text: Messages['explorer']['chart']): string {
   if (chart.measure === 'count') return text.count
   return agg ? text.aggs[agg] : EMPTY_VALUE
+}
+
+// The window always travels; dataset filters only when the series endpoint declares them.
+function seriesFilterValues(chart: ExplorerChartConfig, query: Record<string, string | undefined>) {
+  const allowed = chart.seriesFilters
+  if (!allowed) return query
+  const { start, end } = query
+  return { start, end, ...Object.fromEntries(allowed.map((key) => [key, query[key]])) }
 }
 
 function withoutDefault(key: ChartSearchKey, value: string | string[] | undefined): string | undefined {
@@ -216,6 +250,10 @@ function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages): 
     color: categoryColor(palette, chart.colorBy ? item.group[chart.colorBy.group] : undefined, index),
     unit: item.unit,
     points: item.points,
+    tooltipAlternate:
+      chart.tooltipWanKw && item.unit === POWER_UNIT
+        ? { divisor: MW_PER_WAN_KW, format: m.explorer.chart.wanKw }
+        : undefined,
   }))
 }
 

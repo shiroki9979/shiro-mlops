@@ -15,11 +15,21 @@ from tests.scenarios.data_explorer_series import (
     SERIES_SCENARIOS,
     series_client,
 )
+from tests.scenarios.data_explorer_supply_demand_series import SUPPLY_DEMAND_SERIES_SCENARIOS
 from tests.scenarios.data_explorer_unit_series import UNIT_SERIES_SCENARIOS
 
 
 @pytest.mark.parametrize("scenario", SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__)
 def test_series_scenarios_on_sqlite(scenario, test_repo: TimeSeriesRepository) -> None:
+    scenario(test_repo)
+
+
+@pytest.mark.parametrize(
+    "scenario", SUPPLY_DEMAND_SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__
+)
+def test_supply_demand_series_scenarios_on_sqlite(
+    scenario, test_repo: TimeSeriesRepository
+) -> None:
     scenario(test_repo)
 
 

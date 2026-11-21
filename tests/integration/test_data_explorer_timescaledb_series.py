@@ -6,6 +6,7 @@ from sqlalchemy.engine import Engine
 from shiro_mlops.data.repository import TimeSeriesRepository
 from tests.scenarios.data_explorer_audit_series import AUDIT_SERIES_SCENARIOS
 from tests.scenarios.data_explorer_series import SERIES_SCENARIOS
+from tests.scenarios.data_explorer_supply_demand_series import SUPPLY_DEMAND_SERIES_SCENARIOS
 from tests.scenarios.data_explorer_unit_series import UNIT_SERIES_SCENARIOS
 
 
@@ -28,6 +29,17 @@ def test_audit_series_scenarios_on_timescaledb(
 @pytest.mark.parametrize("data_explorer_timescaledb_engine", ["Asia/Taipei"], indirect=True)
 @pytest.mark.parametrize("scenario", UNIT_SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__)
 def test_unit_series_scenarios_on_timescaledb(
+    scenario, data_explorer_timescaledb_engine: Engine
+) -> None:
+    scenario(TimeSeriesRepository(engine=data_explorer_timescaledb_engine, auto_init=False))
+
+
+# WHY-NOT(SUPPLY_DEMAND_UTC_SESSION): the snapshot repositories write naive UTC instants and
+# rely on a UTC session, as the power pagination suite does; bucketing names Asia/Taipei itself.
+@pytest.mark.parametrize(
+    "scenario", SUPPLY_DEMAND_SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__
+)
+def test_supply_demand_series_scenarios_on_timescaledb(
     scenario, data_explorer_timescaledb_engine: Engine
 ) -> None:
     scenario(TimeSeriesRepository(engine=data_explorer_timescaledb_engine, auto_init=False))

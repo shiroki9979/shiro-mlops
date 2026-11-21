@@ -19,6 +19,7 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
+from shiro_mlops.service.data_explorer.supply_demand_series import regional_series_filters
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import optional_time, to_float, to_mw, to_taiwan
 
@@ -110,12 +111,9 @@ def _completeness_clause(db: ExplorerDb, completeness: str, sql_params: dict[str
 
 def _regional_filters(db: ExplorerDb, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
     clauses, sql_params = db.time_window("observed_at", query.window)
-    region = query.filters.get("region")
-    if region:
-        if region not in REGIONAL_SUPPLY_DEMAND_REGIONS:
-            raise ExplorerQueryError("region must be one of 北部, 中部, 南部, 東部")
-        clauses.append("region = :region")
-        sql_params["region"] = region
+    region_clauses, region_params = regional_series_filters(query.filters)
+    clauses.extend(region_clauses)
+    sql_params.update(region_params)
     completeness = _validate_completeness(query.filters.get("completeness"))
     if completeness:
         clauses.append(_completeness_clause(db, completeness, sql_params))
