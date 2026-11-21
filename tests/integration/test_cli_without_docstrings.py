@@ -5,16 +5,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from rederive_hourly_actual_load import CLI_DESCRIPTION as REDERIVE_DESCRIPTION
 
 from shiro_mlops.pipelines import smoke_check
+from shiro_mlops.pipelines.smoke_check import CLI_DESCRIPTION as SMOKE_CHECK_DESCRIPTION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REDERIVE_DESCRIPTION = (
-    "Derive hourly actual load for stored regional snapshots the scheduled asset never covered."
-)
-SMOKE_CHECK_DESCRIPTION = (
-    "Container smoke check: schedule configuration, per-task readiness, and forecast issuing."
-)
 
 
 def _unwrapped(help_text: str) -> str:
@@ -36,8 +32,8 @@ def _unwrapped(help_text: str) -> str:
             marks=pytest.mark.xfail(
                 strict=True,
                 reason=(
-                    "lightgbm 4.7.0 crashes on import under -OO: lightgbm/dask.py calls "
-                    "LGBMClassifier.__init__.__doc__.partition(), and shiro_mlops.pipelines "
+                    "TODO(#198): lightgbm 4.7.0 crashes on import under -OO: lightgbm/dask.py "
+                    "calls LGBMClassifier.__init__.__doc__.partition(), and shiro_mlops.pipelines "
                     "imports lightgbm before smoke_check parses arguments"
                 ),
             ),

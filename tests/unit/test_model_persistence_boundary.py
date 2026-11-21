@@ -5,16 +5,16 @@ No module under src/ may import pickle or joblib, and every ``np.load`` call mus
 """
 
 import ast
-from pathlib import Path
 
 import pytest
 
-SRC_DIR = Path(__file__).resolve().parents[2] / "src"
+from tests.source_scan import SRC_DIR, scan_sources
+
 FORBIDDEN_MODULES = frozenset({"pickle", "joblib"})
 
 
-def _imported_top_level_modules(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _imported_top_level_modules(source: str) -> set[str]:
+    tree = ast.parse(source)
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -25,14 +25,12 @@ def _imported_top_level_modules(path: Path) -> set[str]:
 
 
 def test_src_never_imports_pickle_or_joblib() -> None:
-    offenders = {
-        str(path.relative_to(SRC_DIR)): sorted(
-            _imported_top_level_modules(path) & FORBIDDEN_MODULES
-        )
-        for path in SRC_DIR.rglob("*.py")
-    }
+    offenders = scan_sources(
+        SRC_DIR,
+        lambda path, source: sorted(_imported_top_level_modules(source) & FORBIDDEN_MODULES),
+    )
 
-    assert {path: modules for path, modules in offenders.items() if modules} == {}
+    assert offenders == {}
 
 
 def _np_load_names(tree: ast.AST) -> tuple[set[str], set[str]]:
@@ -81,14 +79,11 @@ def _np_load_calls_without_allow_pickle_false(source: str) -> list[int]:
 
 
 def test_src_np_load_always_disables_pickle() -> None:
-    offenders = {
-        str(path.relative_to(SRC_DIR)): _np_load_calls_without_allow_pickle_false(
-            path.read_text(encoding="utf-8")
-        )
-        for path in SRC_DIR.rglob("*.py")
-    }
+    offenders = scan_sources(
+        SRC_DIR, lambda path, source: _np_load_calls_without_allow_pickle_false(source)
+    )
 
-    assert {path: lines for path, lines in offenders.items() if lines} == {}
+    assert offenders == {}
 
 
 @pytest.mark.parametrize(

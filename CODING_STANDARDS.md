@@ -23,43 +23,11 @@
 
 ## 程式碼註解
 
+註解種類、`WHY-NOT` 錨點、`SYNC` 路徑與引用路徑等可機械判定的規則，以及檢查失敗時的修法，見 `scripts/check_conventions.py` 的模組 docstring（`uv run python scripts/check_conventions.py --help` 的 `comment-refs` 與 `comment-kinds`）。以下是審查者要判斷的部分。
+
+- **註解不重述程式碼**：註解只記錄程式碼本身說不出的事：為何刻意這樣做、哪些檔案必須一起改、還欠著什麼。換句話說程式碼的註解、分隔線與分節標籤一律刪除，改用命名或函式、模組切分表達；註解寫的理由是否屬實也由審查者確認。
+- **何時寫 `WHY-NOT`**：做法看起來像疏失或可以「簡化」、而改掉會造成實際失敗時才寫，理由要說出它防範的失敗；只想指向 ADR 時也用這個形式。名稱選真正受保護的識別字，讓那段程式碼被刪除或改名時檢查跟著失敗。
+- **何時寫 `SYNC`**：重複是刻意的、無法改為引用同一來源時才寫（例如 smoke check 重述部署契約，才能檢出漂移），列出每個必須一起修改的檔案。能共用來源就引用，不寫 `SYNC`。
+- **引用從 repo 根目錄寫起**：註解提到檔案時寫完整路徑，例如 `src/shiro_mlops/pipelines/issued_forecast.py`，不寫 `pipelines/issued_forecast.py`；`SYNC` 以外的套件內相對路徑不以 tracked 頂層目錄開頭，檢查看不到，由審查者要求改寫。「第 6 節」這類章節編號是否仍對得上也由審查者判斷。
+- **標頭不變條件與程式碼同步**：模組或類別 docstring 裡寫下的不變條件（例如「task types 不碰資料層」），描述的程式碼在 PR 中被修改時，同一個 PR 要更新或刪除那條不變條件。
 - **會被工具讀取的 docstring 是介面文字，不是註解**：FastAPI 路由與 Pydantic schema 的 docstring 會成為 OpenAPI 說明，不可依註解規則刪減；Dagster asset 一律以 `description=` 明示說明，不依賴函式 docstring。
-- **引用從 repo 根目錄寫起**：Python 註解提到檔案或目錄時，寫成以 tracked 頂層目錄開頭的完整路徑，例如 `src/shiro_mlops/pipelines/issued_forecast.py`、`tests/fixtures/published/`，不寫 `pipelines/issued_forecast.py` 這類套件內相對路徑；提到 ADR 時寫 `ADR-NNNN`。`comment-refs` 檢查會確認這些路徑與 ADR 存在；字串字面值、含 glob 或佔位符（`*`、`<topic>`、`{name}`）的路徑，以及「第 6 節」這類章節編號不在檢查範圍，章節是否仍對得上由審查者判斷。
-- **`comment-refs` 失敗時**：檔案改名就把註解改成新路徑；檔案已刪除就連同失效的說明一起改寫或刪除。註解裡看起來像路徑、但其實是名稱的字樣（例如 MLflow experiment 名稱），改為引用持有該值的常數，不要只為了通過檢查而改寫成不像路徑的樣子。
-- **新增或修改的註解只用允許的種類**：`comment-kinds` 檢查 PR 在 `src/` 與 `scripts/` 的 Python 檔中新增或修改的註解區塊；tests 與 `lab/` 不檢查。連續、同縮排、中間沒有空行的整行註解是一個區塊，只有第一行需要標籤；行尾註解各自是一個區塊。區塊中任何一行被改到，整個區塊都要檢查，修改帶著舊行尾註解的程式碼行也算改到那條註解。標籤一律是英文大寫，說明可用任何語言。允許的種類：
-  - `WHY-NOT(<名稱>): <理由>`：說明刻意的設計，避免被當成意外「修好」。名稱寫它保護的程式碼，錨點規則見下方。只想指向 ADR 時也用這個形式。
-  - `SYNC(<路徑>[, <路徑>…]): <說明>`：列出刻意重複、必須一起修改的檔案，路徑從 repo 根目錄寫起，存在與否由 `comment-refs` 確認。
-  - `TODO(#n)`：技術債標記，規則見 [docs/agents/tech-debt.md](docs/agents/tech-debt.md)。
-  - 工具指令：`noqa`、`type: ignore`、`pragma`、`fmt:`、`ruff:`。`noqa` 與 `type: ignore` 在代碼之後要寫理由。
-
-  ```python
-  # WHY-NOT(retry_policy): 重試間隔加總必須小於 10 分鐘 slot，否則會和下一輪排程重疊
-  retry_policy = RetryPolicy(max_retries=3, delay=60)
-  # SYNC(scripts/smoke_nginx.py): 發布檔名清單刻意重複，nginx smoke check 依此驗證部署
-  PUBLISHED_FILES = ("index.html", "forecast.json")
-  l = hourly_load()  # noqa: E741 — 沿用論文符號，l 表示每小時負載
-  ```
-
-- **`WHY-NOT` 的名稱必須錨在受保護的程式碼上**：受保護的程式碼被刪除或改名時，檢查會失敗，逼著同一個 PR 更新或刪除那條理由，就像 Rust clippy 要求 `// SAFETY:` 緊貼在 `unsafe` 之前。
-  - 整行註解區塊：名稱要出現在區塊之後的下一個邏輯行。空行與其他註解不算邏輯行；跨多個實體行的敘述（多行呼叫、decorator 參數）算同一個邏輯行。區塊寫在括號內時，比對的是區塊之後、到該敘述結束為止的程式碼。
-  - 行尾註解：名稱要出現在註解所在的同一個邏輯行。
-  - 名稱以識別字比對，可以是變數、屬性、參數、`def` 那一行的函式名，或 decorator 裡的參數名；字串內容不算。點分名稱只比對最後一段，`WHY-NOT(Settings.max_wait)` 會在 `self.max_wait = 5` 找到 `max_wait`。
-  - 失敗訊息會列出找不到的名稱與應該出現的行號。理由仍然成立就把註解移到受保護程式碼的正上方或改成正確的名稱；程式碼已刪除就連同理由一起刪除。
-
-  下例的 decorator 註解通過，因為 `retry_policy` 在 decorator 參數裡；最後的行尾註解失敗，因為 `retries` 在下一行，不在註解所在的那一行：
-
-  ```python
-  # WHY-NOT(retry_policy): 重試間隔加總必須小於 10 分鐘 slot，否則會和下一輪排程重疊
-  @asset(
-      description="Hourly load forecast.",
-      retry_policy=RetryPolicy(max_retries=3, delay=60),
-  )
-  def hourly_forecast() -> None: ...
-
-
-  timeout = 30  # WHY-NOT(retries): 上游的速率限制每分鐘重置，重試太快只會耗盡額度
-  retries = 3
-  ```
-
-- **`comment-kinds` 失敗時**：先問這條註解是否只是重述程式碼；是的話就刪掉，分隔線與分節標籤也一樣刪掉，改用函式或模組切分。說明刻意設計的註解改寫成 `WHY-NOT`，提醒同步的註解改寫成 `SYNC`，未登記的待辦先開 `tech-debt` issue 再寫成 `TODO(#n)`，`noqa` 與 `type: ignore` 補上理由。修改帶著舊行尾註解的程式碼行時，同時轉換或刪除那條註解。本機可以先跑 `uv run python scripts/check_conventions.py comment-kinds --base origin/dev`。
-- **標頭不變條件與程式碼同步**：模組或類別 docstring 裡寫下的不變條件（例如「task types 不碰資料層」），描述的程式碼在 PR 中被修改時，同一個 PR 要更新或刪除那條不變條件。註解是否只是重述程式碼、理由是否屬實，仍由審查者判斷。

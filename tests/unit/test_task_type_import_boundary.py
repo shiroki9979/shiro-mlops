@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-SRC_DIR = Path(__file__).resolve().parents[2] / "src"
+from tests.source_scan import SRC_DIR, scan_sources
+
 TASK_TYPES_DIR = SRC_DIR / "shiro_mlops" / "tasks" / "types"
 FORBIDDEN_PREFIXES = (
     "shiro_mlops.data",
@@ -53,15 +54,11 @@ def _package_of(path: Path) -> str:
 
 
 def test_task_types_never_import_data_layer_sqlalchemy_dagster_or_feast() -> None:
-    offenders = {
-        str(path.relative_to(SRC_DIR)): _forbidden_imports(
-            path.read_text(encoding="utf-8"), _package_of(path)
-        )
-        for path in sorted(TASK_TYPES_DIR.rglob("*.py"))
-    }
+    offenders = scan_sources(
+        TASK_TYPES_DIR, lambda path, source: _forbidden_imports(source, _package_of(path))
+    )
 
-    assert offenders, "no task type modules found; the scan would pass vacuously"
-    assert {path: modules for path, modules in offenders.items() if modules} == {}
+    assert offenders == {}
 
 
 @pytest.mark.parametrize(

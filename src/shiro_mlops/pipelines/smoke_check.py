@@ -42,6 +42,10 @@ from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import deployed_task, deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
 
+CLI_DESCRIPTION = (
+    "Container smoke check: schedule configuration, per-task readiness, and forecast issuing."
+)
+
 # 任務的訓練與監控只能讀 raw_taipower_load 資料表；執行下列資產即代表會讀快照表或呼叫外部 API。
 FORBIDDEN_IN_LOAD_CONSUMERS = frozenset(
     (*TAIPOWER_REALTIME_SNAPSHOT_ASSETS, *CWA_INGESTION_ASSETS, HOURLY_ACTUAL_LOAD_ASSET)
@@ -58,6 +62,8 @@ class CheckStatus(StrEnum):
 class ExpectedSchedule:
     """Deployed schedule contract from docs/reference/dagster-schedules.md.
 
+    The fixed contracts below restate names and crons instead of importing them from
+    the modules that define the schedules, so deployment drift fails the comparison.
     Only job, cron and timezone are compared with the registered schedule; the
     remaining fields say how a registered schedule that is not running reports.
     """
@@ -85,39 +91,45 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
     ),
 }
 
-# SYNC(src/shiro_mlops/pipelines/issued_forecast.py, docs/reference/dagster-schedules.md): 發布排程
-# 的固定契約（該文件第 6 項）；名稱與 cron 刻意重述而不引用來源模組，才能檢出部署漂移。
-# 與擷取排程一樣不受 --task 篩選。冷啟動期間刻意停用，首次訓練成功後才開啟，
-# 因此停用時回報 WAIT 而非 FAIL；未開啟的每一小時都不會留下已發布預報，且無法回補。
+# SYNC(src/shiro_mlops/pipelines/issued_forecast.py, docs/reference/dagster-schedules.md): 排程名稱、
+# job 與 cron 三處一起修改（文件第 6 項）
 ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
     "issued_forecast_schedule": ExpectedSchedule(
         "issued_forecast_job",
         "15 * * * *",
         TAIWAN_TZ,
+        # WHY-NOT(status_when_stopped): 冷啟動期間刻意停用、首次訓練成功後才開啟，停用不算 FAIL；
+        # 但未開啟的每一小時都不會留下已發布預報且無法回補，所以回報 WAIT 讓 --require-ready 擋下。
         status_when_stopped=CheckStatus.WAIT,
         turn_on_after="the first successful training run",
     ),
 }
 
 
-# SYNC(src/shiro_mlops/pipelines/forecast_track_record.py, docs/reference/dagster-schedules.md): 預報實績排程
-# 的固定契約（該文件第 7 項）；名稱與 cron 刻意重述而不引用來源模組，才能檢出部署漂移。
-# 與擷取排程一樣不受 --task 篩選，停用時也回報 FAIL。
-# 彙整不依賴模型，尚無已發布預報時照常產出 0 天，因此冷啟動時就與擷取排程一起開啟。
+# SYNC(src/shiro_mlops/pipelines/forecast_track_record.py, docs/reference/dagster-schedules.md): 排程名稱、
+# job 與 cron 三處一起修改（文件第 7 項）
 FORECAST_TRACK_RECORD_SCHEDULES: dict[str, ExpectedSchedule] = {
     "forecast_track_record_schedule": ExpectedSchedule(
-        "forecast_track_record_job", "25 * * * *", TAIWAN_TZ
+        "forecast_track_record_job",
+        "25 * * * *",
+        TAIWAN_TZ,
+        # WHY-NOT(status_when_stopped): 彙整不依賴模型，尚無已發布預報時照常產出 0 天，
+        # 冷啟動時就與擷取排程一起開啟，所以停用是部署錯誤，不比照發布排程回報 WAIT。
+        status_when_stopped=CheckStatus.FAIL,
     ),
 }
 
 
-# SYNC(src/shiro_mlops/pipelines/forecast_view_export.py, docs/reference/dagster-schedules.md): 預報檢視匯出排程
-# 的固定契約（該文件第 8 項）；名稱與 cron 刻意重述而不引用來源模組，才能檢出部署漂移。
-# 比照預報實績排程，不受 --task 篩選、停用時回報 FAIL。
-# 匯出不依賴模型，尚無已發布預報時照常寫出空狀態，冷啟動時就與預報實績排程一起開啟。
+# SYNC(src/shiro_mlops/pipelines/forecast_view_export.py, docs/reference/dagster-schedules.md): 排程名稱、
+# job 與 cron 三處一起修改（文件第 8 項）
 FORECAST_VIEW_EXPORT_SCHEDULES: dict[str, ExpectedSchedule] = {
     "forecast_view_export_schedule": ExpectedSchedule(
-        "forecast_view_export_job", "35 * * * *", TAIWAN_TZ
+        "forecast_view_export_job",
+        "35 * * * *",
+        TAIWAN_TZ,
+        # WHY-NOT(status_when_stopped): 匯出不依賴模型，尚無已發布預報時照常寫出空狀態，
+        # 冷啟動時就與預報實績排程一起開啟，所以停用是部署錯誤，不比照發布排程回報 WAIT。
+        status_when_stopped=CheckStatus.FAIL,
     ),
 }
 
@@ -238,12 +250,7 @@ def format_report(results: Iterable[CheckResult]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Container smoke check: schedule configuration, per-task readiness, "
-            "and forecast issuing."
-        )
-    )
+    parser = argparse.ArgumentParser(description=CLI_DESCRIPTION)
     parser.add_argument(
         "--require-ready",
         action="store_true",
