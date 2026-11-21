@@ -60,65 +60,82 @@ export function Lead24SeriesChart({ series }: { series: Lead24SeriesPoint[] }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[400px] w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={toSeriesRows(series)}
-              margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
-              accessibilityLayer
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} vertical={false} />
-              <XAxis
-                dataKey="target_hour"
-                tickFormatter={(instant: number) => formatDateTime(instant, locale)}
-                stroke="#64748b"
-                fontSize={11}
-                tickLine={false}
-                minTickGap={24}
-                dy={10}
-              />
-              <YAxis
-                domain={['auto', 'auto']}
-                tickFormatter={(load: number) => formatLoadThousands(load, locale)}
-                stroke="#64748b"
-                fontSize={11}
-                tickLine={false}
-                dx={-5}
-              />
-              <Tooltip
-                content={({ active, payload }) => (
-                  <SeriesTooltip
-                    row={active ? (payload?.[0]?.payload as SeriesRow | undefined) : undefined}
-                    locale={locale}
-                    text={seriesText}
-                  />
-                )}
-              />
-              <Legend verticalAlign="top" align="right" wrapperStyle={{ paddingBottom: 15, fontSize: '12px' }} />
-              <Line
-                type="monotone"
-                dataKey="actual_load_mw"
-                name={seriesText.actual}
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="predicted_load_mw"
-                name={seriesText.predicted}
-                stroke="#06b6d4"
-                strokeWidth={2}
-                strokeDasharray="4 4"
-                dot={false}
-                isAnimationActive={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+        {series.length === 0 ? (
+          // Neutral and without a reason, like the page's other empty states.
+          <p className="text-sm text-slate-300">{seriesText.empty}</p>
+        ) : (
+          <SeriesLines series={series} locale={locale} text={seriesText} />
+        )}
       </CardContent>
     </Card>
+  )
+}
+
+interface SeriesLinesProps {
+  series: Lead24SeriesPoint[]
+  locale: Locale
+  text: Messages['history']['series']
+}
+
+function SeriesLines({ series, locale, text: seriesText }: SeriesLinesProps) {
+  return (
+    <div className="h-[400px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart
+          data={toSeriesRows(series)}
+          margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
+          accessibilityLayer
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} vertical={false} />
+          <XAxis
+            dataKey="target_hour"
+            tickFormatter={(instant: number) => formatDateTime(instant, locale)}
+            stroke="#64748b"
+            fontSize={11}
+            tickLine={false}
+            minTickGap={24}
+            dy={10}
+          />
+          <YAxis
+            domain={['auto', 'auto']}
+            tickFormatter={(load: number) => formatLoadThousands(load, locale)}
+            stroke="#64748b"
+            fontSize={11}
+            tickLine={false}
+            dx={-5}
+          />
+          <Tooltip
+            content={({ active, payload }) => (
+              <SeriesTooltip
+                row={active ? (payload?.[0]?.payload as SeriesRow | undefined) : undefined}
+                locale={locale}
+                text={seriesText}
+              />
+            )}
+          />
+          <Legend verticalAlign="top" align="right" wrapperStyle={{ paddingBottom: 15, fontSize: '12px' }} />
+          <Line
+            type="monotone"
+            dataKey="actual_load_mw"
+            name={seriesText.actual}
+            stroke="#10b981"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="predicted_load_mw"
+            name={seriesText.predicted}
+            stroke="#06b6d4"
+            strokeWidth={2}
+            strokeDasharray="4 4"
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
   )
 }
 

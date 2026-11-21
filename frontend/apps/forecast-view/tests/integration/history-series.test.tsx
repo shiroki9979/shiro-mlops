@@ -165,6 +165,18 @@ describe('Forecast View /history lead-24 series', () => {
     expect(within(tooltip).queryByText(EMPTY_VALUE)).not.toBeInTheDocument()
   })
 
+  it.each(['zh-TW', 'en'] as const)(
+    'shows a neutral empty message in the series card, not a blank chart, when the series is empty in %s',
+    async (locale) => {
+      serveTrackRecord({ ...TRACK_RECORD, metrics: { ...TRACK_RECORD.metrics, lead_24_series: [] } })
+      const text = renderHistory(locale)
+
+      const figure = await screen.findByRole('figure', { name: text.series.title })
+      expect(within(figure).getByText(text.series.empty)).toBeInTheDocument()
+      expect(within(figure).queryByRole('application')).not.toBeInTheDocument()
+    },
+  )
+
   it('shows no series chart while the track record is still accumulating', async () => {
     serveTrackRecord(emptyTrackRecord)
     const text = renderHistory()

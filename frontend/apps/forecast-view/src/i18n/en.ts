@@ -91,6 +91,7 @@ export const en: Messages = {
       actual: 'Actual load',
       predicted: 'Forecast load',
       difference: 'Difference',
+      empty: 'Nothing to compare right now',
     },
     leadTimeCurve: {
       title: 'MAPE by lead time',

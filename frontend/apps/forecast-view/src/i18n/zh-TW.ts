@@ -90,6 +90,7 @@ export const zhTW = {
       actual: '實際負載',
       predicted: '預測負載',
       difference: '差值',
+      empty: '目前沒有可顯示的對照',
     },
     leadTimeCurve: {
       title: 'MAPE 對提前時數',
