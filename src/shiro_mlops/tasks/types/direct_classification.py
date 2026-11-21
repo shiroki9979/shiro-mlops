@@ -11,9 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-import lightgbm as lgb
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from sklearn.metrics import f1_score, precision_score, recall_score
@@ -43,6 +42,9 @@ from shiro_mlops.tasks.types.lightgbm_common import (
     NativeBoosterFiles,
 )
 from shiro_mlops.tasks.types.metadata import ModelFormat
+
+if TYPE_CHECKING:
+    import lightgbm as lgb
 
 TASK_TYPE_NAME = "direct_classification"
 MODEL_FILES = NativeBoosterFiles(ModelFormat(TASK_TYPE_NAME, version=1))
@@ -186,6 +188,10 @@ class DirectClassificationModel:
                 "Training labels contain a single class; the high-load threshold never "
                 "separates the training rows, so no classifier can be fitted."
             )
+        # WHY-NOT(lgb): 用到時才 import；lightgbm 4.7.0 在 python -OO 下一 import 就崩潰，
+        # 放在模組頂層會讓只讀任務設定的 CLI（smoke check 的 --help）在解析參數前就失敗。
+        import lightgbm as lgb
+
         feature_names = [column for column in rows.columns if column not in NON_FEATURE_COLUMNS]
         classifier = lgb.LGBMClassifier(**FIXED_LIGHTGBM_PARAMS, **params.model.model_dump())
         classifier.fit(rows[feature_names], rows[LABEL_COL].astype(int))

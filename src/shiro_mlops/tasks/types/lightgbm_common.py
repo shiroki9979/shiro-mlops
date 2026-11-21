@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import lightgbm as lgb
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
 
 from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
+
+if TYPE_CHECKING:
+    import lightgbm as lgb
 
 MODEL_FILE = "model.txt"
 # 固定種子讓同一份訓練資料重新訓練時得到相同模型；各任務類型只再補上自己的 objective。
@@ -40,5 +42,9 @@ class NativeBoosterFiles:
 
     def load(self, directory: Path) -> tuple[lgb.Booster, dict[str, Any]]:
         """Refuse another task type's or format's directory before reading the booster."""
+        # WHY-NOT(lgb): 用到時才 import；lightgbm 4.7.0 在 python -OO 下一 import 就崩潰，
+        # 放在模組頂層會讓只讀任務設定的 CLI（smoke check 的 --help）在解析參數前就失敗。
+        import lightgbm as lgb
+
         metadata = read_metadata(directory, self.model_format)
         return lgb.Booster(model_file=str(directory / MODEL_FILE)), metadata

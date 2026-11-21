@@ -29,14 +29,6 @@ def _unwrapped(help_text: str) -> str:
             ["-m", "shiro_mlops.pipelines.smoke_check"],
             SMOKE_CHECK_DESCRIPTION,
             id="smoke_check",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "TODO(#198): lightgbm 4.7.0 crashes on import under -OO: lightgbm/dask.py "
-                    "calls LGBMClassifier.__init__.__doc__.partition(), and shiro_mlops.pipelines "
-                    "imports lightgbm before smoke_check parses arguments"
-                ),
-            ),
         ),
     ],
 )
