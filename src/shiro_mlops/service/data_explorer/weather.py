@@ -351,7 +351,7 @@ picking by `source_updated_at` alone would chart the 12-hourly weekly forecast b
 NEWEST_CORRECTION_SQL = """
     (dataset_id, issued_at, geocode, source_updated_at) IN (
         SELECT dataset_id, issued_at, geocode, MAX(source_updated_at)
-        FROM raw_cwa_township_forecast
+        FROM {table}
         {where}
         GROUP BY dataset_id, issued_at, geocode
     )
@@ -418,7 +418,8 @@ def _forecast_vintage_series_filters(
     if filters.get("source_updated_at"):
         return clauses, params
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return [*clauses, NEWEST_CORRECTION_SQL.format(where=where)], params
+    newest_correction = NEWEST_CORRECTION_SQL.format(table=FORECAST_SERIES.table, where=where)
+    return [*clauses, newest_correction], params
 
 
 class ObservationAuditReader(DatasetReader):
