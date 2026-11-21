@@ -17,7 +17,6 @@ from shiro_mlops.service.data_explorer.power import (
     UnitGenerationReader,
 )
 from tests.helpers import (
-    TAIWAN,
     rfc3339,
     supply_demand_snapshot,
     unit_generation_snapshots,
@@ -29,11 +28,17 @@ from tests.scenarios.data_explorer_power import (
 )
 
 
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
+    """Missing slots stop at "now", so a fixed clock keeps the window's slots in the past."""
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.completeness.now_taiwan", lambda: now)
+
+
 def test_national_reader_converts_mw_and_preserves_nullable_fields(
-    test_repo: TimeSeriesRepository,
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """全台供需 reader 必須以 MW 為主顯示，並保留契約允許的空值與萬瓩欄位。"""
-    observed = datetime.now(TAIWAN).replace(tzinfo=None, minute=30, second=0, microsecond=0)
+    observed = datetime(2026, 9, 5, 17, 30)
+    _freeze_clock(monkeypatch, observed + timedelta(hours=1))
     test_repo.upsert_supply_demand_snapshot(
         supply_demand_snapshot(observed - timedelta(minutes=20))
     )
@@ -51,10 +56,11 @@ def test_national_reader_converts_mw_and_preserves_nullable_fields(
 
 
 def test_regional_reader_marks_incomplete_slots_and_filters_completeness(
-    test_repo: TimeSeriesRepository,
+    test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """缺少任一區時該 slot 必須標記 incomplete；completeness 篩選不得改變此判定。"""
-    observed = datetime.now(TAIWAN).replace(tzinfo=None, minute=20, second=0, microsecond=0)
+    observed = datetime(2026, 9, 5, 17, 20)
+    _freeze_clock(monkeypatch, observed + timedelta(hours=1))
     complete_slot = observed - timedelta(minutes=10)
     rows = [
         TaipowerRegionalSupplyDemandSnapshot(
@@ -104,7 +110,7 @@ def test_unit_generation_reader_preserves_zero_and_nullable_fields(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """機組零發電必須保留，契約允許空值不得被當成缺失。"""
-    observed = datetime.now(TAIWAN).replace(tzinfo=None, minute=10, second=0, microsecond=0)
+    observed = datetime(2026, 9, 5, 17, 10)
     test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
     reader = UnitGenerationReader(test_repo.engine)
     window = {
