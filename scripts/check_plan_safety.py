@@ -11,6 +11,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 SAFE_ACTIONS = frozenset({"no-op", "create", "read", "update"})
 REPLACE_LABELS = {
@@ -19,19 +20,27 @@ REPLACE_LABELS = {
 }
 
 
-def is_safe(actions: tuple[str, ...]) -> bool:
-    return set(actions) <= SAFE_ACTIONS
+class ResourceChange(NamedTuple):
+    address: str
+    actions: tuple[str, ...]
+
+    @property
+    def is_safe(self) -> bool:
+        return set(self.actions) <= SAFE_ACTIONS
+
+    @property
+    def display_action(self) -> str:
+        return REPLACE_LABELS.get(self.actions, "+".join(self.actions))
 
 
-def label(actions: tuple[str, ...]) -> str:
-    return REPLACE_LABELS.get(actions, "+".join(actions))
+def find_violations(changes: list[ResourceChange]) -> list[ResourceChange]:
+    return [change for change in changes if not change.is_safe]
 
 
-def render_summary(changes: list[tuple[str, tuple[str, ...]]]) -> str:
-    by_action: dict[str, list[str]] = {}
-    for address, actions in changes:
-        by_action.setdefault(label(actions), []).append(address)
-    violations = [(address, actions) for address, actions in changes if not is_safe(actions)]
+def render_summary(changes: list[ResourceChange], violations: list[ResourceChange]) -> str:
+    by_label: dict[str, list[str]] = {}
+    for change in changes:
+        by_label.setdefault(change.display_action, []).append(change.address)
 
     lines = ["## Terraform plan safety check", ""]
     if violations:
@@ -43,14 +52,14 @@ def render_summary(changes: list[tuple[str, tuple[str, ...]]]) -> str:
             "### Violations",
             "",
         ]
-        lines += [f"- `{address}`: {label(actions)}" for address, actions in violations]
+        lines += [f"- `{change.address}`: {change.display_action}" for change in violations]
         lines.append("")
     else:
         lines += ["**Result: safe**", ""]
     lines += ["| Action | Count |", "| :--- | ---: |"]
-    lines += [f"| {action} | {len(addresses)} |" for action, addresses in by_action.items()]
-    for action, addresses in by_action.items():
-        lines += ["", f"### {action} ({len(addresses)})", ""]
+    lines += [f"| {label} | {len(addresses)} |" for label, addresses in by_label.items()]
+    for label, addresses in by_label.items():
+        lines += ["", f"### {label} ({len(addresses)})", ""]
         lines += [f"- `{address}`" for address in addresses]
     return "\n".join(lines) + "\n"
 
@@ -59,7 +68,7 @@ class InvalidPlanError(Exception):
     """The input cannot be judged; the message is the reason shown to the caller."""
 
 
-def load_changes(path: Path) -> list[tuple[str, tuple[str, ...]]]:
+def load_changes(path: Path) -> list[ResourceChange]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
@@ -73,7 +82,9 @@ def load_changes(path: Path) -> list[tuple[str, tuple[str, ...]]]:
         # resources, so indexing it instead of `.get` would reject an empty plan as invalid.
         resource_changes = plan.get("resource_changes", [])
         return [
-            (str(change["address"]), tuple(str(action) for action in change["change"]["actions"]))
+            ResourceChange(
+                str(change["address"]), tuple(str(action) for action in change["change"]["actions"])
+            )
             for change in resource_changes
         ]
     except (AttributeError, KeyError, TypeError) as error:
@@ -95,8 +106,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"plan safety check: {error}", file=sys.stderr)
         return 2
 
-    print(render_summary(changes), end="")
-    return 0 if all(is_safe(actions) for _, actions in changes) else 1
+    violations = find_violations(changes)
+    print(render_summary(changes, violations), end="")
+    return 1 if violations else 0
 
 
 if __name__ == "__main__":
