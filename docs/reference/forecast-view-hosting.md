@@ -88,8 +88,9 @@ bucket policy 只有一個 statement：授權 CloudFront 服務主體經該 dist
 - **雲端 smoke check**：除 ADR-0015 §4 的項目（首頁與兩份 JSON 回 200、預報時刻不超過 24 小時）外，另驗證：
   - `/history` 回 200 且為 HTML；
   - `/published/` 下不存在的檔案不回 200。
-  - 腳本為 `scripts/smoke_cloudfront.py`，只用 Python 標準函式庫，以 `make cloud-smoke ARGS="--base-url <forecast_view_url>"` 或 `uv run --no-project python scripts/smoke_cloudfront.py --base-url <url>` 執行。`--base-url` 為必填；`--now` 為選填（ISO 8601 帶 offset，預設為執行當下）。
-  - 每一項都執行，最後列出所有未通過的項目與實際狀態碼或原因。腳本的結束碼：全部通過為 0，任一項失敗為 1，參數錯誤為 2；經 `make` 執行時，任何非 0 都由 `make` 回報為 2，CD 管線須區分時直接執行腳本。
+- **smoke check 腳本**：`scripts/smoke_cloudfront.py`，只用 Python 標準函式庫，以 `make cloud-smoke ARGS="--base-url <forecast_view_url>"` 或 `uv run --no-project python scripts/smoke_cloudfront.py --base-url <url>` 執行。
+  - `--base-url` 為必填；`--now` 為選填（ISO 8601 帶 offset，預設為執行當下）。
+  - 每一項都執行，最後列出所有未通過的項目與實際狀態碼或原因。結束碼：全部通過為 0，任一項失敗為 1，參數錯誤為 2；經 `make` 執行時，任何非 0 都由 `make` 回報為 2，CD 管線須區分時直接執行腳本。
   - 不跟隨 redirect，任何 3xx 都算該項失敗；不檢查 `Cache-Control`、安全標頭，也不檢查預報時刻是否晚於當下。
 - CD 管線的其餘步驟待 [GitHub #129](https://github.com/shiroki9979/shiro-mlops/issues/129)（Terraform state 與 apply 權責）定案。
 
