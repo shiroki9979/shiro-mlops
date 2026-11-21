@@ -4,9 +4,9 @@ Checks:
   python-uv  Makefile recipes and CI `run:` commands must not start with a host python/python3.
   docker-pins
              Each package a `pip install` or `uv pip install` in docker/Dockerfile* names must be
-             pinned to an exact version with ==; to install unpinned names, read a lock file
-             with -r instead. Values of options such as -r and -e (a local project) are not
-             checked.
+             pinned to an exact version with ==, unless the command reads a constraints file
+             with -c (as exported from uv.lock); or read a lock file with -r instead. Values of
+             options such as -r and -e (a local project) are not checked.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
   doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
              earlier than the newest author date of their commits in that range.
@@ -93,6 +93,9 @@ DOCKERFILE_COMMENT = re.compile(r"^\s*#")
 PIP_PROGRAM = re.compile(r"(?:.*/)?pip(?:3(?:\.\d+)?)?")
 UV_PROGRAM = re.compile(r"(?:.*/)?uv")
 EXACT_PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]*\])?===?[^\s,;<>=!~*]+")
+# WHY-NOT(CONSTRAINT_OPTION): names installed under -c are not checked for == pins, since the
+# constraints file (exported from uv.lock) pins them; requiring == as well would duplicate the lock.
+CONSTRAINT_OPTION = re.compile(r"-c.*|--constraint(?:=.*)?")
 REDIRECTION = re.compile(r"[<>&]*[<>][<>&]*")
 SHELL_PUNCTUATION = frozenset("();<>|&")
 # WHY-NOT(PIP_VALUE_OPTIONS): the values of -r and -e are skipped like any option value rather
@@ -430,7 +433,7 @@ def check_docker_pins(repo_root: Path) -> list[Violation]:
 
 def unpinned_message(hit: UnpinnedInstall) -> str:
     packages = ", ".join(hit.packages)
-    return f"pin pip installs with == or install from a lock file with -r: {packages}"
+    return f"pin pip installs with ==, or install under a lock file with -c or -r: {packages}"
 
 
 def find_unpinned_pip_installs(text: str) -> list[UnpinnedInstall]:
@@ -485,6 +488,8 @@ def unpinned_packages(command: list[str]) -> list[str]:
     for token in without_redirections(pip_install_arguments(command)):
         if takes_value:
             takes_value = False
+        elif CONSTRAINT_OPTION.fullmatch(token):
+            return []
         elif token.startswith("-"):
             takes_value = token in PIP_VALUE_OPTIONS
         elif not EXACT_PIN.fullmatch(token):

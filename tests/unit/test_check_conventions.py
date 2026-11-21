@@ -350,7 +350,7 @@ def test_docker_pins_reports_each_unpinned_dockerfile_under_docker(tmp_path: Pat
         Violation(
             "docker/Dockerfile.mlflow",
             3,
-            "pin pip installs with == or install from a lock file with -r: mlflow, psycopg2-binary",
+            "pin pip installs with ==, or install under a lock file with -c or -r: mlflow, psycopg2-binary",
         )
     ]
 
@@ -392,6 +392,16 @@ def test_double_equals_outside_an_exact_version_is_not_a_pin() -> None:
 def test_shell_redirections_after_pinned_packages_are_not_packages() -> None:
     dockerfile = (
         "RUN pip install mlflow==3.15.1 > /dev/null 2>&1\nRUN pip install x==1 2>/dev/null\n"
+    )
+
+    assert _unpinned(dockerfile) == []
+
+
+def test_packages_installed_under_a_constraints_file_are_pinned_by_it() -> None:
+    dockerfile = (
+        "RUN uv pip install --system --no-cache -c /tmp/constraints.txt mlflow psycopg2-binary\n"
+        "RUN pip install --constraint=constraints.txt fastapi\n"
+        "RUN pip install -cconstraints.txt uvicorn\n"
     )
 
     assert _unpinned(dockerfile) == []
