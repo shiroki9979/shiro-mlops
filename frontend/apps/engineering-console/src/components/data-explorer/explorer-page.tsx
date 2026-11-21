@@ -50,6 +50,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         filterValues={explorer.filterValues}
         fetchedAt={fetchedAt}
         items={list.data?.items ?? []}
+        csvDisabled={explorer.detailLimitExceeded}
         onRefresh={() => {
           explorer.refetchList()
           void statusQuery.refetch()
@@ -67,6 +68,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
           query={explorer.query}
           chartSearch={explorer.chartSearch}
           onSettingChange={explorer.setChartSetting}
+          onWindowChange={explorer.setWindow}
         />
       )}
       <ExplorerResults
@@ -76,6 +78,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         isError={list.isError}
         isLoading={list.isLoading}
         canRestart={explorer.canRestart}
+        detailLimitExceeded={explorer.detailLimitExceeded}
         onSelect={setSelected}
         onNextPage={explorer.goToNextPage}
         onRestart={explorer.restartFromFirstPage}

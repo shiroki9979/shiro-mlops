@@ -11,20 +11,23 @@ import {
 } from 'recharts'
 import { EMPTY_VALUE, formatDateTime, formatNumber } from '@shiro-mlops/shared/i18n/format'
 import { type Locale, useLocale } from '@shiro-mlops/shared/i18n/locale-store'
-import { CHART_AXIS, CHART_GAP_BAND, CHART_GRID } from '@/lib/chart-palette'
+import { CHART_AXIS, CHART_BRUSH, CHART_GAP_BAND, CHART_GRID } from '@/lib/chart-palette'
+import type { ChartBrush } from './chart-brush'
 import { type ChartRow, type PlottedSeries, gapRanges, toChartRows } from './chart-series'
 
 // Dots only while they stay legible; denser lines are read from the line and the tooltip.
 const MAX_POINTS_WITH_DOTS = 48
 const GAP_BAND_OPACITY = 0.18
+const BRUSH_OPACITY = 0.2
 
 export interface ChartBodyProps {
   series: PlottedSeries[]
+  brush: ChartBrush
 }
 
 // The first unit takes the left axis and a second unit the right one; the spec asks for two
 // axes when a chart mixes units.
-export function SeriesLineChart({ series }: ChartBodyProps) {
+export function SeriesLineChart({ series, brush }: ChartBodyProps) {
   const locale = useLocale()
   const rows = toChartRows(series)
   const units = [...new Set(series.map((item) => item.unit))].slice(0, 2)
@@ -32,7 +35,7 @@ export function SeriesLineChart({ series }: ChartBodyProps) {
   return (
     <div className="h-[320px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={rows} margin={{ top: 28, right: 20, left: 10, bottom: 10 }} accessibilityLayer>
+        <LineChart data={rows} margin={{ top: 28, right: 20, left: 10, bottom: 10 }} accessibilityLayer {...brush.handlers}>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} opacity={0.4} vertical={false} />
           <XAxis
             dataKey="t"
@@ -70,6 +73,16 @@ export function SeriesLineChart({ series }: ChartBodyProps) {
               ifOverflow="extendDomain"
             />
           ))}
+          {brush.selection && (
+            <ReferenceArea
+              x1={brush.selection.from}
+              x2={brush.selection.to}
+              yAxisId={units[0]}
+              fill={CHART_BRUSH}
+              fillOpacity={BRUSH_OPACITY}
+              stroke="none"
+            />
+          )}
           <Tooltip content={({ active, payload }) => <SeriesTooltip active={active} row={payload?.[0]?.payload as ChartRow | undefined} series={series} locale={locale} />} />
           <Legend verticalAlign="top" align="right" wrapperStyle={{ paddingBottom: 8, fontSize: '12px' }} />
           {series.map((item) => (

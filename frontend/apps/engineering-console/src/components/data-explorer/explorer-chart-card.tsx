@@ -6,8 +6,10 @@ import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
 import { CATEGORY_PALETTES, categoryColor } from '@/lib/chart-palette'
+import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
 import type { Series } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
+import { type ChartBrush, useChartBrush } from './chart-brush'
 import { gapRanges, type PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
@@ -31,15 +33,28 @@ interface ExplorerChartCardProps {
   query: Record<string, string | undefined>
   chartSearch: ChartSearch
   onSettingChange: (key: ChartSearchKey, value: string) => void
+  // A brushed range becomes the shared window, the same URL path as the quick ranges and shifts.
+  onWindowChange: (window: ExplorerWindow) => void
 }
 
-export function ExplorerChartCard({ dataset, chart, query, chartSearch, onSettingChange }: ExplorerChartCardProps) {
+export function ExplorerChartCard({
+  dataset,
+  chart,
+  query,
+  chartSearch,
+  onSettingChange,
+  onWindowChange,
+}: ExplorerChartCardProps) {
   const m = useMessages()
   const chartText = m.explorer.chart
   const bucket = optionOr(chartSearch.bucket, BUCKET_OPTIONS, 'auto')
   const agg = optionOr(chartSearch.agg, AGG_OPTIONS, 'avg')
   const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch))
   const plotted = seriesQuery.data ? plotSeries(seriesQuery.data.series, chart, m) : []
+  const resolvedBucket = seriesQuery.data?.bucket
+  const brush = useChartBrush((selection) => {
+    if (resolvedBucket) onWindowChange(brushWindow(selection, resolvedBucket, dataset.cadenceSeconds))
+  })
   const fieldLabels = (seriesQuery.data?.series.map((item) => item.field) ?? chart.fields)
     .filter((field, index, all) => all.indexOf(field) === index)
     .map((field) => explorerFieldLabel(field, m))
@@ -80,7 +95,7 @@ export function ExplorerChartCard({ dataset, chart, query, chartSearch, onSettin
         </div>
       </CardHeader>
       <CardContent>
-        <ChartBody chart={chart} query={seriesQuery} plotted={plotted} text={chartText} />
+        <ChartBody chart={chart} query={seriesQuery} plotted={plotted} brush={brush} text={chartText} />
       </CardContent>
     </Card>
   )
@@ -90,17 +105,21 @@ interface ChartBodyStateProps {
   chart: ExplorerChartConfig
   query: ReturnType<typeof useDatasetSeries>
   plotted: PlottedSeries[]
+  brush: ChartBrush
   text: Messages['explorer']['chart']
 }
 
-function ChartBody({ chart, query, plotted, text }: ChartBodyStateProps) {
+function ChartBody({ chart, query, plotted, brush, text }: ChartBodyStateProps) {
   if (query.isLoading) return <p className="text-sm text-slate-400">{text.loading}</p>
   if (query.isError) return <p className="text-sm text-rose-300">{seriesErrorMessage(query.error, text)}</p>
   if (plotted.length === 0) return <p className="text-sm text-slate-300">{text.empty}</p>
   const Renderer = CHART_RENDERERS[chart.type]
   return (
     <>
-      <Renderer series={plotted} />
+      <div className="cursor-crosshair select-none">
+        <Renderer series={plotted} brush={brush} />
+      </div>
+      <p className="mt-2 text-xs text-slate-500">{text.brushHint}</p>
       {gapRanges(plotted).length > 0 && (
         <p className="mt-2 flex items-center gap-2 text-xs text-slate-400">
           <span className="inline-block h-3 w-4 rounded-sm bg-slate-500/30" />

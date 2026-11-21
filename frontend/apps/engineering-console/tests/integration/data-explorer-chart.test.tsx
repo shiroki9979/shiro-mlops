@@ -1,6 +1,6 @@
 import { cloneElement, type ReactElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
@@ -47,6 +47,20 @@ function renderPath(path: string) {
   const router = createAppRouter(history)
   render(<RouterProvider router={router} />)
   return router
+}
+
+// Points carry dots at this density, and a dot's centre is where the chart draws that bucket.
+function bucketX(figure: HTMLElement, index: number): number {
+  const dots = figure.querySelectorAll('.recharts-line-dots circle')
+  return Number(dots[index].getAttribute('cx'))
+}
+
+function dragAcross(figure: HTMLElement, fromX: number, toX: number) {
+  const surface = figure.querySelector('.recharts-wrapper') as HTMLElement
+  const at = (x: number) => ({ clientX: x, clientY: 150, pageX: x, pageY: 150 })
+  fireEvent.mouseDown(surface, at(fromX))
+  fireEvent.mouseMove(surface, at(toX))
+  fireEvent.mouseUp(surface, at(toX))
 }
 
 function captureRequests() {
@@ -166,6 +180,60 @@ describe('Data Explorer chart card', () => {
     await user.click(within(screen.getByRole('main')).getByRole('button', { name: m.common.refresh }))
 
     await waitFor(() => expect(requests.series.length).toBe(before + 1))
+  })
+
+  it('skips the list beyond its detail limit, hints at brushing, and still draws the chart', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-21T04:30:15Z'))
+    try {
+      const requests = captureRequests()
+      const user = userEvent.setup()
+      renderPath(`/data/power/load?${WINDOW}`)
+      await screen.findByText(m.explorer.results.empty)
+      const listsBefore = requests.lists.length
+
+      await user.click(screen.getByRole('button', { name: m.explorer.filters.quickRanges.last92Days }))
+
+      expect(await screen.findByText(m.explorer.results.detailLimitExceeded('31'))).toBeInTheDocument()
+      await waitFor(() => expect(requests.series.at(-1)!.searchParams.get('start')).toBe('2026-08-21T12:30:15+08:00'))
+      expect(await screen.findByRole('figure')).toBeInTheDocument()
+      expect(requests.lists.length).toBe(listsBefore)
+      expect(screen.getByRole('button', { name: m.common.exportCsv })).toBeDisabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('turns a brush across buckets into the window, clearing the cursor and keeping chart settings', async () => {
+    const requests = captureRequests()
+    const router = renderPath(`/data/power/load?${WINDOW}&agg=max&cursor=page-2`)
+    const figure = await screen.findByRole('figure')
+    await waitFor(() => expect(figure.querySelectorAll('.recharts-line-dots circle').length).toBe(2))
+
+    dragAcross(figure, bucketX(figure, 0), bucketX(figure, 1))
+
+    await waitFor(() => {
+      const search = router.state.location.search as Record<string, string>
+      expect(search.start).toBe('2026-09-09T18:00:00+08:00')
+    })
+    expect(router.state.location.search).toEqual({
+      start: '2026-09-09T18:00:00+08:00',
+      end: '2026-09-09T20:59:59+08:00',
+      agg: 'max',
+    })
+    await waitFor(() => expect(requests.lists.at(-1)!.searchParams.get('end')).toBe('2026-09-09T20:59:59+08:00'))
+    expect(requests.lists.at(-1)!.searchParams.has('cursor')).toBe(false)
+  })
+
+  it('keeps the window when the chart is clicked without dragging', async () => {
+    captureRequests()
+    const router = renderPath(`/data/power/load?${WINDOW}`)
+    const figure = await screen.findByRole('figure')
+    await waitFor(() => expect(figure.querySelectorAll('.recharts-line-dots circle').length).toBe(2))
+
+    dragAcross(figure, bucketX(figure, 0), bucketX(figure, 0))
+
+    expect(router.state.location.search).toEqual({ start: START, end: END })
   })
 
   it('suggests the coarser bucket the API names when the chosen one has too many points', async () => {

@@ -13,6 +13,7 @@ interface ExplorerResultsProps {
   isError: boolean
   isLoading: boolean
   canRestart: boolean
+  detailLimitExceeded: boolean
   onSelect: (row: Record<string, unknown>) => void
   onNextPage: (cursor: string | undefined) => void
   onRestart: () => void
@@ -47,6 +48,7 @@ export function ExplorerResults({
   isError,
   isLoading,
   canRestart,
+  detailLimitExceeded,
   onSelect,
   onNextPage,
   onRestart,
@@ -56,7 +58,9 @@ export function ExplorerResults({
   return (
     <Card>
       <CardContent className="pt-6">
-        {isLoading ? (
+        {detailLimitExceeded ? (
+          <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
+        ) : isLoading ? (
           <p className="text-xs text-slate-500">{resultsText.loading}</p>
         ) : isError ? (
           <div>
