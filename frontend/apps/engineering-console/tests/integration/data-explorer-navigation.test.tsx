@@ -67,6 +67,7 @@ describe('Data Explorer window navigation', () => {
     ['/data/power/regional', quickRanges.last7Days, '2026-11-14T12:30:15+08:00', '2026-11-21T12:30:15+08:00'],
     ['/data/power/regional', quickRanges.detailLimit('7'), '2026-11-14T12:30:15+08:00', '2026-11-21T12:30:15+08:00'],
     ['/data/power/load', quickRanges.detailLimit('31'), '2026-10-21T12:30:15+08:00', '2026-11-21T12:30:15+08:00'],
+    ['/data/power/load', quickRanges.last30Days, '2026-10-22T12:30:15+08:00', '2026-11-21T12:30:15+08:00'],
     ['/data/weather/forecasts', quickRanges.next24Hours, '2026-11-21T12:30:15+08:00', '2026-11-22T12:30:15+08:00'],
     ['/data/weather/forecasts', quickRanges.next72Hours, '2026-11-21T12:30:15+08:00', '2026-11-24T12:30:15+08:00'],
     ['/data/weather/forecasts', quickRanges.next7Days, '2026-11-21T12:30:15+08:00', '2026-11-28T12:30:15+08:00'],
@@ -92,6 +93,7 @@ describe('Data Explorer window navigation', () => {
     expect(screen.getByRole('button', { name: quickRanges.next72Hours })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: quickRanges.today })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: quickRanges.last24Hours })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: quickRanges.last92Days })).not.toBeInTheDocument()
   })
 })
 
