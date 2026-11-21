@@ -83,6 +83,12 @@ export const zhTW = {
       lead24Mape: '提前 24 小時 MAPE',
       lead24Mae: '提前 24 小時 MAE',
     },
+    series: {
+      title: '最近 30 天提前 24 小時已發布預報與實際負載',
+      actual: '實際負載',
+      predicted: '預測負載',
+      difference: '差值',
+    },
   },
 }
 

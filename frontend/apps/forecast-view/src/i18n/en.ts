@@ -84,5 +84,11 @@ export const en: Messages = {
       lead24Mape: 'MAPE at 24-hour lead time',
       lead24Mae: 'MAE at 24-hour lead time',
     },
+    series: {
+      title: 'Forecasts issued 24 hours ahead vs actual load, last 30 days',
+      actual: 'Actual load',
+      predicted: 'Forecast load',
+      difference: 'Difference',
+    },
   },
 }
