@@ -3,6 +3,7 @@ import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
 import { quickRangeWindow } from '@/lib/explorer-window'
+import type { ResolvedBucket } from '@/schemas/data-explorer'
 import { AuditStatusGrid } from './audit-status-grid'
 import type { ExplorerChartConfig, ExplorerDatasetConfig, ExplorerSparklineConfig } from './catalog'
 import { explorerFieldLabel } from './field-format'
@@ -12,7 +13,7 @@ import { SeriesSparkline } from './series-sparkline'
 // Every card previews 24 hours; the detail limit does not apply to these ranges.
 const UNUSED_DETAIL_LIMIT_DAYS = 0
 // Hourly status cells need hourly counts whatever `auto` would pick.
-const STATUS_GRID_BUCKET = '1h'
+const STATUS_GRID_BUCKET: ResolvedBucket = '1h'
 
 interface DatasetSparklineProps {
   dataset: ExplorerDatasetConfig
