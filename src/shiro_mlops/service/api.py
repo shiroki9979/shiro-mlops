@@ -56,6 +56,17 @@ class ModelStore:
         self.models: dict[str, TaskModel] = {}
         self.load_errors: dict[str, str] = {}
 
+    def record_loaded(self, task_id: str, model: TaskModel | None) -> None:
+        """Keep the task's model; an untrained task (``None``) only clears an earlier failure."""
+        self.load_errors.pop(task_id, None)
+        if model is not None:
+            self.models[task_id] = model
+
+    def record_load_failure(self, task_id: str, error: Exception) -> None:
+        """Drop any earlier model so the task reports this failure instead of serving it."""
+        self.models.pop(task_id, None)
+        self.load_errors[task_id] = f"Model failed to load: {type(error).__name__}: {error}"
+
     def missing_model_reason(self, task_id: str) -> str:
         return self.load_errors.get(task_id, MODEL_NOT_LOADED_REASON)
 
@@ -90,17 +101,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def _load_task_models(tasks: Iterable[TaskDefinition], root: Path) -> None:
     """A broken model leaves only its own task unserved; the other tasks still load."""
     for task in tasks:
-        model_store.load_errors.pop(task.task_id, None)
         try:
             model = load_model(root, task)
         except Exception as error:
             logger.exception("Could not load the %s model from %s.", task.task_id, root)
-            model_store.load_errors[task.task_id] = (
-                f"Model failed to load: {type(error).__name__}: {error}"
-            )
-            continue
-        if model is not None:
-            model_store.models[task.task_id] = model
+            model_store.record_load_failure(task.task_id, error)
+        else:
+            model_store.record_loaded(task.task_id, model)
 
 
 app = FastAPI(
@@ -313,21 +320,20 @@ def _deployed_task_or_404(task_id: str) -> TaskDefinition:
 def _readiness(task: TaskDefinition) -> ReadyResponse:
     model = model_store.models.get(task.task_id)
     if model is None:
-        response = ReadyResponse(
-            status="not_ready",
-            model_loaded=False,
-            reason=model_store.missing_model_reason(task.task_id),
-        )
-        return JSONResponse(status_code=503, content=response.model_dump())
+        return _not_ready(model_loaded=False, reason=model_store.missing_model_reason(task.task_id))
     try:
         readiness = check_task_ready(task, model, _runtime(), as_of=request_clock())
     except Exception as error:
         logger.exception("Readiness check failed for task %s", task.task_id)
         readiness = Readiness(ready=False, reason=str(error))
     if not readiness.ready:
-        response = ReadyResponse(status="not_ready", model_loaded=True, reason=readiness.reason)
-        return JSONResponse(status_code=503, content=response.model_dump())
+        return _not_ready(model_loaded=True, reason=readiness.reason)
     return ReadyResponse(status="ready", mode=readiness.mode, model_loaded=True)
+
+
+def _not_ready(*, model_loaded: bool, reason: str | None) -> JSONResponse:
+    response = ReadyResponse(status="not_ready", model_loaded=model_loaded, reason=reason)
+    return JSONResponse(status_code=503, content=response.model_dump())
 
 
 def _predict(task: TaskDefinition, *, horizon_hours: int) -> PredictionOutcome:

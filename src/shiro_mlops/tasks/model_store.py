@@ -65,12 +65,7 @@ def _lock_path(root: Path, task_id: str) -> Path:
 
 
 @contextmanager
-def _locked(descriptor: int, operation: int) -> Iterator[None]:
-    """Hold ``operation`` on the task's lock file, then close it.
-
-    The lock serializes model directory swaps with readers across service and
-    training processes.
-    """
+def _holding(descriptor: int, operation: int) -> Iterator[None]:
     try:
         fcntl.flock(descriptor, operation)
         yield
@@ -78,8 +73,23 @@ def _locked(descriptor: int, operation: int) -> Iterator[None]:
         os.close(descriptor)
 
 
-def _open_lock_for_writing(root: Path, task_id: str) -> int:
-    return os.open(_lock_path(root, task_id), os.O_RDWR | os.O_CREAT, 0o666)
+@contextmanager
+def _exclusive_lock(root: Path, task_id: str) -> Iterator[None]:
+    """Serialize a model directory swap with readers across service and training processes."""
+    descriptor = os.open(_lock_path(root, task_id), os.O_RDWR | os.O_CREAT, 0o666)
+    with _holding(descriptor, fcntl.LOCK_EX):
+        yield
+
+
+@contextmanager
+def _shared_lock(root: Path, task_id: str) -> Iterator[bool]:
+    """Hold the task's lock as a reader; yields ``False``, holding nothing, when it is untrained."""
+    descriptor = _open_lock_for_reading(root, task_id)
+    if descriptor is None:
+        yield False
+        return
+    with _holding(descriptor, fcntl.LOCK_SH):
+        yield True
 
 
 def _open_lock_for_reading(root: Path, task_id: str) -> int | None:
@@ -201,7 +211,7 @@ def save_model(root: Path, task_id: str, model: TaskModel) -> SavedModel:
     try:
         model.save(staging)
         sha256 = model_directory_sha256(staging)
-        with _locked(_open_lock_for_writing(root, task_id), fcntl.LOCK_EX):
+        with _exclusive_lock(root, task_id):
             _install(staging, target)
     finally:
         if staging.exists():
@@ -219,11 +229,8 @@ def load_model_with_sha256(root: Path, task: TaskDefinition) -> LoadedModel | No
     if not root.is_dir():
         return None
     directory = model_directory(root, task.task_id)
-    lock = _open_lock_for_reading(root, task.task_id)
-    if lock is None:
-        return None
-    with _locked(lock, fcntl.LOCK_SH):
-        if not directory.is_dir():
+    with _shared_lock(root, task.task_id) as locked:
+        if not locked or not directory.is_dir():
             return None
         model = get_task_type(task.task_type).load(directory)
         return LoadedModel(model=model, sha256=model_directory_sha256(directory))

@@ -451,6 +451,23 @@ def test_a_model_that_fails_to_load_is_reported_apart_from_an_untrained_one(
     assert untrained_predict.json()["detail"] == "Model is not loaded or trained yet."
 
 
+def test_a_model_that_fails_to_reload_no_longer_serves_the_earlier_one(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Each startup load replaces what an earlier one left, so a failure cannot hide behind it."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(model_store, "models", {DYNAMIC_HORIZON_FORECAST: MagicMock()})
+    monkeypatch.setattr(model_store, "load_errors", {})
+    model_directory(settings.models_dir, DYNAMIC_HORIZON_FORECAST).mkdir(parents=True)
+
+    with TestClient(app) as client:
+        ready = client.get("/ready")
+
+    assert ready.status_code == 503
+    assert ready.json()["model_loaded"] is False
+    assert ready.json()["reason"].startswith("Model failed to load: MissingModelLockError: ")
+
+
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
     """Issue #68 keeps the /predict item contract aligned with the dynamic-horizon task item."""
     expected_fields = {
