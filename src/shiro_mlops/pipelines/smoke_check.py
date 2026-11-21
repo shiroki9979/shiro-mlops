@@ -238,7 +238,12 @@ def format_report(results: Iterable[CheckResult]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=(
+            "Container smoke check: schedule configuration, per-task readiness, "
+            "and forecast issuing."
+        )
+    )
     parser.add_argument(
         "--require-ready",
         action="store_true",

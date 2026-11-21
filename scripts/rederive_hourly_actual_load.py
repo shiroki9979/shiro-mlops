@@ -73,7 +73,12 @@ def _derivable_hours_missing_from_store(
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=(
+            "Derive hourly actual load for stored regional snapshots "
+            "the scheduled asset never covered."
+        )
+    )
     parser.add_argument("--start", required=True, type=datetime.fromisoformat)
     parser.add_argument("--end", required=True, type=datetime.fromisoformat)
     parser.add_argument("--min-samples", type=int, default=settings.HOURLY_LOAD_MIN_SAMPLES)
