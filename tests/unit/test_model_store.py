@@ -1,7 +1,9 @@
 """Per-task model directories: atomic replacement, content hashes and no legacy joblib loading."""
 
+import builtins
 import ctypes
 import errno
+import io
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +18,7 @@ import pytest
 from shiro_mlops.tasks import model_store
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import (
+    MissingModelLockError,
     load_model,
     load_model_with_sha256,
     model_directory_sha256,
@@ -306,3 +309,93 @@ def test_retraining_during_a_load_cannot_pair_the_loaded_model_with_another_hash
     assert loaded is not None
     assert (loaded.model.version, loaded.sha256) == ("v1", expected)
     assert model_directory_sha256(root / "sample_task") == _hash_of_saved(tmp_path, "v2")
+
+
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+
+
+def _mount_read_only(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    """Refuse every write or create under ``root`` as a read-only mount does, even for root users."""
+
+    def refuse(path) -> None:
+        if Path(path).is_relative_to(root):
+            raise OSError(errno.EROFS, os.strerror(errno.EROFS), str(path))
+
+    real_os_open, real_io_open = os.open, io.open
+
+    def os_open(path, flags, *args, **kwargs):
+        if flags & _WRITE_FLAGS:
+            refuse(path)
+        return real_os_open(path, flags, *args, **kwargs)
+
+    def io_open(file, mode="r", *args, **kwargs):
+        if isinstance(file, str | os.PathLike) and set(mode) & set("wax+"):
+            refuse(file)
+        return real_io_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", os_open)
+    monkeypatch.setattr(io, "open", io_open)
+    monkeypatch.setattr(builtins, "open", io_open)
+
+
+def test_trained_task_loads_from_a_read_only_model_root(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The API mounts the models read-only; a shared lock must not need write access (#204)."""
+    save_model(root, "sample_task", _RecordingModel("v1"))
+    _stub_recording_task_type(monkeypatch)
+    expected = _hash_of_saved(tmp_path, "v1")
+    _mount_read_only(monkeypatch, root)
+
+    loaded = load_model_with_sha256(root, _RECORDING_TASK)
+
+    assert loaded is not None
+    assert (loaded.model.version, loaded.sha256) == ("v1", expected)
+
+
+def test_untrained_task_loads_no_model_from_a_read_only_model_root(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task never trained has no lock file either; a reader must not try to create one."""
+    _mount_read_only(monkeypatch, root)
+
+    assert load_model_with_sha256(root, _RECORDING_TASK) is None
+
+
+def test_model_directory_without_a_lock_file_fails_to_load_instead_of_reading_unlocked(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory copied in by hand was never installed by the store; retraining replaces it."""
+    _RecordingModel("hand-copied").save(root / "sample_task")
+    _stub_recording_task_type(monkeypatch)
+    _mount_read_only(monkeypatch, root)
+
+    with pytest.raises(MissingModelLockError, match="retrain"):
+        load_model_with_sha256(root, _RECORDING_TASK)
+
+
+def test_first_training_finishing_while_a_reader_looks_for_the_lock_still_loads(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writer may create the lock and install the model just after the reader missed the lock."""
+    _stub_recording_task_type(monkeypatch)
+    lock = root / ".sample_task.lock"
+    real_os_open = os.open
+    first_look = Event()
+
+    def os_open(path, flags, *args, **kwargs):
+        if Path(path) == lock and not flags & _WRITE_FLAGS and not first_look.is_set():
+            first_look.set()
+            missed = FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(path))
+            monkeypatch.setattr(os, "open", real_os_open)
+            save_model(root, "sample_task", _RecordingModel("v1"))
+            monkeypatch.setattr(os, "open", os_open)
+            raise missed
+        return real_os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", os_open)
+
+    loaded = load_model_with_sha256(root, _RECORDING_TASK)
+
+    assert loaded is not None
+    assert loaded.model.version == "v1"

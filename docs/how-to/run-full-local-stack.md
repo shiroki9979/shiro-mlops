@@ -38,11 +38,7 @@ cp .env.example .env
 make compose-up
 ```
 
-或使用原生 docker compose 指令：
-
-```bash
-docker compose --env-file .env -f docker/docker-compose.yml up -d
-```
+拉取新程式碼後，重新執行同一指令即可重建映像並套用。
 
 ---
 
@@ -65,11 +61,7 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 make frontend-smoke ARGS='--check-compose-bindings --direct-api-url http://127.0.0.1:8000'
 ```
 
-輸出最後一行為 `Nginx smoke check passed` 即通過，檢查項目（兩個應用 `/` 與 `/console/`、`/published/` 匯出與 `/api`）見 [`scripts/smoke_nginx.py`](../../scripts/smoke_nginx.py)。其中 `/published/` 的兩份 JSON 要在第一次匯出後才存在；全新環境請先依第 4 節開啟 `forecast_view_export_schedule` 並待第 35 分鐘的匯出完成，或在 Dagster UI 手動 materialize `forecast_view_export`，再執行此檢查，否則會停在 `/published/latest_issued_forecast.json returned HTTP 404`。前端程式變更後，從專案根目錄重新建置靜態映像，再重新整理瀏覽器：
-
-```bash
-docker compose --env-file .env -f docker/docker-compose.yml up -d --build frontend
-```
+輸出最後一行為 `Nginx smoke check passed` 即通過，檢查項目（兩個應用 `/` 與 `/console/`、`/published/` 匯出與 `/api`）見 [`scripts/smoke_nginx.py`](../../scripts/smoke_nginx.py)。其中 `/published/` 的兩份 JSON 要在第一次匯出後才存在；全新環境請先依第 4 節開啟 `forecast_view_export_schedule` 並待第 35 分鐘的匯出完成，或在 Dagster UI 手動 materialize `forecast_view_export`，再執行此檢查，否則會停在 `/published/latest_issued_forecast.json returned HTTP 404`。前端程式變更後，重新執行 `make compose-up` 再重新整理瀏覽器。
 
 需要 Vite 熱重載時可使用 `make frontend`，同時啟動預報檢視（`http://127.0.0.1:5173`）與工程主控台（`http://127.0.0.1:5174/console/`）兩個開發伺服器；本機對應的前端指令見 [frontend README](../../frontend/README.md)。
 
