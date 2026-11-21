@@ -1,6 +1,6 @@
 import { cloneElement, type ReactElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
 import { createAppRouter } from '@/router'
@@ -61,7 +61,24 @@ function captureSeries(path: string, field: string) {
 
 function renderPath(path: string) {
   const history = createMemoryHistory({ initialEntries: [`/console${path}`] })
-  render(<RouterProvider router={createAppRouter(history)} />)
+  const router = createAppRouter(history)
+  render(<RouterProvider router={router} />)
+  return router
+}
+
+// The centre of a bar is where the chart draws that bucket.
+function barCentres(figure: HTMLElement): number[] {
+  const bars = [...figure.querySelectorAll('.recharts-bar-rectangle path')]
+  const centres = bars.map((bar) => Number(bar.getAttribute('x')) + Number(bar.getAttribute('width')) / 2)
+  return [...new Set(centres)].sort((a, b) => a - b)
+}
+
+function dragAcross(figure: HTMLElement, fromX: number, toX: number) {
+  const surface = figure.querySelector('.recharts-wrapper') as HTMLElement
+  const at = (x: number) => ({ clientX: x, clientY: 150, pageX: x, pageY: 150 })
+  fireEvent.mouseDown(surface, at(fromX))
+  fireEvent.mouseMove(surface, at(toX))
+  fireEvent.mouseUp(surface, at(toX))
 }
 
 describe('Data Explorer audit status timeline', () => {
@@ -103,5 +120,23 @@ describe('Data Explorer audit status timeline', () => {
     expect(params.get('dataset_id')).toBe('F-D0047-089')
     expect(params.has('fields')).toBe(false)
     await waitFor(() => expect(within(figure).getByText(m.status.completeness.complete)).toBeInTheDocument())
+  })
+
+  it('turns a brush across status bars into the window', async () => {
+    captureSeries('/data/audits/cwa-observations/series', 'batch_count')
+    const router = renderPath(`/data/audits?type=observations&${WINDOW}`)
+    const figure = await screen.findByRole('figure')
+    await waitFor(() => expect(barCentres(figure)).toHaveLength(2))
+
+    const [first, second] = barCentres(figure)
+    dragAcross(figure, first, second)
+
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        type: 'observations',
+        start: '2026-09-09T10:00:00+08:00',
+        end: '2026-09-09T11:59:59+08:00',
+      }),
+    )
   })
 })

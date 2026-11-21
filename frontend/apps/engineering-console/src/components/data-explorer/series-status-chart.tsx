@@ -1,27 +1,28 @@
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Legend, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { formatDateTime, formatNumber } from '@shiro-mlops/shared/i18n/format'
 import { type Locale, useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
-import { CHART_AXIS, CHART_GRID, CHART_SURFACE } from '@/lib/chart-palette'
+import { CHART_AXIS, CHART_BRUSH, CHART_GRID, CHART_SURFACE } from '@/lib/chart-palette'
 import type { ChartBodyProps } from './series-line-chart'
 import type { PlottedSeries } from './chart-series'
 
 const STACK_ID = 'status'
 const SEGMENT_GAP_PX = 2
 const MAX_BAR_PX = 24
+const BRUSH_OPACITY = 0.2
 
 type CountRow = { t: number } & Record<string, number>
 
 // Status counts stacked per bucket. Raw audit points carry one point of value 1 per batch or
 // version and may share an instant, so points at one instant add up instead of replacing each other.
-export function SeriesStatusChart({ series }: ChartBodyProps) {
+export function SeriesStatusChart({ series, brush }: ChartBodyProps) {
   const locale = useLocale()
   const countLabel = useMessages().explorer.chart.count
   const rows = toCountRows(series)
   return (
     <div className="h-[260px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ top: 28, right: 20, left: 10, bottom: 10 }} accessibilityLayer>
+        <BarChart data={rows} margin={{ top: 28, right: 20, left: 10, bottom: 10 }} accessibilityLayer {...brush.handlers}>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} opacity={0.4} vertical={false} />
           <XAxis
             dataKey="t"
@@ -43,6 +44,15 @@ export function SeriesStatusChart({ series }: ChartBodyProps) {
             tickLine={false}
             label={{ value: countLabel, position: 'top', offset: 14, fill: CHART_AXIS, fontSize: 11 }}
           />
+          {brush.selection && (
+            <ReferenceArea
+              x1={brush.selection.from}
+              x2={brush.selection.to}
+              fill={CHART_BRUSH}
+              fillOpacity={BRUSH_OPACITY}
+              stroke="none"
+            />
+          )}
           <Tooltip
             cursor={{ fill: CHART_GRID, fillOpacity: 0.2 }}
             content={({ active, payload }) => (
