@@ -28,3 +28,13 @@ export async function readPublished<T>(
     throw new PublishedReadError(fileName, { cause })
   }
 }
+
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000
+
+// A published timestamp (ISO 8601 with offset, such as the track record cutoff or a forecast's
+// issued_at) is stale once it is strictly more than 24 hours behind the viewer's clock; exactly 24
+// hours is not. Compared as absolute instants, so the browser's time zone never matters. Checked on
+// every render, background re-reads included, with no timer of its own.
+export function isPublishedTimestampStale(timestamp: string, now: number = Date.now()): boolean {
+  return now - Date.parse(timestamp) > STALE_AFTER_MS
+}

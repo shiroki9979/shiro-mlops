@@ -80,6 +80,8 @@ export const en: Messages = {
     description: 'Issued forecasts compared with the actual load that followed, over the last 30 days.',
     cutoff: (time) => `Track record cutoff: ${time}`,
     loadError: 'The forecast track record is unavailable right now',
+    accumulatedDays: (days) => `${days} ${days === 1 ? 'day' : 'days'} accumulated so far`,
+    staleHint: 'The forecast track record has not been updated for more than 24 hours',
     metrics: {
       lead24Mape: 'MAPE at 24-hour lead time',
       lead24Mae: 'MAE at 24-hour lead time',
