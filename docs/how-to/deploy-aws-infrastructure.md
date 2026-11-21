@@ -195,7 +195,7 @@ aws cloudfront get-distribution \
   --query Distribution.Status --output text
 ```
 
-bucket 剛建立時 `site/` 與 `published/` 都是空的。CloudFront 沒有列出 bucket 的權限，缺檔一律回 403，屬預期結果，不是設定錯誤：
+bucket 剛建立時 `site/` 與 `published/` 都是空的，缺檔回 403 屬預期結果，不是設定錯誤（原因見[預報檢視的雲端託管 §1](../reference/forecast-view-hosting.md#1-s3-配置與寫入權限)）：
 
 - `site/` 還沒上傳前，首頁 `/` 與 `/history` 回 403。
 - `published/` 還沒上傳前，`/published/` 下的 JSON 回 403；第 5 節的地端匯出上傳後，約一分鐘內生效。
