@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
@@ -40,6 +39,9 @@ from shiro_mlops.tasks.types.lightgbm_common import (
     NativeBoosterFiles,
 )
 from shiro_mlops.tasks.types.metadata import ModelFormat
+
+if TYPE_CHECKING:
+    import lightgbm as lgb
 
 TASK_TYPE_NAME = "recursive_regression"
 PREDICTION_COL = f"predicted_{LOAD_MW_COL}"
@@ -150,6 +152,10 @@ class RecursiveRegressionModel:
         training_rows: pd.DataFrame,
         weather_columns: list[str],
     ) -> RecursiveRegressionModel:
+        # WHY-NOT(lgb): 用到時才 import；lightgbm 4.7.0 在 python -OO 下一 import 就崩潰，
+        # 放在模組頂層會讓只讀任務設定的 CLI（smoke check 的 --help）在解析參數前就失敗。
+        import lightgbm as lgb
+
         feature_names = [c for c in training_rows.columns if c not in NON_FEATURE_COLUMNS]
         regressor = lgb.LGBMRegressor(**FIXED_LIGHTGBM_PARAMS, **params.model.model_dump())
         regressor.fit(training_rows[feature_names], training_rows[LOAD_MW_COL])
