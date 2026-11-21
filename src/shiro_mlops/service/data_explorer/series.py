@@ -87,7 +87,7 @@ class SeriesSpec:
     none is left out. `instant_group_columns` are group columns holding instants, reported
     as RFC 3339 +08:00 like point times. `rows_share_time` marks datasets where one series
     may hold several rows at a timestamp, each carrying a different subset of the fields;
-    `raw` then keeps each field's value.
+    `raw` then keeps each field's value. Contradictory flags raise `ValueError` on declaration.
     """
 
     dataset: str
@@ -106,6 +106,11 @@ class SeriesSpec:
     instant_group_columns: frozenset[str] = frozenset()
     rows_share_time: bool = False
 
+    def __post_init__(self) -> None:
+        conflicts = _flag_conflicts(self)
+        if conflicts:
+            raise ValueError(f"series spec {self.dataset}: {'; '.join(conflicts)}")
+
     @property
     def request_params(self) -> frozenset[str]:
         common = COUNT_SERIES_PARAMS if self.count_rows else COMMON_SERIES_PARAMS
@@ -115,6 +120,20 @@ class SeriesSpec:
     @property
     def cadence(self) -> timedelta:
         return timedelta(seconds=DATASET_SPECS[self.dataset]["cadence"])
+
+
+def _flag_conflicts(spec: SeriesSpec) -> list[str]:
+    conflicts = []
+    if spec.count_rows and spec.member_sum:
+        conflicts.append("count_rows counts rows, so it cannot sum members first")
+    if spec.count_rows and spec.gap_fill:
+        conflicts.append("count_rows cannot gap-fill: an empty bucket would read as null, not 0")
+    if spec.rows_share_time and (spec.count_rows or spec.member_sum):
+        conflicts.append(
+            "rows_share_time merges rows sharing a timestamp, which counting must not do "
+            "and a member sum already does"
+        )
+    return conflicts
 
 
 class TooManyPointsError(ExplorerQueryError):
