@@ -149,12 +149,15 @@ class TooManyPointsError(ExplorerQueryError):
 
 @dataclass(frozen=True)
 class SeriesRequest:
-    """Validated series query: window, field names, grouping, bucket, aggregation, filters."""
+    """Validated series query: window, field names, grouping, bucket, aggregation, filters.
+
+    `agg` is None exactly when the spec counts rows, whose buckets hold counts instead.
+    """
 
     window: TimeWindow
     fields: tuple[str, ...]
     bucket: Bucket
-    agg: Agg
+    agg: Agg | None
     filters: Mapping[str, str]
     group_columns: tuple[str, ...]
 
@@ -166,18 +169,14 @@ class SeriesRequest:
         *,
         fields: list[str] | None,
         bucket: Bucket,
-        agg: Agg,
+        agg: Agg | None = None,
     ) -> SeriesRequest:
         """Reject undeclared parameters, then resolve the window under the series limit."""
         unknown = sorted(set(query_params) - spec.request_params)
         if unknown:
             raise ExplorerQueryError(f"unsupported series parameters: {', '.join(unknown)}")
         window = resolve_window(query_params.get("start"), query_params.get("end"), SERIES_MAX_DAYS)
-        filters = {
-            key: value
-            for key, value in query_params.items()
-            if key in spec.filter_keys and value != ""
-        }
+        filters = {key: value for key, value in query_params.items() if key in spec.filter_keys}
         chosen = (
             tuple(dict.fromkeys(fields)) if fields else spec.default_fields or tuple(spec.fields)
         )
@@ -185,7 +184,7 @@ class SeriesRequest:
             window=window,
             fields=chosen,
             bucket=bucket,
-            agg=agg,
+            agg=None if spec.count_rows else agg or Agg.AVG,
             filters=filters,
             group_columns=_group_columns(spec, query_params.get(GROUP_BY_PARAM)),
         )
@@ -210,7 +209,7 @@ class SeriesReader:
         where, params = self._where(request)
         keys = self._series_keys(request.group_columns, where, params)
         bucket = self._resolve_bucket(request, series_count=len(keys) * len(request.fields))
-        agg = None if bucket is Bucket.RAW or self.spec.count_rows else request.agg
+        agg = None if bucket is Bucket.RAW else request.agg
         if not keys:
             return SeriesResponse(bucket=bucket, agg=agg, series=[])
         rows = self.db.fetch(self._points_sql(request, bucket, where), params)
@@ -276,7 +275,7 @@ class SeriesReader:
             tail = ""
         else:
             time_sql = self.db.bucket_start(self.spec.time_column, bucket.value)
-            function = "COUNT" if self.spec.count_rows else request.agg.value.upper()
+            function = "COUNT" if request.agg is None else request.agg.value.upper()
             values = [f"{function}({sql}) AS v{index}" for index, sql in enumerate(value_sql)]
             tail = f" GROUP BY {', '.join([time_sql, *groups])}"
         selected = ", ".join([f"{time_sql} AS bucket_at", *groups, *values])
