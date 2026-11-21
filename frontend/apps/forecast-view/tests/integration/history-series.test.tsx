@@ -30,7 +30,7 @@ vi.mock('recharts', async (importOriginal) => {
 
 const TRACK_RECORD_URL = '/published/forecast_track_record.json'
 
-// 11:00 Taipei is missing from the series: it is a gap, not a point to draw a line through.
+// The export omits 11:00 Taipei; the Forecast View does not disclose that such an hour exists (ADR-0013 §2.2).
 const TRACK_RECORD = {
   cutoff: '2026-11-20T10:00:00+08:00',
   accumulated_days: 9,
@@ -79,7 +79,7 @@ describe('Forecast View /history lead-24 series', () => {
     expect(await screen.findByRole('figure', { name: text.series.title })).toBeInTheDocument()
   })
 
-  it('plots every target hour from the first to the last point and leaves the missing one empty', async () => {
+  it('plots only the target hours the JSON contains, with no placeholder for the omitted one', async () => {
     serveTrackRecord(TRACK_RECORD)
     const text = renderHistory()
     await screen.findByText(text.series.title)
@@ -90,7 +90,6 @@ describe('Forecast View /history lead-24 series', () => {
     ).toEqual([
       [Date.parse('2026-11-13T01:00:00Z'), 25012.0, 25830.4],
       [Date.parse('2026-11-13T02:00:00Z'), 26100.0, 25900.0],
-      [Date.parse('2026-11-13T03:00:00Z'), null, null],
       [Date.parse('2026-11-13T04:00:00Z'), 27000.0, 27270.0],
     ])
   })
@@ -118,7 +117,7 @@ describe('Forecast View /history lead-24 series', () => {
     },
   )
 
-  it('shows the missing target hour in the tooltip with empty values, not made-up ones', async () => {
+  it('moves the tooltip from one target hour in the JSON to the next, skipping the omitted hour', async () => {
     serveTrackRecord(TRACK_RECORD)
     const text = renderHistory()
     const chart = await findSeriesChart(text)
@@ -128,8 +127,9 @@ describe('Forecast View /history lead-24 series', () => {
     fireEvent.keyDown(chart, { key: 'ArrowRight' })
 
     const tooltip = await screen.findByRole('tooltip')
-    expect(within(tooltip).getByText('11/13 11:00')).toBeInTheDocument()
-    expect(within(tooltip).getAllByText(EMPTY_VALUE)).toHaveLength(3)
+    expect(within(tooltip).getByText('11/13 12:00')).toBeInTheDocument()
+    expect(within(tooltip).getByText('27,000.0 MW')).toBeInTheDocument()
+    expect(within(tooltip).queryByText(EMPTY_VALUE)).not.toBeInTheDocument()
   })
 
   it('shows no series chart while the track record is still accumulating', async () => {

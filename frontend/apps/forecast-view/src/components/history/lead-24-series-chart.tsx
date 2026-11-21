@@ -1,7 +1,6 @@
 import { useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import {
-  EMPTY_VALUE,
   formatDateTime,
   formatLoadDelta,
   formatLoadMW,
@@ -24,34 +23,24 @@ import {
 
 type Lead24SeriesPoint = NonNullable<ForecastTrackRecord['metrics']>['lead_24_series'][number]
 
-const HOUR_MS = 60 * 60 * 1000
 const DIFFERENCE_PERCENT_FRACTION_DIGITS = 2
 
 interface SeriesRow {
-  // Absolute instant (epoch ms), so the grid does not depend on the viewer's time zone.
+  // Absolute instant (epoch ms), so the rows do not depend on the viewer's time zone.
   target_hour: number
-  actual_load_mw: number | null
-  predicted_load_mw: number | null
+  actual_load_mw: number
+  predicted_load_mw: number
 }
 
-// The export omits target hours with no pair (data-contracts §5.1). Laying the points on an hourly
-// grid from the first to the last gives each missing hour a row of nulls, so the lines break there
-// instead of being drawn across it; no value is made up.
-function toHourlyGrid(series: Lead24SeriesPoint[]): SeriesRow[] {
-  if (series.length === 0) return []
-  const byInstant = new Map(series.map((point) => [Date.parse(point.target_hour), point]))
-  const first = Date.parse(series[0].target_hour)
-  const last = Date.parse(series[series.length - 1].target_hour)
-  const rows: SeriesRow[] = []
-  for (let instant = first; instant <= last; instant += HOUR_MS) {
-    const point = byInstant.get(instant)
-    rows.push({
-      target_hour: instant,
-      actual_load_mw: point?.actual_load_mw ?? null,
-      predicted_load_mw: point?.predicted_load_mw ?? null,
-    })
-  }
-  return rows
+// Only the target hours the export contains are plotted: it omits hours with no pair
+// (data-contracts §5.1), and the Forecast View does not disclose them (ADR-0013 §2.2), so the lines
+// run straight on from one point to the next and no row stands in for an omitted hour.
+function toSeriesRows(series: Lead24SeriesPoint[]): SeriesRow[] {
+  return series.map((point) => ({
+    target_hour: Date.parse(point.target_hour),
+    actual_load_mw: point.actual_load_mw,
+    predicted_load_mw: point.predicted_load_mw,
+  }))
 }
 
 // Actual load and the forecast issued 24 hours ahead for each target hour of the last 30 days.
@@ -70,7 +59,7 @@ export function Lead24SeriesChart({ series }: { series: Lead24SeriesPoint[] }) {
         <div className="h-[400px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
-              data={toHourlyGrid(series)}
+              data={toSeriesRows(series)}
               margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
               accessibilityLayer
             >
@@ -93,7 +82,6 @@ export function Lead24SeriesChart({ series }: { series: Lead24SeriesPoint[] }) {
                 dx={-5}
               />
               <Tooltip
-                filterNull={false}
                 content={({ active, payload }) => (
                   <SeriesTooltip
                     row={active ? (payload?.[0]?.payload as SeriesRow | undefined) : undefined}
@@ -139,15 +127,12 @@ interface SeriesTooltipProps {
 function SeriesTooltip({ row, locale, text }: SeriesTooltipProps) {
   if (!row) return null
   const { actual_load_mw: actual, predicted_load_mw: predicted } = row
-  const loadText = (load: number | null) => (load === null ? EMPTY_VALUE : `${formatLoadMW(load, locale)} MW`)
-  const difference =
-    actual === null || predicted === null
-      ? EMPTY_VALUE
-      : `${formatLoadDelta(predicted - actual, locale)} MW (${formatPercentDelta(
-          ((predicted - actual) / actual) * 100,
-          locale,
-          DIFFERENCE_PERCENT_FRACTION_DIGITS,
-        )})`
+  const loadText = (load: number) => `${formatLoadMW(load, locale)} MW`
+  const difference = `${formatLoadDelta(predicted - actual, locale)} MW (${formatPercentDelta(
+    ((predicted - actual) / actual) * 100,
+    locale,
+    DIFFERENCE_PERCENT_FRACTION_DIGITS,
+  )})`
   return (
     <div
       role="tooltip"
