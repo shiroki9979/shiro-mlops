@@ -2,7 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir mlflow psycopg2-binary
+# 版本與 uv.lock 一致，讓 tracking server 與專案的 MLflow client 同版。SQLAlchemy 須同時鎖定：
+# 2.1 起 postgresql:// 的預設 driver 改為 psycopg（v3），未安裝即讓容器持續重啟（#205）。
+RUN pip install --no-cache-dir mlflow==3.15.1 psycopg2-binary==2.9.12 sqlalchemy==2.0.52
 
 EXPOSE 5000
 

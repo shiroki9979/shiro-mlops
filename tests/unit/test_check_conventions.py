@@ -1,14 +1,18 @@
 """Offline tests for the repository convention checks in scripts/check_conventions.py."""
 
 from datetime import date
+from pathlib import Path
 
 from check_conventions import (
+    Violation,
+    check_docker_pins,
     doc_date_violation,
     find_banned_terms,
     find_host_python_in_makefile,
     find_host_python_in_workflow,
     find_last_updated,
     find_unlinked_debt_markers,
+    find_unpinned_pip_installs,
     is_debt_marker_source,
     python_comments,
 )
@@ -284,3 +288,110 @@ def test_comments_are_full_line_only_when_nothing_but_indentation_precedes_them(
         (5, False),
         (6, False),
     ]
+
+
+def _unpinned(dockerfile: str) -> list[tuple[int, list[str]]]:
+    return [(hit.line, list(hit.packages)) for hit in find_unpinned_pip_installs(dockerfile)]
+
+
+def test_dockerfile_pip_install_without_versions_reports_line_and_packages() -> None:
+    dockerfile = "FROM python:3.11-slim\n\nRUN pip install --no-cache-dir mlflow psycopg2-binary\n"
+
+    assert _unpinned(dockerfile) == [(3, ["mlflow", "psycopg2-binary"])]
+
+
+def test_pip_install_chained_on_a_continued_run_line_is_reported_at_the_run_line() -> None:
+    dockerfile = (
+        "FROM python:3.11-slim\n"
+        "RUN apt-get update \\\n"
+        "    && pip install --no-cache-dir mlflow \\\n"
+        "    && rm -rf /var/lib/apt/lists/*\n"
+    )
+
+    assert _unpinned(dockerfile) == [(2, ["mlflow"])]
+
+
+def test_every_pip_installer_spelling_is_checked() -> None:
+    dockerfile = (
+        "RUN uv pip install --system fastapi\n"
+        "RUN pip3 install uvicorn\n"
+        "RUN python -m pip install --upgrade pip\n"
+        "RUN /usr/local/bin/python3.11 -m pip install lightgbm\n"
+    )
+
+    assert _unpinned(dockerfile) == [
+        (1, ["fastapi"]),
+        (2, ["uvicorn"]),
+        (3, ["pip"]),
+        (4, ["lightgbm"]),
+    ]
+
+
+def test_pinned_lock_file_and_local_project_installs_are_allowed() -> None:
+    dockerfile = (
+        "RUN pip install mlflow==3.18.0 'psycopg[binary]==3.2.3'\n"
+        "RUN uv pip install --system --no-cache -r /tmp/requirements.txt\n"
+        "RUN uv pip install --system --no-cache --no-deps -e .\n"
+        "RUN pip install --index-url https://pypi.example/simple --requirement requirements.lock\n"
+    )
+
+    assert _unpinned(dockerfile) == []
+
+
+def test_docker_pins_reports_each_unpinned_dockerfile_under_docker(tmp_path: Path) -> None:
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "Dockerfile.api").write_text("RUN uv pip install --system -r /tmp/req.txt\n")
+    (docker / "Dockerfile.mlflow").write_text(
+        "FROM python:3.11-slim\n\nRUN pip install --no-cache-dir mlflow psycopg2-binary\n"
+    )
+
+    assert check_docker_pins(tmp_path) == [
+        Violation(
+            "docker/Dockerfile.mlflow",
+            3,
+            "pin pip installs with == or install from a lock file with -r: mlflow, psycopg2-binary",
+        )
+    ]
+
+
+def test_pip_install_behind_run_flags_env_assignments_and_shell_keywords_is_checked() -> None:
+    dockerfile = (
+        "RUN --mount=type=cache,target=/root/.cache pip install mlflow\n"
+        "RUN PIP_NO_CACHE_DIR=1 pip install fastapi\n"
+        "RUN if true; then pip install uvicorn; fi\n"
+    )
+
+    assert _unpinned(dockerfile) == [(1, ["mlflow"]), (2, ["fastapi"]), (3, ["uvicorn"])]
+
+
+def test_installer_options_before_the_install_subcommand_do_not_hide_it() -> None:
+    dockerfile = (
+        "RUN uv --no-cache pip install fastapi\n"
+        "RUN pip -q install uvicorn\n"
+        "RUN python -u -m pip install lightgbm\n"
+    )
+
+    assert _unpinned(dockerfile) == [(1, ["fastapi"]), (2, ["uvicorn"]), (3, ["lightgbm"])]
+
+
+def test_double_equals_outside_an_exact_version_is_not_a_pin() -> None:
+    dockerfile = (
+        "RUN pip install 'mlflow>=3,==3.15.1'\n"
+        "RUN pip install 'fastapi; python_version==\"3.11\"'\n"
+        "RUN pip install lightgbm==4.*\n"
+    )
+
+    assert _unpinned(dockerfile) == [
+        (1, ["mlflow>=3,==3.15.1"]),
+        (2, ['fastapi; python_version=="3.11"']),
+        (3, ["lightgbm==4.*"]),
+    ]
+
+
+def test_shell_redirections_after_pinned_packages_are_not_packages() -> None:
+    dockerfile = (
+        "RUN pip install mlflow==3.15.1 > /dev/null 2>&1\nRUN pip install x==1 2>/dev/null\n"
+    )
+
+    assert _unpinned(dockerfile) == []
