@@ -14,5 +14,7 @@ export function useLatestIssuedForecast() {
     // Matches the max-age=60 Nginx and CloudFront serve the file with; keep in sync with the
     // `/published/` Cache-Control in frontend/nginx.conf.
     staleTime: 60000,
+    // One retry rides out a blip; React Query's default of 3 would hold back the neutral error for ~7s.
+    retry: 1,
   })
 }

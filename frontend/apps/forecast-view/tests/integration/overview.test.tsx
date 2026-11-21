@@ -43,7 +43,8 @@ function freezeViewerNow(iso: string) {
 }
 
 function renderOverview() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // The page's own retry count stays in force; only the back-off between attempts is removed.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } })
   const view = render(
     <QueryClientProvider client={queryClient}>
       <OverviewPage />
@@ -319,6 +320,22 @@ describe('Overview page states', () => {
     expect(screen.queryByText(dashboard.table.loading)).not.toBeInTheDocument()
   })
 
+  it('retries a failed read once before showing the neutral error', async () => {
+    let reads = 0
+    server.use(
+      http.get('*/published/latest_issued_forecast.json', () => {
+        reads += 1
+        return new HttpResponse(null, { status: 403 })
+      }),
+    )
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.unavailable)).toBeInTheDocument()
+    expect(reads).toBe(2)
+  })
+
   it('keeps the forecast on screen when a later refetch fails', async () => {
     let failedRefetches = 0
     // Runtime handlers are tried in order: the first read succeeds once, every later one fails.
@@ -345,7 +362,8 @@ describe('Overview page states', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
-    expect(failedRefetches).toBe(1)
+    // The refetch and its one retry.
+    expect(failedRefetches).toBe(2)
     expect(screen.getByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
     expect(screen.getByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
     expect(screen.queryByText(dashboard.unavailable)).not.toBeInTheDocument()
