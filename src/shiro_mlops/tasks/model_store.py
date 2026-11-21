@@ -56,12 +56,63 @@ def model_directory_sha256(directory: Path) -> str:
     return digest.hexdigest()
 
 
+class MissingModelLockError(RuntimeError):
+    """A model directory has no lock file, so the model store never installed it."""
+
+
+def _lock_path(root: Path, task_id: str) -> Path:
+    return root / f".{task_id}.lock"
+
+
 @contextmanager
-def _model_lock(root: Path, task_id: str, *, exclusive: bool) -> Iterator[None]:
-    """Serialize model directory swaps with readers across service and training processes."""
-    with (root / f".{task_id}.lock").open("a+b") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+def _holding(descriptor: int, operation: int) -> Iterator[None]:
+    try:
+        fcntl.flock(descriptor, operation)
         yield
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _exclusive_lock(root: Path, task_id: str) -> Iterator[None]:
+    """Serialize a model directory swap with readers across service and training processes."""
+    descriptor = os.open(_lock_path(root, task_id), os.O_RDWR | os.O_CREAT, 0o666)
+    with _holding(descriptor, fcntl.LOCK_EX):
+        yield
+
+
+@contextmanager
+def _shared_lock(root: Path, task_id: str) -> Iterator[bool]:
+    """Hold the task's lock as a reader; yields ``False``, holding nothing, when it is untrained."""
+    descriptor = _open_lock_for_reading(root, task_id)
+    if descriptor is None:
+        yield False
+        return
+    with _holding(descriptor, fcntl.LOCK_SH):
+        yield True
+
+
+def _open_lock_for_reading(root: Path, task_id: str) -> int | None:
+    """Open the lock read-only, since ``LOCK_SH`` needs no write access and the API mounts the models read-only.
+
+    Only a writer creates the lock file, before installing the first model, so a
+    missing lock file beside a missing model directory means the task is untrained.
+    A directory found after the lock was missing may be a first training finishing
+    meanwhile, so the lock is looked for once more before the directory is rejected.
+    """
+    path = _lock_path(root, task_id)
+    try:
+        return os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        if not model_directory(root, task_id).exists():
+            return None
+    try:
+        return os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        raise MissingModelLockError(
+            f"{model_directory(root, task_id)} has no {path.name}, so the model store did not"
+            " install it; retrain the task to replace it."
+        ) from None
 
 
 def _exchange_directories(staging: Path, target: Path) -> None:
@@ -160,7 +211,7 @@ def save_model(root: Path, task_id: str, model: TaskModel) -> SavedModel:
     try:
         model.save(staging)
         sha256 = model_directory_sha256(staging)
-        with _model_lock(root, task_id, exclusive=True):
+        with _exclusive_lock(root, task_id):
             _install(staging, target)
     finally:
         if staging.exists():
@@ -172,13 +223,14 @@ def load_model_with_sha256(root: Path, task: TaskDefinition) -> LoadedModel | No
     """Load the task's current model and hash its directory under one shared lock.
 
     A swap waits for the lock, so the model and the hash always belong to the same
-    directory version. ``None`` when the task has never been trained.
+    directory version. ``None`` when the task has never been trained; raises
+    ``MissingModelLockError`` for a model directory the store did not install.
     """
     if not root.is_dir():
         return None
     directory = model_directory(root, task.task_id)
-    with _model_lock(root, task.task_id, exclusive=False):
-        if not directory.is_dir():
+    with _shared_lock(root, task.task_id) as locked:
+        if not locked or not directory.is_dir():
             return None
         model = get_task_type(task.task_type).load(directory)
         return LoadedModel(model=model, sha256=model_directory_sha256(directory))
