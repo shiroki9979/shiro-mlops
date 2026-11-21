@@ -181,3 +181,67 @@
     ]
   }
   ```
+
+## 5. Data Explorer series
+
+Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，僅在 local environment 或 `DATA_EXPLORER_ENABLED` 時可用（其餘情況回 HTTP 404）；產品語意見 [data-explorer.md](data-explorer.md) §8。
+
+### 5.1 共用參數
+
+每個 series endpoint 的路徑為對應 list 路徑再加 `/series`。
+
+| 參數 | 型別 | 預設 | 說明 |
+| --- | --- | --- | --- |
+| `start`、`end` | RFC 3339 | `end` = 現在，`start` = `end` − 24 小時 | 與 list 相同的精確閉區間；無 offset 時視為台北時間。窗口最長 92 天，與各 list 的天數上限無關。 |
+| `fields` | 可重複的列舉 | 該資料集白名單的全部欄位 | `fields=a&fields=b`；重複的欄位只產生一條 series。 |
+| `bucket` | `auto` \| `raw` \| `1h` \| `1d` | `auto` | `auto` 解析為同時符合兩個點數上限的最細粒度（依 `raw`、`1h`、`1d` 順序）。 |
+| `agg` | `avg` \| `min` \| `max` | `avg` | bucket 內的時間聚合；`raw` 忽略此參數。 |
+| 資料集篩選 | 依資料集 | — | 見 §5.4。 |
+
+- 參數一律以列舉驗證；欄位與分組名稱只對應程式內建的 SQL 常數，不從輸入字串組進 SQL。
+- 未宣告的參數（例如 `cursor`、`limit` 或其他資料集的分組參數）回 HTTP 422。
+
+### 5.2 回應 Schema
+
+```json
+{
+  "bucket": "1d",
+  "agg": "avg",
+  "timezone": "Asia/Taipei",
+  "series": [
+    {
+      "field": "load_mw",
+      "unit": "MW",
+      "group": {"subject": "nationwide"},
+      "points": [
+        {"t": "2026-11-20T00:00:00+08:00", "v": 30125.4},
+        {"t": "2026-11-21T00:00:00+08:00", "v": null}
+      ]
+    }
+  ]
+}
+```
+
+- `bucket`：實際採用的粒度，不會是 `auto`。
+- `agg`：實際採用的聚合；`bucket` 為 `raw` 時為 `null`。
+- `series`：每個（欄位, 分組鍵值）一條，依欄位請求順序、再依分組鍵值排序。`group` 為分組欄位到值的對應，未分組時為 `{}`。
+- `points`：依時間遞增。`t` 為 bucket 起點（`raw` 時為資料本身的時間，保留微秒），帶 `+08:00`；`v` 為數值，`null` 代表該 bucket 沒有資料（補值規則見 data-explorer.md §8）。
+
+### 5.3 上限與 HTTP 語意
+
+| 情況 | 狀態碼 | `detail` |
+| --- | --- | --- |
+| 正常，含窗口內沒有資料 | 200 | —（沒有資料時 `series` 為 `[]`） |
+| 手動指定的 `bucket` 讓任一 series 超過 1,200 點，或全部 series 合計超過 10,000 點 | 422 | `{"message": "...", "suggested_bucket": "1d"}`；`suggested_bucket` 為符合上限的最細粒度，沒有任何粒度符合時為 `null` |
+| `auto` 也找不到符合上限的粒度 | 422 | 同上，`suggested_bucket` 為 `null` |
+| 窗口超過 92 天、`start` 晚於 `end`、時間格式錯誤、未宣告的參數 | 422 | 字串訊息 |
+| 欄位不在白名單、`bucket` 或 `agg` 不在列舉內（含 `agg=sum`） | 422 | FastAPI 驗證錯誤陣列 |
+| TimescaleDB 無法連線 | 503 | `"Persistence unavailable"` |
+
+點數以窗口內預期的 bucket 數計算：`raw` 依資料集節奏（逐時負載 1 小時、10 分鐘快照 10 分鐘），`1h` 與 `1d` 依整點與台北日界，含只涵蓋到部分的邊界 bucket。
+
+### 5.4 各資料集
+
+| 資料集 | 路徑 | `fields` 白名單（單位） | 分組 | 篩選 | 補值 |
+| --- | --- | --- | --- | --- | --- |
+| 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW） | 固定依 `subject` | `subject` | 有（節奏 1 小時） |

@@ -49,7 +49,7 @@
 ## 5. 介面與 API 邊界
 
 - **前端路由**：在 `/console/` 之下提供 `/data/power/load`、`/data/power/supply-demand`、`/data/power/regional`、`/data/power/units`、`/data/weather/observations`、`/data/weather/forecasts` 與 `/data/audits` nested routes，支援重新整理與 deep link。側邊欄在 Data Explorer 啟用時列出上述資料集與 CWA audits。`GET /data/status` 回傳的 `href` 是不含 base path 的工程主控台路由（如 `/data/power/load`），前端產生連結時補上 `/console`。
-- **資料 API**：每個領域 dataset 使用獨立 typed read endpoint：`GET /data/power/load`、`GET /data/power/supply-demand`、`GET /data/power/regional`、`GET /data/power/units`、`GET /data/weather/observations`、`GET /data/weather/forecasts`、`GET /data/audits/cwa-observations` 與 `GET /data/audits/cwa-forecasts`。所有 list endpoints 共用 cursor pagination response envelope；不提供任意 SQL 或任意實體資料表查詢。
+- **資料 API**：每個領域 dataset 使用獨立 typed read endpoint：`GET /data/power/load`、`GET /data/power/supply-demand`、`GET /data/power/regional`、`GET /data/power/units`、`GET /data/weather/observations`、`GET /data/weather/forecasts`、`GET /data/audits/cwa-observations` 與 `GET /data/audits/cwa-forecasts`。所有 list endpoints 共用 cursor pagination response envelope。圖表另以 list 路徑加 `/series` 的有界序列 endpoint 讀取（目前為 `GET /data/power/load/series`），契約見 [rest-api.md](rest-api.md) §5。兩者都不提供任意 SQL 或任意實體資料表查詢。
 - **Audit 呈現**：CWA observation 與 forecast 資料頁顯示最新 audit 狀態及 Audit History 連結；`/data/audits` 提供批次歷史與 missing identifiers，但不提供完整 `raw_payload`。
 
 ## 6. 交互與診斷行為
@@ -70,6 +70,18 @@
 - **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
 - **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示返回第一頁的恢復操作（字典鍵 `explorer.results.backToFirstPage`，顯示文字隨介面語系）；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。
 - **開啟條件**：v1 不建立應用層登入與 RBAC。Data Explorer 路由與 API 僅在 local environment 或明確啟用功能旗標時可用；非本機存取必須由內網或 reverse proxy 限制，並使用 same-origin CORS，不得依賴現有 `CORS *` 對外暴露。
-- **顯示範圍**：目前提供狀態、資料表、篩選、typed detail drawer 與當頁 CSV 匯出。趨勢圖與資料集內可設定欄位、分組、粒度與聚合的探索視覺化規劃於 M9（[GitHub #212](https://github.com/shiroki9979/shiro-mlops/issues/212)），實作時於同一 PR 更新本節。
-- **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。
-- **時間範圍上限**：10 分鐘快照與機組資料單次最多查詢 7 天；逐時負載、測站觀測與 audits 最多 31 天；鄉鎮預報有效時間最多 14 天。更長歷史必須移動有界時間視窗取得。
+- **顯示範圍**：目前提供狀態、資料表、篩選、typed detail drawer、當頁 CSV 匯出，以及表格上方的趨勢圖卡片（目前為逐時負載，語意見 §8）。其餘資料集的圖表依 M9（[GitHub #212](https://github.com/shiroki9979/shiro-mlops/issues/212)）陸續加入，實作時於同一 PR 更新本節。
+- **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。Series endpoints 沿用同一組語意（無資料回 200 與空 `series`，點數超限另帶 `suggested_bucket`），詳見 [rest-api.md](rest-api.md) §5.3。
+- **時間範圍上限**：10 分鐘快照與機組資料單次最多查詢 7 天；逐時負載、測站觀測與 audits 最多 31 天；鄉鎮預報有效時間最多 14 天。更長歷史必須移動有界時間視窗取得。Series endpoints 的窗口上限另為 92 天，與列表上限無關。
+
+## 8. 圖表與聚合語意
+
+- **圖表卡片**：有圖表的資料頁在表格上方顯示一張圖表卡片，與表格共用同一個窗口與篩選。粒度（`bucket`）與聚合（`agg`）選單寫入 URL，預設值（`auto`、`avg`）不寫入；這兩個參數不送進 list 請求、不綁進 cursor，因此改圖表設定時 cursor 保留，而改窗口或篩選時 cursor 照常清除、圖表設定保留。Refresh 同時重新取得狀態、圖表與表格。點擊資料點只顯示 tooltip，不跳轉。
+- **成員合成**：一個分組內同一時間點有多個成員時（例如同一 `unit_type` 下的多部機組），先在該時間點把成員加總成一個值，`NULL` 成員略過，全部成員皆為 `NULL` 時該點為 `null`。逐時負載每個 `subject` 每小時只有一列，沒有成員合成。
+- **時間聚合**：`1h` 與 `1d` 在每個 bucket 內對合成後的值取 `avg`、`min` 或 `max`；不提供 `sum`（`agg=sum` 回 422）。`raw` 不做時間聚合並忽略 `agg`。
+- **計算順序**：先套用窗口與篩選，再做成員合成，最後做時間聚合；因此邊界 bucket 只用窗口內的資料計算。例：機組 A 為 100..150、B 為 60..0 時，逐點合計為 160, 150, …，`1h` 的 `max` 為 160，而不是各成員最大值相加的 210。
+- **Bucket 對齊**：`1h` 對齊整點，`1d` 對齊台北日界（00:00 `+08:00`），bucket 時間標示其起點。TimescaleDB 以 `time_bucket(..., 'Asia/Taipei')` 計算；SQLite 以對應的時間截斷計算，台北無日光節約時間，固定 +8 小時即可精確對齊。只涵蓋到一部分的邊界 bucket 仍保留。
+- **補值規則**：有固定節奏的資料集由應用層產生窗口內所有預期的 bucket（`raw` 依資料集節奏，自窗口起點後的第一個節奏點起算；`1h`、`1d` 自包含起點的 bucket 起算），沒有資料的 bucket 補 `null`，不使用 TimescaleDB 專屬的 gapfill。晚於現在的 bucket 不算缺口，也不補 `null`；判斷依據為 `min(end, 現在)`，與列表缺口一致。前端在 `null` 處斷開線段並加灰底帶。
+- **點數上限**：每條 series 最多 1,200 點，所有 series 合計最多 10,000 點；`auto` 選出同時符合兩者的最細粒度，手動粒度超限時回 422 並附建議粒度（[rest-api.md](rest-api.md) §5.3）。
+- **配色**：類別顏色（四區、12 種 `unit_type`、測站、audit 狀態、預報版本）集中定義在 `frontend/apps/engineering-console/src/lib/chart-palette.ts`，跨頁一致；同家族的機組類型（燃氣與民營電廠-燃氣、燃煤與民營電廠-燃煤、儲能與儲能負載）共用色相、以明度區分。每個顏色與深色卡片背景的對比至少 3:1（WCAG 非文字對比），由前端單元測試檢查。
+- **可及性**：圖表的標籤、圖例與提示文字一律走 i18n 字典；每張圖帶可及性文字，說明資料集、欄位與序列名稱。
