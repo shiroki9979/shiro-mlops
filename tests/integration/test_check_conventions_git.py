@@ -357,6 +357,8 @@ def test_comment_kinds_passes_every_allowed_kind(
         ("# SYNC(docs/guide.md):\n# note below\nx = 1\n", "SYNC(<path>[, <path>...]): <note>"),
         ("# why-not(x): lower case is not a tag\nx = 1\n", "allowed kind"),
         ("# TODO: no issue\nx = 1\n", "allowed kind"),
+        ("# FIXME: no issue\nx = 1\n", "allowed kind"),
+        ("#!/usr/bin/env python3\nx = 1\n", "allowed kind"),
     ],
 )
 def test_comment_kinds_fails_on_malformed_tags_and_unexplained_suppressions(
@@ -576,3 +578,196 @@ def test_why_not_fails_when_no_code_follows_the_block(
 
     assert _why_not(repo, source) == 1
     assert "no code follows the comment" in capsys.readouterr().err
+
+
+_PROTECTED = (
+    "x = 1\n"
+    "# WHY-NOT(retry_policy): the upstream rate limit resets every minute.\n"
+    "retry_policy = 3\n"
+    "timeout = 30\n"
+)
+
+
+def test_why_not_is_rechecked_when_its_anchor_line_is_renamed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    renamed = _PROTECTED.replace("retry_policy = 3", "retries = 3")
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": _PROTECTED}, {"src/pkg/load.py": renamed}) == 1
+    assert "src/pkg/load.py:2: " in capsys.readouterr().err
+
+
+def test_why_not_is_rechecked_when_its_anchor_line_is_deleted(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    deleted = _PROTECTED.replace("retry_policy = 3\n", "")
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": _PROTECTED}, {"src/pkg/load.py": deleted}) == 1
+    assert "src/pkg/load.py:2: " in capsys.readouterr().err
+
+
+def test_why_not_is_rechecked_when_a_deletion_removes_its_name_from_a_multi_line_anchor(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = (
+        "x = 1\n"
+        "# WHY-NOT(retry_policy): the upstream rate limit resets every minute.\n"
+        "client = connect(\n"
+        "    retry_policy=3,\n"
+        "    timeout=30,\n"
+        ")\n"
+    )
+    after = before.replace("    retry_policy=3,\n", "")
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": before}, {"src/pkg/load.py": after}) == 1
+    assert "src/pkg/load.py:2: " in capsys.readouterr().err
+
+
+def test_why_not_is_rechecked_when_the_last_line_of_the_file_is_its_deleted_anchor(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = "x = 1\n# WHY-NOT(retry_policy): the upstream limit resets.\nretry_policy = 3\n"
+    after = "x = 1\n# WHY-NOT(retry_policy): the upstream limit resets.\n"
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": before}, {"src/pkg/load.py": after}) == 1
+    assert "no code follows the comment" in capsys.readouterr().err
+
+
+def test_why_not_passes_when_its_anchor_changes_but_keeps_the_name(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    changed = _PROTECTED.replace("retry_policy = 3", "retry_policy = 5")
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": _PROTECTED}, {"src/pkg/load.py": changed}) == 0
+
+
+def test_why_not_is_not_rechecked_for_changes_after_its_anchor(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    stale = "x = 1\n# WHY-NOT(retries): legacy wording.\nretry_policy = 3\ntimeout = 30\n"
+    changed = stale.replace("timeout = 30\n", "")
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": stale}, {"src/pkg/load.py": changed}) == 0
+
+
+def test_why_not_above_decorators_matches_the_decorated_definition(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "# WHY-NOT(rows): the asset name is the published table name.\n"
+        "@retry\n"
+        "@asset(description='Rows.')\n"
+        "def rows():\n"
+        "    return 1\n"
+        "# WHY-NOT(Loader): one loader per process keeps the connection pool small.\n"
+        "@dataclass\n"
+        "class Loader:\n"
+        "    pass\n"
+        "# WHY-NOT(frozen): instances are shared across threads.\n"
+        "@dataclass(\n"
+        "    frozen=True,\n"
+        ")\n"
+        "@total_ordering\n"
+        "class Row:\n"
+        "    pass\n"
+    )
+
+    assert _why_not(repo, source) == 0
+
+
+def test_why_not_above_decorators_ignores_the_definition_body(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "# WHY-NOT(retries): the upstream rate limit resets every minute.\n"
+        "@asset\n"
+        "def rows():\n"
+        "    retries = 3\n"
+    )
+
+    assert _why_not(repo, source) == 1
+    assert (
+        "'retries' must appear on the decorated definition (lines 3-4)" in capsys.readouterr().err
+    )
+
+
+def test_why_not_is_rechecked_when_its_decorated_definition_is_renamed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = "# WHY-NOT(rows): the published table name.\n@asset\ndef rows():\n    return 1\n"
+    after = before.replace("def rows", "def table_rows")
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": before}, {"src/pkg/load.py": after}) == 1
+    assert "src/pkg/load.py:1: " in capsys.readouterr().err
+
+
+def test_comment_kinds_accepts_every_linked_debt_marker_and_file_directives(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "#!/usr/bin/env python3\n"
+        "# -*- coding: utf-8 -*-\n"
+        "# FIXME(#1): the cache ignores time zones.\n"
+        "x = 1\n"
+        "# HACK(#2): patch the client until upstream ships the fix.\n"
+        "y = 2\n"
+        "z = 3  # XXX(#3): off by one at midnight.\n"
+    )
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": "x = 1\n"}, {"src/pkg/load.py": source}) == 0
+
+
+def test_comment_kinds_does_not_let_a_file_directive_tag_the_comments_after_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = "#!/usr/bin/env python3\n# Print the report.\nprint(1)\n# coding: utf-8\nx = 1\n"
+
+    assert _comment_kinds(repo, {"src/pkg/load.py": "x = 1\n"}, {"src/pkg/load.py": source}) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:2: " in err
+    assert "src/pkg/load.py:4: " in err
+    assert "src/pkg/load.py:1: " not in err
+
+
+def test_comment_refs_fails_on_a_sync_path_that_does_not_exist(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "# SYNC(Makefile, scrpts/a.py, docs/missing.md, docs): keep the names in step.\nx = 1\n"
+    )
+    _commit(
+        repo,
+        {"docs/guide.md": "# Guide\n", "scripts/a.py": "", "src/pkg/load.py": source},
+        "2026-11-21",
+    )
+
+    assert main(["comment-refs"]) == 1
+    err = capsys.readouterr().err
+    for path in ("Makefile", "scrpts/a.py", "docs/missing.md", "docs"):
+        assert err.count(f"SYNC path '{path}'") == 1
+    assert "4 convention violation(s)" in err
+
+
+def test_comment_refs_passes_on_sync_paths_that_are_tracked_files(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = "# SYNC(Makefile, pyproject.toml, scripts/a.py): keep the names in step.\nx = 1\n"
+    files = {"Makefile": "", "pyproject.toml": "", "scripts/a.py": "", "src/pkg/load.py": source}
+    _commit(repo, files, "2026-11-21")
+
+    assert main(["comment-refs"]) == 0
