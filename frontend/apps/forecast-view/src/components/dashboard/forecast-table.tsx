@@ -15,14 +15,14 @@ import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
 import { Download, FileSpreadsheet } from 'lucide-react'
 
-interface PredictionTableProps {
+interface ForecastTableProps {
   // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
   steps: ForecastStep[]
   isLoading: boolean
   issuedAt: string | null
 }
 
-export function PredictionTable({ steps, isLoading, issuedAt }: PredictionTableProps) {
+export function ForecastTable({ steps, isLoading, issuedAt }: ForecastTableProps) {
   const [page, setPage] = useState(0)
   const m = useMessages()
   const locale = useLocale()

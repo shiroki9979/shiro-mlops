@@ -6,7 +6,7 @@ import { useDashboardStore } from '@/store/dashboard-store'
 import { ForecastChart } from '@/components/dashboard/forecast-chart'
 import { HorizonControls } from '@/components/dashboard/horizon-controls'
 import { MetricCards } from '@/components/dashboard/metric-cards'
-import { PredictionTable } from '@/components/dashboard/prediction-table'
+import { ForecastTable } from '@/components/dashboard/forecast-table'
 import { AlertTriangle, CalendarClock, Clock, Inbox } from 'lucide-react'
 import { formatDateTime } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
@@ -92,7 +92,7 @@ export function OverviewPage() {
           <ForecastChart steps={steps} isLoading={isPending} />
 
           {/* Hourly Detail Table; keyed by preset so a shorter window never opens on a page past its end */}
-          <PredictionTable key={horizonHours} steps={steps} isLoading={isPending} issuedAt={issuedAt} />
+          <ForecastTable key={horizonHours} steps={steps} isLoading={isPending} issuedAt={issuedAt} />
         </>
       )}
     </div>

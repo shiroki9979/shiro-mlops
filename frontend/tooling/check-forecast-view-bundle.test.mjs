@@ -44,7 +44,7 @@ describe('findBundleViolations', () => {
   })
 
   it('passes a name that merely starts with the inference path, and still reports the path itself', () => {
-    const lookalike = { path: 'assets/chunk-4.js', text: 'import("/src/components/dashboard/prediction-table.tsx")' }
+    const lookalike = { path: 'assets/chunk-4.js', text: 'const href="/prediction-table"' }
     const endpoint = { path: 'assets/chunk-5.js', text: 'fetch("/predict?h=24")' }
 
     assert.deepEqual(check({ files: [...CLEAN_FILES, lookalike] }), [])
