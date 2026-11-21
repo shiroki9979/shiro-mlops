@@ -1,7 +1,38 @@
-# 刪冗餘註解有據，「D 最好」卻證據不足
+# Coding agent 時代的程式碼註解策略調查
 
 - 建立日期：2026-11-21
 - 最後更新：2026-11-21
+- 對應：#181 Coding agent 時代的註解策略：研究報告與跨專案 guide
+- 結論：**刪冗餘註解有據，「D 最好」卻證據不足。** 刪掉重述型註解、把 why 寫下來有證據支持；只留標頭與 why-not 的嚴格版本會少抓陷阱 bug，最大的風險是被奉為天條的註解過時。
+- 延伸：可跨專案採用的原則見 [採用 coding agent 時代的註解策略](../how-to/adopt-agent-era-comment-policy.md)。
+
+## 研究對象
+
+一則貼文主張：coding agent 能讀大量程式碼，所以多份重複的說明（設計書、檔頭、內文註解、commit 訊息）大多不必保留，只要留下 package 與 class header，並把其中的不變條件當成永遠不能冒犯的「天條」。貼文附上的註解規則如下：
+
+> 命名優先於註解（Names over comments）。名稱、型別、小型函式與測試應該清楚表達程式碼的用途與行為。凡是只是重述這些資訊的註解，都應刪除——例如重複函式簽章的文件說明、重複欄位名稱的欄位註解，或只是敘述下一行程式碼要做什麼的旁白。
+>
+> 註解只允許出現在兩種情境：
+>
+> 1. 模組或類別的標頭註解（Module/Class Header）：用一到三行說明其角色，以及所有修改都必須維持的不變條件（invariant）。也就是新呼叫端或新增函式可能破壞的核心規則。
+> 2. 設計理由註解（Why-not）：放在那些表面上看起來不合理、多餘或任意，但實際上是刻意如此設計的程式碼旁邊。這類註解必須說明背後的限制條件、實際觀察到的失敗情況，或當時的決策依據。
+>
+> 這類註解必須明確指出它所保護的程式碼，讓日後修改相關程式碼時，仍能檢驗註解是否有效；當該段程式碼被移除時，註解也必須一併刪除。至於對執行期行為（runtime behaviour）的描述，仍須遵守前述規則。
+
+實驗由 Opus 依不同規則改寫 3 個模組的註解，再讓 Sonnet 閱讀、修改並審查埋入的 bug。O 是現狀，N 是全刪，A 到 D 是不同嚴格度的規則；貼文沒有說明上述規則對應哪個版本。
+
+| 指標 | O 現狀 | N 全刪 | A | B | C | D |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 保留的註解字元（3 個模組） | 11,753 | 0 | 7,794 | 2,930 | 1,545 | 4,196 |
+| 理解程式碼做什麼（what） | 94% | 97% | 92% | 86% | 83% | 92% |
+| 理解為什麼這樣寫（why） | 94% | 60% | 96% | 96% | 81% | 98% |
+| 審查時抓到的陷阱 bug | 10/14 | 3/14 | 10/14 | 6/14 | 5/14 | 6/14 |
+| 審查時抓到的邏輯 bug | 12/12 | 12/12 | 12/12 | 11/12 | 12/12 | 12/12 |
+| 修改時察覺設計衝突 | 6/6 | 3/6 | 6/6 | 6/6 | 4/6 | 6/6 |
+| 停下來詢問而非直接實作 | 0/4 | 0/4 | 1/4 | 2/4 | 0/4 | 4/4 |
+| 兩位改寫者的一致性（κ） | — | — | 0.77 | 0.54 | 0.82 | 0.81 |
+
+## 摘要
 
 這則貼文的方向大致站得住，結論卻說過頭了。「刪掉只重述名稱、簽章或下一行程式碼的註解，把 why 寫下來」同時得到已發表研究與貼文自身數據的支持：全刪的 N 版仍理解 97% 的 what，但 why 掉到 60%，陷阱 bug 也從 10/14 掉到 3/14。可是「D（模組／類別標頭加 why-not）最好」撐不住：D 漏掉了 O 與 A 都抓到的 10 個陷阱中的 4 個，而它唯一明顯的優勢「停下來詢問 4/4」只建立在 4 個任務上，若採配對分析，最小可達的精確 McNemar p 值是 **0.125**，無論結果多懸殊都不可能顯著；整張表也**沒有任何一項差異撐得過多重比較校正**。數據最直接支持的，其實是較溫和的 A：刪掉約三分之一的註解字元，所有指標都看不出損失。文獻最一致的發現是**錯誤或過時的註解造成的傷害遠大於沒有註解**，而且叫模型「忽略註解」並不管用；貼文只測了剛改寫、內容正確的註解，所以沒量到這條規則真正的風險：被奉為「天條」的少數註解一旦過時，agent 會拿它對抗程式碼。對 shiro-mlops 來說，`#` 註解層（`src/` 共 7,808 字元，多半已是理由與同步來源）其實已接近目標；這條規則真正會砍到的是 64,077 字元的 docstring，其中一部分由 FastAPI、Pydantic 與 argparse 在執行期讀取，直接刪除會改變 OpenAPI 文件，還會讓兩支 CLI 一啟動就崩潰。
 
@@ -96,7 +127,7 @@ ADR 可以承接去重，但無法取代就地的 why-not。Nygard 2011 年提�
 
 ## shiro-mlops 的 `#` 註解已夠精簡，該動的是 docstring 與天條的執行
 
-先釐清現況。repo 裡沒有任何文件寫著「名稱優先、只留標頭與 why-not」。[`CODING_STANDARDS.md`](../CODING_STANDARDS.md) 只有「文件」「設定與基礎設施」「技術債」三節，與註解相關的只有第 14 行的「無法共用時，在重複處註明須同步的來源檔」，以及第 15 行的「非直觀設定附 Why 註解」，後者只涵蓋基礎設施設定。另有三處規定要求寫註解：[`docs/agents/tech-debt.md:25`](../docs/agents/tech-debt.md) 的 `TODO(#123)` 格式、[`docs/reference/lab.md:83`](../docs/reference/lab.md) 的「採用時在任務設定 TOML 參數旁註解連回報告」，以及只寫在 [`docs/adr/0010-persist-models-in-native-non-executable-formats.md:44`](../docs/adr/0010-persist-models-in-native-non-executable-formats.md) 的 `np.load` 審查清單。貼文的實驗也沒有記錄在 repo 的任何地方；以 11,753 字元回推，`src/` 中有四組不同的三模組組合都落在正負 15 字元內，無法辨識是哪三個模組，甚至可能根本不是這個 repo。量測結果顯示，`#` 註解層已經接近規則的目標，冗餘主要在 docstring：
+先釐清現況。repo 裡沒有任何文件寫著「名稱優先、只留標頭與 why-not」。[`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) 只有「文件」「設定與基礎設施」「技術債」三節，與註解相關的只有第 14 行的「無法共用時，在重複處註明須同步的來源檔」，以及第 15 行的「非直觀設定附 Why 註解」，後者只涵蓋基礎設施設定。另有三處規定要求寫註解：[`docs/agents/tech-debt.md:25`](../../docs/agents/tech-debt.md) 的 `TODO(#123)` 格式、[`docs/reference/lab.md:83`](../../docs/reference/lab.md) 的「採用時在任務設定 TOML 參數旁註解連回報告」，以及只寫在 [`docs/adr/0010-persist-models-in-native-non-executable-formats.md:44`](../../docs/adr/0010-persist-models-in-native-non-executable-formats.md) 的 `np.load` 審查清單。貼文的實驗也沒有記錄在 repo 的任何地方；以 11,753 字元回推，`src/` 中有四組不同的三模組組合都落在正負 15 字元內，無法辨識是哪三個模組，甚至可能根本不是這個 repo。量測結果顯示，`#` 註解層已經接近規則的目標，冗餘主要在 docstring：
 
 | 目錄 | 檔案數 | 行數 | `#` 註解字元 | docstring 字元 | 有模組 docstring |
 | :--- | ---: | ---: | ---: | ---: | ---: |
@@ -105,40 +136,93 @@ ADR 可以承接去重，但無法取代就地的 why-not。Nygard 2011 年提�
 | `lab/` | 12 | 2,722 | 3,673 | 8,215 | 10/12 |
 | `scripts/` | 4 | 874 | 1,695 | 1,889 | 4/4 |
 
-`src/` 的 docstring 約是 `#` 註解的 **8 倍**。151 行 `#` 註解中有 105 行是中文，多半已是 why-not 或同步來源：[`src/shiro_mlops/data/cwa_client.py:16-17`](../src/shiro_mlops/data/cwa_client.py) 說明為何以 defusedxml 防範 billion laughs，[`src/shiro_mlops/pipelines/smoke_check.py:29`](../src/shiro_mlops/pipelines/smoke_check.py) 解釋唯一一處依賴 `dagster._core` 私有路徑的原因，[`src/shiro_mlops/pipelines/assets.py:76-78`](../src/shiro_mlops/pipelines/assets.py) 用算式證明重試仍早於下一個 10 分鐘 slot。575 個 docstring 中則只有 9 個含中文。所以這條規則若把 docstring 算進「註解」，落地時幾乎就是一場 docstring 刪減，規則文字必須先把這一點講清楚。
+`src/` 的 docstring 約是 `#` 註解的 **8 倍**。151 行 `#` 註解中有 105 行是中文，多半已是 why-not 或同步來源：[`src/shiro_mlops/data/cwa_client.py:16-17`](../../src/shiro_mlops/data/cwa_client.py) 說明為何以 defusedxml 防範 billion laughs，[`src/shiro_mlops/pipelines/smoke_check.py:29`](../../src/shiro_mlops/pipelines/smoke_check.py) 解釋唯一一處依賴 `dagster._core` 私有路徑的原因，[`src/shiro_mlops/pipelines/assets.py:76-78`](../../src/shiro_mlops/pipelines/assets.py) 用算式證明重試仍早於下一個 10 分鐘 slot。575 個 docstring 中則只有 9 個含中文。所以這條規則若把 docstring 算進「註解」，落地時幾乎就是一場 docstring 刪減，規則文字必須先把這一點講清楚。
 
 ### 工具會讀的 docstring 是介面文字，不能當註解刪
 
-至少三種工具在執行期讀取 docstring，直接刪除會改變對外輸出。以下行為都對照了 [`uv.lock`](../uv.lock) 鎖定版本的套件原始碼確認。
+至少三種工具在執行期讀取 docstring，直接刪除會改變對外輸出。以下行為都對照了 [`uv.lock`](../../uv.lock) 鎖定版本的套件原始碼確認。
 
 | 工具（鎖定版本） | 讀取機制 | 本 repo 受影響位置 | 刪除後果 |
 | :--- | :--- | :--- | :--- |
-| FastAPI 0.141.1 | `route.description = description or inspect.cleandoc(route.endpoint.__doc__ or "")`（`fastapi/routing.py:1034`） | 沒有任何路由傳 `description=` 或 `summary=`；[`service/api.py`](../src/shiro_mlops/service/api.py) 第 235、254、260、266、284 行，以及 [`data_explorer/router.py`](../src/shiro_mlops/service/data_explorer/router.py) 第 69 至 129 行的九個處理函式 | `/docs` 與 OpenAPI 的 operation description 消失 |
-| Pydantic 2.13.4 | 類別 `__doc__` 經 `inspect.cleandoc` 成為 JSON schema 的 `description`（`json_schema.py:1662-1665`；列舉在第 891 行） | [`data_explorer/schemas.py`](../src/shiro_mlops/service/data_explorer/schemas.py) 第 17、44、51 行的類別；[`service/api.py:200`](../src/shiro_mlops/service/api.py)；`create_model(..., __doc__=item.__doc__)` 刻意傳遞（[`service/api.py:178-181`](../src/shiro_mlops/service/api.py) 與第 216 行），使 [`recursive_regression.py:69`](../src/shiro_mlops/tasks/types/recursive_regression.py)、[`direct_classification.py:95`](../src/shiro_mlops/tasks/types/direct_classification.py)、[`unsupervised_reconstruction.py:101`](../src/shiro_mlops/tasks/types/unsupervised_reconstruction.py) 的預測項目 docstring 成為 API 文字 | OpenAPI schema 說明消失 |
-| argparse | `ArgumentParser(description=__doc__.splitlines()[0])` | [`pipelines/smoke_check.py:241`](../src/shiro_mlops/pipelines/smoke_check.py)、[`scripts/rederive_hourly_actual_load.py:76`](../scripts/rederive_hourly_actual_load.py) | `__doc__` 變成 `None`，啟動即 `AttributeError` |
-| argparse | `ArgumentParser(description=__doc__)` | [`scripts/smoke_nginx.py:249`](../scripts/smoke_nginx.py)、[`lab/2026-11-17-dhf-weather-calendar/study.py:300`](../lab/2026-11-17-dhf-weather-calendar/study.py) | `--help` 說明變空白 |
-| Dagster 1.13.19 | 只在未傳 `description=` 時以 docstring 作為 op 或 asset 說明（`op_decorator.py:128`）；`@schedule` 完全不讀 docstring | 所有 `@asset` 都明示 `description=`（例如 [`pipelines/assets.py`](../src/shiro_mlops/pipelines/assets.py) 第 89 行起）；[`pipelines/schedules.py`](../src/shiro_mlops/pipelines/schedules.py) 第 131、158 行的 docstring 不會出現在 UI | 目前安全；未來漏寫 `description=` 的 asset 會悄悄改用 docstring |
+| FastAPI 0.141.1 | `route.description = description or inspect.cleandoc(route.endpoint.__doc__ or "")`（`fastapi/routing.py:1034`） | 沒有任何路由傳 `description=` 或 `summary=`；[`service/api.py`](../../src/shiro_mlops/service/api.py) 第 235、254、260、266、284 行，以及 [`data_explorer/router.py`](../../src/shiro_mlops/service/data_explorer/router.py) 第 69 至 129 行的九個處理函式 | `/docs` 與 OpenAPI 的 operation description 消失 |
+| Pydantic 2.13.4 | 類別 `__doc__` 經 `inspect.cleandoc` 成為 JSON schema 的 `description`（`json_schema.py:1662-1665`；列舉在第 891 行） | [`data_explorer/schemas.py`](../../src/shiro_mlops/service/data_explorer/schemas.py) 第 17、44、51 行的類別；[`service/api.py:200`](../../src/shiro_mlops/service/api.py)；`create_model(..., __doc__=item.__doc__)` 刻意傳遞（[`service/api.py:178-181`](../../src/shiro_mlops/service/api.py) 與第 216 行），使 [`recursive_regression.py:69`](../../src/shiro_mlops/tasks/types/recursive_regression.py)、[`direct_classification.py:95`](../../src/shiro_mlops/tasks/types/direct_classification.py)、[`unsupervised_reconstruction.py:101`](../../src/shiro_mlops/tasks/types/unsupervised_reconstruction.py) 的預測項目 docstring 成為 API 文字 | OpenAPI schema 說明消失 |
+| argparse | `ArgumentParser(description=__doc__.splitlines()[0])` | [`pipelines/smoke_check.py:241`](../../src/shiro_mlops/pipelines/smoke_check.py)、[`scripts/rederive_hourly_actual_load.py:76`](../../scripts/rederive_hourly_actual_load.py) | `__doc__` 變成 `None`，啟動即 `AttributeError` |
+| argparse | `ArgumentParser(description=__doc__)` | [`scripts/smoke_nginx.py:249`](../../scripts/smoke_nginx.py)、[`lab/2026-11-17-dhf-weather-calendar/study.py:300`](../../lab/2026-11-17-dhf-weather-calendar/study.py) | `--help` 說明變空白 |
+| Dagster 1.13.19 | 只在未傳 `description=` 時以 docstring 作為 op 或 asset 說明（`op_decorator.py:128`）；`@schedule` 完全不讀 docstring | 所有 `@asset` 都明示 `description=`（例如 [`pipelines/assets.py`](../../src/shiro_mlops/pipelines/assets.py) 第 89 行起）；[`pipelines/schedules.py`](../../src/shiro_mlops/pipelines/schedules.py) 第 131、158 行的 docstring 不會出現在 UI | 目前安全；未來漏寫 `description=` 的 asset 會悄悄改用 docstring |
 
-Feast 以明示的 `description=` 參數設定說明（[`features/definitions.py:14`](../src/shiro_mlops/features/definitions.py)），不讀 docstring；repo 也沒有設定 Sphinx、mkdocs 或 pdoc，ruff 只選 `E`、`F`、`I`、`N`、`W`、`UP`（[`pyproject.toml:54`](../pyproject.toml)），沒有任何 `D` 規則要求或保護 docstring。最危險的是測試完全不會發現：[`tests/integration/test_api.py:650-654`](../tests/integration/test_api.py) 只斷言 `Field(description=…)` 的內容，沒有任何測試斷言路由或模型的 docstring，一次「依規則清理」的 PR 可以在 CI 全綠的情況下改掉公開 API 文件，還弄壞兩支 CLI。建議在規則中明訂「被工具讀取的 docstring 屬於介面文字，不是註解」。更乾淨的做法是把這些文字搬到明示的 `summary=`、`description=` 與 `Field(description=…)`，沿用 [`service/api.py:142-152`](../src/shiro_mlops/service/api.py) 請求模型已有的寫法，讓契約顯性且可測，再加一個針對 `app.openapi()` 關鍵說明的快照測試；argparse 的兩處 `__doc__.splitlines()[0]` 則改成明示字串，或至少改成 `__doc__` 為 `None` 時不會崩潰的寫法。
+Feast 以明示的 `description=` 參數設定說明（[`features/definitions.py:14`](../../src/shiro_mlops/features/definitions.py)），不讀 docstring；repo 也沒有設定 Sphinx、mkdocs 或 pdoc，ruff 只選 `E`、`F`、`I`、`N`、`W`、`UP`（[`pyproject.toml:54`](../../pyproject.toml)），沒有任何 `D` 規則要求或保護 docstring。最危險的是測試完全不會發現：[`tests/integration/test_api.py:650-654`](../../tests/integration/test_api.py) 只斷言 `Field(description=…)` 的內容，沒有任何測試斷言路由或模型的 docstring，一次「依規則清理」的 PR 可以在 CI 全綠的情況下改掉公開 API 文件，還弄壞兩支 CLI。建議在規則中明訂「被工具讀取的 docstring 屬於介面文字，不是註解」。更乾淨的做法是把這些文字搬到明示的 `summary=`、`description=` 與 `Field(description=…)`，沿用 [`service/api.py:142-152`](../../src/shiro_mlops/service/api.py) 請求模型已有的寫法，讓契約顯性且可測，再加一個針對 `app.openapi()` 關鍵說明的快照測試；argparse 的兩處 `__doc__.splitlines()[0]` 則改成明示字串，或至少改成 `__doc__` 為 `None` 時不會崩潰的寫法。
 
 ### 先做 A 級清理，別一步跳到 D 級的嚴格度
 
-實驗數據支持的是「刪掉約三分之一，看不出損失」。對應到這個 repo，有一批幾乎沒有爭議的刪除對象：[`src/shiro_mlops/core/config.py`](../src/shiro_mlops/core/config.py) 第 25、28、60、63、70、88 行的 `# Environment`、`# MLflow` 等分節標籤，就在不言自明的設定上方；[`src/shiro_mlops/features/definitions.py`](../src/shiro_mlops/features/definitions.py) 第 10、19、44 行的編號標題；[`src/shiro_mlops/features/transformers.py:51`](../src/shiro_mlops/features/transformers.py) 的 `# Cyclical hour encoding` 正好位於 `hour_sin` 計算上方，第 133、144 行亦然；[`src/shiro_mlops/data/cwa_client.py:566`](../src/shiro_mlops/data/cwa_client.py) 與 [`src/shiro_mlops/core/database.py:202`](../src/shiro_mlops/core/database.py) 只是重述下一行；[`src/shiro_mlops/tasks/runner.py`](../src/shiro_mlops/tasks/runner.py) 第 131、226、252、525 行等共 11 處 `# --- Training ---` 式分隔線；[`src/shiro_mlops/data/repository.py:332-343`](../src/shiro_mlops/data/repository.py) 這類重述簽章的 NumPy 式 `Parameters` 區塊（repository.py 有 4 個、database.py 有 5 個）；以及 [`repository.py`](../src/shiro_mlops/data/repository.py) 第 56、93、324 行這種改寫函式或類別名稱的單行 docstring。這些多半在淺層 clone 的邊界（2026-09-28）之前就已存在，較新的 why 與同步註解則多在 11 月加入。啟發式統計顯示，297 個單行函式 docstring 中有 77 個以函式名的動詞開頭（5,086 字元），但這會高估冗餘，例如 [`core/io_managers.py:64`](../src/shiro_mlops/core/io_managers.py) 的「reject legacy pickle files」就帶著不變條件，所以刪除應逐條審查，不宜批次處理。
+實驗數據支持的是「刪掉約三分之一，看不出損失」。對應到這個 repo，有一批幾乎沒有爭議的刪除對象：[`src/shiro_mlops/core/config.py`](../../src/shiro_mlops/core/config.py) 第 25、28、60、63、70、88 行的 `# Environment`、`# MLflow` 等分節標籤，就在不言自明的設定上方；[`src/shiro_mlops/features/definitions.py`](../../src/shiro_mlops/features/definitions.py) 第 10、19、44 行的編號標題；[`src/shiro_mlops/features/transformers.py:51`](../../src/shiro_mlops/features/transformers.py) 的 `# Cyclical hour encoding` 正好位於 `hour_sin` 計算上方，第 133、144 行亦然；[`src/shiro_mlops/data/cwa_client.py:566`](../../src/shiro_mlops/data/cwa_client.py) 與 [`src/shiro_mlops/core/database.py:202`](../../src/shiro_mlops/core/database.py) 只是重述下一行；[`src/shiro_mlops/tasks/runner.py`](../../src/shiro_mlops/tasks/runner.py) 第 131、226、252、525 行等共 11 處 `# --- Training ---` 式分隔線；[`src/shiro_mlops/data/repository.py:332-343`](../../src/shiro_mlops/data/repository.py) 這類重述簽章的 NumPy 式 `Parameters` 區塊（repository.py 有 4 個、database.py 有 5 個）；以及 [`repository.py`](../../src/shiro_mlops/data/repository.py) 第 56、93、324 行這種改寫函式或類別名稱的單行 docstring。這些多半在淺層 clone 的邊界（2026-09-28）之前就已存在，較新的 why 與同步註解則多在 11 月加入。啟發式統計顯示，297 個單行函式 docstring 中有 77 個以函式名的動詞開頭（5,086 字元），但這會高估冗餘，例如 [`core/io_managers.py:64`](../../src/shiro_mlops/core/io_managers.py) 的「reject legacy pickle files」就帶著不變條件，所以刪除應逐條審查，不宜批次處理。
 
-刪除時要守住 Ousterhout 與 Google 的底線：型別與名稱承載不了的介面語意要留下。[`src/shiro_mlops/tasks/runner.py:1-8`](../src/shiro_mlops/tasks/runner.py) 的模組 docstring 寫明 runner 掌管 I/O、任務類型只接收記憶體內資料、所有時間相依的決策都要明示台灣本地 naive 時間的 `as_of`。這些正是 agent 每次都得重新推導、也最容易推錯的東西，即使有 7 行、超過規則的 1 到 3 行，也不該砍。相對地，幾段長篇模組 docstring 是在敘述執行期行為，而且與 `docs/reference/` 重複：[`pipelines/issued_forecast.py:1`](../src/shiro_mlops/pipelines/issued_forecast.py) 的「never floored to the hour」與「Only scheduled ticks issue」，幾乎就是 [`docs/reference/dagster-schedules.md`](../docs/reference/dagster-schedules.md) 第 57、60 行；[`tasks/types/base.py:1`](../src/shiro_mlops/tasks/types/base.py) 的「Task types never touch repositories」重述了 [`docs/reference/ml-tasks.md:48`](../docs/reference/ml-tasks.md)；[`tasks/model_store.py:1`](../src/shiro_mlops/tasks/model_store.py) 的「A legacy `model.joblib` is never loaded」重述了 ADR-0010 第 21 行。[`AGENTS.md:11`](../AGENTS.md) 要求 reference 文件與程式碼在同一個 PR 修改，docstring 裡的副本卻沒有這道守門，這正是文獻警告的「過時天條」溫床。建議沿用 [`data/hourly_actual_load.py:1`](../src/shiro_mlops/data/hourly_actual_load.py) 的寫法，只用兩行指向「ADR-0008 and docs/reference/data-contracts.md §1」，讓跨模組契約以連結取代重述，模組標頭只寫在本模組內成立的不變條件。[`pipelines/forecast_view_export.py:1`](../src/shiro_mlops/pipelines/forecast_view_export.py)（953 字元、15 行）與 [`tasks/types/unsupervised_reconstruction.py:1`](../src/shiro_mlops/tasks/types/unsupervised_reconstruction.py)（826 字元）是首選對象；[`pipelines/smoke_check.py:1-15`](../src/shiro_mlops/pipelines/smoke_check.py) 雖然也長，但第一行餵給 argparse，還含使用說明，縮減時必須一併處理。
+刪除時要守住 Ousterhout 與 Google 的底線：型別與名稱承載不了的介面語意要留下。[`src/shiro_mlops/tasks/runner.py:1-8`](../../src/shiro_mlops/tasks/runner.py) 的模組 docstring 寫明 runner 掌管 I/O、任務類型只接收記憶體內資料、所有時間相依的決策都要明示台灣本地 naive 時間的 `as_of`。這些正是 agent 每次都得重新推導、也最容易推錯的東西，即使有 7 行、超過規則的 1 到 3 行，也不該砍。相對地，幾段長篇模組 docstring 是在敘述執行期行為，而且與 `docs/reference/` 重複：[`pipelines/issued_forecast.py:1`](../../src/shiro_mlops/pipelines/issued_forecast.py) 的「never floored to the hour」與「Only scheduled ticks issue」，幾乎就是 [`docs/reference/dagster-schedules.md`](../../docs/reference/dagster-schedules.md) 第 57、60 行；[`tasks/types/base.py:1`](../../src/shiro_mlops/tasks/types/base.py) 的「Task types never touch repositories」重述了 [`docs/reference/ml-tasks.md:48`](../../docs/reference/ml-tasks.md)；[`tasks/model_store.py:1`](../../src/shiro_mlops/tasks/model_store.py) 的「A legacy `model.joblib` is never loaded」重述了 ADR-0010 第 21 行。[`AGENTS.md:11`](../../AGENTS.md) 要求 reference 文件與程式碼在同一個 PR 修改，docstring 裡的副本卻沒有這道守門，這正是文獻警告的「過時天條」溫床。建議沿用 [`data/hourly_actual_load.py:1`](../../src/shiro_mlops/data/hourly_actual_load.py) 的寫法，只用兩行指向「ADR-0008 and docs/reference/data-contracts.md §1」，讓跨模組契約以連結取代重述，模組標頭只寫在本模組內成立的不變條件。[`pipelines/forecast_view_export.py:1`](../../src/shiro_mlops/pipelines/forecast_view_export.py)（953 字元、15 行）與 [`tasks/types/unsupervised_reconstruction.py:1`](../../src/shiro_mlops/tasks/types/unsupervised_reconstruction.py)（826 字元）是首選對象；[`pipelines/smoke_check.py:1-15`](../../src/shiro_mlops/pipelines/smoke_check.py) 雖然也長，但第一行餵給 argparse，還含使用說明，縮減時必須一併處理。
 
 ### 把天條變成會失敗的測試
 
-既然模型會照單全收註解，叫它忽略也沒用，每條被奉為天條的不變條件都應盡量配一個違反時會失敗的檢查，並在標頭中點名那個檢查。這個 repo 已經有很好的範本：[`lab/tests/test_snapshot.py:357-358`](../lab/tests/test_snapshot.py) 的 `test_src_never_imports_lab` 把 ADR-0011 的依賴方向變成測試；[`src/shiro_mlops/tasks/definition.py:98-127`](../src/shiro_mlops/tasks/definition.py) 以 Pydantic validator 強制權重總和為 1；[`tests/unit/test_smoke_check.py:74`](../tests/unit/test_smoke_check.py) 替 [`smoke_check.py:88-91`](../src/shiro_mlops/pipelines/smoke_check.py) 那段「刻意重述排程名稱與 cron」的 why-not 撐腰；[`tests/integration/test_resiliency.py:364`](../tests/integration/test_resiliency.py) 的 `test_serving_path_never_constructs_a_cwa_client` 則直接用測試名稱陳述不變條件。仍停在散文的有三條。第一，[`tasks/types/base.py:1`](../src/shiro_mlops/tasks/types/base.py) 的「Task types never touch repositories」沒有任何測試或 lint 把關，ruff 也沒啟用 `flake8-tidy-imports` 或 banned-api；建議仿照 `test_src_never_imports_lab` 寫一個 AST 測試，禁止 `tasks/types/` 匯入 `shiro_mlops.data` 與 `sqlalchemy`。第二，ADR-0010 第 44 行要求 `np.load` 一律明示 `allow_pickle=False`，目前只是審查清單；`src/` 只有一個呼叫點（[`unsupervised_reconstruction.py:359`](../src/shiro_mlops/tasks/types/unsupervised_reconstruction.py)），很適合做成 `check_conventions.py` 的檢查或一個測試。第三，[`tasks/types/base.py:59`](../src/shiro_mlops/tasks/types/base.py) 的「各任務類型不得自行切分」是否有測試把關，本次調查尚未確認，值得補查。
+既然模型會照單全收註解，叫它忽略也沒用，每條被奉為天條的不變條件都應盡量配一個違反時會失敗的檢查，並在標頭中點名那個檢查。這個 repo 已經有很好的範本：[`lab/tests/test_snapshot.py:357-358`](../../lab/tests/test_snapshot.py) 的 `test_src_never_imports_lab` 把 ADR-0011 的依賴方向變成測試；[`src/shiro_mlops/tasks/definition.py:98-127`](../../src/shiro_mlops/tasks/definition.py) 以 Pydantic validator 強制權重總和為 1；[`tests/unit/test_smoke_check.py:74`](../../tests/unit/test_smoke_check.py) 替 [`smoke_check.py:88-91`](../../src/shiro_mlops/pipelines/smoke_check.py) 那段「刻意重述排程名稱與 cron」的 why-not 撐腰；[`tests/integration/test_resiliency.py:364`](../../tests/integration/test_resiliency.py) 的 `test_serving_path_never_constructs_a_cwa_client` 則直接用測試名稱陳述不變條件。仍停在散文的有三條。第一，[`tasks/types/base.py:1`](../../src/shiro_mlops/tasks/types/base.py) 的「Task types never touch repositories」沒有任何測試或 lint 把關，ruff 也沒啟用 `flake8-tidy-imports` 或 banned-api；建議仿照 `test_src_never_imports_lab` 寫一個 AST 測試，禁止 `tasks/types/` 匯入 `shiro_mlops.data` 與 `sqlalchemy`。第二，ADR-0010 第 44 行要求 `np.load` 一律明示 `allow_pickle=False`，目前只是審查清單；`src/` 只有一個呼叫點（[`unsupervised_reconstruction.py:359`](../../src/shiro_mlops/tasks/types/unsupervised_reconstruction.py)），很適合做成 `check_conventions.py` 的檢查或一個測試。第三，[`tasks/types/base.py:59`](../../src/shiro_mlops/tasks/types/base.py) 的「各任務類型不得自行切分」是否有測試把關，本次調查尚未確認，值得補查。
 
 ### 規則寫進 CODING_STANDARDS.md，機械部分交給 check_conventions.py
 
-[`CODING_STANDARDS.md:6`](../CODING_STANDARDS.md) 已經劃好分工：審查者判斷的規則寫在這裡，可機械判定的交給 CI。建議新增「程式碼註解」一節，先定義「註解」是否包含 docstring，再列出允許的種類：模組與類別標頭（角色，加上本模組內成立的不變條件，跨模組契約以 ADR 或 reference 連結）、點名受保護程式碼的 why-not，以及 repo 已經強制要求、規則若不豁免就會自相矛盾的幾類，包括第 14 行的同步來源指標、第 15 行的基礎設施 Why 註解、`TODO(#n)` 技術債標記、附理由的 `noqa`（如 [`runner.py:63`](../src/shiro_mlops/tasks/runner.py) 的「name fixed by the #66 interface design」）、lab 採用時的 TOML 註解，以及 [`docs/how-to/run-lab-study.md:174`](../docs/how-to/run-lab-study.md) 規定的 Jupytext percent 格式儲存格（見 [`lab/2026-11-17-dhf-weather-calendar/study.py:1-26`](../lab/2026-11-17-dhf-weather-calendar/study.py)）。同一節也可以寫下目前未成文的語言慣例：`#` 註解用中文，docstring 用英文。另外應比照 AGENTS.md 第 11 行補一條審查規則：改動標頭不變條件所描述的程式碼時，同一個 PR 必須更新或刪除那條不變條件。why-not 與 what 的區分是語意判斷，屬於審查者，不該硬塞進 CI。
+[`CODING_STANDARDS.md:6`](../../CODING_STANDARDS.md) 已經劃好分工：審查者判斷的規則寫在這裡，可機械判定的交給 CI。建議新增「程式碼註解」一節，先定義「註解」是否包含 docstring，再列出允許的種類：模組與類別標頭（角色，加上本模組內成立的不變條件，跨模組契約以 ADR 或 reference 連結）、點名受保護程式碼的 why-not，以及 repo 已經強制要求、規則若不豁免就會自相矛盾的幾類，包括第 14 行的同步來源指標、第 15 行的基礎設施 Why 註解、`TODO(#n)` 技術債標記、附理由的 `noqa`（如 [`runner.py:63`](../../src/shiro_mlops/tasks/runner.py) 的「name fixed by the #66 interface design」）、lab 採用時的 TOML 註解，以及 [`docs/how-to/run-lab-study.md:174`](../../docs/how-to/run-lab-study.md) 規定的 Jupytext percent 格式儲存格（見 [`lab/2026-11-17-dhf-weather-calendar/study.py:1-26`](../../lab/2026-11-17-dhf-weather-calendar/study.py)）。同一節也可以寫下目前未成文的語言慣例：`#` 註解用中文，docstring 用英文。另外應比照 AGENTS.md 第 11 行補一條審查規則：改動標頭不變條件所描述的程式碼時，同一個 PR 必須更新或刪除那條不變條件。why-not 與 what 的區分是語意判斷，屬於審查者，不該硬塞進 CI。
 
-能機械化的部分應放進 [`scripts/check_conventions.py`](../scripts/check_conventions.py)，但要注意現有的 `debt-markers` 是逐行 regex（第 362 至 368 行），分不出註解與字串，新檢查應改用 `tokenize` 或 `ast`。值得做的有四項：同步指標的目標存在檢查，也就是註解中提到的 `docs/reference/…md` 或 `pipelines/…py` 路徑必須是被追蹤的檔案，便宜地抓出刪檔後過時的指標；仿照 clippy 那對 lint 的 why-not 標記慣例，例如以 `WHY-NOT(<symbol>)` 標出受保護的符號，檢查該符號仍存在於相鄰程式碼中，讓「隨受保護程式碼一起刪除」變得可驗證；檢查每個 Dagster asset 都有 `description=`；以及在 ruff 加入 `ERA001` 抓註解掉的程式碼。不要啟用 pydocstyle 的 `D` 規則，那會把 repo 推向更多 docstring，與規則方向相反。所有新檢查都要像 `DEBT_MARKER_EXEMPT`（第 56 至 62 行）一樣，豁免 Jupytext 檔與檢查本身的測試檔。最後，若團隊希望這條規則以實驗為依據，應把提示、各版本、評分方式與配對分析設計記錄在 `docs/research/`（已有 [`2026-09-16-taipower-hourly-actual-load-source.md`](../docs/research/2026-09-16-taipower-hourly-actual-load-source.md) 的先例），再由 ADR 引用；`lab/` 的契約是為訓練快照與滾動起點回測設計的，不適合放這類研究。
+能機械化的部分應放進 [`scripts/check_conventions.py`](../../scripts/check_conventions.py)，但要注意現有的 `debt-markers` 是逐行 regex（第 362 至 368 行），分不出註解與字串，新檢查應改用 `tokenize` 或 `ast`。值得做的有四項：同步指標的目標存在檢查，也就是註解中提到的 `docs/reference/…md` 或 `pipelines/…py` 路徑必須是被追蹤的檔案，便宜地抓出刪檔後過時的指標；仿照 clippy 那對 lint 的 why-not 標記慣例，例如以 `WHY-NOT(<symbol>)` 標出受保護的符號，檢查該符號仍存在於相鄰程式碼中，讓「隨受保護程式碼一起刪除」變得可驗證；檢查每個 Dagster asset 都有 `description=`；以及在 ruff 加入 `ERA001` 抓註解掉的程式碼。不要啟用 pydocstyle 的 `D` 規則，那會把 repo 推向更多 docstring，與規則方向相反。所有新檢查都要像 `DEBT_MARKER_EXEMPT`（第 56 至 62 行）一樣，豁免 Jupytext 檔與檢查本身的測試檔。最後，若團隊希望這條規則以實驗為依據，應把提示、各版本、評分方式與配對分析設計記錄在 `docs/research/`（已有 [`2026-09-16-taipower-hourly-actual-load-source.md`](../../docs/research/2026-09-16-taipower-hourly-actual-load-source.md) 的先例），再由 ADR 引用；`lab/` 的契約是為訓練快照與滾動起點回測設計的，不適合放這類研究。
 
 ## 結論
 
 這場辯論真正的變數不是註解多寡，而是哪些宣稱可以驗證，以及它們是否放在讀者動手改的地方。貼文的數據其實已經暗示這一點：陷阱偵測幾乎完全取決於改寫是否保留了相關事實，而這不靠任何模型就能確定性地算出來。agent 時代只翻轉了舊辯論一半的成本結構：閱讀變便宜，重新推導介面的時間成本趨近於零，但推導出錯的風險沒有下降，留下的註解還會被當成指令執行。精簡規則最大的優點，也就是更少、更有份量的註解，因此也是它最大的失效模式：一條過時的天條，比十條過時的重述註解更危險。
 
 對 shiro-mlops 而言，務實的順序是先做 A 級清理、豁免工具讀取的介面文字、把幾條散文天條換成會失敗的測試，之後再討論是否收緊到 D 級。要讓 D 級的嚴格度成為團隊標準，需要的不是更有說服力的貼文，而是一次預先登記、採配對設計、含過時註解組與應執行對照組的複製實驗；在那之前，「D 最好」只應被當成值得檢驗的假說，而不是規範。
+
+## 參考文獻
+
+有標註發表處的是會議或期刊論文，沒標註的多為 arXiv 預印本或網頁資料。本次調查無法開啟 arXiv 全文，所以 arXiv 文獻的數字取自摘要與檢索結果，未對照原文核實；正式引用前應先核對原文。repo 內的證據以內文的檔案與行號為準。
+
+### LLM 與註解
+
+1. Macke & Doyle，文件缺漏或錯誤對 LLM 理解程式碼的影響，Findings of NAACL 2024。[arXiv 2404.03114](https://arxiv.org/abs/2404.03114)
+2. CodeCrash：17 個模型在程式碼擾動下的穩健性，NeurIPS 2025。[arXiv 2504.14119](https://arxiv.org/html/2504.14119v3)
+3. Le et al.，When Names Disappear：識別字名稱混淆後的程式理解。[arXiv 2510.03178](https://arxiv.org/pdf/2510.03178)
+4. 註解對 bug 修復準確率的影響（微調設定）。[arXiv 2601.23059](https://arxiv.org/abs/2601.23059)
+5. Thornton：8 個前沿模型在註解操弄下的漏洞偵測。[arXiv 2602.16741](https://arxiv.org/html/2602.16741v1)
+6. Imani et al.，Inside Out：開關模型內的「註解」表徵。[arXiv 2512.16790](https://arxiv.org/abs/2512.16790)
+7. LLM 從 commit 還原架構決策。[arXiv 2609.03721](https://arxiv.org/abs/2609.03721)
+8. LLM 零樣本產生設計理由。[arXiv 2504.20781](https://arxiv.org/abs/2504.20781)
+9. Gloaguen et al.，AGENTS.md 等脈絡檔對 coding agent 的效果評估。[arXiv 2602.11988](https://arxiv.org/abs/2602.11988)
+10. Xia et al.，When Comments Mislead：過時註解對程式碼生成的影響，ASE 2026。[DOI](https://doi.org/10.1145/3832783.3834359)
+11. Comment Traps：被註解掉的缺陷程式碼對 Copilot 與 Cursor 的影響，ACM。[DOI](https://dl.acm.org/doi/10.1145/3797102)
+12. Wu & Nita-Rotaru，ALIBI：LLM 無法照指示忽略不可信註解。[arXiv 2607.24964](https://arxiv.org/abs/2607.24964)
+13. Vijayvargiya et al.，Ambig-SWE：agent 偵測需求不完整與詢問行為。[arXiv 2502.13069](https://arxiv.org/html/2502.13069v3)
+14. Edwards et al.，Ask or Assume?，Findings of EMNLP 2026。[arXiv 2603.26233](https://arxiv.org/abs/2603.26233)
+15. Anthropic，Claude prompting best practices。[文件](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-4-best-practices)
+16. Terminal Wars，Should you comment code for AI?（實務綜述，部落格）。[連結](https://terminalwars.com/posts/should-you-comment-code-for-ai/)
+
+### 實驗方法與統計
+
+1. Miller，Adding Error Bars to Evals，2024。[arXiv 2411.00640](https://arxiv.org/abs/2411.00640)；Anthropic 摘要文章：[A statistical approach to model evaluations](https://www.anthropic.com/research/statistical-approach-to-model-evals)
+2. Brown, Cai & DasGupta，二項比例的區間估計（Wilson 區間），Statistical Science 2001。[連結](https://projecteuclid.org/euclid.ss/1009213286)
+3. McHugh，Interrater reliability: the kappa statistic，2012。[PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC3900052/)
+4. Cohen's kappa（含 Landis & Koch 分級）。[Wikipedia](https://en.wikipedia.org/wiki/Cohen%27s_kappa)
+5. Yao et al.，τ-bench（pass^k 與 agent 執行變異），ICLR 2025。[arXiv 2406.12045](https://arxiv.org/abs/2406.12045)
+6. Sclar et al.，提示格式敏感度，ICLR 2024。[arXiv 2310.11324](https://arxiv.org/abs/2310.11324)
+7. Panickssery et al.，LLM 評審的自我偏好，NeurIPS 2024。[arXiv 2404.13076](https://arxiv.org/abs/2404.13076)
+8. Zheng et al.，LLM-as-a-Judge 的偏誤，NeurIPS 2023。[arXiv 2306.05685](https://arxiv.org/abs/2306.05685)
+9. CodeJudgeBench，ACL 2026。[ACL Anthology](https://aclanthology.org/2026.acl-long.888/)
+10. Zhu et al.，Agentic Benchmark Checklist。[arXiv 2507.02825](https://arxiv.org/abs/2507.02825)
+11. Bean et al.，445 個 LLM 基準的建構效度回顧，NeurIPS 2025。[arXiv 2511.04703](https://arxiv.org/abs/2511.04703)
+
+### 傳統軟體工程
+
+1. Ousterhout & Martin，A Philosophy of Software Design 與 Clean Code 的公開辯論，2024–2025。[GitHub](https://github.com/johnousterhout/aposd-vs-clean-code)
+2. Clean Code 第 4 章筆記（二手整理）。[GitHub](https://github.com/JuanCrg90/Clean-Code-Notes)
+3. PEP 257 Docstring Conventions。[連結](https://peps.python.org/pep-0257/)；PEP 8。[連結](https://peps.python.org/pep-0008/)
+4. Google Python Style Guide。[連結](https://google.github.io/styleguide/pyguide.html)
+5. Linux kernel coding style。[GitHub](https://github.com/torvalds/linux/blob/master/Documentation/process/coding-style.rst)；kernel Rust coding guidelines。[GitHub](https://github.com/torvalds/linux/blob/master/Documentation/rust/coding-guidelines.rst)
+6. Go Doc Comments。[連結](https://go.dev/doc/comment)
+7. clippy `undocumented_unsafe_blocks` 原始碼。[GitHub](https://github.com/rust-lang/rust-clippy/blob/master/clippy_lints/src/undocumented_unsafe_blocks.rs)
+8. Nygard，Documenting Architecture Decisions，2011。[連結](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions)；Fowler，Architecture Decision Record。[連結](https://www.martinfowler.com/bliki/ArchitectureDecisionRecord.html)
+9. Fluri et al.，程式碼與註解的共同演化，2009。[DOI](https://doi.org/10.1007/s11219-009-9075-x)
+10. Woodfield et al.，註解對程式理解的影響，ICSE 1981。[書目](https://bibtex.github.io/ICSE-1981-WoodfieldDS.html)
+11. Potdar & Shihab，自承技術債，ICSME 2014。[書目](https://bibtex.github.io/ICSME-2014-PotdarS.html)
+12. icontract（Python 的 Design by Contract 函式庫）。[PyPI](https://pypi.org/project/icontract/)
+13. Chesterton's fence。[thoughtbot](https://thoughtbot.com/blog/chestertons-fence)
