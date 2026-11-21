@@ -332,6 +332,62 @@ resource "aws_cloudfront_cache_policy" "published" {
   }
 }
 
+# Browser Cache-Control per behavior (forecast-view-hosting.md §2) plus the same
+# security headers as the managed SecurityHeadersPolicy (§3). A behavior takes one
+# response headers policy, so the managed policy is copied into each one rather
+# than attached. The uploads set no Cache-Control metadata; override = true keeps
+# these values even if an object gains some. Edge TTLs stay with the cache policies.
+locals {
+  browser_cache_control = {
+    index     = "no-cache"
+    assets    = "public, max-age=31536000, immutable"
+    published = "public, max-age=60"
+  }
+}
+
+resource "aws_cloudfront_response_headers_policy" "forecast_view" {
+  for_each = local.browser_cache_control
+
+  name    = "shiro-mlops-forecast-view-${each.key}"
+  comment = "Cache-Control: ${each.value}; managed SecurityHeadersPolicy headers"
+
+  custom_headers_config {
+    items {
+      header   = "Cache-Control"
+      value    = each.value
+      override = true
+    }
+  }
+
+  # Field by field the managed SecurityHeadersPolicy
+  # (67f7725c-6f97-4210-82d7-5512b31e9d03): only X-Content-Type-Options overrides
+  # the origin; no CSP.
+  security_headers_config {
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "SAMEORIGIN"
+      override     = false
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = false
+    }
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = false
+      preload                    = false
+      override                   = false
+    }
+    xss_protection {
+      protection = true
+      mode_block = true
+      override   = false
+    }
+  }
+}
+
 # No default_root_object (spa-rewrite maps / to /index.html), and no custom error
 # response, WAF, geo restriction or standard logging (forecast-view-hosting.md §3).
 resource "aws_cloudfront_distribution" "forecast_view" {
@@ -354,12 +410,13 @@ resource "aws_cloudfront_distribution" "forecast_view" {
   }
 
   default_cache_behavior {
-    target_origin_id       = local.site_origin_id
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = local.read_only_methods
-    cached_methods         = local.read_only_methods
-    compress               = true
-    cache_policy_id        = aws_cloudfront_cache_policy.index.id
+    target_origin_id           = local.site_origin_id
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = local.read_only_methods
+    cached_methods             = local.read_only_methods
+    compress                   = true
+    cache_policy_id            = aws_cloudfront_cache_policy.index.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.forecast_view["index"].id
 
     function_association {
       event_type   = "viewer-request"
@@ -368,23 +425,25 @@ resource "aws_cloudfront_distribution" "forecast_view" {
   }
 
   ordered_cache_behavior {
-    path_pattern           = "/assets/*"
-    target_origin_id       = local.site_origin_id
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = local.read_only_methods
-    cached_methods         = local.read_only_methods
-    compress               = true
-    cache_policy_id        = aws_cloudfront_cache_policy.assets.id
+    path_pattern               = "/assets/*"
+    target_origin_id           = local.site_origin_id
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = local.read_only_methods
+    cached_methods             = local.read_only_methods
+    compress                   = true
+    cache_policy_id            = aws_cloudfront_cache_policy.assets.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.forecast_view["assets"].id
   }
 
   ordered_cache_behavior {
-    path_pattern           = "/${local.published_prefix}*"
-    target_origin_id       = local.published_origin_id
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = local.read_only_methods
-    cached_methods         = local.read_only_methods
-    compress               = true
-    cache_policy_id        = aws_cloudfront_cache_policy.published.id
+    path_pattern               = "/${local.published_prefix}*"
+    target_origin_id           = local.published_origin_id
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = local.read_only_methods
+    cached_methods             = local.read_only_methods
+    compress                   = true
+    cache_policy_id            = aws_cloudfront_cache_policy.published.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.forecast_view["published"].id
   }
 
   restrictions {

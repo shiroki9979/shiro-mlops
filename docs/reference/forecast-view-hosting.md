@@ -8,7 +8,7 @@
 
 ---
 
-依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只以 S3 + CloudFront 提供預報檢視的發布產物，沒有 API origin。本節的配置經 [GitHub #128](https://github.com/shiroki9979/shiro-mlops/issues/128) 定案，已由 TICKET-412 實作於 `infra/terraform/`；瀏覽器 `Cache-Control` 與安全標頭由 [GitHub #169](https://github.com/shiroki9979/shiro-mlops/issues/169) 實作。
+依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只以 S3 + CloudFront 提供預報檢視的發布產物，沒有 API origin。本節的配置經 [GitHub #128](https://github.com/shiroki9979/shiro-mlops/issues/128) 定案，已由 TICKET-412 實作於 `infra/terraform/`；瀏覽器 `Cache-Control` 與安全標頭已由 [GitHub #169](https://github.com/shiroki9979/shiro-mlops/issues/169) 實作。
 
 ## 1. S3 配置與寫入權限
 
@@ -43,7 +43,7 @@ bucket policy 只有一個 statement：授權 CloudFront 服務主體經該 dist
 | `/assets/*` | `site` | 無 | 長期 | `public, max-age=31536000, immutable` |
 | `/published/*` | `published` | 無 | 60 秒 | `public, max-age=60` |
 
-- **快取規則集中在 CloudFront**：TTL 由 cache policy 決定，瀏覽器標頭由 response headers policy 覆寫；上傳端（CI 與地端匯出）不設定物件的 `Cache-Control` metadata。
+- **快取規則集中在 CloudFront**：邊緣 TTL 由各 behavior 的 cache policy 決定；瀏覽器 `Cache-Control` 由各 behavior 專用的自訂 response headers policy 以 override 寫入上表的值，同一 policy 也帶 §3 的安全標頭。上傳端（CI 與地端匯出）不設定物件的 `Cache-Control` metadata。
 - **地端對應**：地端 Nginx 的 `/assets/`、`/index.html` 沿用既有標頭，`/published/` 同樣回 `public, max-age=60`。Compose 把主機的 `data/published/`（即 Dagster 的 `DATA_DIR/published/`）唯讀掛載到 frontend 容器的 `/usr/share/nginx/published`，`/published/` 以 `try_files $uri =404` 提供，缺檔回 404，不落到 SPA fallback；目錄本身不列出檔案。掛載整個目錄而非單檔，因為匯出以 rename 替換檔案，單檔 bind mount 會一直指向舊檔。
 - **SPA fallback**：`spa-rewrite` 把最後一段沒有副檔名的路徑（含 `/`、`/history`、`/history/`）內部改寫為 `/index.html`，等價於地端 Nginx 的 `try_files $uri $uri/ /index.html`。不使用 custom error response，因其作用於整個 distribution，會讓 `/published/` 下的缺檔回 200 與 HTML。`/api/*`、`/console/*` 不特別處理，落到預報檢視的 not-found 頁。
 - **原始碼與測試**：`infra/terraform/functions/spa-rewrite.js` 只宣告頂層 `handler`，由 Terraform `file()` 讀入；同目錄的 `spa-rewrite.test.mjs` 以 `node:vm` 執行同一份原始檔，涵蓋 `/`、`/history`、`/history/`、`/assets/x.js`、`/favicon.ico`、`/console/foo` 與 querystring 原樣保留，由 CI 的 `infra` job 以 `node --test` 執行。
@@ -61,10 +61,19 @@ bucket policy 只有一個 statement：授權 CloudFront 服務主體經該 dist
 | Cache key | 不含 headers、cookies 與 query strings |
 | 壓縮 | gzip 與 Brotli；預設 behavior 的 cache policy 為 min 0、default 0、max 1 秒（見下方說明） |
 | HTTP 版本 | HTTP/2 與 HTTP/3 |
-| 安全標頭 | AWS 托管 `SecurityHeadersPolicy`；不自訂 CSP；地端 Nginx 不跟進 |
+| 安全標頭 | 與 AWS 托管 `SecurityHeadersPolicy` 相同的安全標頭；因每個 behavior 只能掛一個 response headers policy 而併入 §2 的自訂 policy（見下方說明）；不自訂 CSP；地端 Nginx 不跟進 |
 | WAF、地理限制、標準 log、custom error response | 皆不設（log 依 ADR-0015 §2.6，custom error response 見 §2） |
 
 - **預設 behavior 的 TTL**：min、default、max TTL 全為 0 的 cache policy 會停用快取，CloudFront 也不接受在這種 policy 上啟用 gzip 與 Brotli；沒有這兩項設定，該 behavior 就不會在邊緣壓縮。因此 max TTL 設為 1 秒並啟用兩種壓縮。上傳端不設 `Cache-Control`，邊緣仍以 default TTL 0 處理，`index.html` 實際上不在邊緣快取。
+- **安全標頭的內容**：三個自訂 policy 的 `security_headers_config` 逐項照抄托管 `SecurityHeadersPolicy`（ID `67f7725c-6f97-4210-82d7-5512b31e9d03`，[Using managed response headers policies](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-response-headers-policies.html)）。只有 `X-Content-Type-Options` 覆寫 origin 的值，其餘標頭在 origin 已帶同名標頭時沿用 origin 的值；S3 不送這些標頭，所以回應一律帶下表的值。
+
+  | 標頭 | 值 | 覆寫 origin |
+  | :--- | :--- | :--- |
+  | `Referrer-Policy` | `strict-origin-when-cross-origin` | 否 |
+  | `Strict-Transport-Security` | `max-age=31536000`（不含 `includeSubDomains`、`preload`） | 否 |
+  | `X-Content-Type-Options` | `nosniff` | 是 |
+  | `X-Frame-Options` | `SAMEORIGIN` | 否 |
+  | `X-XSS-Protection` | `1; mode=block` | 否 |
 
 ## 4. 前端讀取 `/published/`
 
