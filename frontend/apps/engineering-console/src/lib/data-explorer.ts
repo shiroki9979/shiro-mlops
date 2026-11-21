@@ -55,7 +55,7 @@ const TAIPEI_DAY_FORMAT = new Intl.DateTimeFormat('en-CA', {
   timeZone: TAIPEI_TIME_ZONE,
 })
 
-// Returns the Taipei calendar day (YYYY-MM-DD) of an RFC 3339 timestamp, or null when it does not parse.
+// Date separator rows follow the Taipei day the data is labelled in, not the viewer's local day.
 export function taipeiCalendarDate(timestamp: string): string | null {
   const instant = new Date(timestamp)
   if (Number.isNaN(instant.getTime())) return null
