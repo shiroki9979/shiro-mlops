@@ -24,3 +24,5 @@
 ## 程式碼註解
 
 - **會被工具讀取的 docstring 是介面文字，不是註解**：FastAPI 路由與 Pydantic schema 的 docstring 會成為 OpenAPI 說明，不可依註解規則刪減；Dagster asset 一律以 `description=` 明示說明，不依賴函式 docstring。
+- **引用從 repo 根目錄寫起**：Python 註解提到檔案或目錄時，寫成以 tracked 頂層目錄開頭的完整路徑，例如 `src/shiro_mlops/pipelines/issued_forecast.py`、`tests/fixtures/published/`，不寫 `pipelines/issued_forecast.py` 這類套件內相對路徑；提到 ADR 時寫 `ADR-NNNN`。`comment-refs` 檢查會確認這些路徑與 ADR 存在；字串字面值、含 glob 或佔位符（`*`、`<topic>`、`{name}`）的路徑，以及「第 6 節」這類章節編號不在檢查範圍，章節是否仍對得上由審查者判斷。
+- **`comment-refs` 失敗時**：檔案改名就把註解改成新路徑；檔案已刪除就連同失效的說明一起改寫或刪除。註解裡看起來像路徑、但其實是名稱的字樣（例如 MLflow experiment 名稱），改為引用持有該值的常數，不要只為了通過檢查而改寫成不像路徑的樣子。

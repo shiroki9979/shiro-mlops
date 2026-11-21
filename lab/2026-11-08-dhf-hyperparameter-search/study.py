@@ -21,7 +21,7 @@
 #
 # 1. 以 `SEARCH_ORIGINS`（9 個搜尋起點）執行 Optuna 滾動起點回測搜尋；
 # 2. 以 `dataclasses.replace(task, params=...)` 覆寫候選特徵配方（`lags`、`rolling_windows`）與 LightGBM 超參數；
-# 3. 將回測紀錄寫入 MLflow experiment `lab/dhf-hyperparameter-search`（不建立任何 registered model 或 model version；MLflow 不可用時記錄警告並繼續）；
+# 3. 將回測紀錄寫入 `MLFLOW_EXPERIMENT_NAME` 指定的 MLflow experiment（不建立任何 registered model 或 model version；MLflow 不可用時記錄警告並繼續）；
 # 4. 在預報目標時段與搜尋起點完全不重疊的 `EVAL_ORIGINS`（2 個評估起點）上比較最佳候選與基線，並檢核評估起點數量是否達正式採用門檻。
 
 # %%
