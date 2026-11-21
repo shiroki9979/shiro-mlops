@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ FORECAST_SERIES_PATH = "/data/weather/forecasts/series"
 FORECAST_DAY = datetime(2026, 8, 5)
 EARLY_ISSUE = FORECAST_DAY.replace(hour=9)
 LATE_ISSUE = FORECAST_DAY.replace(hour=15)
+SHARED_ISSUE = datetime(2030, 8, 5, 11)
 FORECAST_WINDOW = {
     "start": rfc3339(FORECAST_DAY.replace(hour=16)),
     "end": rfc3339(FORECAST_DAY.replace(hour=19)),
@@ -286,9 +288,70 @@ def assert_forecast_all_vintages_draws_one_series_per_issued_at(
     }
 
 
+def _shared_issue_release(
+    dataset_id: str, issued_at: datetime, source_updated_at: datetime, geocode: str, value: float
+) -> CWAForecastRelease:
+    forecast = replace(
+        _forecast(geocode, 0, value),
+        valid_from=pd.Timestamp(issued_at + timedelta(hours=3)),
+        valid_to=pd.Timestamp(issued_at + timedelta(hours=3)),
+    )
+    return CWAForecastRelease(
+        dataset_id=dataset_id,
+        issued_at=pd.Timestamp(issued_at),
+        source_updated_at=pd.Timestamp(source_updated_at),
+        fetched_at=source_updated_at,
+        status="complete",
+        missing_geocodes=(),
+        raw_payload={},
+        forecasts=(forecast,),
+    )
+
+
+def assert_forecast_series_prefers_three_day_dataset_on_shared_issue(
+    repo: TimeSeriesRepository,
+) -> None:
+    """未指定 dataset_id 時，同一最新 issued_at 下優先 F-D0047-089，即使 091 的更新時間較晚。"""
+    issued_at = SHARED_ISSUE + timedelta(microseconds=uuid4().int % 1_000_000)
+    geocode = f"g{uuid4().hex[:8]}"
+    releases = {
+        "F-D0047-089": _shared_issue_release(
+            "F-D0047-089", issued_at, issued_at + timedelta(minutes=5), geocode, 21.0
+        ),
+        "F-D0047-091": _shared_issue_release(
+            "F-D0047-091", issued_at, issued_at + timedelta(minutes=5, seconds=30), geocode, 23.0
+        ),
+    }
+    for release in releases.values():
+        repo.upsert_cwa_forecast_release(release)
+    window = {
+        "start": rfc3339(issued_at.replace(microsecond=0)),
+        "end": rfc3339(issued_at.replace(microsecond=0) + timedelta(hours=6)),
+        "geocode": geocode,
+    }
+    try:
+        with series_client(repo) as client:
+            default = client.get(FORECAST_SERIES_PATH, params=window)
+            weekly = client.get(
+                FORECAST_SERIES_PATH, params={**window, "dataset_id": "F-D0047-091"}
+            )
+    finally:
+        with repo.engine.begin() as connection:
+            for table in ("raw_cwa_township_forecast", "raw_cwa_forecast_release"):
+                connection.execute(
+                    text(f"DELETE FROM {table} WHERE issued_at = :issued_at"),
+                    {"issued_at": issued_at},
+                )
+
+    assert default.status_code == 200
+    assert [point["v"] for s in default.json()["series"] for point in s["points"]] == [21.0]
+    assert [point["v"] for s in weekly.json()["series"] for point in s["points"]] == [23.0]
+
+
 WEATHER_SERIES_SCENARIOS = (
     assert_observation_series_draws_one_temperature_line_per_station,
     assert_observation_series_rejects_any_group_by,
     assert_forecast_series_draws_latest_version_per_geocode_without_null_points,
     assert_forecast_all_vintages_draws_one_series_per_issued_at,
+    assert_forecast_series_prefers_three_day_dataset_on_shared_issue,
 )

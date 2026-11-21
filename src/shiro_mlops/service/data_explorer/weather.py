@@ -27,10 +27,16 @@ class PinnedForecastVersion(NamedTuple):
     source_updated_at: datetime
 
 
-def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> PinnedForecastVersion | None:
-    """Return the newest persisted forecast release in Taiwan time, optionally for one dataset."""
+def latest_forecast_version(
+    db: ExplorerDb, dataset_id: str | None, *, preferred_dataset_id: str | None = None
+) -> PinnedForecastVersion | None:
+    """Return the newest persisted forecast release in Taiwan time, optionally for one dataset.
+
+    Among releases sharing the newest `issued_at`, `preferred_dataset_id` wins before the
+    newest `source_updated_at` does.
+    """
     clauses = []
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"preferred_dataset_id": preferred_dataset_id}
     if dataset_id:
         clauses.append("dataset_id = :dataset_id")
         params["dataset_id"] = dataset_id
@@ -41,6 +47,7 @@ def latest_forecast_version(db: ExplorerDb, dataset_id: str | None) -> PinnedFor
         FROM raw_cwa_forecast_release
         {where}
         ORDER BY {db.time_operand("issued_at")} DESC,
+                 CASE WHEN dataset_id = :preferred_dataset_id THEN 0 ELSE 1 END,
                  {db.time_operand("source_updated_at")} DESC
         LIMIT 1
         """,
@@ -338,6 +345,9 @@ FORECAST_FIELD_UNITS = {
     ForecastSeriesField.WIND_SPEED_M_S: "m/s",
 }
 FORECAST_VINTAGE_COLUMNS = ("geocode", "dataset_id", "issued_at")
+SERIES_PREFERRED_FORECAST_DATASET_ID = "F-D0047-089"
+"""Both datasets usually share `issued_at` and the weekly one is updated seconds later, so
+picking by `source_updated_at` alone would chart the 12-hourly weekly forecast by default."""
 NEWEST_CORRECTION_SQL = """
     (dataset_id, issued_at, geocode, source_updated_at) IN (
         SELECT dataset_id, issued_at, geocode, MAX(source_updated_at)
@@ -378,7 +388,8 @@ def plan_forecast_series(
 ) -> tuple[SeriesSpec, dict[str, str]]:
     """Resolve the forecast version the way the list does, so chart and table agree.
 
-    Without an explicit version the latest release is pinned and each geocode is one series.
+    Without an explicit version the latest release is pinned and each geocode is one series;
+    unlike the list, the three-day dataset wins when both datasets share the newest issue.
     Otherwise (`all_vintages` or a version filter) one series per geocode and issue, drawn
     from the issue's newest correction unless `source_updated_at` names one; two releases
     are never merged into one line.
@@ -391,7 +402,9 @@ def plan_forecast_series(
         )
         return spec, dict(params)
     pinned = dict(params)
-    latest = latest_forecast_version(db, params.get("dataset_id"))
+    latest = latest_forecast_version(
+        db, params.get("dataset_id"), preferred_dataset_id=SERIES_PREFERRED_FORECAST_DATASET_ID
+    )
     if latest is not None:
         pinned.update(_version_filters(latest))
     return replace(FORECAST_SERIES, filters=partial(_forecast_version_filters, db)), pinned
