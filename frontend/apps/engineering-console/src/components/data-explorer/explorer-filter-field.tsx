@@ -27,7 +27,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
     return (
       <div className="text-xs text-slate-400 space-y-1">
         <span id={labelId}>{label}</span>
-        <div className="flex h-[42px] items-center">
+        <div className="flex h-[34px] items-center">
           <Switch
             aria-labelledby={labelId}
             checked={TRUTHY_VALUES.has(value.toLowerCase())}
@@ -43,7 +43,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
       <div className="text-xs text-slate-400 space-y-1">
         <span id={labelId}>{label}</span>
         <Select value={value || NO_FILTER} onValueChange={(next) => onChange(next === NO_FILTER ? '' : next)}>
-          <SelectTrigger aria-labelledby={labelId} className="h-[42px]">
+          <SelectTrigger aria-labelledby={labelId} className="h-auto py-2 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
