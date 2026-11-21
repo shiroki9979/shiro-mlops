@@ -57,7 +57,12 @@
 - **Freshness 維度**：分別顯示 ingestion age 與 source age。前者表示距上次成功入庫所經時間，後者表示最新來源事件或發布時間距今時間；不得以其中一者取代另一者。
 - **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。
 - **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供預測對象（`subject`，如 `nationwide`），區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
+  - **值集合固定的欄位**：`region`（北部、中部、南部、東部）、區域供需 `completeness` 與 audit `status`（`complete`、`incomplete`）使用下拉選單，第一個選項「不篩選」清除該篩選；選項以 API 原始值寫入 URL，`completeness` 與 `status` 的顯示文字隨介面語系。`all_vintages` 使用開關，開啟時寫入 `all_vintages=true`，關閉時自 URL 移除。
+  - **值集合開放的欄位**：`subject`、`unit_type`、`unit_name`、`station_id`、`geocode`、`dataset_id`、`issued_at`、`source_updated_at` 與 `missing_*` 維持文字輸入；不提供列出 distinct 值的 endpoint。
 - **預設窗口與 cursor 失效**：URL 未指定 `start`／`end` 時，前端以進入頁面當下計算預設窗口，同一次瀏覽內不隨重新繪製漂移，且不主動寫入 URL。變更窗口或任一篩選即清除 cursor 並回到第一頁；只有翻頁操作會設定 cursor。
+  - **快速區間**：以點擊當下（取整秒）計算。過去方向的 datasets 提供「今天」（台北日 00:00:00 至 23:59:59）、「近 24 小時」、「近 7 天」與「明細上限」（結束於當下，長度為該資料集 list 的時間範圍上限：7、14 或 31 天，見 §7）。鄉鎮預報以有效時間為準、由現在往後，提供「未來 24 小時」、「未來 72 小時」、「未來 7 天」與「未來 14 天」；預設窗口維持「進入當下前 1 小時至後 72 小時」，保留正在生效的預報時段。
+  - **平移**：窗口長度 L 為終點減起點再加 1 秒。`‹` 的新窗口為「起點減 L」至「起點減 1 秒」，`›` 的新窗口為「終點加 1 秒」至「終點加 L」；新窗口與原窗口相鄰且不重疊，例如「今天」按一次 `‹` 即為完整的昨天。
+  - **URL 更新**：快速區間與平移一次寫入 `start`／`end`（帶 `+08:00` 的 RFC 3339）並清除 cursor，與其他窗口變更走同一條路徑；起訖時間的精確輸入維持原本行為，逐端更新。
 - **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
 - **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
 - **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。
