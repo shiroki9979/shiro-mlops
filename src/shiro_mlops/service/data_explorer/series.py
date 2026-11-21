@@ -105,7 +105,8 @@ class SeriesSpec:
     count_rows: bool = False
     member_sum: bool = False
     default_fields: tuple[str, ...] = ()
-    # Python 3.11 (the CI and container runtime) treats a mappingproxy default as mutable.
+    # WHY-NOT(group_options): a plain MappingProxyType default fails on Python 3.11, the CI and
+    # container runtime, which treats a mappingproxy dataclass default as mutable.
     group_options: Mapping[str, tuple[str, ...]] = dataclass_field(
         default_factory=lambda: MappingProxyType({})
     )
