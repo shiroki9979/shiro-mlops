@@ -33,8 +33,8 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
-      - name: Check Python runs through uv and tech-debt markers name an issue
-        run: uv run python scripts/check_conventions.py python-uv debt-markers
+      - name: Check Python runs through uv, tech-debt markers name an issue, comment refs resolve
+        run: uv run python scripts/check_conventions.py python-uv debt-markers comment-refs
 
       - name: Run unit & integration tests
         run: uv run pytest tests/ -v

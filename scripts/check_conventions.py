@@ -8,6 +8,9 @@ Checks:
   debt-markers
              TODO/FIXME/HACK/XXX in tracked source files must name their tech-debt issue,
              as in `TODO(#123): ...` (see docs/agents/tech-debt.md).
+  comment-refs
+             Paths starting with a tracked top-level directory and ADR-NNNN numbers in tracked
+             Python comments must exist; paths with glob or placeholder characters are skipped.
 """
 
 from __future__ import annotations
@@ -17,7 +20,8 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+import tokenize
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -60,6 +64,15 @@ DEBT_MARKER_EXEMPT = frozenset(
         "tests/integration/test_check_conventions_git.py",
     }
 )
+
+# A path written in a comment, ending at the first character neither a path nor a pattern uses.
+PATH_CANDIDATE = re.compile(
+    r"(?<![A-Za-z0-9_./${}<>*?\[\]-])(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_./${}<>*?\[\]-]*)"
+)
+# Glob and placeholder characters mark an illustrative pattern rather than one concrete path.
+PATH_PATTERN_CHARS = frozenset("*?[]<>{}$")
+ADR_REF = re.compile(r"\bADR-(?P<number>\d{4})\b")
+ADR_FILE = re.compile(r"docs/adr/\d{4}-[^/]+\.md")
 
 LAST_UPDATED = re.compile(
     r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
@@ -107,6 +120,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
+    "comment-refs": lambda args: check_comment_refs(REPO_ROOT),
 }
 
 
@@ -367,6 +381,70 @@ def find_unlinked_debt_markers(text: str) -> list[SourceLine]:
     ]
 
 
+# --- comment-refs ----------------------------------------------------------
+
+
+def check_comment_refs(repo_root: Path) -> list[Violation]:
+    tracked = tracked_files(repo_root)
+    tree = TrackedTree(tracked)
+    adrs = {Path(path).name[:4] for path in tracked if ADR_FILE.fullmatch(path)}
+    return [
+        Violation(path, comment.line, message)
+        for path in tracked
+        if path.endswith(".py")
+        for comment in file_comments(repo_root, path)
+        for message in comment_ref_problems(comment.text, tree, adrs)
+    ]
+
+
+def file_comments(repo_root: Path, path: str) -> list[Comment]:
+    try:
+        return list(python_comments((repo_root / path).read_text(encoding="utf-8")))
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+
+
+def comment_ref_problems(text: str, tree: TrackedTree, adrs: set[str]) -> list[str]:
+    problems = [
+        f"comment refers to missing path '{ref}'"
+        for ref in find_path_refs(text, tree.top_level_dirs)
+        if not tree.contains(ref)
+    ]
+    problems += [
+        f"comment refers to {match[0]}, but docs/adr/ has no {match['number']}-*.md"
+        for match in ADR_REF.finditer(text)
+        if match["number"] not in adrs
+    ]
+    return problems
+
+
+def find_path_refs(text: str, top_level_dirs: Iterable[str]) -> list[str]:
+    refs = []
+    for match in PATH_CANDIDATE.finditer(text):
+        candidate = match["path"].rstrip(".")
+        top, _, rest = candidate.partition("/")
+        if top in top_level_dirs and rest and not PATH_PATTERN_CHARS.intersection(candidate):
+            refs.append(candidate)
+    return refs
+
+
+class TrackedTree:
+    """The tracked files of a repository, queried as a tree of files and directories."""
+
+    def __init__(self, tracked: Iterable[str]) -> None:
+        self.files = frozenset(tracked)
+        self.dirs = frozenset(
+            "/".join(parts[:end])
+            for parts in (Path(path).parts for path in self.files)
+            for end in range(1, len(parts))
+        )
+        self.top_level_dirs = frozenset(path for path in self.dirs if "/" not in path)
+
+    def contains(self, path: str) -> bool:
+        stripped = path.rstrip("/")
+        return stripped in self.dirs or (stripped == path and path in self.files)
+
+
 # --- doc-dates -------------------------------------------------------------
 
 
@@ -454,6 +532,34 @@ def find_last_updated(text: str) -> HeaderDate | None:
 
 
 # --- shared ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Comment:
+    """A `#` comment found by tokenize, so `#` inside string literals is never one."""
+
+    line: int
+    column: int
+    text: str
+    full_line: bool
+
+    @property
+    def body(self) -> str:
+        """The comment text after `#` and the spaces that follow it."""
+        return self.text[1:].strip()
+
+
+def python_comments(source: str) -> Iterator[Comment]:
+    """Yield every comment in Python source in order; raise ValueError if it cannot tokenize."""
+    readline = iter(source.splitlines(keepends=True)).__next__
+    try:
+        for token in tokenize.generate_tokens(readline):
+            if token.type == tokenize.COMMENT:
+                line, column = token.start
+                full_line = not token.line[:column].strip()
+                yield Comment(line, column, token.string, full_line)
+    except (tokenize.TokenError, SyntaxError) as error:
+        raise ValueError(f"cannot tokenize Python source: {error}") from error
 
 
 def git(repo_root: Path, *args: str) -> str:

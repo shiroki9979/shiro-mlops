@@ -1,4 +1,4 @@
-"""Offline doc-dates tests against throwaway git repositories built in tmp_path."""
+"""Offline convention-check tests against throwaway git repositories built in tmp_path."""
 
 import os
 import subprocess
@@ -159,3 +159,68 @@ def test_main_passes_once_the_debt_marker_names_its_issue(
     _commit(repo, {"src/pkg/load.py": "# TODO(#123): retry on timeout\n"}, "2026-11-16")
 
     assert main(["debt-markers"]) == 0
+
+
+def test_comment_refs_fails_on_a_comment_path_that_does_not_exist(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(
+        repo,
+        {
+            "docs/guide.md": "# Guide\n",
+            "src/pkg/load.py": "x = 1\n# keep in sync with docs/missing.md\n",
+        },
+        "2026-11-21",
+    )
+
+    assert main(["comment-refs"]) == 1
+    assert "src/pkg/load.py:2: " in capsys.readouterr().err
+
+
+def test_comment_refs_passes_on_existing_paths_and_ignores_paths_in_strings(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "# Mirrors docs/guide.md and the files under docs/.\n"
+        'MISSING = "docs/missing.md"  # Read from src/pkg/load.py.\n'
+        "HELP = '''\n# docs/also-missing.md is text, not a comment\n'''\n"
+    )
+    _commit(repo, {"docs/guide.md": "# Guide\n", "src/pkg/load.py": source}, "2026-11-21")
+
+    assert main(["comment-refs"]) == 0
+
+
+def test_comment_refs_fails_on_an_adr_number_without_an_adr(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = "# Native formats only (ADR-0001).\nx = 1  # See ADR-0002.\n"
+    _commit(
+        repo,
+        {"docs/adr/0001-native-formats.md": "# ADR\n", "src/pkg/load.py": source},
+        "2026-11-21",
+    )
+
+    assert main(["comment-refs"]) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:2: " in err
+    assert "src/pkg/load.py:1: " not in err
+
+
+def test_comment_refs_skips_globs_placeholders_and_section_numbers(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "# Studies live under lab/<YYYY-MM-DD>-<topic>/ and match lab/drafts/*.py.\n"
+        "# Each writes docs/{name}.md and scripts/${TOOL}.sh; see docs/guide.md 第 6 節.\n"
+    )
+    _commit(
+        repo,
+        {"docs/guide.md": "# Guide\n", "lab/run.py": "", "src/pkg/load.py": source},
+        "2026-11-21",
+    )
+
+    assert main(["comment-refs"]) == 0
