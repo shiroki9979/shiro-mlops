@@ -213,7 +213,8 @@ def load_model_with_sha256(root: Path, task: TaskDefinition) -> LoadedModel | No
     """Load the task's current model and hash its directory under one shared lock.
 
     A swap waits for the lock, so the model and the hash always belong to the same
-    directory version. ``None`` when the task has never been trained.
+    directory version. ``None`` when the task has never been trained; raises
+    ``MissingModelLockError`` for a model directory the store did not install.
     """
     if not root.is_dir():
         return None
