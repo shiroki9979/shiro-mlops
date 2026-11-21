@@ -230,3 +230,205 @@ resource "aws_budgets_budget" "monthly_cost" {
     subscriber_email_addresses = [var.budget_alert_email]
   }
 }
+
+# 5. CloudFront serves the Forecast View from the bucket through OAC
+#    (forecast-view-hosting.md §2, §3). One distribution, two origins on the same
+#    bucket: site (origin path /site) and published (no origin path).
+locals {
+  site_origin_id      = "site"
+  published_origin_id = "published"
+  # The bucket is read-only to viewers; only these methods are allowed and cached.
+  read_only_methods = ["GET", "HEAD"]
+}
+
+resource "aws_cloudfront_origin_access_control" "forecast_view" {
+  name                              = "shiro-mlops-forecast-view"
+  description                       = "CloudFront reads the Forecast View bucket with signed requests"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# SPA fallback without a custom error response, which would turn a missing
+# /published/ file into 200 and HTML. Tested offline by functions/spa-rewrite.test.mjs.
+resource "aws_cloudfront_function" "spa_rewrite" {
+  name    = "shiro-mlops-spa-rewrite"
+  comment = "Rewrite extensionless paths to /index.html"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = file("${path.module}/functions/spa-rewrite.js")
+}
+
+# Edge TTLs per behavior; no cache key includes headers, cookies or query strings.
+# A 0/0/0 policy disables caching and CloudFront then rejects the gzip and Brotli
+# flags, leaving the behavior without edge compression. max_ttl = 1 keeps both
+# flags; the uploads set no Cache-Control, so the edge still applies default_ttl = 0.
+resource "aws_cloudfront_cache_policy" "index" {
+  name        = "shiro-mlops-forecast-view-index"
+  comment     = "Default behavior: index.html is not cached at the edge"
+  min_ttl     = 0
+  default_ttl = 0
+  max_ttl     = 1
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "none"
+    }
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+resource "aws_cloudfront_cache_policy" "assets" {
+  name        = "shiro-mlops-forecast-view-assets"
+  comment     = "/assets/*: hashed file names, cached for one year"
+  min_ttl     = 31536000
+  default_ttl = 31536000
+  max_ttl     = 31536000
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "none"
+    }
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+resource "aws_cloudfront_cache_policy" "published" {
+  name        = "shiro-mlops-forecast-view-published"
+  comment     = "/published/*: exported JSON, cached for 60 seconds"
+  min_ttl     = 60
+  default_ttl = 60
+  max_ttl     = 60
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "none"
+    }
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+# No default_root_object (spa-rewrite maps / to /index.html), and no custom error
+# response, WAF, geo restriction or standard logging (forecast-view-hosting.md §3).
+resource "aws_cloudfront_distribution" "forecast_view" {
+  enabled      = true
+  comment      = "shiro-mlops Forecast View"
+  price_class  = "PriceClass_200"
+  http_version = "http2and3"
+
+  origin {
+    origin_id                = local.site_origin_id
+    domain_name              = aws_s3_bucket.forecast_view.bucket_regional_domain_name
+    origin_path              = "/${trimsuffix(local.site_prefix, "/")}"
+    origin_access_control_id = aws_cloudfront_origin_access_control.forecast_view.id
+  }
+
+  origin {
+    origin_id                = local.published_origin_id
+    domain_name              = aws_s3_bucket.forecast_view.bucket_regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.forecast_view.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = local.site_origin_id
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = local.read_only_methods
+    cached_methods         = local.read_only_methods
+    compress               = true
+    cache_policy_id        = aws_cloudfront_cache_policy.index.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_rewrite.arn
+    }
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/assets/*"
+    target_origin_id       = local.site_origin_id
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = local.read_only_methods
+    cached_methods         = local.read_only_methods
+    compress               = true
+    cache_policy_id        = aws_cloudfront_cache_policy.assets.id
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/${local.published_prefix}*"
+    target_origin_id       = local.published_origin_id
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = local.read_only_methods
+    cached_methods         = local.read_only_methods
+    compress               = true
+    cache_policy_id        = aws_cloudfront_cache_policy.published.id
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+# Only this distribution may read, and only site/* and published/*. Without
+# s3:ListBucket a missing object returns 403, not 404. A fixed service principal
+# and a fixed AWS:SourceArn keep the policy non-public, so the public access
+# block stays fully on.
+resource "aws_s3_bucket_policy" "forecast_view" {
+  bucket = aws_s3_bucket.forecast_view.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CloudFrontReadSiteAndPublished"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action = "s3:GetObject"
+        Resource = [
+          "${aws_s3_bucket.forecast_view.arn}/${local.site_prefix}*",
+          "${aws_s3_bucket.forecast_view.arn}/${local.published_prefix}*"
+        ]
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.forecast_view.arn
+          }
+        }
+      }
+    ]
+  })
+
+  # S3 rejects concurrent changes to one bucket's configuration, so the public
+  # access block is applied first.
+  depends_on = [aws_s3_bucket_public_access_block.forecast_view]
+}

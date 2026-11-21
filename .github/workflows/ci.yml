@@ -98,6 +98,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/package.json
+
+      # Runs the CloudFront Function source that Terraform reads with file(); no dependencies needed.
+      - name: Test CloudFront Functions
+        run: node --test "functions/*.test.mjs"
+
       # Pinned version satisfies required_version in infra/terraform/main.tf.
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
