@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
@@ -48,6 +49,7 @@ class Agg(StrEnum):
 RESOLVED_BUCKETS = (Bucket.RAW, Bucket.HOUR, Bucket.DAY)
 BUCKET_FREQUENCY = {Bucket.HOUR: "h", Bucket.DAY: "D"}
 COMMON_SERIES_PARAMS = frozenset({"start", "end", "fields", "bucket", "agg"})
+GROUP_BY_PARAM = "group_by"
 
 SeriesFilters = Callable[[Mapping[str, str]], tuple[list[str], dict[str, Any]]]
 
@@ -68,6 +70,12 @@ class SeriesSpec:
     the time window, bucketing, limits and gap-fill come from this module. `slot_lag` is
     how long after its timestamp a slot is expected to exist (an hourly load row labels
     the hour it summarises, so it is due only once that hour has ended).
+
+    `member_sum` first adds every member row sharing a timestamp and group (SQL `SUM`,
+    which skips NULL) and only then applies the time aggregation; only additive power
+    fields may set it. `group_options` maps each selectable `group_by` value to its group
+    columns; without options the dataset's grouping is fixed to `group_columns`.
+    `default_fields` names the fields charted when a request names none (all if empty).
     """
 
     dataset: str
@@ -79,6 +87,9 @@ class SeriesSpec:
     filters: SeriesFilters
     gap_fill: bool = True
     slot_lag: timedelta = timedelta(0)
+    member_sum: bool = False
+    default_fields: tuple[str, ...] = ()
+    group_options: Mapping[str, tuple[str, ...]] = MappingProxyType({})
 
     @property
     def cadence(self) -> timedelta:
@@ -98,13 +109,14 @@ class TooManyPointsError(ExplorerQueryError):
 
 @dataclass(frozen=True)
 class SeriesRequest:
-    """Validated series query: window, field names, bucket, aggregation, filters."""
+    """Validated series query: window, field names, grouping, bucket, aggregation, filters."""
 
     window: TimeWindow
     fields: tuple[str, ...]
     bucket: Bucket
     agg: Agg
     filters: Mapping[str, str]
+    group_columns: tuple[str, ...]
 
     @classmethod
     def build(
@@ -117,7 +129,10 @@ class SeriesRequest:
         agg: Agg,
     ) -> SeriesRequest:
         """Reject undeclared parameters, then resolve the window under the series limit."""
-        unknown = sorted(set(query_params) - COMMON_SERIES_PARAMS - spec.filter_keys)
+        accepted = COMMON_SERIES_PARAMS | spec.filter_keys
+        if spec.group_options:
+            accepted |= {GROUP_BY_PARAM}
+        unknown = sorted(set(query_params) - accepted)
         if unknown:
             raise ExplorerQueryError(f"unsupported series parameters: {', '.join(unknown)}")
         window = resolve_window(query_params.get("start"), query_params.get("end"), SERIES_MAX_DAYS)
@@ -126,8 +141,25 @@ class SeriesRequest:
             for key, value in query_params.items()
             if key in spec.filter_keys and value != ""
         }
-        chosen = tuple(dict.fromkeys(fields)) if fields else tuple(spec.fields)
-        return cls(window=window, fields=chosen, bucket=bucket, agg=agg, filters=filters)
+        chosen = (
+            tuple(dict.fromkeys(fields)) if fields else spec.default_fields or tuple(spec.fields)
+        )
+        return cls(
+            window=window,
+            fields=chosen,
+            bucket=bucket,
+            agg=agg,
+            filters=filters,
+            group_columns=_group_columns(spec, query_params.get(GROUP_BY_PARAM)),
+        )
+
+
+def _group_columns(spec: SeriesSpec, group_by: str | None) -> tuple[str, ...]:
+    if group_by is None:
+        return spec.group_columns
+    if group_by not in spec.group_options:
+        raise ExplorerQueryError(f"group_by must be one of {', '.join(spec.group_options)}")
+    return spec.group_options[group_by]
 
 
 class SeriesReader:
@@ -139,7 +171,7 @@ class SeriesReader:
 
     def read(self, request: SeriesRequest) -> SeriesResponse:
         where, params = self._where(request)
-        keys = self._series_keys(where, params)
+        keys = self._series_keys(request.group_columns, where, params)
         bucket = self._resolve_bucket(request, series_count=len(keys) * len(request.fields))
         agg = None if bucket is Bucket.RAW else request.agg
         if not keys:
@@ -156,8 +188,9 @@ class SeriesReader:
         extra_clauses, extra_params = self.spec.filters(request.filters)
         return " AND ".join([*clauses, *extra_clauses]), {**params, **extra_params}
 
-    def _series_keys(self, where: str, params: dict[str, Any]) -> list[tuple[str, ...]]:
-        groups = self.spec.group_columns
+    def _series_keys(
+        self, groups: tuple[str, ...], where: str, params: dict[str, Any]
+    ) -> list[tuple[str, ...]]:
         if not groups:
             found = self.db.fetch_one(
                 f"SELECT 1 AS present FROM {self.spec.table} WHERE {where} LIMIT 1", params
@@ -186,19 +219,33 @@ class SeriesReader:
         return per_series <= MAX_POINTS_PER_SERIES and per_series * series_count <= MAX_TOTAL_POINTS
 
     def _points_sql(self, request: SeriesRequest, bucket: Bucket, where: str) -> str:
-        groups = list(self.spec.group_columns)
-        fields = [self.spec.fields[name] for name in request.fields]
+        groups = list(request.group_columns)
+        source, value_sql = self._source(request, where)
         if bucket is Bucket.RAW:
             time_sql = self.spec.time_column
-            values = [f"{field.sql} AS v{index}" for index, field in enumerate(fields)]
+            values = [f"{sql} AS v{index}" for index, sql in enumerate(value_sql)]
             tail = ""
         else:
             time_sql = self.db.bucket_start(self.spec.time_column, bucket.value)
             function = request.agg.value.upper()
-            values = [f"{function}({field.sql}) AS v{index}" for index, field in enumerate(fields)]
+            values = [f"{function}({sql}) AS v{index}" for index, sql in enumerate(value_sql)]
             tail = f" GROUP BY {', '.join([time_sql, *groups])}"
         selected = ", ".join([f"{time_sql} AS bucket_at", *groups, *values])
-        return f"SELECT {selected} FROM {self.spec.table} WHERE {where}{tail}"
+        return f"SELECT {selected} FROM {source}{tail}"
+
+    def _source(self, request: SeriesRequest, where: str) -> tuple[str, list[str]]:
+        """Relation the buckets read from, and the value expression of each field in it.
+
+        With `member_sum` it is the per-timestamp, per-group member total, so the time
+        aggregation runs over those totals rather than over individual members.
+        """
+        fields = [self.spec.fields[name] for name in request.fields]
+        if not self.spec.member_sum:
+            return f"{self.spec.table} WHERE {where}", [item.sql for item in fields]
+        keys = ", ".join([self.spec.time_column, *request.group_columns])
+        sums = ", ".join(f"SUM({item.sql}) AS m{index}" for index, item in enumerate(fields))
+        members = f"SELECT {keys}, {sums} FROM {self.spec.table} WHERE {where} GROUP BY {keys}"
+        return f"({members}) AS members", [f"m{index}" for index in range(len(fields))]
 
     def _assemble(
         self,
@@ -207,7 +254,7 @@ class SeriesReader:
         keys: list[tuple[str, ...]],
         rows: list[dict[str, Any]],
     ) -> list[Series]:
-        groups = self.spec.group_columns
+        groups = request.group_columns
         by_key: dict[tuple[str, ...], list[dict[str, Any]]] = {key: [] for key in keys}
         for row in rows:
             by_key[tuple(str(row[column]) for column in groups)].append(row)

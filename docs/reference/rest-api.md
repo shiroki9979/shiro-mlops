@@ -193,7 +193,8 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 參數 | 型別 | 預設 | 說明 |
 | --- | --- | --- | --- |
 | `start`、`end` | RFC 3339 | `end` = 現在，`start` = `end` − 24 小時 | 與 list 相同的精確閉區間；無 offset 時視為台北時間。窗口最長 92 天，與各 list 的天數上限無關。 |
-| `fields` | 可重複的列舉 | 該資料集白名單的全部欄位 | `fields=a&fields=b`；重複的欄位只產生一條 series。 |
+| `fields` | 可重複的列舉 | 該資料集的預設欄位（見 §5.4） | `fields=a&fields=b`；重複的欄位只產生一條 series。 |
+| `group_by` | 依資料集的列舉 | 該資料集的預設分組 | 只有允許切換分組的資料集接受（見 §5.4）；其餘資料集帶此參數回 422。 |
 | `bucket` | `auto` \| `raw` \| `1h` \| `1d` | `auto` | `auto` 解析為同時符合兩個點數上限的最細粒度（依 `raw`、`1h`、`1d` 順序）。 |
 | `agg` | `avg` \| `min` \| `max` | `avg` | bucket 內的時間聚合；`raw` 忽略此參數。 |
 | 資料集篩選 | 依資料集 | — | 見 §5.4。 |
@@ -245,3 +246,6 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 資料集 | 路徑 | `fields` 白名單（單位） | 分組 | 篩選 | 補值 |
 | --- | --- | --- | --- | --- | --- |
 | 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW） | 固定依 `subject` | `subject` | 有（節奏 1 小時） |
+| 機組發電 | `GET /data/power/units/series` | `net_generation_mw`（MW，預設）、`capacity_mw`（MW） | `group_by=unit_type`（預設，依機組類型）或 `group_by=none`（所有成員的總和，`group` 為 `{}`） | `unit_type`、`unit_name`（精確比對，縮小合成的成員範圍） | 有（節奏 10 分鐘） |
+
+機組發電的每個點是成員合成後再做時間聚合的值：同一時點、同一分組的機組先加總（`NULL` 略過、不當成 0；全部為 `NULL` 時為 `null`），`1h`／`1d` 再對這些合計取 `avg`、`min` 或 `max`。儲能負載的負值照常加總，因此總和會扣掉充電功率。`auto` 以序列數計算點數：7 天窗口依 12 種 `unit_type` 分組時 `raw` 合計 12,108 點，超過 10,000，解析為 `1h`。
