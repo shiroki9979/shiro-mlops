@@ -117,6 +117,39 @@ describe('Forecast View /history lead-24 series', () => {
     },
   )
 
+  it('plots the points in target-hour order whatever order the JSON lists them in', async () => {
+    serveTrackRecord({
+      ...TRACK_RECORD,
+      metrics: { ...TRACK_RECORD.metrics, lead_24_series: [...TRACK_RECORD.metrics.lead_24_series].reverse() },
+    })
+    const text = renderHistory()
+    await screen.findByText(text.series.title)
+
+    expect(seriesChartData().map((row) => row.target_hour)).toEqual([
+      Date.parse('2026-11-13T01:00:00Z'),
+      Date.parse('2026-11-13T02:00:00Z'),
+      Date.parse('2026-11-13T04:00:00Z'),
+    ])
+  })
+
+  it('shows the empty-value dash for the percentage difference when the actual load is 0', async () => {
+    const [first, ...rest] = TRACK_RECORD.metrics.lead_24_series
+    serveTrackRecord({
+      ...TRACK_RECORD,
+      metrics: {
+        ...TRACK_RECORD.metrics,
+        lead_24_series: [{ ...first, actual_load_mw: 0, predicted_load_mw: 100 }, ...rest],
+      },
+    })
+    const text = renderHistory()
+    const chart = await findSeriesChart(text)
+
+    act(() => chart.focus())
+
+    const tooltip = await screen.findByRole('tooltip')
+    expect(within(tooltip).getByText(`+100.0 MW (${EMPTY_VALUE})`)).toBeInTheDocument()
+  })
+
   it('moves the tooltip from one target hour in the JSON to the next, skipping the omitted hour', async () => {
     serveTrackRecord(TRACK_RECORD)
     const text = renderHistory()

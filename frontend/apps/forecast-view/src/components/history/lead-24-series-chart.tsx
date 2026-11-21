@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import {
+  EMPTY_VALUE,
   formatDateTime,
   formatLoadDelta,
   formatLoadMW,
@@ -34,13 +35,16 @@ interface SeriesRow {
 
 // Only the target hours the export contains are plotted: it omits hours with no pair
 // (data-contracts §5.1), and the Forecast View does not disclose them (ADR-0013 §2.2), so the lines
-// run straight on from one point to the next and no row stands in for an omitted hour.
+// run straight on from one point to the next and no row stands in for an omitted hour. Sorted by
+// absolute instant rather than trusting the order in the JSON.
 function toSeriesRows(series: Lead24SeriesPoint[]): SeriesRow[] {
-  return series.map((point) => ({
-    target_hour: Date.parse(point.target_hour),
-    actual_load_mw: point.actual_load_mw,
-    predicted_load_mw: point.predicted_load_mw,
-  }))
+  return series
+    .map((point) => ({
+      target_hour: Date.parse(point.target_hour),
+      actual_load_mw: point.actual_load_mw,
+      predicted_load_mw: point.predicted_load_mw,
+    }))
+    .sort((a, b) => a.target_hour - b.target_hour)
 }
 
 // Actual load and the forecast issued 24 hours ahead for each target hour of the last 30 days.
@@ -128,11 +132,12 @@ function SeriesTooltip({ row, locale, text }: SeriesTooltipProps) {
   if (!row) return null
   const { actual_load_mw: actual, predicted_load_mw: predicted } = row
   const loadText = (load: number) => `${formatLoadMW(load, locale)} MW`
-  const difference = `${formatLoadDelta(predicted - actual, locale)} MW (${formatPercentDelta(
-    ((predicted - actual) / actual) * 100,
-    locale,
-    DIFFERENCE_PERCENT_FRACTION_DIGITS,
-  )})`
+  // A percentage of an actual load of 0 has no value, so it shows the empty-value dash.
+  const percent = ((predicted - actual) / actual) * 100
+  const percentText = Number.isFinite(percent)
+    ? formatPercentDelta(percent, locale, DIFFERENCE_PERCENT_FRACTION_DIGITS)
+    : EMPTY_VALUE
+  const difference = `${formatLoadDelta(predicted - actual, locale)} MW (${percentText})`
   return (
     <div
       role="tooltip"
