@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, NamedTuple
 
-from shiro_mlops.service.data_explorer.completeness import observation_gaps
+from shiro_mlops.service.data_explorer.completeness import gaps_until_now, observation_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
@@ -188,7 +188,11 @@ class ObservationReader(DatasetReader):
                     "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
                 }
             )
-        return items, observation_gaps(self.db, query.window, query.filters.get("station_id"))
+        station_id = query.filters.get("station_id")
+        gaps = gaps_until_now(
+            query.window, lambda window: observation_gaps(self.db, window, station_id)
+        )
+        return items, gaps
 
 
 class ForecastReader(DatasetReader):
