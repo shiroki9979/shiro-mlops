@@ -12,7 +12,7 @@ frontend/
 │   └── engineering-console/    # 工程主控台：base path /console/，只在地端
 ├── packages/
 │   └── shared/                 # UI 元件、設計 token、i18n 機制與語系切換、格式函式、request()；testing/ 為測試輔助
-└── tooling/                    # Vite 共用 /api 代理、workspace 邊界與 bundle 檢查的測試（node --test）
+└── tooling/                    # Vite dev 代理（/api、/published）、workspace 邊界與 bundle 檢查的測試（node --test）
 ```
 
 兩個應用都可依賴 `packages/shared`，彼此不得 import，`shared` 也不得 import 任何應用；ESLint 強制此規則。`shared` 的收錄標準見 ADR-0014 §2.3，語系與格式規則見 [前端語系與格式](../docs/reference/frontend-locale.md)。
@@ -30,7 +30,7 @@ frontend/
 
 預報檢視（`apps/forecast-view`）：
 
-1. **即時預測總覽 (`/`)**：1~72 小時動態用電負載與氣溫雙軸曲線、尖離峰指標卡、逐時明細表與 CSV 匯出。
+1. **即時預測總覽 (`/`)**：最新已發布預報的預測負載、預報時刻、尖離峰指標卡、逐時明細表與 CSV 匯出；讀取 `/published/latest_issued_forecast.json`，`pnpm dev` 時經 Vite proxy 轉送到地端 Compose 的 Nginx（`:8080`）。
 2. **預報實績 (`/history`)**：讀取 `/published/forecast_track_record.json`，顯示統計截至時刻、提前 24 小時的 MAPE 與 MAE 指標卡、MAPE 對提前時數曲線與最近 30 天提前 24 小時已發布預報與實際負載的對照；累積未滿 7 天時只顯示累積天數，統計截至時刻超過 24 小時時顯示中性的過舊提示。不呼叫 API；讀取規則見[預報檢視託管 §4](../docs/reference/forecast-view-hosting.md#4-前端讀取-published)。
 
 工程主控台（`apps/engineering-console`，`/console/` 開啟監控頁）：
@@ -50,7 +50,7 @@ frontend/
 corepack enable
 pnpm install --frozen-lockfile
 
-# 同時啟動兩個 Vite 開發伺服器（/api 皆代理至 FastAPI http://localhost:8000）
+# 同時啟動兩個 Vite 開發伺服器（預報檢視的 /published 代理至地端 Nginx http://localhost:8080，工程主控台的 /api 代理至 FastAPI http://localhost:8000）
 #   預報檢視 http://localhost:5173、工程主控台 http://localhost:5174/console/
 pnpm run dev
 
@@ -60,7 +60,7 @@ pnpm run test
 # shared 型別檢查，再對兩個應用執行 TypeScript 型別檢查與生產打包
 pnpm run build
 
-# 確認預報檢視的建置產物不含工程主控台的路徑與專用相依（需先 build；腳本在 scripts/，CI 呼叫同一 Makefile target）
+# 確認預報檢視的建置產物不含工程主控台的路徑與專用相依，也不含隨需推論的 /predict（需先 build；腳本在 scripts/，CI 呼叫同一 Makefile target）
 make -C .. frontend-bundle-check
 
 # 程式碼風格、Lint 與 workspace 邊界檢查

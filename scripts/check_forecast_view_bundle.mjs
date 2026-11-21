@@ -1,8 +1,9 @@
 // Verifies the Forecast View build (the only frontend deployed to the cloud) carries no Engineering
 // Console trace (ADR-0014 §4): no console route paths in the built files, and no console source module
-// or console-only dependency among the bundled modules. Run after the frontend build, via
-// `make frontend-bundle-check` locally and in the CI frontend job. Its negative controls live in
-// frontend/tooling/check-forecast-view-bundle.test.mjs.
+// or console-only dependency among the bundled modules. It also rejects any on-demand inference call,
+// since the Forecast View only reads the precomputed `/published/` files (ADR-0015 §2.4). Run after
+// the frontend build, via `make frontend-bundle-check` locally and in the CI frontend job. Its
+// negative controls live in frontend/tooling/check-forecast-view-bundle.test.mjs.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -15,10 +16,23 @@ const MODULES_REPORT = join(FORECAST_VIEW, 'node_modules/.cache/bundle-modules.j
 const CONSOLE_SOURCE_PREFIX = 'apps/engineering-console/'
 const TEXT_EXTENSIONS = /\.(html|js|mjs|css|json|svg|txt|map|webmanifest)$/
 
-// Engineering Console routes (ADR-0014 §2.5) and the pre-split URLs it replaced. `/console` is the
-// console's Vite `base` without its trailing slash (CONSOLE_BASE_PATH in
-// frontend/apps/engineering-console/vite.config.ts); keep in sync.
-export const FORBIDDEN_PATHS = ['/console', '/monitoring', '/data/']
+// Paths no built file may contain, one violation per group. `wholeWord` paths match only where the
+// next character is not a word character or `-`.
+export const FORBIDDEN_PATH_GROUPS = [
+  // Engineering Console routes (ADR-0014 §2.5) and the pre-split URLs it replaced. `/console` is the
+  // console's Vite `base` without its trailing slash (CONSOLE_BASE_PATH in
+  // frontend/apps/engineering-console/vite.config.ts); keep in sync.
+  { label: 'console paths', paths: ['/console', '/monitoring', '/data/'] },
+  // API endpoints for on-demand inference, which the cloud surface has no origin for (ADR-0015).
+  // Whole word, so names such as `/prediction-table` are not mistaken for the endpoint.
+  { label: 'on-demand inference paths', paths: ['/predict'], wholeWord: true },
+]
+
+function containsPath(text, path, wholeWord) {
+  if (!wholeWord) return text.includes(path)
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`${escaped}(?![\\w-])`).test(text)
+}
 
 // Runtime dependencies that only the Engineering Console declares. Workspace packages are skipped:
 // their sources are checked by path instead.
@@ -43,8 +57,10 @@ function packageOf(moduleId) {
 export function findBundleViolations({ files, moduleIds, consoleOnly }) {
   const violations = []
   for (const { path, text } of files) {
-    const found = FORBIDDEN_PATHS.filter((forbidden) => text.includes(forbidden))
-    if (found.length > 0) violations.push(`${path} contains console paths: ${found.join(', ')}`)
+    for (const { label, paths, wholeWord = false } of FORBIDDEN_PATH_GROUPS) {
+      const found = paths.filter((forbidden) => containsPath(text, forbidden, wholeWord))
+      if (found.length > 0) violations.push(`${path} contains ${label}: ${found.join(', ')}`)
+    }
   }
   const consoleOnlySet = new Set(consoleOnly)
   for (const id of moduleIds) {

@@ -1,40 +1,43 @@
 import type { z } from 'zod'
 
-// The Forecast View reads precomputed JSON from its own origin (local Nginx or CloudFront), never
-// through the shared API client: the cloud has no API origin (ADR-0015).
-const PUBLISHED_PATH = '/published'
-
-// Every way a read can fail (non-2xx, network error, unparsable body, contract mismatch) is this one
-// error, with no status code to branch on: S3 answers 403 for a missing object, so a status must
-// never decide what the page shows (forecast-view-hosting §4).
+// The one error every failed `/published/` read becomes (ADR-0015 §2.4; forecast-view-hosting §4).
+// A missing file is 403 from CloudFront but 404 from local Nginx, so callers must not tell failures
+// apart: the message carries nothing a viewer could be shown, and the underlying failure stays in `cause`.
 export class PublishedReadError extends Error {
-  constructor(fileName: string, options?: ErrorOptions) {
-    super(`Unable to read ${PUBLISHED_PATH}/${fileName}`, options)
+  constructor(fileName: string, options?: { cause?: unknown }) {
+    super(`Could not read /published/${fileName}`, options)
     this.name = 'PublishedReadError'
   }
 }
 
-export const publishedQueryKey = (fileName: string) => ['published', fileName] as const
-
+// Reads a precomputed Forecast View file by relative path; Cache-Control is left to Nginx and CloudFront.
+// A non-2xx response, a network error, a body that is not JSON and a schema mismatch all throw
+// PublishedReadError.
 export async function readPublished<T>(
   fileName: string,
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
 ): Promise<T> {
+  let body: unknown
   try {
-    const response = await fetch(`${PUBLISHED_PATH}/${fileName}`)
+    const response = await fetch(`/published/${fileName}`)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    return schema.parse(await response.json())
+    body = await response.json()
   } catch (cause) {
     throw new PublishedReadError(fileName, { cause })
   }
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) throw new PublishedReadError(fileName, { cause: parsed.error })
+  return parsed.data
 }
 
-const STALE_AFTER_MS = 24 * 60 * 60 * 1000
+export const publishedQueryKey = (fileName: string) => ['published', fileName] as const
+
+// One threshold for both the comparison and the notices that state it (ADR-0015 §2.5).
+export const STALE_AFTER_HOURS = 24
 
 // A published timestamp (ISO 8601 with offset, such as the track record cutoff or a forecast's
 // issued_at) is stale once it is strictly more than 24 hours behind the viewer's clock; exactly 24
-// hours is not. Compared as absolute instants, so the browser's time zone never matters. Checked on
-// every render, background re-reads included, with no timer of its own.
+// hours is not. Compared as absolute instants, so the browser's time zone never matters.
 export function isPublishedTimestampStale(timestamp: string, now: number = Date.now()): boolean {
-  return now - Date.parse(timestamp) > STALE_AFTER_MS
+  return now - Date.parse(timestamp) > STALE_AFTER_HOURS * 3_600_000
 }

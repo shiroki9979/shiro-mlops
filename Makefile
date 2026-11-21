@@ -10,7 +10,7 @@ help:
 	@echo "  make frontend      Run the Forecast View and Engineering Console Vite dev servers"
 	@echo "  make frontend-test Run frontend Vitest suites and workspace tooling tests"
 	@echo "  make frontend-build Type-check and build both frontend apps"
-	@echo "  make frontend-bundle-check Verify the built Forecast View carries no Engineering Console trace (after frontend-build)"
+	@echo "  make frontend-bundle-check Verify the built Forecast View carries no Engineering Console trace or /predict call (after frontend-build)"
 	@echo "  make dagster       Run Dagster webserver locally"
 	@echo "  make mlflow        Run MLflow UI locally"
 	@echo "  make test          Run Python test suite with pytest"

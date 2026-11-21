@@ -1,12 +1,13 @@
-// Negative controls for the Forecast View bundle check (ADR-0014 §4): each fixture plants one
-// Engineering Console trace in an otherwise clean bundle and expects the check to name it.
+// Negative controls for the Forecast View bundle check (ADR-0014 §4, ADR-0015): each fixture plants one
+// Engineering Console trace or on-demand inference call in an otherwise clean bundle and expects the
+// check to name it.
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { consoleOnlyDependencies, findBundleViolations } from '../../scripts/check_forecast_view_bundle.mjs'
 
 const CLEAN_FILES = [
   { path: 'index.html', text: '<script type="module" src="/assets/index-abc.js"></script>' },
-  { path: 'assets/index-abc.js', text: 'fetch(`${base}/predict`);console.error("x");const r="/history"' },
+  { path: 'assets/index-abc.js', text: 'fetch("/published/latest_issued_forecast.json");const r="/history"' },
 ]
 const CLEAN_MODULES = [
   '\0vite/preload-helper.js',
@@ -35,6 +36,31 @@ describe('findBundleViolations', () => {
       assert.match(violations[0], /assets\/chunk-1\.js/)
     })
   }
+
+  it('reports an on-demand inference call apart from console paths', () => {
+    const files = [...CLEAN_FILES, { path: 'assets/chunk-2.js', text: 'fetch(`${base}/predict`,{method:"POST"})' }]
+
+    assert.deepEqual(check({ files }), ['assets/chunk-2.js contains on-demand inference paths: /predict'])
+  })
+
+  it('passes a name that merely starts with the inference path, and still reports the path itself', () => {
+    const lookalike = { path: 'assets/chunk-4.js', text: 'const href="/prediction-table"' }
+    const endpoint = { path: 'assets/chunk-5.js', text: 'fetch("/predict?h=24")' }
+
+    assert.deepEqual(check({ files: [...CLEAN_FILES, lookalike] }), [])
+    assert.deepEqual(check({ files: [...CLEAN_FILES, lookalike, endpoint] }), [
+      'assets/chunk-5.js contains on-demand inference paths: /predict',
+    ])
+  })
+
+  it('reports console paths and an inference call in one file as two violations', () => {
+    const files = [...CLEAN_FILES, { path: 'assets/chunk-3.js', text: 'const a="/console";fetch("/api/predict")' }]
+
+    assert.deepEqual(check({ files }), [
+      'assets/chunk-3.js contains console paths: /console',
+      'assets/chunk-3.js contains on-demand inference paths: /predict',
+    ])
+  })
 
   it('reports a bundled Engineering Console source module', () => {
     const moduleIds = [...CLEAN_MODULES, 'apps/engineering-console/src/lib/api-client.ts']

@@ -64,10 +64,11 @@ bucket policy 只授權 CloudFront 服務主體經該 distribution 的 `s3:GetOb
 ## 4. 前端讀取 `/published/`
 
 - 預報檢視以相對路徑 `/published/` 讀取 JSON，沒有 API base URL 設定；`VITE_API_BASE_URL` 只供工程主控台使用。
-- 非 2xx、網路錯誤、JSON 解析失敗或內容不符[資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished)（以 zod schema 驗證，未知的多餘欄位忽略）一律顯示中性的錯誤狀態（例如「目前無法取得預報」），不區分原因；空狀態只由匯出 JSON 的內容決定，不由 HTTP 狀態碼推斷。
-- `/history` 的預報實績在背景每 5 分鐘重新讀取一次，失敗不自動重試，由下一次背景讀取恢復；已有資料時背景讀取失敗，保留畫面上的內容，不切換到錯誤狀態。
-- 過舊提示：JSON 內帶 offset 的時刻（`/history` 為統計截至時刻）換算成絕對時間後，距觀眾的 `Date.now()` 嚴格超過 24 小時才顯示一行中性提示，剛好 24 小時不顯示，不揭露原因，內容照常顯示；每次 render 時判斷，不另設計時器；每次背景讀取完成都會重新 render，內容與前次相同亦然，錯誤狀態不顯示。
-- `pnpm dev` 時，預報檢視的 Vite dev server 以 proxy 把 `/published/` 開頭的路徑原樣（不改寫路徑，比對方式同 Nginx 的 `location ^~ /published/`）轉送到地端 Compose 的 Nginx（`http://localhost:8080`）；Vitest 以 MSW 攔截 `/published/` 請求。
+- 讀到的 JSON 依[資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished) 的 schema 驗證，未知的多餘欄位忽略；非 2xx、網路錯誤、JSON 解析失敗或 schema 不符都視為同一種讀取失敗。尚無已載入的內容時一律顯示中性的錯誤狀態（例如「目前無法取得預報」），不區分原因，不顯示狀態碼或伺服器訊息；已有內容時，背景重新讀取失敗保留原內容，不切換到錯誤狀態。空狀態只由匯出 JSON 的內容決定（`/` 為 `issued_at` 為 `null`，`/history` 為 `metrics` 為 `null`），不由 HTTP 狀態碼推斷。請求不設快取標頭，快取交給 Nginx 與 CloudFront。
+- 重新讀取：`/` 失敗時重試一次；`/history` 的預報實績在背景每 5 分鐘重新讀取一次，失敗不自動重試，由下一次背景讀取恢復。
+- 載入中只取決於讀取是否完成。已發布預報在所選預測時效內沒有目標小時（包括 `steps` 為空）時，`/` 顯示一行中性提示，不顯示載入中，也不補造任何列。
+- 過舊提示：JSON 內帶 offset 的時刻（`/` 為預報時刻，`/history` 為統計截至時刻）換算成絕對時間後，距觀眾的 `Date.now()` 嚴格超過 24 小時才顯示一行中性提示（例如「預報已超過 24 小時未更新」），正好 24 小時不顯示；提示不揭露、也不暗示原因（ADR-0015 §2.5），舊內容照常顯示，錯誤狀態不顯示。只在渲染時比較，不另設計時器；`/history` 每次背景讀取完成都會重新渲染，內容與前次相同亦然。
+- `pnpm dev` 時，預報檢視的 Vite dev server 把 `/published/` 開頭的路徑原樣（不改寫路徑，比對方式同 Nginx 的 `location ^~ /published/`）轉送到地端 Compose 的 Nginx（`:8080`，設定於 `frontend/tooling/vite-dev-proxy.ts`）；預報檢視不設 `/api` proxy。Vitest 以 MSW 攔截 `/published/` 請求並提供 fixtures。
 
 ## 5. 部署與驗證
 

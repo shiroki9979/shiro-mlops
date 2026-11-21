@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 1 節拆出。
@@ -243,7 +243,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 - **時刻格式**：所有時刻為台灣本地時間、ISO 8601 帶 `+08:00` offset（例如 `2026-11-20T10:15:00+08:00`），觀眾瀏覽器不論位於哪個時區都能換算距當下的時間。與 §5.1 的 Dagster artifact（不帶時區）不同。
 - **編碼**：UTF-8 JSON，不含 `NaN` 或無限大；出現時匯出失敗，不寫出無效 JSON。HTTP `Content-Type` 為 `application/json`；`Cache-Control` 由 Nginx 與 CloudFront 決定，上傳端不設定物件 metadata。
 - **空狀態只由內容決定**：還沒有已發布預報、或累積天數未滿 7 時，兩份 JSON 仍照常輸出（見各小節），前端不以 HTTP 狀態碼推斷空狀態。
-- **fixtures**：`tests/fixtures/published/` 是兩份 JSON 的範例，由單元測試核對與匯出結果一致，也供 Nginx smoke check 掛載。
+- **fixtures**：`tests/fixtures/published/` 是兩份 JSON 的範例，由單元測試核對與匯出結果一致，也供 Nginx smoke check 掛載。前端的 Docker 建置只含 `frontend/`，因此預報檢視的 MSW 另存一份 `latest_issued_forecast.json` 副本於應用內，由前端單元測試核對與此 fixture 相同。
 
 ### 6.1 最新已發布預報 `latest_issued_forecast.json`
 
