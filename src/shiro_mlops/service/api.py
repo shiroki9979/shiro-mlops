@@ -45,10 +45,19 @@ from shiro_mlops.tasks.types.base import TaskModel, WeatherEchoingItem
 
 
 class ModelStore:
-    """In-memory models of the deployed tasks, keyed by task id; untrained tasks are absent."""
+    """In-memory models of the deployed tasks, keyed by task id; untrained tasks are absent.
+
+    ``load_errors`` holds, per task whose model failed to load at startup, the
+    reason served instead of the untrained one, so a failure never passes for
+    a task not trained yet.
+    """
 
     def __init__(self) -> None:
         self.models: dict[str, TaskModel] = {}
+        self.load_errors: dict[str, str] = {}
+
+    def missing_model_reason(self, task_id: str) -> str:
+        return self.load_errors.get(task_id, MODEL_NOT_LOADED_REASON)
 
 
 model_store = ModelStore()
@@ -79,19 +88,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def _load_task_models(tasks: Iterable[TaskDefinition], root: Path) -> None:
+    """A broken model leaves only its own task unserved; the other tasks still load."""
     for task in tasks:
-        model = _load_task_model(task, root)
+        model_store.load_errors.pop(task.task_id, None)
+        try:
+            model = load_model(root, task)
+        except Exception as error:
+            logger.exception("Could not load the %s model from %s.", task.task_id, root)
+            model_store.load_errors[task.task_id] = (
+                f"Model failed to load: {type(error).__name__}: {error}"
+            )
+            continue
         if model is not None:
             model_store.models[task.task_id] = model
-
-
-def _load_task_model(task: TaskDefinition, root: Path) -> TaskModel | None:
-    """A broken model leaves only its own task unserved; the other tasks still load."""
-    try:
-        return load_model(root, task)
-    except Exception:
-        logger.exception("Could not load the %s model from %s.", task.task_id, root)
-        return None
 
 
 app = FastAPI(
@@ -303,15 +312,20 @@ def _deployed_task_or_404(task_id: str) -> TaskDefinition:
 
 def _readiness(task: TaskDefinition) -> ReadyResponse:
     model = model_store.models.get(task.task_id)
+    if model is None:
+        response = ReadyResponse(
+            status="not_ready",
+            model_loaded=False,
+            reason=model_store.missing_model_reason(task.task_id),
+        )
+        return JSONResponse(status_code=503, content=response.model_dump())
     try:
         readiness = check_task_ready(task, model, _runtime(), as_of=request_clock())
     except Exception as error:
         logger.exception("Readiness check failed for task %s", task.task_id)
         readiness = Readiness(ready=False, reason=str(error))
     if not readiness.ready:
-        response = ReadyResponse(
-            status="not_ready", model_loaded=model is not None, reason=readiness.reason
-        )
+        response = ReadyResponse(status="not_ready", model_loaded=True, reason=readiness.reason)
         return JSONResponse(status_code=503, content=response.model_dump())
     return ReadyResponse(status="ready", mode=readiness.mode, model_loaded=True)
 
@@ -320,7 +334,7 @@ def _predict(task: TaskDefinition, *, horizon_hours: int) -> PredictionOutcome:
     """Run the task's prediction, mapping missing models and unavailable inputs to HTTP 503."""
     model = model_store.models.get(task.task_id)
     if model is None:
-        raise HTTPException(status_code=503, detail=MODEL_NOT_LOADED_REASON)
+        raise HTTPException(status_code=503, detail=model_store.missing_model_reason(task.task_id))
     try:
         return predict_task(
             task, model, _runtime(), as_of=request_clock(), horizon_hours=horizon_hours

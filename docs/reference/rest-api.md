@@ -1,7 +1,7 @@
 # API 介面規格 (REST Interface)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 2 節拆出。
@@ -49,7 +49,7 @@
 - **語意**：模型已載入、負載起點未過舊，且預報天氣任務的正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足、或負載起點過舊時回傳 HTTP 503，並列出未就緒原因。
 - **觀測天氣任務**（任務類型 `requirements().weather` 為 `OBSERVED`，例如 `load_pattern_anomaly`）：不讀預報、不降級；模型已載入、負載起點未過舊，且錨點結束小時有完整的負載與測站觀測評分窗時回傳 HTTP 200 與 `mode: normal`，否則回傳 HTTP 503。
 - **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過任務設定 `[policies].stale_anchor_max_lag_hours`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
-- **模型**：API 啟動時依任務設定逐一載入 `DATA_DIR/models/<task_id>/`（[ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）；單一任務的模型目錄不存在或無法載入時，只有該任務維持 `not_ready`（載入錯誤寫入日誌），其他任務照常服務。既有 `DATA_DIR/model.joblib` 不載入，首次以新格式重新訓練前 `/ready` 維持 `not_ready`。任務設定無效時 API 啟動失敗。
+- **模型**：API 啟動時依任務設定逐一載入 `DATA_DIR/models/<task_id>/`（[ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）；單一任務的模型目錄不存在或無法載入時，只有該任務維持 `not_ready`，其他任務照常服務。未訓練（模型目錄不存在）時 `reason` 為 `Model is not loaded or trained yet.`；載入失敗時 `reason` 為 `Model failed to load: <例外類型>: <訊息>`，完整 traceback 寫入日誌。兩者皆回傳 HTTP 503，該任務的 `/predict` 以同一字串作為 `detail`。既有 `DATA_DIR/model.joblib` 不載入，首次以新格式重新訓練前 `/ready` 維持 `not_ready`。任務設定無效時 API 啟動失敗。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
 
 ## 3. 隨需動態視界負載預報
