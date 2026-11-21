@@ -28,6 +28,12 @@ export interface ExplorerChartConfig {
   fields: ExplorerFieldKey[]
   // Group key whose values pick a colour from the central palette; others use series order.
   colorBy?: { group: string; palette: CategoryPaletteKey }
+  // While the `when` switch is on the chart needs the `filter` value, so no series is requested without it.
+  requiredFilter?: { filter: ExplorerFieldKey; when: ExplorerFieldKey }
+  // Group key holding an issue instant: such series are named by it and shaded newest first.
+  vintageGroup?: string
+  // The API returns only valued points (no gap-fill), so lines join across instants they lack.
+  sparsePoints?: boolean
 }
 
 export interface ExplorerDatasetConfig {
@@ -120,6 +126,12 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     auditDatasetId: 'cwa_observation_audits',
     columns: ['observed_at', 'station_id', 'temperature_c', 'relative_humidity_pct'],
     filters: [{ key: 'station_id', placeholder: '466920' }],
+    chart: {
+      type: 'line',
+      seriesApiPath: '/data/weather/observations/series',
+      fields: ['temperature_c'],
+      colorBy: { group: 'station_id', palette: 'station_id' },
+    },
   },
   {
     id: 'cwa_forecasts',
@@ -140,6 +152,14 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'source_updated_at' },
       { key: 'all_vintages', control: { kind: 'switch' } },
     ],
+    chart: {
+      type: 'line',
+      seriesApiPath: '/data/weather/forecasts/series',
+      fields: ['temperature_c'],
+      requiredFilter: { filter: 'geocode', when: 'all_vintages' },
+      vintageGroup: 'issued_at',
+      sparsePoints: true,
+    },
   },
   {
     id: 'cwa_observation_audits',

@@ -8,6 +8,8 @@ export interface PlottedSeries {
   color: string
   unit: string
   points: Series['points']
+  // Set for datasets the API does not gap-fill: an instant without a point is no gap, so the line continues.
+  connectNulls?: boolean
 }
 
 export type ChartRow = { t: number } & Record<string, number | null>

@@ -1,11 +1,12 @@
 import { type ComponentType, useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
-import { EMPTY_VALUE } from '@shiro-mlops/shared/i18n/format'
+import { EMPTY_VALUE, formatDateTime } from '@shiro-mlops/shared/i18n/format'
+import { type Locale, useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
-import { CATEGORY_PALETTES, categoryColor } from '@/lib/chart-palette'
+import { CATEGORY_PALETTES, FORECAST_VINTAGE_COLORS, categoryColor } from '@/lib/chart-palette'
 import type { Series } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { gapRanges, type PlottedSeries } from './chart-series'
@@ -35,11 +36,13 @@ interface ExplorerChartCardProps {
 
 export function ExplorerChartCard({ dataset, chart, query, chartSearch, onSettingChange }: ExplorerChartCardProps) {
   const m = useMessages()
+  const locale = useLocale()
   const chartText = m.explorer.chart
   const bucket = optionOr(chartSearch.bucket, BUCKET_OPTIONS, 'auto')
   const agg = optionOr(chartSearch.agg, AGG_OPTIONS, 'avg')
-  const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch))
-  const plotted = seriesQuery.data ? plotSeries(seriesQuery.data.series, chart, m) : []
+  const prompt = missingFilterPrompt(chart, query, m)
+  const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch), !prompt)
+  const plotted = seriesQuery.data && !prompt ? plotSeries(seriesQuery.data.series, chart, m, locale) : []
   const fieldLabels = (seriesQuery.data?.series.map((item) => item.field) ?? chart.fields)
     .filter((field, index, all) => all.indexOf(field) === index)
     .map((field) => explorerFieldLabel(field, m))
@@ -80,7 +83,11 @@ export function ExplorerChartCard({ dataset, chart, query, chartSearch, onSettin
         </div>
       </CardHeader>
       <CardContent>
-        <ChartBody chart={chart} query={seriesQuery} plotted={plotted} text={chartText} />
+        {prompt ? (
+          <p className="text-sm text-amber-200">{prompt}</p>
+        ) : (
+          <ChartBody chart={chart} query={seriesQuery} plotted={plotted} text={chartText} />
+        )}
       </CardContent>
     </Card>
   )
@@ -161,7 +168,19 @@ function optionOr<T extends string>(value: unknown, options: readonly T[], fallb
   return options.includes(value as T) ? (value as T) : fallback
 }
 
-function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages): PlottedSeries[] {
+function missingFilterPrompt(chart: ExplorerChartConfig, query: Record<string, string | undefined>, m: Messages): string | undefined {
+  const required = chart.requiredFilter
+  if (!required || query[required.when] !== 'true' || query[required.filter]) return undefined
+  return m.explorer.chart.requiresFilter(explorerFieldLabel(required.filter, m), explorerFieldLabel(required.when, m))
+}
+
+function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages, locale: Locale): PlottedSeries[] {
+  return groupedSeries(series, chart, m, locale).map((item) => ({ ...item, connectNulls: chart.sparsePoints }))
+}
+
+function groupedSeries(series: Series[], chart: ExplorerChartConfig, m: Messages, locale: Locale): PlottedSeries[] {
+  const vintageGroup = chart.vintageGroup
+  if (vintageGroup && series.some((item) => item.group[vintageGroup])) return plotVintages(series, vintageGroup, m, locale)
   const multipleFields = new Set(series.map((item) => item.field)).size > 1
   const palette = chart.colorBy ? CATEGORY_PALETTES[chart.colorBy.palette] : undefined
   return series.map((item, index) => ({
@@ -171,6 +190,28 @@ function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages): 
     unit: item.unit,
     points: item.points,
   }))
+}
+
+// Newest issue first and brightest; vintages past the ramp share its darkest step. Other group
+// values are named only where they tell series apart (e.g. two datasets for one issue time).
+function plotVintages(series: Series[], vintageGroup: string, m: Messages, locale: Locale): PlottedSeries[] {
+  const issues = [...new Set(series.map((item) => item.group[vintageGroup]))].sort().reverse()
+  const multipleFields = new Set(series.map((item) => item.field)).size > 1
+  const varyingKeys = Object.keys(series[0].group).filter(
+    (key) => key !== vintageGroup && new Set(series.map((item) => item.group[key])).size > 1,
+  )
+  const ordered = [...series].sort((a, b) => issues.indexOf(a.group[vintageGroup]) - issues.indexOf(b.group[vintageGroup]))
+  return ordered.map((item, index) => {
+    const rank = Math.min(issues.indexOf(item.group[vintageGroup]), FORECAST_VINTAGE_COLORS.length - 1)
+    const vintage = [formatDateTime(item.group[vintageGroup], locale), ...varyingKeys.map((key) => item.group[key])].join(' · ')
+    return {
+      key: `s${index}`,
+      name: multipleFields ? `${explorerFieldLabel(item.field, m)} · ${vintage}` : vintage,
+      color: FORECAST_VINTAGE_COLORS[rank],
+      unit: item.unit,
+      points: item.points,
+    }
+  })
 }
 
 function seriesName(item: Series, multipleFields: boolean, m: Messages): string {

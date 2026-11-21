@@ -262,6 +262,7 @@ export const en: Messages = {
       databaseUnavailable: 'The database is unavailable. Try again later.',
       tooManyPoints: (bucket: string) => `Too many points; switch to the "${bucket}" granularity.`,
       gapLegend: 'Gray band: no data for that period',
+      requiresFilter: (filter: string, toggle: string) => `With "${toggle}" on, set "${filter}" to compare forecast vintages.`,
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset} trend chart; fields: ${fields}; series: ${series}`,
     },

@@ -260,6 +260,7 @@ export const zhTW = {
       databaseUnavailable: '資料庫目前無法連線，請稍後再試。',
       tooManyPoints: (bucket: string) => `資料點超過上限，建議改用「${bucket}」粒度。`,
       gapLegend: '灰底區段：該時段沒有資料',
+      requiresFilter: (filter: string, toggle: string) => `開啟「${toggle}」時，請先指定「${filter}」，才能比較各發布版本。`,
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset}趨勢圖；欄位：${fields}；序列：${series}`,
     },
