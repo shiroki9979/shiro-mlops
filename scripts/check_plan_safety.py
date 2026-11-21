@@ -69,10 +69,12 @@ def load_changes(path: Path) -> list[tuple[str, tuple[str, ...]]]:
     except ValueError as error:
         raise InvalidPlanError(f"{path} is not valid JSON: {error}") from error
     try:
-        # Terraform omits `resource_changes` when the configuration has no resources.
+        # WHY-NOT(resource_changes): Terraform omits the key when the configuration has no
+        # resources, so indexing it instead of `.get` would reject an empty plan as invalid.
+        resource_changes = plan.get("resource_changes", [])
         return [
             (str(change["address"]), tuple(str(action) for action in change["change"]["actions"]))
-            for change in plan.get("resource_changes", [])
+            for change in resource_changes
         ]
     except (AttributeError, KeyError, TypeError) as error:
         raise InvalidPlanError(
