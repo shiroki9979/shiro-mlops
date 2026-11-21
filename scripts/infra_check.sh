@@ -31,7 +31,8 @@ check_layer() {
   terraform validate
 
   echo "==> Running Terraform tests in ${layer_dir#"${REPO_ROOT}/"}"
-  # tests/*.tftest.hcl plan against mock_provider "aws", so no AWS credentials are read.
+  # infra/terraform/tests/ and infra/terraform/bootstrap/tests/ plan against
+  # mock_provider "aws", so no AWS credentials are read.
   terraform test
 }
 

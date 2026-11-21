@@ -39,9 +39,8 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
-# 1. State bucket for both layers. Kept apart from the Forecast View bucket so CloudFront
-#    cannot read state and the 30-day noncurrent-version expiry there never removes the
-#    versions that recover a damaged state.
+# Kept apart from the Forecast View bucket so CloudFront cannot read state and the 30-day
+# noncurrent-version expiry there never removes the versions that recover a damaged state.
 resource "aws_s3_bucket" "state" {
   # Bucket names are global; the account ID keeps this one unique.
   bucket = "shiro-mlops-tfstate-${data.aws_caller_identity.current.account_id}"
@@ -73,8 +72,8 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
-# 2. GitHub Actions OIDC provider, shared by the plan, apply and site deploy roles; the
-#    main configuration reads it through a data source.
+# Shared by the plan, apply and site deploy roles; the main configuration reads it through a
+# data source.
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
@@ -121,8 +120,8 @@ locals {
   }
 }
 
-# 3. Plan role: any pull request can assume it, so it may not write anything. The PR plan
-#    runs with -lock=false, so it needs no lockfile access either.
+# Any pull request can assume the plan role, so it may not write anything. The PR plan runs
+# with -lock=false, so it needs no lockfile access either.
 resource "aws_iam_role" "terraform_plan" {
   name               = "shiro-mlops-terraform-plan"
   assume_role_policy = local.github_trust_policies.terraform_plan
@@ -158,7 +157,7 @@ resource "aws_iam_role_policy" "terraform_plan_state" {
   })
 }
 
-# 4. Apply role: only code merged into main can assume it. It applies the main configuration.
+# Only code merged into main can assume the apply role.
 resource "aws_iam_role" "terraform_apply" {
   name               = "shiro-mlops-terraform-apply"
   assume_role_policy = local.github_trust_policies.terraform_apply

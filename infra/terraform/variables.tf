@@ -17,7 +17,9 @@ variable "s3_bucket_name" {
 }
 
 variable "github_repo" {
-  type        = string
+  type = string
+  # SYNC(infra/terraform/bootstrap/variables.tf): the site deploy role here and the plan and
+  # apply roles there must trust the same repository.
   default     = "shiroki9979/shiro-mlops"
   description = "GitHub repository name (org/repo) for OIDC trust"
 }

@@ -45,9 +45,9 @@ locals {
   budget_actual_alert_usd     = 5
 }
 
-# 1. S3 bucket for the Forecast View release artefacts (ADR-0015 §2.2).
-#    site/      : forecast-view build output, written by the CI role.
-#    published/ : exported public JSON, written by the on-prem publisher user.
+# S3 bucket for the Forecast View release artefacts (ADR-0015 §2.2).
+# site/      : forecast-view build output, written by the CI role.
+# published/ : exported public JSON, written by the on-prem publisher user.
 resource "aws_s3_bucket" "forecast_view" {
   bucket        = var.s3_bucket_name
   force_destroy = var.environment == "dev"
@@ -111,9 +111,8 @@ resource "aws_s3_bucket_public_access_block" "forecast_view" {
   restrict_public_buckets = true
 }
 
-# 2. Site deploy role: deploys the frontend to site/ only. The GitHub Actions OIDC
-#    provider belongs to the bootstrap layer (infra/terraform/bootstrap), which only a
-#    person applies, so CI cannot change whom the provider trusts.
+# The GitHub Actions OIDC provider belongs to the bootstrap layer (infra/terraform/bootstrap),
+# which only a person applies, so CI cannot change whom the provider trusts.
 data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
@@ -181,9 +180,9 @@ resource "aws_iam_role_policy_attachment" "ci_site_deploy" {
   policy_arn = aws_iam_policy.ci_site_deploy.arn
 }
 
-# 3. On-prem publisher user: uploads the exported JSON to published/ only
-#    (ADR-0015 §2.3). Its access key is created and rotated outside Terraform,
-#    so the secret never enters Terraform state.
+# On-prem publisher user: uploads the exported JSON to published/ only
+# (ADR-0015 §2.3). Its access key is created and rotated outside Terraform,
+# so the secret never enters Terraform state.
 resource "aws_iam_user" "onprem_publisher" {
   name = "shiro-mlops-onprem-publisher"
 }
@@ -210,9 +209,9 @@ resource "aws_iam_user_policy_attachment" "onprem_publisher_put" {
   policy_arn = aws_iam_policy.onprem_publisher_put.arn
 }
 
-# 4. Cost guardrail: email when monthly actual or forecasted spend reaches the
-#    levels in locals (ADR-0015 §2.6). AWS Budgets only offers GREATER_THAN,
-#    EQUAL_TO and LESS_THAN; GREATER_THAN is the closest to "reaches" (達).
+# Cost guardrail: email when monthly actual or forecasted spend reaches the
+# levels in locals (ADR-0015 §2.6). AWS Budgets only offers GREATER_THAN,
+# EQUAL_TO and LESS_THAN; GREATER_THAN is the closest to "reaches" (達).
 resource "aws_budgets_budget" "monthly_cost" {
   name         = "shiro-mlops-monthly-cost"
   budget_type  = "COST"
@@ -237,9 +236,9 @@ resource "aws_budgets_budget" "monthly_cost" {
   }
 }
 
-# 5. CloudFront serves the Forecast View from the bucket through OAC
-#    (forecast-view-hosting.md §2, §3). One distribution, two origins on the same
-#    bucket: site (origin path /site) and published (no origin path).
+# CloudFront serves the Forecast View from the bucket through OAC
+# (forecast-view-hosting.md §2, §3). One distribution, two origins on the same
+# bucket: site (origin path /site) and published (no origin path).
 locals {
   site_origin_id      = "site"
   published_origin_id = "published"
