@@ -2,7 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir mlflow psycopg2-binary
+# 固定 uv 版本，同一 commit 的映像建置結果不隨 uv 新版漂移。
+COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /bin/uv
+
+# 只裝 tracking server 需要的 mlflow 與 psycopg2，但以 uv.lock 匯出的 constraints 鎖住它們與所有間接相依，
+# 讓 server 與專案內的 MLflow client 同版本。未鎖版本時，上游 SQLAlchemy 2.1 變更 Postgres 預設 driver
+# 就讓映像重建後無法啟動（#205）。
+COPY pyproject.toml uv.lock README.md ./
+RUN uv export --frozen --no-dev --no-emit-workspace --package shiro-mlops -o /tmp/constraints.txt \
+    && uv pip install --system --no-cache -c /tmp/constraints.txt mlflow psycopg2-binary \
+    && rm /tmp/constraints.txt
 
 EXPOSE 5000
 
