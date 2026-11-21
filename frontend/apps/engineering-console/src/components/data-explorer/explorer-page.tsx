@@ -54,6 +54,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         }}
         onStartChange={explorer.setStart}
         onEndChange={explorer.setEnd}
+        onWindowChange={explorer.setWindow}
         onFilterChange={explorer.setFilter}
       />
       <ExplorerResults
