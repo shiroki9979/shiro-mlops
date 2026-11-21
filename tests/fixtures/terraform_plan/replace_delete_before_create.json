@@ -1,0 +1,17 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.11.4",
+  "resource_changes": [
+    {
+      "address": "aws_cloudfront_distribution.forecast_view",
+      "mode": "managed",
+      "type": "aws_cloudfront_distribution",
+      "name": "forecast_view",
+      "change": {
+        "actions": ["delete", "create"],
+        "replace_paths": [["origin"]]
+      },
+      "action_reason": "replace_because_cannot_update"
+    }
+  ]
+}

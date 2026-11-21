@@ -1,5 +1,19 @@
 terraform {
-  required_version = ">= 1.5.0"
+  # S3 native locking (use_lockfile) is GA from 1.11.
+  required_version = ">= 1.11.0"
+
+  # Partial configuration: the state bucket name carries the account ID, so it stays out of
+  # the repo and comes from -backend-config (the untracked infra/terraform/state.s3.tfbackend
+  # locally, a repository variable in CI). The bootstrap layer keeps its state in the same
+  # bucket under another key.
+  backend "s3" {
+    # SYNC(infra/terraform/bootstrap/main.tf): the apply and plan roles grant access to this key.
+    key          = "forecast-view/terraform.tfstate"
+    region       = "ap-northeast-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -31,9 +45,9 @@ locals {
   budget_actual_alert_usd     = 5
 }
 
-# 1. S3 bucket for the Forecast View release artefacts (ADR-0015 §2.2).
-#    site/      : forecast-view build output, written by the CI role.
-#    published/ : exported public JSON, written by the on-prem publisher user.
+# S3 bucket for the Forecast View release artefacts (ADR-0015 §2.2).
+# site/      : forecast-view build output, written by the CI role.
+# published/ : exported public JSON, written by the on-prem publisher user.
 resource "aws_s3_bucket" "forecast_view" {
   bucket        = var.s3_bucket_name
   force_destroy = var.environment == "dev"
@@ -97,23 +111,14 @@ resource "aws_s3_bucket_public_access_block" "forecast_view" {
   restrict_public_buckets = true
 }
 
-# 2. GitHub Actions OIDC provider and CI role: deploys the frontend to site/ only.
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_oidc_provider ? 1 : 0
-  url   = "https://token.actions.githubusercontent.com"
-
-  client_id_list = [
-    "sts.amazonaws.com"
-  ]
-
-  thumbprint_list = [
-    "6938fd4d98bab03faadb97b34396831e3780aea1",
-    "1c58a21a5a0d317b07b4172f3e72166e408d63c5"
-  ]
+# The GitHub Actions OIDC provider belongs to the bootstrap layer (infra/terraform/bootstrap),
+# which only a person applies, so CI cannot change whom the provider trusts.
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
 }
 
-resource "aws_iam_role" "github_actions_role" {
-  name = "shiro-mlops-github-actions-role"
+resource "aws_iam_role" "site_deploy" {
+  name = "shiro-mlops-site-deploy"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -121,16 +126,16 @@ resource "aws_iam_role" "github_actions_role" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"
+          Federated = data.aws_iam_openid_connect_provider.github.arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
-          # Accept only tokens minted for AWS STS, not ones issued to another audience.
+          # Accept only tokens minted for AWS STS, not ones issued to another audience,
+          # and only from pushes to main, so no pull request or other branch can upload
+          # the site.
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/main"
           }
         }
       }
@@ -171,13 +176,13 @@ resource "aws_iam_policy" "ci_site_deploy" {
 }
 
 resource "aws_iam_role_policy_attachment" "ci_site_deploy" {
-  role       = aws_iam_role.github_actions_role.name
+  role       = aws_iam_role.site_deploy.name
   policy_arn = aws_iam_policy.ci_site_deploy.arn
 }
 
-# 3. On-prem publisher user: uploads the exported JSON to published/ only
-#    (ADR-0015 §2.3). Its access key is created and rotated outside Terraform,
-#    so the secret never enters Terraform state.
+# On-prem publisher user: uploads the exported JSON to published/ only
+# (ADR-0015 §2.3). Its access key is created and rotated outside Terraform,
+# so the secret never enters Terraform state.
 resource "aws_iam_user" "onprem_publisher" {
   name = "shiro-mlops-onprem-publisher"
 }
@@ -204,9 +209,9 @@ resource "aws_iam_user_policy_attachment" "onprem_publisher_put" {
   policy_arn = aws_iam_policy.onprem_publisher_put.arn
 }
 
-# 4. Cost guardrail: email when monthly actual or forecasted spend reaches the
-#    levels in locals (ADR-0015 §2.6). AWS Budgets only offers GREATER_THAN,
-#    EQUAL_TO and LESS_THAN; GREATER_THAN is the closest to "reaches" (達).
+# Cost guardrail: email when monthly actual or forecasted spend reaches the
+# levels in locals (ADR-0015 §2.6). AWS Budgets only offers GREATER_THAN,
+# EQUAL_TO and LESS_THAN; GREATER_THAN is the closest to "reaches" (達).
 resource "aws_budgets_budget" "monthly_cost" {
   name         = "shiro-mlops-monthly-cost"
   budget_type  = "COST"
@@ -231,9 +236,9 @@ resource "aws_budgets_budget" "monthly_cost" {
   }
 }
 
-# 5. CloudFront serves the Forecast View from the bucket through OAC
-#    (forecast-view-hosting.md §2, §3). One distribution, two origins on the same
-#    bucket: site (origin path /site) and published (no origin path).
+# CloudFront serves the Forecast View from the bucket through OAC
+# (forecast-view-hosting.md §2, §3). One distribution, two origins on the same
+# bucket: site (origin path /site) and published (no origin path).
 locals {
   site_origin_id      = "site"
   published_origin_id = "published"

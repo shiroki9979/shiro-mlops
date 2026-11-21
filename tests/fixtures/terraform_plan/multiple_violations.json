@@ -1,0 +1,44 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.11.4",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.forecast_view",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "forecast_view",
+      "change": { "actions": ["update"] }
+    },
+    {
+      "address": "aws_cloudfront_distribution.forecast_view",
+      "mode": "managed",
+      "type": "aws_cloudfront_distribution",
+      "name": "forecast_view",
+      "change": { "actions": ["delete", "create"] },
+      "action_reason": "replace_because_cannot_update"
+    },
+    {
+      "address": "aws_budgets_budget.monthly",
+      "mode": "managed",
+      "type": "aws_budgets_budget",
+      "name": "monthly",
+      "change": { "actions": ["delete"] },
+      "action_reason": "delete_because_no_resource_config"
+    },
+    {
+      "address": "aws_iam_role.site_deploy",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "site_deploy",
+      "change": { "actions": ["create"] }
+    },
+    {
+      "address": "aws_iam_user.publisher",
+      "mode": "managed",
+      "type": "aws_iam_user",
+      "name": "publisher",
+      "change": { "actions": ["forget"] },
+      "action_reason": "delete_because_no_resource_config"
+    }
+  ]
+}

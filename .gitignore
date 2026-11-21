@@ -71,6 +71,8 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+# Backend settings carry the account-specific state bucket name (partial configuration).
+*.tfbackend
 
 # Environment & Secrets
 .env

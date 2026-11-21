@@ -1,0 +1,20 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.11.4",
+  "resource_changes": [
+    {
+      "address": "aws_cloudfront_distribution.forecast_view",
+      "mode": "managed",
+      "type": "aws_cloudfront_distribution",
+      "name": "forecast_view",
+      "change": { "actions": ["update"] }
+    },
+    {
+      "address": "aws_s3_bucket.forecast_view",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "forecast_view",
+      "change": { "actions": ["no-op"] }
+    }
+  ]
+}
