@@ -1,7 +1,7 @@
 # 研究空間（`lab/`）介面與報告契約
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 7 節拆出。
@@ -41,7 +41,7 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 - **預報**：`PredictionData.anchor = origin`，`load_history` 含起點當小時；`weather` 為目標時段的完整逐時軸，以正式的觀測氣象對齊規則（2 小時內向後對齊）填入。
 - **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `ValueError` 並指出起點與條件：
   1. `datetime <= origin` 的有效負載小時數達 `min_history_hours`（預設取任務設定 `policies.min_training_hours`）。
-  2. `(origin - lookback_hours, origin]` 的逐時負載完整（含起點當小時）。
+  2. `(origin - lookback_hours, origin]` 的逐時負載完整（含起點當小時）。serving 以相同條件拒絕預測（[ML 任務設定 §2](ml-tasks.md#2-任務類型介面taskstypes)），回測與 serving 接受的起點一致。
   3. 目標時段的實際負載與對齊後觀測氣象皆有值。
 
 `BacktestReport` 欄位：
