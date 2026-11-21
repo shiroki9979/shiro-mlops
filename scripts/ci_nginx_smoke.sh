@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Smoke-test a built frontend image: Nginx config syntax, SPA, `/published/` exports and `/api`
-# gateway through Nginx, then recovery after the API container is recreated. Shared by CI and
-# `make frontend-smoke-ci`; the Makefile owns the default image name and host port.
+# Smoke-test a built frontend image: Nginx config syntax, both apps (Forecast View at /, Engineering
+# Console at /console/), the `/published/` exports and the `/api` gateway through Nginx,
+# then recovery after the API container is recreated. Shared by CI and `make frontend-smoke-ci`;
+# the Makefile owns the default image name and host port.
 #
 # Usage: scripts/ci_nginx_smoke.sh <image> <host-port>
 #   host-port  published on loopback only
@@ -51,7 +52,7 @@ main() {
     -v "${REPO_ROOT}/tests/fixtures/published:${PUBLISHED_MOUNT}:ro" "$IMAGE" >/dev/null
   wait_for_gateway
 
-  echo "==> Checking SPA, published exports and API gateway"
+  echo "==> Checking both apps, published exports and API gateway"
   # Same invocation as `make frontend-smoke`; keep the two in sync.
   uv run --no-project python "${REPO_ROOT}/scripts/smoke_nginx.py" \
     --base-url "$BASE_URL" --expected-upstream-path /health

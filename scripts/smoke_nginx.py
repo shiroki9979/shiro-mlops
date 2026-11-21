@@ -1,4 +1,7 @@
-"""Exercise the built local frontend through its Nginx HTTP entry point."""
+"""Exercise the built local frontend apps through their shared Nginx HTTP entry point.
+
+The Forecast View is served at the root and the Engineering Console under `/console/` (ADR-0014 §2.5).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,7 @@ import argparse
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -17,8 +21,11 @@ REQUEST_TIMEOUT_SECONDS = 10
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 LOOPBACK_HOST = "127.0.0.1"
 REQUIRED_HOST_PORTS = (("frontend", "8080"), ("api", "8000"))
-NESTED_SPA_ROUTE = "/data/power/load"
-MISSING_ASSET_PATH = "/assets/definitely-missing-smoke-check.js"
+# The console's Vite `base` (CONSOLE_BASE_PATH in frontend/apps/engineering-console/vite.config.ts),
+# which frontend/nginx.conf and frontend/Dockerfile follow too; keep in sync.
+CONSOLE_BASE_PATH = "/console/"
+MISSING_ASSET_NAME = "definitely-missing-smoke-check.js"
+
 # 預報檢視匯出的兩個固定檔名；此腳本以 `uv run --no-project` 執行、不能 import shiro_mlops，
 # 變更時須同步 src/shiro_mlops/data/forecast_view.py 與 tests/fixtures/published/。
 PUBLISHED_FILES = ("latest_issued_forecast.json", "forecast_track_record.json")
@@ -27,9 +34,36 @@ PUBLISHED_CACHE_CONTROL = "public, max-age=60"
 MISSING_PUBLISHED_PATH = "/published/definitely-missing-smoke-check.json"
 
 
+@dataclass(frozen=True)
+class App:
+    """One built app on the shared origin, as Nginx serves it."""
+
+    name: str
+    base_path: str
+    # Client-side routes that must fall back to this app's own index.html.
+    routes: tuple[str, ...]
+
+    @property
+    def assets_prefix(self) -> str:
+        return self.base_path + "assets/"
+
+
+APPS = (
+    App(
+        "Forecast View",
+        "/",
+        # /monitoring is a pre-split console URL: not redirected, so it falls through to the
+        # Forecast View like any unknown path.
+        ("/history", "/monitoring"),
+    ),
+    App("Engineering Console", CONSOLE_BASE_PATH, (CONSOLE_BASE_PATH + "data/power/load",)),
+)
+
+
 class AssetFinder(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, prefix: str) -> None:
         super().__init__()
+        self.prefix = prefix
         self.asset_path: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -37,7 +71,7 @@ class AssetFinder(HTMLParser):
             return
         attr = dict(attrs)
         path = attr.get("src") if tag == "script" else attr.get("href")
-        if path and path.startswith("/assets/"):
+        if path and path.startswith(self.prefix):
             self.asset_path = path
 
 
@@ -70,37 +104,50 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def check_spa(base_url: str) -> None:
-    home = check_spa_root(base_url)
-    check_nested_route(base_url, home)
-    check_built_asset(base_url, home)
-    check_missing_asset(base_url)
+def check_apps(base_url: str) -> None:
+    served: list[str] = []
+    for app in APPS:
+        served.append(check_app(base_url, app, served))
 
 
-def check_spa_root(base_url: str) -> str:
-    status, home, headers = fetch(base_url, "/")
-    require(status == 200, f"SPA root returned HTTP {status}")
-    require("text/html" in headers.get("Content-Type", ""), "SPA root is not HTML")
-    require('<div id="root"></div>' in home, "SPA root document is missing")
+def check_app(base_url: str, app: App, other_indexes: list[str]) -> str:
+    index = check_app_index(base_url, app)
+    require(
+        index not in other_indexes,
+        f"{app.name} root {app.base_path} serves another app's index.html",
+    )
+    for route in app.routes:
+        check_route_serves(base_url, route, index, app.name)
+    check_built_asset(base_url, index, app.assets_prefix)
+    check_missing_asset(base_url, app.assets_prefix)
+    return index
+
+
+def check_app_index(base_url: str, app: App) -> str:
+    path = app.base_path
+    status, document, headers = fetch(base_url, path)
+    require(status == 200, f"{app.name} root {path} returned HTTP {status}")
+    require("text/html" in headers.get("Content-Type", ""), f"{app.name} root {path} is not HTML")
+    require('<div id="root"></div>' in document, f"{app.name} root document is missing at {path}")
     cache_control = headers.get("Cache-Control", "")
     require(
         "no-cache" in cache_control or "no-store" in cache_control,
-        "SPA index.html can be cached long-term",
+        f"{app.name} index.html at {path} can be cached long-term",
     )
-    return home
+    return document
 
 
-def check_nested_route(base_url: str, home: str) -> None:
-    status, nested, headers = fetch(base_url, NESTED_SPA_ROUTE)
-    require(status == 200, f"Nested SPA route returned HTTP {status}")
-    require("text/html" in headers.get("Content-Type", ""), "Nested SPA route is not HTML")
-    require(nested == home, "Nested SPA route did not return the built index.html")
+def check_route_serves(base_url: str, path: str, expected: str, app: str) -> None:
+    status, document, headers = fetch(base_url, path)
+    require(status == 200, f"SPA route {path} returned HTTP {status}")
+    require("text/html" in headers.get("Content-Type", ""), f"SPA route {path} is not HTML")
+    require(document == expected, f"SPA route {path} did not return the {app} index.html")
 
 
-def check_built_asset(base_url: str, home: str) -> None:
-    finder = AssetFinder()
-    finder.feed(home)
-    require(finder.asset_path is not None, "Built SPA index has no /assets/ reference")
+def check_built_asset(base_url: str, document: str, prefix: str) -> None:
+    finder = AssetFinder(prefix)
+    finder.feed(document)
+    require(finder.asset_path is not None, f"Built index has no {prefix} reference")
     status, _, headers = fetch(base_url, finder.asset_path)
     require(status == 200, f"Built asset {finder.asset_path} returned HTTP {status}")
     content_type = headers.get("Content-Type", "")
@@ -108,11 +155,16 @@ def check_built_asset(base_url: str, home: str) -> None:
         "javascript" in content_type or "text/css" in content_type,
         f"Built asset has unexpected Content-Type: {content_type}",
     )
+    require(
+        "immutable" in headers.get("Cache-Control", ""),
+        f"Built asset {finder.asset_path} is not cached as immutable",
+    )
 
 
-def check_missing_asset(base_url: str) -> None:
-    status, _, _ = fetch(base_url, MISSING_ASSET_PATH)
-    require(status == 404, f"Missing static asset returned HTTP {status}, expected 404")
+def check_missing_asset(base_url: str, prefix: str) -> None:
+    path = prefix + MISSING_ASSET_NAME
+    status, _, _ = fetch(base_url, path)
+    require(status == 404, f"Missing static asset {path} returned HTTP {status}, expected 404")
 
 
 def check_published(base_url: str) -> None:
@@ -204,7 +256,7 @@ def main() -> int:
     try:
         if args.check_compose_bindings:
             check_compose_bindings()
-        check_spa(args.base_url)
+        check_apps(args.base_url)
         check_published(args.base_url)
         check_api(args.base_url, args.expected_upstream_path)
         if args.direct_api_url:
