@@ -1,5 +1,19 @@
 terraform {
+  # S3 native locking (use_lockfile) is GA from 1.11.
   required_version = ">= 1.11.0"
+
+  # Partial configuration: the state bucket name carries the account ID, so it stays out of
+  # the repo and comes from -backend-config (the untracked infra/terraform/state.s3.tfbackend
+  # locally, a repository variable in CI). The bootstrap layer keeps its state in the same
+  # bucket under another key.
+  backend "s3" {
+    # SYNC(infra/terraform/bootstrap/main.tf): the apply and plan roles grant access to this key.
+    key          = "forecast-view/terraform.tfstate"
+    region       = "ap-northeast-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -19,8 +33,6 @@ provider "aws" {
     }
   }
 }
-
-data "aws_caller_identity" "current" {}
 
 locals {
   # Bucket prefixes (ADR-0015 §2.2); the CI and on-prem policies scope to these.
@@ -99,20 +111,11 @@ resource "aws_s3_bucket_public_access_block" "forecast_view" {
   restrict_public_buckets = true
 }
 
-# 2. GitHub Actions OIDC provider and site deploy role: deploys the frontend to
-#    site/ only.
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_oidc_provider ? 1 : 0
-  url   = "https://token.actions.githubusercontent.com"
-
-  client_id_list = [
-    "sts.amazonaws.com"
-  ]
-
-  thumbprint_list = [
-    "6938fd4d98bab03faadb97b34396831e3780aea1",
-    "1c58a21a5a0d317b07b4172f3e72166e408d63c5"
-  ]
+# 2. Site deploy role: deploys the frontend to site/ only. The GitHub Actions OIDC
+#    provider belongs to the bootstrap layer (infra/terraform/bootstrap), which only a
+#    person applies, so CI cannot change whom the provider trusts.
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
 }
 
 resource "aws_iam_role" "site_deploy" {
@@ -124,7 +127,7 @@ resource "aws_iam_role" "site_deploy" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
+          Federated = data.aws_iam_openid_connect_provider.github.arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {

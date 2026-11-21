@@ -10,15 +10,10 @@ mock_provider "aws" {
     }
   }
 
-  mock_resource "aws_iam_openid_connect_provider" {
+  # The bootstrap layer (infra/terraform/bootstrap) owns the provider; this layer only reads it.
+  mock_data "aws_iam_openid_connect_provider" {
     defaults = {
       arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
-    }
-  }
-
-  mock_data "aws_caller_identity" {
-    defaults = {
-      account_id = "111122223333"
     }
   }
 }
@@ -33,6 +28,11 @@ run "site_deploy_role_trusts_only_main_branch_pushes" {
   assert {
     condition     = aws_iam_role.site_deploy.name == "shiro-mlops-site-deploy"
     error_message = "The site deploy role must be named shiro-mlops-site-deploy."
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role.site_deploy.assume_role_policy).Statement[0].Principal.Federated == "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+    error_message = "The site deploy role must trust the GitHub OIDC provider that the bootstrap layer created, read through a data source."
   }
 
   assert {

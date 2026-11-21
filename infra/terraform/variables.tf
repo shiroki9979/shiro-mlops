@@ -22,12 +22,6 @@ variable "github_repo" {
   description = "GitHub repository name (org/repo) for OIDC trust"
 }
 
-variable "create_oidc_provider" {
-  type        = bool
-  default     = true
-  description = "Whether to create the GitHub OIDC provider in AWS"
-}
-
 variable "budget_alert_email" {
   type        = string
   description = "Email address that receives the AWS Budgets cost alerts"
