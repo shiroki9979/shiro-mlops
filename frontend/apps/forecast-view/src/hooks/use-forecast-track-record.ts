@@ -14,5 +14,8 @@ export function useForecastTrackRecord() {
     queryFn: () => readPublished(TRACK_RECORD_FILE, ForecastTrackRecordSchema),
     refetchInterval: BACKGROUND_REFRESH_MS,
     retry: false,
+    // Re-render on every settled read, even one whose JSON is byte-identical (structural sharing keeps
+    // `data` the same object), so the stale hint is checked again against the viewer's clock.
+    notifyOnChangeProps: ['data', 'isError', 'dataUpdatedAt', 'errorUpdatedAt'],
   })
 }

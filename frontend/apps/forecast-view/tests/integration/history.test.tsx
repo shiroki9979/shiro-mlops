@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
 import { EMPTY_VALUE } from '@shiro-mlops/shared/i18n/format'
@@ -13,6 +13,8 @@ import { zhTW } from '@/i18n/zh-TW'
 import emptyTrackRecord from '../../../../../tests/fixtures/published/forecast_track_record.json'
 
 const TRACK_RECORD_URL = '/published/forecast_track_record.json'
+// The background read interval (forecast-view-hosting §4).
+const BACKGROUND_REFRESH_MS = 5 * 60 * 1000
 
 // Data contract §6.2 sample: 10:00 Taipei is 02:00 UTC, so a formatter that falls back to the
 // test host zone (TZ=UTC) would show a different hour.
@@ -167,6 +169,34 @@ describe('Forecast View /history track record', () => {
       expect(await findContent(text)).toBeInTheDocument()
       expect(screen.queryByText(text.staleHint)).not.toBeInTheDocument()
     })
+  })
+
+  it('shows the stale hint once a later background read serves the same JSON past the 24 hours', async () => {
+    // Also fake intervals, so the test can fire the background read. Reads still settle on real
+    // timeouts; the find* queries below then wait on DOM changes, since their polling is faked too.
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    // 23 hours after the 10:00 Taipei cutoff: fresh.
+    setNow('2026-11-21T01:00:00Z')
+    let reads = 0
+    server.use(
+      http.get(TRACK_RECORD_URL, () => {
+        reads += 1
+        return HttpResponse.json(TRACK_RECORD)
+      }),
+    )
+    const text = renderHistory()
+    await screen.findByRole('group', { name: text.metrics.lead24Mape })
+    expect(screen.queryByText(text.staleHint)).not.toBeInTheDocument()
+
+    // The export has stalled: past the 24 hours, the next background read serves byte-identical JSON.
+    setNow('2026-11-21T02:00:01Z')
+    act(() => {
+      vi.advanceTimersByTime(BACKGROUND_REFRESH_MS)
+    })
+
+    expect(await screen.findByText(text.staleHint)).toBeInTheDocument()
+    expect(reads).toBe(2)
   })
 
   it('shows no stale hint in the error state', async () => {
