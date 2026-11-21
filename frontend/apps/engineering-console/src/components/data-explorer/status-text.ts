@@ -15,6 +15,12 @@ export function translateCompleteness(value: string, m: Messages): string {
   return labels[value] ?? value
 }
 
+// Enum value sets whose display text comes from the dictionary; other values are shown verbatim.
+export type ExplorerValueLabels = 'completeness'
+export const EXPLORER_VALUE_LABELS: Record<ExplorerValueLabels, (value: string, m: Messages) => string> = {
+  completeness: translateCompleteness,
+}
+
 const completenessVariant: Record<string, 'success' | 'warning'> = {
   complete: 'success',
   incomplete: 'warning',

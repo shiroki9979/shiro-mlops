@@ -1,3 +1,4 @@
+import type { ResolvedBucket } from '@/schemas/data-explorer'
 import { toDatetimeLocal } from './data-explorer'
 
 export interface ExplorerWindow {
@@ -63,8 +64,6 @@ export function shiftWindow(window: ExplorerWindow, direction: ShiftDirection): 
     ? windowBetween(start - length, start - SECOND_MS)
     : windowBetween(end + SECOND_MS, end + length)
 }
-
-export type ResolvedBucket = 'raw' | '1h' | '1d'
 
 // Bucket instants on the chart, in epoch ms, in the order the pointer visited them.
 export interface BucketSelection {

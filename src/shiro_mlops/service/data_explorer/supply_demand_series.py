@@ -32,6 +32,7 @@ def _no_filters(filters: Mapping[str, str]) -> tuple[list[str], dict[str, Any]]:
     return [], {}
 
 
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): NATIONAL_FIELD_OPTIONS, fields and units.
 class NationalSeriesField(StrEnum):
     """National supply-demand power (MW) and percentage fields a series request may name."""
 
@@ -71,6 +72,7 @@ NATIONAL_SERIES = SeriesSpec(
 )
 
 
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): REGIONAL_FIELD_OPTIONS, fields and units.
 class RegionalSeriesField(StrEnum):
     """Regional supply-demand power fields a series request may name."""
 

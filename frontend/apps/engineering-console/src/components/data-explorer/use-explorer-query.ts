@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { datasetListQueryKey, useDatasetList } from '@/hooks/use-data-explorer'
 import { defaultWindow, toRfc3339 } from '@/lib/data-explorer'
 import { type ExplorerWindow, exceedsDays } from '@/lib/explorer-window'
+import { AggSchema, BucketSchema } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 
 type SearchValues = Record<string, string | undefined>
@@ -12,7 +13,9 @@ type SearchValues = Record<string, string | undefined>
 export const CHART_SEARCH_KEYS = ['fields', 'group_by', 'bucket', 'agg'] as const
 export type ChartSearchKey = (typeof CHART_SEARCH_KEYS)[number]
 export type ChartSearch = Partial<Record<ChartSearchKey, string | string[]>>
-export const CHART_DEFAULTS: Partial<Record<ChartSearchKey, string>> = { bucket: 'auto', agg: 'avg' }
+export const DEFAULT_BUCKET = BucketSchema.options[0]
+export const DEFAULT_AGG = AggSchema.options[0]
+export const CHART_DEFAULTS: Partial<Record<ChartSearchKey, string>> = { bucket: DEFAULT_BUCKET, agg: DEFAULT_AGG }
 
 // A v2 cursor is bound to the window and filters it was issued for, so every change
 // other than paging must land on the first page; only paging sets a cursor.

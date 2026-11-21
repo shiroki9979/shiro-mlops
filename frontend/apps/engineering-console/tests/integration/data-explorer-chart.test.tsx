@@ -42,6 +42,12 @@ const seriesBody = {
   ],
 }
 
+// Chart settings use the shared Radix select: open the labelled combobox, then pick the option text.
+async function choose(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
+  await user.click(screen.getByRole('combobox', { name: label }))
+  await user.click(await screen.findByRole('option', { name: option }))
+}
+
 function renderPath(path: string) {
   const history = createMemoryHistory({ initialEntries: [`/console${path}`] })
   const router = createAppRouter(history)
@@ -121,8 +127,8 @@ describe('Data Explorer chart card', () => {
     const router = renderPath(`/data/power/load?${WINDOW}&cursor=page-2`)
     await screen.findByRole('figure')
 
-    await user.selectOptions(screen.getByLabelText(chart.bucket), '1d')
-    await user.selectOptions(screen.getByLabelText(chart.agg), 'max')
+    await choose(user, chart.bucket, chart.buckets['1d'])
+    await choose(user, chart.agg, chart.aggs.max)
 
     await waitFor(() => expect(requests.series.at(-1)!.searchParams.get('agg')).toBe('max'))
     expect(requests.series.at(-1)!.searchParams.get('bucket')).toBe('1d')
@@ -141,16 +147,16 @@ describe('Data Explorer chart card', () => {
     const router = renderPath(`/data/power/load?${WINDOW}&bucket=1h&agg=min`)
     await screen.findByRole('figure')
 
-    await user.selectOptions(screen.getByLabelText(chart.bucket), 'auto')
-    await user.selectOptions(screen.getByLabelText(chart.agg), 'avg')
+    await choose(user, chart.bucket, chart.buckets.auto)
+    await choose(user, chart.agg, chart.aggs.avg)
 
     await waitFor(() => {
       const search = router.state.location.search as Record<string, string>
       expect(search.bucket).toBeUndefined()
       expect(search.agg).toBeUndefined()
     })
-    await user.selectOptions(screen.getByLabelText(chart.bucket), 'raw')
-    expect(screen.getByLabelText(chart.agg)).toBeDisabled()
+    await choose(user, chart.bucket, chart.buckets.raw)
+    expect(screen.getByRole('combobox', { name: chart.agg })).toBeDisabled()
   })
 
   it('keeps chart settings when the window changes and the cursor is cleared', async () => {

@@ -51,9 +51,18 @@ export const SeriesSchema = z.object({
 
 export type Series = z.infer<typeof SeriesSchema>
 
+// SYNC(src/shiro_mlops/service/data_explorer/series.py): Bucket and Agg; the first value of each is the API default.
+export const BucketSchema = z.enum(['auto', 'raw', '1h', '1d'])
+export const ResolvedBucketSchema = BucketSchema.exclude(['auto'])
+export const AggSchema = z.enum(['avg', 'min', 'max'])
+
+export type Bucket = z.infer<typeof BucketSchema>
+export type ResolvedBucket = z.infer<typeof ResolvedBucketSchema>
+export type Agg = z.infer<typeof AggSchema>
+
 export const SeriesResponseSchema = z.object({
-  bucket: z.enum(['raw', '1h', '1d']),
-  agg: z.enum(['avg', 'min', 'max']).nullable(),
+  bucket: ResolvedBucketSchema,
+  agg: AggSchema.nullable(),
   series: z.array(SeriesSchema),
   timezone: z.literal('Asia/Taipei').optional(),
 })

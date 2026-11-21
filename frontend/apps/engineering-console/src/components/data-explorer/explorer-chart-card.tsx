@@ -1,5 +1,6 @@
 import { type ComponentType, useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shiro-mlops/shared/ui/select'
 import { EMPTY_VALUE } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { LineChart as LineChartIcon } from 'lucide-react'
@@ -7,7 +8,7 @@ import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
-import type { SeriesResponse } from '@/schemas/data-explorer'
+import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { type ChartBrush, useChartBrush } from './chart-brush'
 import { ChartFieldPicker } from './chart-field-picker'
@@ -18,7 +19,7 @@ import { plotSeries } from './plot-series'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { SeriesStackedAreaChart } from './series-stacked-area-chart'
 import { SeriesStatusChart } from './series-status-chart'
-import { CHART_DEFAULTS, type ChartSearch, type ChartSearchKey } from './use-explorer-query'
+import { CHART_DEFAULTS, type ChartSearch, type ChartSearchKey, DEFAULT_AGG, DEFAULT_BUCKET } from './use-explorer-query'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
@@ -26,12 +27,8 @@ const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> 
   status: SeriesStatusChart,
 }
 
-const BUCKET_OPTIONS = ['auto', 'raw', '1h', '1d'] as const
-const AGG_OPTIONS = ['avg', 'min', 'max'] as const
 const INVALID_QUERY_STATUS = 422
 const DATABASE_UNAVAILABLE_STATUS = 503
-
-type BucketOption = (typeof BUCKET_OPTIONS)[number]
 
 interface ExplorerChartCardProps {
   dataset: ExplorerDatasetConfig
@@ -55,8 +52,8 @@ export function ExplorerChartCard({
   const m = useMessages()
   const locale = useLocale()
   const chartText = m.explorer.chart
-  const bucket = optionOr(chartSearch.bucket, BUCKET_OPTIONS, 'auto')
-  const agg = optionOr(chartSearch.agg, AGG_OPTIONS, 'avg')
+  const bucket = optionOr(chartSearch.bucket, BucketSchema.options, DEFAULT_BUCKET)
+  const agg = optionOr(chartSearch.agg, AggSchema.options, DEFAULT_AGG)
   const fields = selectedChartFields(chartSearch.fields, chart.fields)
   const prompt = missingFilterPrompt(chart, query, m)
   const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch, fields), !prompt)
@@ -108,7 +105,7 @@ export function ExplorerChartCard({
           <ChartSelect
             label={chartText.bucket}
             value={bucket}
-            options={BUCKET_OPTIONS.map((option) => [option, chartText.buckets[option]])}
+            options={BucketSchema.options.map((option) => [option, chartText.buckets[option]])}
             onChange={(value) => onSettingChange('bucket', value)}
           />
           {chart.measure !== 'count' && (
@@ -116,7 +113,7 @@ export function ExplorerChartCard({
               label={chartText.agg}
               value={agg}
               disabled={bucket === 'raw'}
-              options={AGG_OPTIONS.map((option) => [option, chartText.aggs[option]])}
+              options={AggSchema.options.map((option) => [option, chartText.aggs[option]])}
               onChange={(value) => onSettingChange('agg', value)}
             />
           )}
@@ -179,25 +176,24 @@ interface ChartSelectProps {
 }
 
 function ChartSelect({ label, value, options, disabled, onChange }: ChartSelectProps) {
-  const id = useId()
+  const labelId = useId()
   return (
     <span className="flex items-center gap-2">
-      <label htmlFor={id} className="text-slate-400">
+      <span id={labelId} className="text-slate-400">
         {label}
-      </label>
-      <select
-        id={id}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className="rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-slate-200 disabled:opacity-50"
-      >
-        {options.map(([option, text]) => (
-          <option key={option} value={option}>
-            {text}
-          </option>
-        ))}
-      </select>
+      </span>
+      <Select value={value} disabled={disabled} onValueChange={onChange}>
+        <SelectTrigger aria-labelledby={labelId} className="h-auto w-auto gap-2 px-2 py-1 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([option, text]) => (
+            <SelectItem key={option} value={option}>
+              {text}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </span>
   )
 }
@@ -253,10 +249,11 @@ function seriesErrorMessage(error: unknown, text: Messages['explorer']['chart'])
   return suggested ? text.tooManyPoints(text.buckets[suggested]) : text.invalidQuery
 }
 
-function suggestedBucket(error: unknown): Exclude<BucketOption, 'auto'> | undefined {
+function suggestedBucket(error: unknown): ResolvedBucket | undefined {
   const data = typeof error === 'object' && error !== null && 'data' in error ? error.data : undefined
   const detail = typeof data === 'object' && data !== null && 'detail' in data ? data.detail : undefined
   const suggested = typeof detail === 'object' && detail !== null && 'suggested_bucket' in detail ? detail.suggested_bucket : undefined
-  return suggested === 'raw' || suggested === '1h' || suggested === '1d' ? suggested : undefined
+  const parsed = ResolvedBucketSchema.safeParse(suggested)
+  return parsed.success ? parsed.data : undefined
 }
 

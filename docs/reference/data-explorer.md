@@ -78,7 +78,7 @@
 - **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
 - **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示返回第一頁的恢復操作（字典鍵 `explorer.results.backToFirstPage`，顯示文字隨介面語系）；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。
 - **開啟條件**：v1 不建立應用層登入與 RBAC。Data Explorer 路由與 API 僅在 local environment 或明確啟用功能旗標時可用；非本機存取必須由內網或 reverse proxy 限制，並使用 same-origin CORS，不得依賴現有 `CORS *` 對外暴露。
-- **顯示範圍**：目前提供狀態、資料表、篩選、typed detail drawer、當頁 CSV 匯出，以及表格上方的趨勢圖卡片（目前為逐時負載與兩個 CWA audit，語意見 §8）。其餘資料集的圖表依 M9（[GitHub #212](https://github.com/shiroki9979/shiro-mlops/issues/212)）陸續加入，實作時於同一 PR 更新本節。
+- **顯示範圍**：提供狀態、資料表、篩選、typed detail drawer、當頁 CSV 匯出、首頁的 24 小時小圖，以及八個資料頁表格上方的趨勢圖卡片（六個領域資料集與兩個 CWA audit，語意見 §8）。
 - **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。Series endpoints 沿用同一組語意（無資料回 200 與空 `series`，點數超限另帶 `suggested_bucket`），詳見 [rest-api.md](rest-api.md) §5.3。
 - **時間範圍上限**：10 分鐘快照與機組資料單次最多查詢 7 天；逐時負載、測站觀測與 audits 最多 31 天；鄉鎮預報有效時間最多 14 天。更長歷史必須移動有界時間視窗取得。Series endpoints 的窗口上限另為 92 天，與列表上限無關；窗口超過列表上限時前端不送 list 請求（§3 時間窗口）。
 
@@ -88,16 +88,17 @@
 - **成員合成**：一個分組內同一時間點有多個成員時（例如同一 `unit_type` 下的多部機組），先在該時間點把成員加總成一個值，`NULL` 成員略過，全部成員皆為 `NULL` 時該點為 `null`。逐時負載每個 `subject` 每小時只有一列，沒有成員合成。氣溫、濕度、機率等欄位永不跨成員合成：測站觀測固定依測站分組，鄉鎮預報固定依 `geocode` 分組，避免 GLOSSARY「加權天氣」列為 Avoid 的等權平均。
 - **機組發電圖**：預設依 `unit_type` 分組，畫成正負號分開堆疊的面積圖：正值由零軸往上堆疊，儲能負載充電的負值由零軸往下堆疊，各類型沿用集中配色的家族色相。分組選單提供「依類型」與「總和」（`group_by=none`，所有成員的總淨發電量一條），選擇寫入 URL 的 `group_by`，預設的「依類型」不寫入。`unit_type`、`unit_name` 篩選先縮小參與合成的機組。可選欄位為 `net_generation_mw`（預設）與 `capacity_mw`，兩者皆為可加總的 MW；百分比欄位 `capacity_ratio_pct` 不跨機組合成，因此不開放。
 - **測站觀測圖**：預設每個測站一條 `temperature_c` 線，顏色依測站固定；series endpoint 不接受 `group_by`。可選欄位為相對濕度、氣壓、降水量與風速；觀測表沒有露點，風向不列入。逐時補值，規則同下方補值規則。
-- **鄉鎮預報圖**：時間軸為 `valid_from`，預設每個 `geocode` 一條最新發布版本的 `temperature_c` 線，版本解析與表格相同。開啟 `all_vintages` 時必須指定 `geocode`：有 `geocode` 時每個發布版本（`dataset_id`、`issued_at`）一條線，以發布時間命名，最新版本最亮、較舊版本漸暗（超過色階的較舊版本共用最暗的顏色）；同一發布時間有多個更正版本時取 `source_updated_at` 最新者。沒有 `geocode` 時不送 series 請求，圖表位置提示使用者指定 `geocode`，表格照常查詢。預報不補值，只回傳有值的點，線段連接相鄰的點、不畫灰底帶。
+- **鄉鎮預報圖**：時間軸為 `valid_from`，預設每個 `geocode` 一條最新發布版本的 `temperature_c` 線，版本解析與表格相同，只有一處例外：沒有 `dataset_id` 篩選時，兩個資料集常共用同一個最新 `issued_at`，而 `F-D0047-091` 的更新時間通常晚幾十秒，表格因此預設為 12 小時區間的一週預報；圖表與首頁 sparkline 在共用最新發布時間的版本中優先取逐時的 `F-D0047-089`，避免預設圖變成階梯狀。表格的解析不變，兩者的集中屬 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)。開啟 `all_vintages` 時必須指定 `geocode`：有 `geocode` 時每個發布版本（`dataset_id`、`issued_at`）一條線，以發布時間命名，最新版本最亮、較舊版本漸暗（超過色階的較舊版本共用最暗的顏色）；同一發布時間有多個更正版本時取 `source_updated_at` 最新者。沒有 `geocode` 時不送 series 請求，圖表位置提示使用者指定 `geocode`，表格照常查詢。預報不補值，只回傳有值的點，線段連接相鄰的點、不畫灰底帶。
 - **時間聚合**：`1h` 與 `1d` 在每個 bucket 內對合成後的值取 `avg`、`min` 或 `max`；不提供 `sum`（`agg=sum` 回 422）。`raw` 不做時間聚合並忽略 `agg`。
 - **計算順序**：先套用窗口與篩選，再做成員合成，最後做時間聚合；因此邊界 bucket 只用窗口內的資料計算。例：機組 A 為 100..150、B 為 60..0 時，逐點合計為 160, 150, …，`1h` 的 `max` 為 160，而不是各成員最大值相加的 210。
 - **Bucket 對齊**：`1h` 對齊整點，`1d` 對齊台北日界（00:00 `+08:00`），bucket 時間標示其起點。TimescaleDB 以 `time_bucket(..., 'Asia/Taipei')` 計算；SQLite 以對應的時間截斷計算，台北無日光節約時間，固定 +8 小時即可精確對齊。只涵蓋到一部分的邊界 bucket 仍保留。
 - **補值規則**：有固定節奏的資料集由應用層產生窗口內所有預期的 bucket（`raw` 依資料集節奏，自窗口起點後的第一個節奏點起算；`1h`、`1d` 自包含起點的 bucket 起算），沒有資料的 bucket 補 `null`，不使用 TimescaleDB 專屬的 gapfill。尚未到期的 bucket 不算缺口，也不補 `null`：只考慮起點不晚於 `min(end, 現在)` 的 bucket；逐時負載的時間標示其彙總的小時，該小時結束後才到期，與列表缺口一致。前端在 `null` 處斷開線段並加灰底帶。
 - **欄位選擇**：圖表提供欄位多選時（全台與區域供需），所選欄位以 `fields` 寫入 URL（多個欄位時為陣列），與預設欄位相同時不寫入；`fields` 與其他圖表設定一樣不送進 list 請求、不清除 cursor。一張圖最多兩種單位：第一種單位用左軸，第二種用右軸，單位順序依選取順序；已選滿兩種單位時，第三種單位的欄位停用；最後一個已選欄位不能取消。
 - **全台供需圖**：不分組，預設畫目前用電負載（`curr_load_mw`）與即時最大供電能力（`real_hr_maxi_sply_capacity_mw`）兩條線，兩線的距離即供電餘裕；可另選預估、昨日的功率欄位與使用率、備轉容量率等百分比欄位。
-- **區域供需圖**：固定依 `region` 分組，四區各一條線，不提供四區合成，以免與全台逐時實際負載的口徑混淆。圖表只帶 `region` 篩選；`completeness` 只篩選表格列，圖表照常畫出所有時段並以底帶標示不完整處：某個 bucket 四區全部為 `null` 時是缺口（灰底帶），只有部分區域為 `null` 時加琥珀色底帶。比所選粒度更細的不完整（例如 `1h` bucket 內缺了一個 10 分鐘時段）由缺口清單揭露。
+- **區域供需圖**：固定依 `region` 分組，四區各一條線，不提供四區合成，以免與全台逐時實際負載的口徑混淆。圖表只帶 `region` 篩選；`completeness` 只篩選表格列（series endpoint 對它回 422：完整度是逐一 10 分鐘時段的判定，`1h`／`1d` bucket 內各時段的完整度可能不同，沒有對應的意義），圖表照常畫出所有時段並以底帶標示不完整處：某個 bucket 四區全部為 `null` 時是缺口（灰底帶），只有部分區域為 `null` 時加琥珀色底帶。比所選粒度更細的不完整（例如 `1h` bucket 內缺了一個 10 分鐘時段）由缺口清單揭露。
 - **萬瓩 tooltip**：全台與區域供需的功率欄位，tooltip 同時顯示 MW 與萬瓩（`萬瓩 = MW ÷ 10`，§3 功率單位）；萬瓩由前端換算，API 只回 MW。百分比欄位只顯示一次。
 - **點數上限**：每條 series 最多 1,200 點，所有 series 合計最多 10,000 點；`auto` 選出同時符合兩者的最細粒度，手動粒度超限時回 422 並附建議粒度（[rest-api.md](rest-api.md) §5.3）。
 - **Audit 狀態時間軸**：CWA 觀測批次與預報版本審計頁的預設圖是依 `status` 堆疊的長條圖，每個 bucket 顯示各狀態的批次數或版本數，顏色取自集中配色的 audit 狀態色，圖例與 tooltip 顯示翻譯後的狀態名稱。這兩頁只有粒度選單、沒有聚合選單，series 請求不帶 `fields` 與 `agg`。計數不做成員合成或時間聚合；`raw` 時每個批次或版本各是一點，同一時間點的版本在圖上相加。audits 不補值，沒有擷取紀錄的 bucket 不畫長條、也不加灰底帶，缺漏的擷取由空白的時段呈現。
 - **配色**：類別顏色（四區、12 種 `unit_type`、測站、audit 狀態、預報版本）集中定義在 `frontend/apps/engineering-console/src/lib/chart-palette.ts`，跨頁一致；同家族的機組類型（燃氣與民營電廠-燃氣、燃煤與民營電廠-燃煤、儲能與儲能負載）共用色相、以明度區分。每個顏色與深色卡片背景的對比至少 3:1（WCAG 非文字對比），由前端單元測試檢查。
+- **圖表函式庫**：工程主控台以 `recharts` 繪圖，版本範圍與 Forecast View 相同（`^2.15.1`），兩個前端 app 共用同一份依賴解析，不引入第二套圖表函式庫或另一個主版本。
 - **可及性**：圖表的標籤、圖例與提示文字一律走 i18n 字典；每張圖帶可及性文字，說明資料集、欄位與序列名稱。

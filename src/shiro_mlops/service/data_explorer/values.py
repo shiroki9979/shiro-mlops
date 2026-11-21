@@ -10,6 +10,7 @@ import pandas as pd
 from shiro_mlops.data.repository_utils import deserialize_raw_payload, utc_instant_to_taiwan
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/plot-series.ts): MW_PER_WAN_KW.
 WAN_KW_TO_MW = 10.0
 
 
@@ -50,5 +51,6 @@ def json_list(value: object) -> list[Any]:
     return parsed
 
 
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/explorer-filter-field.tsx): TRUTHY_VALUES.
 def is_truthy(value: object) -> bool:
     return str(value).lower() in {"1", "true", "yes"}

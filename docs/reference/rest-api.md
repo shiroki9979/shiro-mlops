@@ -248,7 +248,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | --- | --- | --- | --- | --- | --- |
 | 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW）。預設 `load_mw` | 固定依 `subject` | `subject` | 有（節奏 1 小時） |
 | 全台供需 | `GET /data/power/supply-demand/series` | 功率（MW，萬瓩 × 10）：`curr_load_mw`、`real_hr_maxi_sply_capacity_mw`、`fore_maxi_sply_capacity_mw`、`fore_peak_dema_load_mw`、`fore_peak_resv_capacity_mw`、`yday_maxi_sply_capacity_mw`、`yday_peak_dema_load_mw`、`yday_peak_resv_capacity_mw`；百分比（%）：`curr_util_rate_pct`、`fore_peak_resv_rate_pct`、`yday_peak_resv_rate_pct`。預設 `curr_load_mw`、`real_hr_maxi_sply_capacity_mw` | 無（`group` 為 `{}`） | 無 | 有（節奏 10 分鐘） |
-| 區域供需 | `GET /data/power/regional/series` | `load_mw`、`generation_mw`（MW，萬瓩 × 10）。預設 `load_mw` | 固定依 `region`，不提供四區合成 | `region`（四區之一，驗證同 list）；不接受 `completeness` | 有（節奏 10 分鐘）；某區缺少該時段時，該區的點為 `null` |
+| 區域供需 | `GET /data/power/regional/series` | `load_mw`、`generation_mw`（MW，萬瓩 × 10）。預設 `load_mw` | 固定依 `region`，不提供四區合成 | `region`（四區之一，驗證同 list）；不接受 `completeness`（回 422）：完整度是逐一 10 分鐘時段的判定，`1h`／`1d` bucket 沒有對應的意義，不完整處改由 `null` 點與缺口清單揭露 | 有（節奏 10 分鐘）；某區缺少該時段時，該區的點為 `null` |
 | 機組發電 | `GET /data/power/units/series` | `net_generation_mw`（MW，預設）、`capacity_mw`（MW） | `group_by=unit_type`（預設，依機組類型）或 `group_by=none`（所有成員的總和，`group` 為 `{}`） | `unit_type`、`unit_name`（精確比對，縮小合成的成員範圍） | 有（節奏 10 分鐘） |
 | 測站觀測 | `GET /data/weather/observations/series` | `temperature_c`（°C，預設）、`relative_humidity_pct`（%）、`air_pressure_hpa`（hPa）、`precipitation_mm`（mm）、`wind_speed_m_s`（m/s） | 固定依 `station_id`；不接受 `group_by` | `station_id` | 有（節奏 1 小時） |
 | 鄉鎮預報 | `GET /data/weather/forecasts/series` | `temperature_c`（°C，預設）、`apparent_temperature_c`（°C）、`dew_point_c`（°C）、`relative_humidity_pct`（%）、`probability_of_precipitation_pct`（%）、`wind_speed_m_s`（m/s） | 預設依 `geocode`；版本未隱含釘選時依 `geocode`、`dataset_id`、`issued_at` | `dataset_id`、`geocode`、`issued_at`、`source_updated_at`、`all_vintages` | 無 |
@@ -258,7 +258,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 機組發電的每個點是成員合成後再做時間聚合的值：同一時點、同一分組的機組先加總（`NULL` 略過、不當成 0；全部為 `NULL` 時為 `null`），`1h`／`1d` 再對這些合計取 `avg`、`min` 或 `max`。儲能負載的負值照常加總，因此總和會扣掉充電功率。`auto` 以序列數計算點數：7 天窗口依 12 種 `unit_type` 分組時 `raw` 合計 12,108 點，超過 10,000，解析為 `1h`。
 
 - **測站觀測**：觀測表沒有露點欄位，因此白名單不含露點；風向（`wind_direction_deg`）是方位角，平均值沒有意義，不列入。
-- **鄉鎮預報**：時間軸為 `valid_from`。版本解析與 list 相同：沒有指定 `issued_at`、`source_updated_at` 也沒有開啟 `all_vintages` 時，釘選最新發布版本（有 `dataset_id` 時取該資料集的最新版本），每個 `geocode` 一條 series，`group` 為 `{"geocode": ...}`。開啟 `all_vintages` 或指定版本篩選時，每個（`geocode`, `dataset_id`, `issued_at`）一條 series，`group` 帶這三個鍵；同一 `issued_at` 有多個更正版本時取 `source_updated_at` 最新者，有指定 `source_updated_at` 時改用該版本。兩個版本永不合併成同一條線。
+- **鄉鎮預報**：時間軸為 `valid_from`。沒有指定 `issued_at`、`source_updated_at` 也沒有開啟 `all_vintages` 時，釘選最新發布版本（有 `dataset_id` 時取該資料集的最新版本），每個 `geocode` 一條 series。沒有 `dataset_id` 時與 list 有一處不同：兩個資料集常共用同一個最新 `issued_at`，而 `F-D0047-091` 的 `source_updated_at` 通常晚幾十秒，list 依 `source_updated_at` 會選到 12 小時區間的一週預報；series 在共用最新 `issued_at` 的版本中優先取逐時的 `F-D0047-089`，再比 `source_updated_at`。list 的解析不變，兩者集中於同一處屬 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102) 的範圍，`group` 為 `{"geocode": ...}`。開啟 `all_vintages` 或指定版本篩選時，每個（`geocode`, `dataset_id`, `issued_at`）一條 series，`group` 帶這三個鍵；同一 `issued_at` 有多個更正版本時取 `source_updated_at` 最新者，有指定 `source_updated_at` 時改用該版本。兩個版本永不合併成同一條線。
 - **鄉鎮預報的同時間多列**：同一版本、同一 `geocode`、同一 `valid_from` 可能有逐時列與三小時降雨機率列，各自只帶部分欄位；`raw` 取每個欄位在該時點的值。
 
 #### CWA audit series

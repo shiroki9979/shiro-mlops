@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from enum import StrEnum
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -106,9 +107,9 @@ def _run_series(
     request: Request,
     spec: SeriesSpec,
     *,
-    fields: list[str] | None,
+    fields: Sequence[StrEnum] | None = None,
     bucket: Bucket,
-    agg: Agg,
+    agg: Agg | None = None,
     plan: SeriesPlan | None = None,
 ) -> SeriesResponse:
     """Read a series; `plan` lets a dataset specialise its spec from the request first."""
@@ -118,7 +119,9 @@ def _run_series(
         params = _series_query_params(request)
         if plan is not None:
             spec, params = plan(ExplorerDb(engine), params)
-        series_request = SeriesRequest.build(spec, params, fields=fields, bucket=bucket, agg=agg)
+        series_request = SeriesRequest.build(
+            spec, params, fields=_field_names(fields), bucket=bucket, agg=agg
+        )
         return SeriesReader(engine, spec).read(series_request)
     except TooManyPointsError as exc:
         suggested = exc.suggested_bucket.value if exc.suggested_bucket else None
@@ -129,6 +132,10 @@ def _run_series(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (DatabaseUnavailableError, SQLAlchemyError) as exc:
         raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
+
+
+def _field_names(fields: Sequence[StrEnum] | None) -> list[str] | None:
+    return [field.value for field in fields] if fields else None
 
 
 def _series_query_params(request: Request) -> dict[str, str]:
@@ -180,7 +187,7 @@ def hourly_load_series(
     return _run_series(
         request,
         HOURLY_LOAD_SERIES,
-        fields=[field.value for field in fields] if fields else None,
+        fields=fields,
         bucket=bucket,
         agg=agg,
     )
@@ -211,7 +218,7 @@ def national_supply_demand_series(
     return _run_series(
         request,
         NATIONAL_SERIES,
-        fields=[field.value for field in fields] if fields else None,
+        fields=fields,
         bucket=bucket,
         agg=agg,
     )
@@ -242,7 +249,7 @@ def regional_supply_demand_series(
     return _run_series(
         request,
         REGIONAL_SERIES,
-        fields=[field.value for field in fields] if fields else None,
+        fields=fields,
         bucket=bucket,
         agg=agg,
     )
@@ -277,7 +284,7 @@ def unit_generation_series(
     return _run_series(
         request,
         UNIT_GENERATION_SERIES,
-        fields=[field.value for field in fields] if fields else None,
+        fields=fields,
         bucket=bucket,
         agg=agg,
     )
@@ -308,7 +315,7 @@ def observation_series(
     return _run_series(
         request,
         OBSERVATION_SERIES,
-        fields=[field.value for field in fields] if fields else None,
+        fields=fields,
         bucket=bucket,
         agg=agg,
     )
@@ -346,7 +353,7 @@ def forecast_series(
     return _run_series(
         request,
         FORECAST_SERIES,
-        fields=[field.value for field in fields] if fields else None,
+        fields=fields,
         bucket=bucket,
         agg=agg,
         plan=plan_forecast_series,
@@ -381,7 +388,7 @@ def observation_audit_series(
     or `agg` are rejected with 422.
     """
     del start, end, status, missing_station_id
-    return _run_series(request, OBSERVATION_AUDIT_SERIES, fields=None, bucket=bucket, agg=Agg.AVG)
+    return _run_series(request, OBSERVATION_AUDIT_SERIES, bucket=bucket)
 
 
 @router.get("/audits/cwa-forecasts/series", response_model=SeriesResponse)
@@ -401,4 +408,4 @@ def forecast_audit_series(
     Buckets without versions are omitted, and `fields` or `agg` are rejected with 422.
     """
     del start, end, dataset_id, status, missing_geocode
-    return _run_series(request, FORECAST_AUDIT_SERIES, fields=None, bucket=bucket, agg=Agg.AVG)
+    return _run_series(request, FORECAST_AUDIT_SERIES, bucket=bucket)
