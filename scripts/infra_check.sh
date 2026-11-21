@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Check infra/terraform offline: the CloudFront Function tests, Terraform formatting, and
-# configuration validation against the providers only. Shared by CI and `make infra-check`;
-# needs node and terraform on PATH, but no state backend or AWS credentials.
+# Check infra/terraform offline: the CloudFront Function tests, Terraform formatting,
+# configuration validation against the providers only, and `terraform test` plans against a
+# mocked AWS provider. Shared by CI and `make infra-check`; needs node and terraform on PATH,
+# but no state backend or AWS credentials.
 #
 # Usage: scripts/infra_check.sh
 set -euo pipefail
@@ -31,6 +32,10 @@ main() {
 
   echo "==> Validating Terraform configuration"
   terraform validate
+
+  echo "==> Running Terraform tests"
+  # tests/*.tftest.hcl plan against mock_provider "aws", so no AWS credentials are read.
+  terraform test
 
   echo "Infra check passed"
 }

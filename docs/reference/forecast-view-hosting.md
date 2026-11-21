@@ -16,7 +16,7 @@
 
 | prefix | 內容 | 寫入者 |
 | :--- | :--- | :--- |
-| `site/` | `forecast-view` 建置產物（`index.html`、`assets/*` 等） | CI 角色（GitHub OIDC），只能寫 `site/*` |
+| `site/` | `forecast-view` 建置產物（`index.html`、`assets/*` 等） | 網站上傳角色 `shiro-mlops-site-deploy`（GitHub OIDC，只信任 `main` 分支 push 的 token），只能列出、寫入與刪除 `site/*` |
 | `published/` | 匯出的兩份公開 JSON（[資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished)） | 地端上傳用 IAM 使用者，只能 `PutObject` 到 `published/*` |
 
 bucket policy 只有一個 statement：授權 CloudFront 服務主體經該 distribution（條件 `AWS:SourceArn`）對 `site/*` 與 `published/*` 執行 `s3:GetObject`，不授權 `s3:ListBucket`。S3 在呼叫者沒有 `s3:ListBucket` 時對不存在的物件回 403 而非 404，前端不依狀態碼區分缺檔原因（§4）。這個 policy 只授權固定的服務主體與 `AWS:SourceArn`，S3 不視為公開 policy，public access block 因此不需放寬。
@@ -46,7 +46,7 @@ bucket policy 只有一個 statement：授權 CloudFront 服務主體經該 dist
 - **快取規則集中在 CloudFront**：邊緣 TTL 由各 behavior 的 cache policy 決定；瀏覽器 `Cache-Control` 由各 behavior 專用的自訂 response headers policy 以 override 寫入上表的值，同一 policy 也帶 §3 的安全標頭。上傳端（CI 與地端匯出）不設定物件的 `Cache-Control` metadata。
 - **地端對應**：地端 Nginx 的 `/assets/`、`/index.html` 沿用既有標頭，`/published/` 同樣回 `public, max-age=60`。Compose 把主機的 `data/published/`（即 Dagster 的 `DATA_DIR/published/`）唯讀掛載到 frontend 容器的 `/usr/share/nginx/published`，`/published/` 以 `try_files $uri =404` 提供，缺檔回 404，不落到 SPA fallback；目錄本身不列出檔案。掛載整個目錄而非單檔，因為匯出以 rename 替換檔案，單檔 bind mount 會一直指向舊檔。
 - **SPA fallback**：`spa-rewrite` 把最後一段沒有副檔名的路徑（含 `/`、`/history`、`/history/`）內部改寫為 `/index.html`，等價於地端 Nginx 的 `try_files $uri $uri/ /index.html`。不使用 custom error response，因其作用於整個 distribution，會讓 `/published/` 下的缺檔回 200 與 HTML。`/api/*`、`/console/*` 不特別處理，落到預報檢視的 not-found 頁。
-- **原始碼與測試**：`infra/terraform/functions/spa-rewrite.js` 只宣告頂層 `handler`，由 Terraform `file()` 讀入；同目錄的 `spa-rewrite.test.mjs` 以 `node:vm` 執行同一份原始檔，涵蓋 `/`、`/history`、`/history/`、`/assets/x.js`、`/favicon.ico`、`/console/foo` 與 querystring 原樣保留，由 `scripts/infra_check.sh` 以 `node --test` 執行；該腳本接著檢查 Terraform 格式並以 `terraform init -backend=false` 驗證設定；本機與 CI 的 `infra` job 都以 `make infra-check` 執行。
+- **原始碼與測試**：`infra/terraform/functions/spa-rewrite.js` 只宣告頂層 `handler`，由 Terraform `file()` 讀入；同目錄的 `spa-rewrite.test.mjs` 以 `node:vm` 執行同一份原始檔，涵蓋 `/`、`/history`、`/history/`、`/assets/x.js`、`/favicon.ico`、`/console/foo` 與 querystring 原樣保留，由 `scripts/infra_check.sh` 以 `node --test` 執行；該腳本接著檢查 Terraform 格式、以 `terraform init -backend=false` 驗證設定，再執行 `infra/terraform/tests/` 的 `terraform test`（以 `mock_provider` 執行 `plan`，不需要 AWS 憑證）；本機與 CI 的 `infra` job 都以 `make infra-check` 執行。
 
 ## 3. Distribution 其他設定
 

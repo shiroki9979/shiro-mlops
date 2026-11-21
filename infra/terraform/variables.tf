@@ -18,14 +18,8 @@ variable "s3_bucket_name" {
 
 variable "github_repo" {
   type        = string
-  default     = "shiro/shiro-mlops"
+  default     = "shiroki9979/shiro-mlops"
   description = "GitHub repository name (org/repo) for OIDC trust"
-}
-
-variable "aws_account_id" {
-  type        = string
-  default     = "123456789012"
-  description = "AWS Account ID"
 }
 
 variable "create_oidc_provider" {
@@ -37,6 +31,8 @@ variable "create_oidc_provider" {
 variable "budget_alert_email" {
   type        = string
   description = "Email address that receives the AWS Budgets cost alerts"
+  # Keeps the personal address out of plan output and workflow logs.
+  sensitive = true
 
   validation {
     condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.budget_alert_email))

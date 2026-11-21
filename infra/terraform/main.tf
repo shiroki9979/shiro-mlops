@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.11.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -19,6 +19,8 @@ provider "aws" {
     }
   }
 }
+
+data "aws_caller_identity" "current" {}
 
 locals {
   # Bucket prefixes (ADR-0015 §2.2); the CI and on-prem policies scope to these.
@@ -97,7 +99,8 @@ resource "aws_s3_bucket_public_access_block" "forecast_view" {
   restrict_public_buckets = true
 }
 
-# 2. GitHub Actions OIDC provider and CI role: deploys the frontend to site/ only.
+# 2. GitHub Actions OIDC provider and site deploy role: deploys the frontend to
+#    site/ only.
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.create_oidc_provider ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
@@ -112,8 +115,8 @@ resource "aws_iam_openid_connect_provider" "github" {
   ]
 }
 
-resource "aws_iam_role" "github_actions_role" {
-  name = "shiro-mlops-github-actions-role"
+resource "aws_iam_role" "site_deploy" {
+  name = "shiro-mlops-site-deploy"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -121,16 +124,16 @@ resource "aws_iam_role" "github_actions_role" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"
+          Federated = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
-          # Accept only tokens minted for AWS STS, not ones issued to another audience.
+          # Accept only tokens minted for AWS STS, not ones issued to another audience,
+          # and only from pushes to main, so no pull request or other branch can upload
+          # the site.
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/main"
           }
         }
       }
@@ -171,7 +174,7 @@ resource "aws_iam_policy" "ci_site_deploy" {
 }
 
 resource "aws_iam_role_policy_attachment" "ci_site_deploy" {
-  role       = aws_iam_role.github_actions_role.name
+  role       = aws_iam_role.site_deploy.name
   policy_arn = aws_iam_policy.ci_site_deploy.arn
 }
 

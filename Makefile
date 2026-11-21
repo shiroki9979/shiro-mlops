@@ -22,7 +22,7 @@ help:
 	@echo "  make frontend-smoke Verify both built apps (/, /history, /console/) and same-origin API routing through Nginx"
 	@echo "  make frontend-smoke-ci Build the frontend image and run the CI Nginx smoke (FRONTEND_SMOKE_PORT=$(FRONTEND_SMOKE_PORT))"
 	@echo "  make cloud-smoke   Verify the deployed Forecast View URL (ARGS=\"--base-url <forecast_view_url>\")"
-	@echo "  make infra-check   Test CloudFront Functions and check Terraform formatting and validity offline"
+	@echo "  make infra-check   Test CloudFront Functions, check Terraform formatting and validity, and run Terraform tests offline"
 	@echo "  make clean         Clean temporary files and caches"
 
 install:
