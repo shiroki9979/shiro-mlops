@@ -3,7 +3,7 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { datasetListQueryKey, useDatasetList } from '@/hooks/use-data-explorer'
 import { defaultWindow, toRfc3339 } from '@/lib/data-explorer'
-import type { ExplorerWindow } from '@/lib/explorer-window'
+import { type ExplorerWindow, exceedsDays } from '@/lib/explorer-window'
 import type { ExplorerDatasetConfig } from './catalog'
 
 type SearchValues = Record<string, string | undefined>
@@ -27,7 +27,10 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
   const query: SearchValues = { start, end, ...filterValues }
   const cursor = searchText(search.cursor)
   const chartSearch = pickChartSearch(search)
-  const list = useDatasetList(dataset.apiPath, { ...query, cursor })
+  // The API would answer 422 beyond the list limit; the chart still covers the window, so the
+  // table explains the limit instead of requesting rows.
+  const detailLimitExceeded = exceedsDays({ start, end }, dataset.maxDays)
+  const list = useDatasetList(dataset.apiPath, { ...query, cursor }, !detailLimitExceeded)
 
   const navigateTo = (nextSearch: Record<string, unknown>) => {
     void navigate({ to: dataset.path as never, search: toSearchParams(withoutBlanks(nextSearch)) as never })
@@ -55,6 +58,7 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     query,
     chartSearch,
     list,
+    detailLimitExceeded,
     canRestart: Boolean(cursor),
     setStart: (value: string) => showFirstPageOf({ start: value }),
     setEnd: (value: string) => showFirstPageOf({ end: value }),
@@ -64,7 +68,9 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     goToNextPage: (nextCursor: string | undefined) => showPage(query, nextCursor),
     restartFromFirstPage,
     setChartSetting,
-    refetchList: () => void list.refetch(),
+    refetchList: () => {
+      if (!detailLimitExceeded) void list.refetch()
+    },
   }
 }
 

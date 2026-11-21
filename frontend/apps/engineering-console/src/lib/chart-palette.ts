@@ -10,6 +10,8 @@ export const CHART_SURFACE = '#0b1224'
 export const CHART_GRID = '#334155'
 export const CHART_AXIS = '#64748b'
 export const CHART_GAP_BAND = '#64748b'
+// The pending brush range, in the console accent so it reads as a selection rather than data.
+export const CHART_BRUSH = '#22d3ee'
 
 // Ungrouped or open-ended series (subjects, unknown keys) take these in order.
 export const SERIES_COLORS = ['#22d3ee', '#fbbf24', '#f472b6', '#34d399', '#a78bfa', '#fb923c'] as const

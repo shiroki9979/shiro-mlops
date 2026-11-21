@@ -41,6 +41,8 @@ export interface ExplorerDatasetConfig {
   lookAheadHours?: number
   // SYNC(src/shiro_mlops/service/data_explorer/specs.py): DATASET_SPECS max_days, the list window limit the API enforces with 422.
   maxDays: number
+  // SYNC(src/shiro_mlops/service/data_explorer/specs.py): DATASET_SPECS cadence, the length of a `raw` chart bucket.
+  cadenceSeconds: number
   quickRanges: readonly QuickRangeId[]
   search?: Record<string, string>
   auditHref?: string
@@ -67,6 +69,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/power/load',
     defaultHours: 24,
     maxDays: 31,
+    cadenceSeconds: 3600,
     quickRanges: PAST_QUICK_RANGES,
     columns: ['datetime', 'subject', 'load_mw'],
     filters: [{ key: 'subject', placeholder: 'nationwide' }],
@@ -79,6 +82,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/power/supply-demand',
     defaultHours: 24,
     maxDays: 7,
+    cadenceSeconds: 600,
     quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'curr_load_mw', 'curr_util_rate_pct'],
     filters: [],
@@ -90,6 +94,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/power/regional',
     defaultHours: 24,
     maxDays: 7,
+    cadenceSeconds: 600,
     quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'region', 'load_mw', 'generation_mw', 'slot_complete'],
     filters: [
@@ -104,6 +109,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/power/units',
     defaultHours: 24,
     maxDays: 7,
+    cadenceSeconds: 600,
     quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'unit_type', 'unit_name', 'net_generation_mw'],
     filters: [{ key: 'unit_type' }, { key: 'unit_name' }],
@@ -115,6 +121,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/weather/observations',
     defaultHours: 24,
     maxDays: 31,
+    cadenceSeconds: 3600,
     quickRanges: PAST_QUICK_RANGES,
     auditHref: '/data/audits?type=observations',
     auditDatasetId: 'cwa_observation_audits',
@@ -129,6 +136,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     defaultHours: 1,
     lookAheadHours: 72,
     maxDays: 14,
+    cadenceSeconds: 3600,
     quickRanges: FORWARD_QUICK_RANGES,
     auditHref: '/data/audits?type=forecasts',
     auditDatasetId: 'cwa_forecast_audits',
@@ -149,6 +157,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/audits/cwa-observations',
     defaultHours: 24,
     maxDays: 31,
+    cadenceSeconds: 3600,
     quickRanges: PAST_QUICK_RANGES,
     columns: ['fetched_at', 'status', 'missing_station_ids'],
     filters: [
@@ -164,6 +173,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/audits/cwa-forecasts',
     defaultHours: 24,
     maxDays: 31,
+    cadenceSeconds: 3600,
     quickRanges: PAST_QUICK_RANGES,
     columns: ['issued_at', 'dataset_id', 'status', 'missing_geocodes'],
     filters: [
