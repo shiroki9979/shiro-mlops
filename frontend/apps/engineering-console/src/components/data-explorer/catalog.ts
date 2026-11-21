@@ -18,7 +18,7 @@ export interface ExplorerFilterField {
   control?: ExplorerFilterControl
 }
 
-export type ExplorerChartType = 'line'
+export type ExplorerChartType = 'line' | 'status'
 
 // What a dataset supplies to get a chart card; bucketing, limits and gap bands are shared.
 export interface ExplorerChartConfig {
@@ -28,6 +28,11 @@ export interface ExplorerChartConfig {
   fields: ExplorerFieldKey[]
   // Group key whose values pick a colour from the central palette; others use series order.
   colorBy?: { group: string; palette: CategoryPaletteKey }
+  // `count`: the endpoint fixes its field and counts rows per bucket, so `fields` (here only the
+  // label) and `agg` are never sent.
+  measure?: 'count'
+  // Group values with a dictionary entry are shown translated in the legend and tooltip.
+  groupLabels?: 'completeness'
 }
 
 export interface ExplorerDatasetConfig {
@@ -58,6 +63,17 @@ export type ExplorerNavGroup = (typeof EXPLORER_NAV_GROUPS)[number]
 const REGIONS = ['北部', '中部', '南部', '東部'] as const
 const COMPLETENESS_VALUES = ['complete', 'incomplete'] as const
 const COMPLETENESS_SELECT: ExplorerFilterControl = { kind: 'select', options: COMPLETENESS_VALUES }
+
+function auditStatusChart(seriesApiPath: string, countField: ExplorerFieldKey): ExplorerChartConfig {
+  return {
+    type: 'status',
+    seriesApiPath,
+    fields: [countField],
+    colorBy: { group: 'status', palette: 'status' },
+    measure: 'count',
+    groupLabels: 'completeness',
+  }
+}
 
 export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
   {
@@ -155,6 +171,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'status', control: COMPLETENESS_SELECT },
       { key: 'missing_station_id' },
     ],
+    chart: auditStatusChart('/data/audits/cwa-observations/series', 'batch_count'),
   },
   {
     id: 'cwa_forecast_audits',
@@ -171,6 +188,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'status', control: COMPLETENESS_SELECT },
       { key: 'missing_geocode' },
     ],
+    chart: auditStatusChart('/data/audits/cwa-forecasts/series', 'version_count'),
   },
 ]
 

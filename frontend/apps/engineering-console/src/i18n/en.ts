@@ -196,6 +196,8 @@ export const en: Messages = {
       missing_station_id: 'Missing Station ID',
       missing_geocodes: 'Missing Geocodes',
       missing_geocode: 'Missing Geocode',
+      batch_count: 'Batches',
+      version_count: 'Versions',
     },
     statusCard: {
       latestSourceAt: (time) => `Latest source time: ${time}`,
@@ -262,6 +264,7 @@ export const en: Messages = {
       databaseUnavailable: 'The database is unavailable. Try again later.',
       tooManyPoints: (bucket: string) => `Too many points; switch to the "${bucket}" granularity.`,
       gapLegend: 'Gray band: no data for that period',
+      count: 'Count',
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset} trend chart; fields: ${fields}; series: ${series}`,
     },

@@ -6,15 +6,22 @@ import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
 import { CATEGORY_PALETTES, categoryColor } from '@/lib/chart-palette'
-import type { Series } from '@/schemas/data-explorer'
+import type { Series, SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { gapRanges, type PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
+import { SeriesStatusChart } from './series-status-chart'
+import { translateCompleteness } from './status-text'
 import { CHART_DEFAULTS, type ChartSearch, type ChartSearchKey } from './use-explorer-query'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
+  status: SeriesStatusChart,
+}
+
+const GROUP_LABELS: Record<NonNullable<ExplorerChartConfig['groupLabels']>, (value: string, m: Messages) => string> = {
+  completeness: translateCompleteness,
 }
 
 const BUCKET_OPTIONS = ['auto', 'raw', '1h', '1d'] as const
@@ -59,7 +66,7 @@ export function ExplorerChartCard({ dataset, chart, query, chartSearch, onSettin
           </CardTitle>
           {seriesQuery.data && (
             <p className="text-xs text-slate-400 mt-1">
-              {chartText.applied(chartText.buckets[seriesQuery.data.bucket], seriesQuery.data.agg ? chartText.aggs[seriesQuery.data.agg] : EMPTY_VALUE)}
+              {chartText.applied(chartText.buckets[seriesQuery.data.bucket], appliedAggText(chart, seriesQuery.data.agg, chartText))}
             </p>
           )}
         </div>
@@ -70,13 +77,15 @@ export function ExplorerChartCard({ dataset, chart, query, chartSearch, onSettin
             options={BUCKET_OPTIONS.map((option) => [option, chartText.buckets[option]])}
             onChange={(value) => onSettingChange('bucket', value)}
           />
-          <ChartSelect
-            label={chartText.agg}
-            value={agg}
-            disabled={bucket === 'raw'}
-            options={AGG_OPTIONS.map((option) => [option, chartText.aggs[option]])}
-            onChange={(value) => onSettingChange('agg', value)}
-          />
+          {chart.measure !== 'count' && (
+            <ChartSelect
+              label={chartText.agg}
+              value={agg}
+              disabled={bucket === 'raw'}
+              options={AGG_OPTIONS.map((option) => [option, chartText.aggs[option]])}
+              onChange={(value) => onSettingChange('agg', value)}
+            />
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -144,6 +153,7 @@ function ChartSelect({ label, value, options, disabled, onChange }: ChartSelectP
 }
 
 function seriesParams(chart: ExplorerChartConfig, query: Record<string, string | undefined>, chartSearch: ChartSearch): QueryParams {
+  if (chart.measure === 'count') return { ...query, bucket: withoutDefault('bucket', chartSearch.bucket) }
   return {
     ...query,
     fields: chartSearch.fields ?? chart.fields,
@@ -151,6 +161,11 @@ function seriesParams(chart: ExplorerChartConfig, query: Record<string, string |
     bucket: withoutDefault('bucket', chartSearch.bucket),
     agg: withoutDefault('agg', chartSearch.agg),
   }
+}
+
+function appliedAggText(chart: ExplorerChartConfig, agg: SeriesResponse['agg'], text: Messages['explorer']['chart']): string {
+  if (chart.measure === 'count') return text.count
+  return agg ? text.aggs[agg] : EMPTY_VALUE
 }
 
 function withoutDefault(key: ChartSearchKey, value: string | string[] | undefined): string | undefined {
@@ -166,16 +181,19 @@ function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages): 
   const palette = chart.colorBy ? CATEGORY_PALETTES[chart.colorBy.palette] : undefined
   return series.map((item, index) => ({
     key: `s${index}`,
-    name: seriesName(item, multipleFields, m),
+    name: seriesName(item, multipleFields, chart, m),
     color: categoryColor(palette, chart.colorBy ? item.group[chart.colorBy.group] : undefined, index),
     unit: item.unit,
     points: item.points,
   }))
 }
 
-function seriesName(item: Series, multipleFields: boolean, m: Messages): string {
+function seriesName(item: Series, multipleFields: boolean, chart: ExplorerChartConfig, m: Messages): string {
   const fieldLabel = explorerFieldLabel(item.field, m)
-  const groupName = Object.values(item.group).join(' / ')
+  const groupLabel = chart.groupLabels ? GROUP_LABELS[chart.groupLabels] : undefined
+  const groupName = Object.values(item.group)
+    .map((value) => (groupLabel ? groupLabel(value, m) : value))
+    .join(' / ')
   if (!groupName) return fieldLabel
   return multipleFields ? `${fieldLabel} · ${groupName}` : groupName
 }
