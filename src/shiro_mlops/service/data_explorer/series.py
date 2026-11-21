@@ -67,7 +67,8 @@ class SeriesSpec:
     `filters` turns the dataset's own validated filter values into extra WHERE clauses;
     the time window, bucketing, limits and gap-fill come from this module. `slot_lag` is
     how long after its timestamp a slot is expected to exist (an hourly load row labels
-    the hour it summarises, so it is due only once that hour has ended).
+    the hour it summarises, so it is due only once that hour has ended). `default_fields`
+    are charted when the request names none; empty means every whitelisted field.
     """
 
     dataset: str
@@ -79,6 +80,7 @@ class SeriesSpec:
     filters: SeriesFilters
     gap_fill: bool = True
     slot_lag: timedelta = timedelta(0)
+    default_fields: tuple[str, ...] = ()
 
     @property
     def cadence(self) -> timedelta:
@@ -126,7 +128,9 @@ class SeriesRequest:
             for key, value in query_params.items()
             if key in spec.filter_keys and value != ""
         }
-        chosen = tuple(dict.fromkeys(fields)) if fields else tuple(spec.fields)
+        chosen = (
+            tuple(dict.fromkeys(fields)) if fields else spec.default_fields or tuple(spec.fields)
+        )
         return cls(window=window, fields=chosen, bucket=bucket, agg=agg, filters=filters)
 
 

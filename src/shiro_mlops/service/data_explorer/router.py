@@ -37,6 +37,12 @@ from shiro_mlops.service.data_explorer.series import (
     SeriesSpec,
     TooManyPointsError,
 )
+from shiro_mlops.service.data_explorer.supply_demand_series import (
+    NATIONAL_SERIES,
+    REGIONAL_SERIES,
+    NationalSeriesField,
+    RegionalSeriesField,
+)
 from shiro_mlops.service.data_explorer.weather import (
     ForecastAuditReader,
     ForecastReader,
@@ -166,10 +172,60 @@ def list_national_supply_demand(request: Request) -> ListEnvelope:
     return _run_list(request, NationalSupplyDemandReader)
 
 
+@router.get("/power/supply-demand/series", response_model=SeriesResponse)
+def national_supply_demand_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    fields: list[NationalSeriesField] | None = Query(default=None),
+    bucket: Bucket = Bucket.AUTO,
+    agg: Agg = Agg.AVG,
+) -> SeriesResponse:
+    """Ungrouped national supply-demand series in MW or percent over a closed window.
+
+    `fields` defaults to `curr_load_mw` and `real_hr_maxi_sply_capacity_mw`, whose distance
+    is the supply margin. Bucket, aggregation and point limits follow the shared series
+    contract.
+    """
+    del start, end
+    return _run_series(
+        request,
+        NATIONAL_SERIES,
+        fields=[field.value for field in fields] if fields else None,
+        bucket=bucket,
+        agg=agg,
+    )
+
+
 @router.get("/power/regional", response_model=ListEnvelope)
 def list_regional_supply_demand(request: Request) -> ListEnvelope:
     """List persisted regional supply-demand snapshots."""
     return _run_list(request, RegionalSupplyDemandReader)
+
+
+@router.get("/power/regional/series", response_model=SeriesResponse)
+def regional_supply_demand_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    region: str | None = None,
+    fields: list[RegionalSeriesField] | None = Query(default=None),
+    bucket: Bucket = Bucket.AUTO,
+    agg: Agg = Agg.AVG,
+) -> SeriesResponse:
+    """Regional supply-demand series in MW, one series per region and field.
+
+    Always grouped by `region`; there is no four-region total. `fields` defaults to
+    `load_mw`. A region absent from a bucket yields a `null` point in that region's series.
+    """
+    del start, end, region
+    return _run_series(
+        request,
+        REGIONAL_SERIES,
+        fields=[field.value for field in fields] if fields else None,
+        bucket=bucket,
+        agg=agg,
+    )
 
 
 @router.get("/power/units", response_model=ListEnvelope)
