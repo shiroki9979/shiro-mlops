@@ -19,6 +19,10 @@ function renderPath(path: string) {
   return render(<RouterProvider router={createAppRouter(history)} />)
 }
 
+function typeInto(label: string, value: string) {
+  fireEvent.change(screen.getByLabelText(label), { target: { value } })
+}
+
 describe('Data Explorer routes', () => {
   it('keeps the default time window when opening a detail later', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -261,8 +265,7 @@ describe('Data Explorer routes', () => {
       path: '/data/power/load',
       apiPath: '/data/power/load',
       markerField: 'subject',
-      field: () => screen.getByLabelText(m.explorer.fields.subject),
-      input: 'north',
+      edit: async () => typeInto(m.explorer.fields.subject, 'north'),
       sent: { subject: 'north' },
     },
     {
@@ -270,8 +273,7 @@ describe('Data Explorer routes', () => {
       path: '/data/power/load',
       apiPath: '/data/power/load',
       markerField: 'subject',
-      field: () => screen.getByLabelText(m.explorer.filters.start),
-      input: '2026-09-09T01:00',
+      edit: async () => typeInto(m.explorer.filters.start, '2026-09-09T01:00'),
       sent: { start: '2026-09-09T01:00:00+08:00' },
     },
     {
@@ -279,8 +281,10 @@ describe('Data Explorer routes', () => {
       path: '/data/audits?type=forecasts',
       apiPath: '/data/audits/cwa-forecasts',
       markerField: 'dataset_id',
-      field: () => screen.getByLabelText(m.explorer.fields.status),
-      input: 'complete',
+      edit: async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click(screen.getByRole('combobox', { name: m.explorer.fields.status }))
+        await user.click(await screen.findByRole('option', { name: m.status.completeness.complete }))
+      },
       sent: { status: 'complete' },
     },
   ])('returns to the first page after changing $change on a later page', async (scenario) => {
@@ -305,7 +309,7 @@ describe('Data Explorer routes', () => {
     await user.click(screen.getByRole('button', { name: m.common.nextPage }))
     await screen.findByText('second-page-row')
 
-    fireEvent.change(scenario.field(), { target: { value: scenario.input } })
+    await scenario.edit(user)
 
     expect(await screen.findByText('first-page-row')).toBeInTheDocument()
     expect(Object.fromEntries(requests.at(-1)!.searchParams)).toEqual({ ...queryWindow, ...scenario.sent, limit: '200' })
