@@ -43,6 +43,16 @@ describe('findBundleViolations', () => {
     assert.deepEqual(check({ files }), ['assets/chunk-2.js contains on-demand inference paths: /predict'])
   })
 
+  it('passes a name that merely starts with the inference path, and still reports the path itself', () => {
+    const lookalike = { path: 'assets/chunk-4.js', text: 'import("/src/components/dashboard/prediction-table.tsx")' }
+    const endpoint = { path: 'assets/chunk-5.js', text: 'fetch("/predict?h=24")' }
+
+    assert.deepEqual(check({ files: [...CLEAN_FILES, lookalike] }), [])
+    assert.deepEqual(check({ files: [...CLEAN_FILES, lookalike, endpoint] }), [
+      'assets/chunk-5.js contains on-demand inference paths: /predict',
+    ])
+  })
+
   it('reports console paths and an inference call in one file as two violations', () => {
     const files = [...CLEAN_FILES, { path: 'assets/chunk-3.js', text: 'const a="/console";fetch("/api/predict")' }]
 
