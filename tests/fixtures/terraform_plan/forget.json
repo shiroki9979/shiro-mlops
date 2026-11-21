@@ -1,0 +1,14 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.11.4",
+  "resource_changes": [
+    {
+      "address": "aws_iam_user.publisher",
+      "mode": "managed",
+      "type": "aws_iam_user",
+      "name": "publisher",
+      "change": { "actions": ["forget"] },
+      "action_reason": "delete_because_no_resource_config"
+    }
+  ]
+}
