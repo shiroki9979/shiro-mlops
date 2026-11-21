@@ -24,6 +24,7 @@ DEFAULT_REGIONAL_SUPPLY_DEMAND_URL = (
 )
 
 # 北中南東為台電區域慣用順序，同時作為合法區域集合。
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): REGIONS.
 REGIONAL_SUPPLY_DEMAND_REGIONS: tuple[str, ...] = ("北部", "中部", "南部", "東部")
 _KNOWN_REGIONS = frozenset(REGIONAL_SUPPLY_DEMAND_REGIONS)
 _SOURCE_TIME_FORMAT = "%Y%m%dT%H%M%S"

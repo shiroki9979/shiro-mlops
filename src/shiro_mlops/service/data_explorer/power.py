@@ -232,6 +232,7 @@ class UnitSeriesField(StrEnum):
     CAPACITY_MW = "capacity_mw"
 
 
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): unit_generation groupOptions, default first.
 class UnitGroupBy(StrEnum):
     """Unit-generation series grouping: per unit type, or one total over every member."""
 

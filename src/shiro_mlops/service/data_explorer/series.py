@@ -29,6 +29,7 @@ MAX_POINTS_PER_SERIES = 1_200
 MAX_TOTAL_POINTS = 10_000
 
 
+# SYNC(frontend/apps/engineering-console/src/schemas/data-explorer.ts): BucketSchema, default first.
 class Bucket(StrEnum):
     """Requested time granularity; `auto` resolves to the finest one within the limits."""
 
@@ -38,6 +39,7 @@ class Bucket(StrEnum):
     DAY = "1d"
 
 
+# SYNC(frontend/apps/engineering-console/src/schemas/data-explorer.ts): AggSchema, default first.
 class Agg(StrEnum):
     """Time aggregation applied inside each `1h` or `1d` bucket."""
 

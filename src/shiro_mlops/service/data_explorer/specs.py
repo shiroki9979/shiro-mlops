@@ -5,6 +5,7 @@ from typing import Any
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): max_days and cadence per dataset (maxDays, cadenceSeconds).
 DATASET_SPECS: dict[str, dict[str, Any]] = {
     "hourly_load": {
         "label": "逐時用電負載",

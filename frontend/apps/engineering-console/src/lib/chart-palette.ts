@@ -45,7 +45,7 @@ export const UNIT_TYPE_COLORS: CategoryPalette = {
   其它再生能源: '#4ade80',
 }
 
-// SYNC: DEFAULT_CWA_LOCATIONS in src/shiro_mlops/data/cwa_client.py (stations outside it use SERIES_COLORS)
+// SYNC(src/shiro_mlops/data/cwa_client.py): DEFAULT_CWA_LOCATIONS station ids; stations outside it use SERIES_COLORS.
 export const STATION_COLORS: CategoryPalette = {
   '466920': '#67e8f9',
   '467490': '#fcd34d',
