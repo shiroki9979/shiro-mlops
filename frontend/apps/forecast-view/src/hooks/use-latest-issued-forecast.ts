@@ -11,7 +11,8 @@ export function useLatestIssuedForecast() {
     queryKey: ['published', LATEST_ISSUED_FORECAST_FILE],
     queryFn: () => readPublished(LATEST_ISSUED_FORECAST_FILE, LatestIssuedForecastSchema),
     refetchInterval: autoRefresh ? refreshIntervalSec * 1000 : false,
-    // Nginx and CloudFront serve the file with max-age=60.
+    // Matches the max-age=60 Nginx and CloudFront serve the file with; keep in sync with the
+    // `/published/` Cache-Control in frontend/nginx.conf.
     staleTime: 60000,
   })
 }
