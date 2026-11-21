@@ -1,7 +1,7 @@
 # 如何將全台負載的預測對象遷移為 nationwide
 
 - 建立日期：2026-09-27
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
@@ -81,7 +81,7 @@ COMMIT;
 2. 重建並重啟容器，讓 API 與 Dagster 載入新版：
 
    ```bash
-   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+   make compose-up
    ```
 
 3. 確認遷移結果與新版寫入：

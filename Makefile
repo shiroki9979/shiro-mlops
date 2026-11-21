@@ -16,7 +16,7 @@ help:
 	@echo "  make test          Run Python test suite with pytest"
 	@echo "  make lint          Check code style and lint with ruff"
 	@echo "  make format        Format code with ruff"
-	@echo "  make compose-up    Start full local stack with built frontend preview"
+	@echo "  make compose-up    Rebuild images from current source and start full local stack"
 	@echo "  make compose-down  Stop full local stack"
 	@echo "  make smoke-check   Verify schedules, per-task readiness and forecast issuing in the Dagster container"
 	@echo "  make frontend-smoke Verify both built apps (/, /history, /console/) and same-origin API routing through Nginx"
@@ -60,8 +60,9 @@ format:
 	uv run ruff format .
 	uv run ruff check --fix .
 
+# API 與前端映像內含原始碼；不帶 --build 時 Compose 沿用既有映像，已合併的修正不會生效。
 compose-up:
-	docker compose --env-file .env -f docker/docker-compose.yml up -d
+	docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 
 compose-down:
 	docker compose -f docker/docker-compose.yml down
