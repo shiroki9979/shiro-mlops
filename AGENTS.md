@@ -1,7 +1,7 @@
 # AGENTS.md
 
 - Created: 2026-08-23
-- Last updated: 2026-11-20
+- Last updated: 2026-11-21
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -66,9 +66,9 @@ uv run uvicorn shiro_mlops.service.api:app --host 0.0.0.0 --port 8000
 
 ## Agent skills
 
-### Issue tracker & PR base branch
+### Issue tracker, PR base branch & PR body
 
-GitHub issues via `gh` CLI. Feature/fix PRs use base `dev` (`gh pr create --base dev`); `main` receives only `dev` release merges. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+GitHub issues via `gh` CLI. Feature/fix PRs use base `dev` (`gh pr create --base dev`); `main` receives only `dev` release merges. Write every PR body with the `mattpocock-skills:pr` skill. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 
 ### Triage labels
 
