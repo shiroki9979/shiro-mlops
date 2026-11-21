@@ -8,7 +8,7 @@
 >
 > - **目標象限**：How-To Guide
 > - **目標讀者**：負責雲端基礎設施部署的 MLOps / DevOps 工程師
-> - **核心目標**：指引如何使用 Terraform 建立預報檢視的靜態託管資源（S3 與 CloudFront）、配置 GitHub Actions OIDC、建立與輪替地端上傳用 access key，並取得預報檢視的網址
+> - **核心目標**：指引如何使用 Terraform 建立預報檢視的靜態託管資源（S3 與 CloudFront）、配置 GitHub Actions OIDC、建立與輪替地端上傳用 access key，並取得預報檢視的網址與執行雲端 smoke check
 > - **排除內容（Avoid）**：AWS 基本概念入門、本機快速預測操作、CD 管線設定
 
 依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只存放並提供預報檢視的發布產物。本指南說明如何透過 Terraform 建立下列資源：
@@ -199,6 +199,18 @@ bucket 剛建立時 `site/` 與 `published/` 都是空的。CloudFront 沒有列
 
 - `site/` 還沒上傳前，首頁 `/` 與 `/history` 回 403。
 - `published/` 還沒上傳前，`/published/` 下的 JSON 回 403；第 5 節的地端匯出上傳後，約一分鐘內生效。
+
+### 執行雲端 smoke check
+
+以 `forecast_view_url` 的值，透過 repo 根目錄的 Makefile target 驗證網址符合[預報檢視的雲端託管 §5](../reference/forecast-view-hosting.md#5-部署與驗證)：
+
+```bash
+make -C ../.. cloud-smoke ARGS="--base-url $(terraform output -raw forecast_view_url)"
+```
+
+腳本只用 Python 標準函式庫，不需先執行 `uv sync`。全部通過時印出 `Forecast View smoke check passed`；任一項未通過時，列出每一項未通過的檢查與實際狀態碼或原因。
+
+`site/` 與 `published/` 上傳前，smoke check 預期會失敗：空的 bucket 讓首頁、`/history` 與兩份 JSON 都回 403，屬上一段所述的預期結果。前端建置產物上傳到 `site/`、地端匯出上傳到 `published/` 之後再執行，結果才有意義。已發布預報的預報時刻距執行當下超過 24 小時也會失敗，表示地端匯出或上傳中斷。
 
 ---
 
