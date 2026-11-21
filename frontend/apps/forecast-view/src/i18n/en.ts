@@ -84,5 +84,13 @@ export const en: Messages = {
       lead24Mape: 'MAPE at 24-hour lead time',
       lead24Mae: 'MAE at 24-hour lead time',
     },
+    leadTimeCurve: {
+      title: 'MAPE by lead time',
+      leadTimeAxis: 'Lead time (hours)',
+      mapeAxis: 'MAPE (%)',
+      leadTime: (hours) => `${hours}-hour lead time`,
+      mape: 'MAPE',
+      mae: 'MAE',
+    },
   },
 }

@@ -83,6 +83,14 @@ export const zhTW = {
       lead24Mape: '提前 24 小時 MAPE',
       lead24Mae: '提前 24 小時 MAE',
     },
+    leadTimeCurve: {
+      title: 'MAPE 對提前時數',
+      leadTimeAxis: '提前時數（小時）',
+      mapeAxis: 'MAPE（%）',
+      leadTime: (hours: number) => `提前 ${hours} 小時`,
+      mape: 'MAPE',
+      mae: 'MAE',
+    },
   },
 }
 
