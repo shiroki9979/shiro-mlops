@@ -27,13 +27,14 @@ export const en: Messages = {
     label: 'Interface language',
   },
   dashboard: {
-    errorTitle: 'Unable to load live inference data',
-    errorFallback: 'Check that the backend API is running (make dev)',
+    unavailable: 'The forecast is unavailable right now',
     horizon: {
       label: 'Horizon:',
       hours: (hours) => `${hours} hours`,
       week: '7 days (168h)',
     },
+    empty: 'There is no issued forecast to show yet',
+    stale: 'This forecast has not been updated for more than 24 hours',
     issuedAt: (time) => `Forecast time: ${time}`,
     predictionSubject: 'Prediction Subject: Nationwide',
     autoRefresh: 'Auto refresh (60s)',

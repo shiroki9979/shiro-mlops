@@ -26,13 +26,14 @@ export const zhTW = {
     label: '介面語系',
   },
   dashboard: {
-    errorTitle: '無法取得即時推論資料',
-    errorFallback: '請檢查後端 API 是否已啟動 (make dev)',
+    unavailable: '目前無法取得預報',
     horizon: {
       label: '預測時效：',
       hours: (hours: number) => `${hours} 小時`,
       week: '7 天 (168h)',
     },
+    empty: '目前還沒有可顯示的已發布預報',
+    stale: '預報已超過 24 小時未更新',
     issuedAt: (time: string) => `預報時刻：${time}`,
     predictionSubject: '預測對象：全台',
     autoRefresh: '自動輪詢 (60s)',

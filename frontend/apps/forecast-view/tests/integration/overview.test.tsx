@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
@@ -44,11 +44,12 @@ function freezeViewerNow(iso: string) {
 
 function renderOverview() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <OverviewPage />
     </QueryClientProvider>,
   )
+  return { ...view, queryClient }
 }
 
 // The target hour of every row in the hourly table, in order, paging through to the last page.
@@ -208,5 +209,134 @@ describe('Overview page shows the latest issued forecast', () => {
     expect(await screen.findByText(en.dashboard.issuedAt('11/20, 10:15'))).toBeInTheDocument()
     expect(screen.getByText(en.dashboard.table.title(24))).toBeInTheDocument()
     expect(screen.getByText(en.dashboard.chart.title)).toBeInTheDocument()
+  })
+})
+
+describe('Overview page states', () => {
+  it('shows an empty state and no forecast data before any forecast is issued', async () => {
+    servePublished({ issued_at: null, steps: [] })
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.empty)).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.metrics.peakTitle)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.chart.title)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.chart.loading)).not.toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.table.loading)).not.toBeInTheDocument()
+    expect(screen.queryByText(/預報時刻/)).not.toBeInTheDocument()
+  })
+
+  it('shows a stale notice alongside the forecast once it is more than 24 hours old', async () => {
+    servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
+    freezeViewerNow('2026-11-21T10:16:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.stale)).toBeInTheDocument()
+    expect(screen.getByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
+    expect(screen.getByText(dashboard.metrics.peakTitle)).toBeInTheDocument()
+    expect(screen.getByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
+  })
+
+  it('shows no stale notice when the forecast is exactly 24 hours old', async () => {
+    servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
+    freezeViewerNow('2026-11-21T10:15:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.stale)).not.toBeInTheDocument()
+  })
+
+  // Local Nginx answers a missing file with 404, CloudFront with 403 (ADR-0015 §2.4): neither means "not issued yet".
+  const failedReads: Array<[string, () => Response, RegExp]> = [
+    ['a 404', () => new HttpResponse('404 Not Found nginx', { status: 404 }), /404|Not Found|nginx/],
+    [
+      'a 403',
+      () =>
+        new HttpResponse('<Error><Code>AccessDenied</Code></Error>', {
+          status: 403,
+          headers: { 'Content-Type': 'application/xml' },
+        }),
+      /403|AccessDenied/,
+    ],
+    ['a network error', () => HttpResponse.error(), /Failed to fetch|network/i],
+    [
+      'a body that is not JSON',
+      () => new HttpResponse('<!doctype html><title>SPA fallback</title>', { headers: { 'Content-Type': 'text/html' } }),
+      /SPA fallback|JSON|Unexpected token/,
+    ],
+    [
+      'a schema mismatch',
+      () => HttpResponse.json({ issued_at: 'yesterday', steps: 'none' }),
+      /yesterday|Invalid|issued_at|steps/,
+    ],
+  ]
+
+  it.each(failedReads)('shows the same neutral error for %s', async (_case, respond, leaked) => {
+    server.use(http.get('*/published/latest_issued_forecast.json', respond))
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.unavailable)).toBeInTheDocument()
+    const page = document.body.textContent ?? ''
+    expect(page).not.toMatch(leaked)
+    expect(page).not.toMatch(/published|make dev|API/)
+    expect(screen.queryByText(dashboard.chart.loading)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.table.loading)).not.toBeInTheDocument()
+  })
+
+  it('keeps the forecast on screen when a later refetch fails', async () => {
+    let failedRefetches = 0
+    // Runtime handlers are tried in order: the first read succeeds once, every later one fails.
+    server.use(
+      http.get(
+        '*/published/latest_issued_forecast.json',
+        () => HttpResponse.json(publishedForecast('2026-11-20T10:15:00+08:00', 168)),
+        { once: true },
+      ),
+      http.get('*/published/latest_issued_forecast.json', () => {
+        failedRefetches += 1
+        return new HttpResponse(null, { status: 403 })
+      }),
+    )
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    const { queryClient } = renderOverview()
+    expect(await screen.findByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
+
+    // Stands in for the auto-refresh poll firing in the background. React Query hands the failed
+    // result to the page on a later macrotask, so the test waits one before looking at the screen.
+    await act(async () => {
+      await queryClient.refetchQueries()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(failedRefetches).toBe(1)
+    expect(screen.getByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
+    expect(screen.getByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.unavailable)).not.toBeInTheDocument()
+  })
+
+  it('reads the stale notice, empty state and error in English', async () => {
+    useLocaleStore.setState({ preference: 'en' })
+    freezeViewerNow('2026-11-22T10:30:00+08:00')
+
+    servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
+    const stale = renderOverview()
+    expect(await screen.findByText(en.dashboard.stale)).toBeInTheDocument()
+    stale.unmount()
+
+    servePublished({ issued_at: null, steps: [] })
+    const empty = renderOverview()
+    expect(await screen.findByText(en.dashboard.empty)).toBeInTheDocument()
+    empty.unmount()
+
+    server.use(http.get('*/published/latest_issued_forecast.json', () => new HttpResponse(null, { status: 404 })))
+    renderOverview()
+    expect(await screen.findByText(en.dashboard.unavailable)).toBeInTheDocument()
   })
 })
