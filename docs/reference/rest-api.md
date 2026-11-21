@@ -245,3 +245,28 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 資料集 | 路徑 | `fields` 白名單（單位） | 分組 | 篩選 | 補值 |
 | --- | --- | --- | --- | --- | --- |
 | 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW） | 固定依 `subject` | `subject` | 有（節奏 1 小時） |
+| CWA 觀測批次審計 | `GET /data/audits/cwa-observations/series` | 不接受；固定為 `batch_count`（`count`） | 固定依 `status` | `status`、`missing_station_id` | 無 |
+| CWA 預報版本審計 | `GET /data/audits/cwa-forecasts/series` | 不接受；固定為 `version_count`（`count`） | 固定依 `status` | `dataset_id`、`status`、`missing_geocode` | 無 |
+
+#### CWA audit series
+
+兩個 audit series 回傳狀態時間軸：每個 `status`（`complete`、`incomplete`）一條 series，`v` 為該 bucket 內的批次數（依 `fetched_at`）或版本數（依 `issued_at`，版本以 `dataset_id`、`issued_at`、`source_updated_at` 識別）。
+
+- 不接受 `fields` 與 `agg`，帶了就回 HTTP 422（未宣告的參數）；回應的 `agg` 固定為 `null`。
+- `1h`、`1d` 的 `v` 為該 bucket 的列數；`raw` 時每個批次或版本各是一個 `v = 1` 的點，`issued_at` 相同的版本各自成點，因此 `t` 可能重複。
+- 不補值：沒有批次或版本的 bucket 不出現；某狀態在窗口內沒有任何列時，不回傳該狀態的 series。
+- 篩選與 list 相同，`status` 只接受 `complete` 或 `incomplete`，其他值回 HTTP 422。點數上限依 §5.3，`raw` 以 1 小時節奏估算。
+
+```json
+{
+  "bucket": "1h",
+  "agg": null,
+  "timezone": "Asia/Taipei",
+  "series": [
+    {"field": "batch_count", "unit": "count", "group": {"status": "complete"},
+     "points": [{"t": "2026-11-21T10:00:00+08:00", "v": 2}]},
+    {"field": "batch_count", "unit": "count", "group": {"status": "incomplete"},
+     "points": [{"t": "2026-11-21T10:00:00+08:00", "v": 1}]}
+  ]
+}
+```

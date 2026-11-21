@@ -10,6 +10,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
+from shiro_mlops.service.data_explorer.audit_series import (
+    FORECAST_AUDIT_SERIES,
+    OBSERVATION_AUDIT_SERIES,
+)
 from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
@@ -200,3 +204,42 @@ def list_observation_audits(request: Request) -> ListEnvelope:
 def list_forecast_audits(request: Request) -> ListEnvelope:
     """List CWA forecast release audit headers without raw payloads."""
     return _run_list(request, ForecastAuditReader)
+
+
+@router.get("/audits/cwa-observations/series", response_model=SeriesResponse)
+def observation_audit_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    status: str | None = None,
+    missing_station_id: str | None = None,
+    bucket: Bucket = Bucket.AUTO,
+) -> SeriesResponse:
+    """Status timeline of CWA observation batches over an exact closed window of up to 92 days.
+
+    One series per `status`; each point counts the batches fetched in that bucket, and `raw`
+    gives one point of value 1 per batch. Buckets without batches are omitted, and `fields`
+    or `agg` are rejected with 422.
+    """
+    del start, end, status, missing_station_id
+    return _run_series(request, OBSERVATION_AUDIT_SERIES, fields=None, bucket=bucket, agg=Agg.AVG)
+
+
+@router.get("/audits/cwa-forecasts/series", response_model=SeriesResponse)
+def forecast_audit_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    dataset_id: str | None = None,
+    status: str | None = None,
+    missing_geocode: str | None = None,
+    bucket: Bucket = Bucket.AUTO,
+) -> SeriesResponse:
+    """Status timeline of CWA forecast versions by `issued_at`, over a window of up to 92 days.
+
+    One series per `status`; each point counts the versions issued in that bucket, and `raw`
+    gives one point of value 1 per version, so versions sharing `issued_at` stay separate.
+    Buckets without versions are omitted, and `fields` or `agg` are rejected with 422.
+    """
+    del start, end, dataset_id, status, missing_geocode
+    return _run_series(request, FORECAST_AUDIT_SERIES, fields=None, bucket=bucket, agg=Agg.AVG)

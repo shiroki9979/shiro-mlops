@@ -48,6 +48,7 @@ class Agg(StrEnum):
 RESOLVED_BUCKETS = (Bucket.RAW, Bucket.HOUR, Bucket.DAY)
 BUCKET_FREQUENCY = {Bucket.HOUR: "h", Bucket.DAY: "D"}
 COMMON_SERIES_PARAMS = frozenset({"start", "end", "fields", "bucket", "agg"})
+COUNT_SERIES_PARAMS = COMMON_SERIES_PARAMS - {"fields", "agg"}
 
 SeriesFilters = Callable[[Mapping[str, str]], tuple[list[str], dict[str, Any]]]
 
@@ -68,6 +69,11 @@ class SeriesSpec:
     the time window, bucketing, limits and gap-fill come from this module. `slot_lag` is
     how long after its timestamp a slot is expected to exist (an hourly load row labels
     the hour it summarises, so it is due only once that hour has ended).
+
+    `count_rows` makes each value the number of rows in the bucket instead of a time
+    aggregate of a field: `fields` and `agg` are then not request parameters, the response
+    `agg` is null, and `raw` yields one point of value 1 per row, even when rows share an
+    instant (CWA forecast versions share `issued_at`).
     """
 
     dataset: str
@@ -79,6 +85,12 @@ class SeriesSpec:
     filters: SeriesFilters
     gap_fill: bool = True
     slot_lag: timedelta = timedelta(0)
+    count_rows: bool = False
+
+    @property
+    def request_params(self) -> frozenset[str]:
+        common = COUNT_SERIES_PARAMS if self.count_rows else COMMON_SERIES_PARAMS
+        return common | self.filter_keys
 
     @property
     def cadence(self) -> timedelta:
@@ -117,7 +129,7 @@ class SeriesRequest:
         agg: Agg,
     ) -> SeriesRequest:
         """Reject undeclared parameters, then resolve the window under the series limit."""
-        unknown = sorted(set(query_params) - COMMON_SERIES_PARAMS - spec.filter_keys)
+        unknown = sorted(set(query_params) - spec.request_params)
         if unknown:
             raise ExplorerQueryError(f"unsupported series parameters: {', '.join(unknown)}")
         window = resolve_window(query_params.get("start"), query_params.get("end"), SERIES_MAX_DAYS)
@@ -141,7 +153,7 @@ class SeriesReader:
         where, params = self._where(request)
         keys = self._series_keys(where, params)
         bucket = self._resolve_bucket(request, series_count=len(keys) * len(request.fields))
-        agg = None if bucket is Bucket.RAW else request.agg
+        agg = None if bucket is Bucket.RAW or self.spec.count_rows else request.agg
         if not keys:
             return SeriesResponse(bucket=bucket, agg=agg, series=[])
         rows = self.db.fetch(self._points_sql(request, bucket, where), params)
@@ -194,7 +206,7 @@ class SeriesReader:
             tail = ""
         else:
             time_sql = self.db.bucket_start(self.spec.time_column, bucket.value)
-            function = request.agg.value.upper()
+            function = "COUNT" if self.spec.count_rows else request.agg.value.upper()
             values = [f"{function}({field.sql}) AS v{index}" for index, field in enumerate(fields)]
             tail = f" GROUP BY {', '.join([time_sql, *groups])}"
         selected = ", ".join([f"{time_sql} AS bucket_at", *groups, *values])
@@ -216,9 +228,9 @@ class SeriesReader:
         for index, name in enumerate(request.fields):
             field = self.spec.fields[name]
             for key, key_rows in by_key.items():
-                observed = {
-                    to_taiwan(row["bucket_at"]): to_float(row[f"v{index}"]) for row in key_rows
-                }
+                observed = [
+                    (to_taiwan(row["bucket_at"]), to_float(row[f"v{index}"])) for row in key_rows
+                ]
                 series.append(
                     Series(
                         field=name,
@@ -241,18 +253,16 @@ class SeriesReader:
 
     def _points(
         self,
-        observed: dict[datetime, float | None],
+        observed: list[tuple[datetime, float | None]],
         expected: list[datetime],
         bucket: Bucket,
     ) -> list[SeriesPoint]:
-        covered = {self._slot_of(moment, bucket) for moment in observed}
-        merged: dict[datetime, float | None] = {
-            slot: None for slot in expected if slot not in covered
-        }
-        merged.update(observed)
+        covered = {self._slot_of(moment, bucket) for moment, _value in observed}
+        missing = [(slot, None) for slot in expected if slot not in covered]
+        merged = sorted([*missing, *observed], key=lambda point: point[0])
         return [
             SeriesPoint(t=format_taiwan_time(moment, timespec="auto"), v=value)
-            for moment, value in sorted(merged.items())
+            for moment, value in merged
         ]
 
     def _slot_of(self, moment: datetime, bucket: Bucket) -> datetime:
