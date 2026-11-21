@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 import type { Plugin } from 'vite'
 import svgr from 'vite-plugin-svgr'
 import { defineConfig } from 'vitest/config'
-import { publishedDevProxy } from '../../tooling/vite-api-proxy'
+import { publishedDevProxy } from '../../tooling/vite-dev-proxy'
 
 const FRONTEND_ROOT = resolve(__dirname, '../..')
 // Read by scripts/check_forecast_view_bundle.mjs; kept out of dist so it is never deployed.
