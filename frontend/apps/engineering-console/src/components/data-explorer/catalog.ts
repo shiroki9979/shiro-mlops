@@ -1,13 +1,20 @@
 import type { Messages } from '@/i18n/messages'
+import { FORWARD_QUICK_RANGES, PAST_QUICK_RANGES, type QuickRangeId } from '@/lib/explorer-window'
 
 // Display text lives in the locale dictionaries; ids and keys are typed against them so a missing entry fails tsc.
 export type ExplorerDatasetId = keyof Messages['explorer']['datasets']
 export type ExplorerFieldKey = keyof Messages['explorer']['fields']
 
+// Fields without a control are free text: their value sets are open and no endpoint lists distinct values.
+export type ExplorerFilterControl =
+  | { kind: 'select'; options: readonly string[] }
+  | { kind: 'switch' }
+
 export interface ExplorerFilterField {
   key: ExplorerFieldKey
   // Placeholders show valid input values (data values), so they are not translated.
   placeholder?: string
+  control?: ExplorerFilterControl
 }
 
 export interface ExplorerDatasetConfig {
@@ -19,6 +26,9 @@ export interface ExplorerDatasetConfig {
   filters: ExplorerFilterField[]
   defaultHours: number
   lookAheadHours?: number
+  // SYNC(src/shiro_mlops/service/data_explorer/specs.py): DATASET_SPECS max_days, the list window limit the API enforces with 422.
+  maxDays: number
+  quickRanges: readonly QuickRangeId[]
   search?: Record<string, string>
   auditHref?: string
   auditDatasetId?: ExplorerDatasetId
@@ -30,6 +40,11 @@ export const EXPLORER_NAV_GROUPS = ['power', 'weather', 'audit'] as const satisf
 
 export type ExplorerNavGroup = (typeof EXPLORER_NAV_GROUPS)[number]
 
+// SYNC(src/shiro_mlops/data/taipower_regional_supply_demand.py): REGIONAL_SUPPLY_DEMAND_REGIONS.
+const REGIONS = ['北部', '中部', '南部', '東部'] as const
+const COMPLETENESS_VALUES = ['complete', 'incomplete'] as const
+const COMPLETENESS_SELECT: ExplorerFilterControl = { kind: 'select', options: COMPLETENESS_VALUES }
+
 export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
   {
     id: 'hourly_load',
@@ -37,6 +52,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     navGroup: 'power',
     apiPath: '/data/power/load',
     defaultHours: 24,
+    maxDays: 31,
+    quickRanges: PAST_QUICK_RANGES,
     columns: ['datetime', 'subject', 'load_mw'],
     filters: [{ key: 'subject', placeholder: 'nationwide' }],
   },
@@ -46,6 +63,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     navGroup: 'power',
     apiPath: '/data/power/supply-demand',
     defaultHours: 24,
+    maxDays: 7,
+    quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'curr_load_mw', 'curr_util_rate_pct'],
     filters: [],
   },
@@ -55,10 +74,12 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     navGroup: 'power',
     apiPath: '/data/power/regional',
     defaultHours: 24,
+    maxDays: 7,
+    quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'region', 'load_mw', 'generation_mw', 'slot_complete'],
     filters: [
-      { key: 'region', placeholder: '北部' },
-      { key: 'completeness', placeholder: 'complete | incomplete' },
+      { key: 'region', control: { kind: 'select', options: REGIONS } },
+      { key: 'completeness', control: COMPLETENESS_SELECT },
     ],
   },
   {
@@ -67,6 +88,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     navGroup: 'power',
     apiPath: '/data/power/units',
     defaultHours: 24,
+    maxDays: 7,
+    quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'unit_type', 'unit_name', 'net_generation_mw'],
     filters: [{ key: 'unit_type' }, { key: 'unit_name' }],
   },
@@ -76,6 +99,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     navGroup: 'weather',
     apiPath: '/data/weather/observations',
     defaultHours: 24,
+    maxDays: 31,
+    quickRanges: PAST_QUICK_RANGES,
     auditHref: '/data/audits?type=observations',
     auditDatasetId: 'cwa_observation_audits',
     columns: ['observed_at', 'station_id', 'temperature_c', 'relative_humidity_pct'],
@@ -88,6 +113,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     apiPath: '/data/weather/forecasts',
     defaultHours: 1,
     lookAheadHours: 72,
+    maxDays: 14,
+    quickRanges: FORWARD_QUICK_RANGES,
     auditHref: '/data/audits?type=forecasts',
     auditDatasetId: 'cwa_forecast_audits',
     columns: ['valid_from', 'geocode', 'dataset_id', 'temperature_c', 'issued_at'],
@@ -96,7 +123,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'geocode', placeholder: '63000000' },
       { key: 'issued_at' },
       { key: 'source_updated_at' },
-      { key: 'all_vintages', placeholder: 'true' },
+      { key: 'all_vintages', control: { kind: 'switch' } },
     ],
   },
   {
@@ -106,9 +133,11 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     search: { type: 'observations' },
     apiPath: '/data/audits/cwa-observations',
     defaultHours: 24,
+    maxDays: 31,
+    quickRanges: PAST_QUICK_RANGES,
     columns: ['fetched_at', 'status', 'missing_station_ids'],
     filters: [
-      { key: 'status', placeholder: 'complete | incomplete' },
+      { key: 'status', control: COMPLETENESS_SELECT },
       { key: 'missing_station_id' },
     ],
   },
@@ -119,10 +148,12 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     search: { type: 'forecasts' },
     apiPath: '/data/audits/cwa-forecasts',
     defaultHours: 24,
+    maxDays: 31,
+    quickRanges: PAST_QUICK_RANGES,
     columns: ['issued_at', 'dataset_id', 'status', 'missing_geocodes'],
     filters: [
       { key: 'dataset_id' },
-      { key: 'status', placeholder: 'complete | incomplete' },
+      { key: 'status', control: COMPLETENESS_SELECT },
       { key: 'missing_geocode' },
     ],
   },
