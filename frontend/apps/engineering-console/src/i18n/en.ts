@@ -258,6 +258,8 @@ export const en: Messages = {
       agg: 'Aggregation',
       buckets: { auto: 'Auto', raw: 'Raw', '1h': 'Hourly', '1d': 'Daily' },
       aggs: { avg: 'Average', min: 'Minimum', max: 'Maximum' },
+      groupBy: 'Grouping',
+      groupOptions: { unit_type: 'By type', none: 'Total' },
       brushHint: 'Drag across the chart to set that time range as the query window.',
       applied: (bucket: string, agg: string) => `Applied granularity: ${bucket} / aggregation: ${agg}`,
       loading: 'Loading chart...',

@@ -113,7 +113,7 @@ interface SeriesTooltipProps {
   locale: Locale
 }
 
-function SeriesTooltip({ active, row, series, locale }: SeriesTooltipProps) {
+export function SeriesTooltip({ active, row, series, locale }: SeriesTooltipProps) {
   if (!active || !row) return null
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900/95 p-3 text-xs shadow-xl">

@@ -18,7 +18,8 @@ export interface ExplorerFilterField {
   control?: ExplorerFilterControl
 }
 
-export type ExplorerChartType = 'line'
+export type ExplorerChartType = 'line' | 'stackedArea'
+export type ExplorerGroupOption = keyof Messages['explorer']['chart']['groupOptions']
 
 // What a dataset supplies to get a chart card; bucketing, limits and gap bands are shared.
 export interface ExplorerChartConfig {
@@ -28,6 +29,8 @@ export interface ExplorerChartConfig {
   fields: ExplorerFieldKey[]
   // Group key whose values pick a colour from the central palette; others use series order.
   colorBy?: { group: string; palette: CategoryPaletteKey }
+  // Selectable `group_by` values, the first being the API default that the URL leaves out.
+  groupOptions?: readonly ExplorerGroupOption[]
 }
 
 export interface ExplorerDatasetConfig {
@@ -113,6 +116,14 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'unit_type', 'unit_name', 'net_generation_mw'],
     filters: [{ key: 'unit_type' }, { key: 'unit_name' }],
+    chart: {
+      type: 'stackedArea',
+      seriesApiPath: '/data/power/units/series',
+      fields: ['net_generation_mw'],
+      colorBy: { group: 'unit_type', palette: 'unit_type' },
+      // SYNC(src/shiro_mlops/service/data_explorer/power.py): UnitGroupBy, default first.
+      groupOptions: ['unit_type', 'none'],
+    },
   },
   {
     id: 'cwa_observations',

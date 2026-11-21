@@ -4,6 +4,7 @@ import type { Series } from '@/schemas/data-explorer'
 // so chart-type renderers only lay out points.
 export interface PlottedSeries {
   key: string
+  field: string
   name: string
   color: string
   unit: string

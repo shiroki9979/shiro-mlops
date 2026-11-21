@@ -6,7 +6,7 @@ const at = (hour: number) => `2026-09-09T${String(hour).padStart(2, '0')}:00:00+
 const instant = (hour: number) => Date.parse(at(hour))
 
 function plotted(key: string, values: (number | null)[]): PlottedSeries {
-  return { key, name: key, color: '#22d3ee', unit: 'MW', points: values.map((v, hour) => ({ t: at(hour), v })) }
+  return { key, field: 'load_mw', name: key, color: '#22d3ee', unit: 'MW', points: values.map((v, hour) => ({ t: at(hour), v })) }
 }
 
 describe('chart series helpers', () => {

@@ -202,6 +202,34 @@ export const handlers = [
     }),
   ),
 
+  http.get('*/data/power/units/series', () =>
+    HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      bucket: 'raw',
+      agg: null,
+      series: [
+        {
+          field: 'net_generation_mw',
+          unit: 'MW',
+          group: { unit_type: '燃氣' },
+          points: [
+            { t: '2026-09-09T12:00:00+08:00', v: 9000.0 },
+            { t: '2026-09-09T12:10:00+08:00', v: 9100.0 },
+          ],
+        },
+        {
+          field: 'net_generation_mw',
+          unit: 'MW',
+          group: { unit_type: '儲能負載(Energy Storage System Load)' },
+          points: [
+            { t: '2026-09-09T12:00:00+08:00', v: -2000.0 },
+            { t: '2026-09-09T12:10:00+08:00', v: -2100.0 },
+          ],
+        },
+      ],
+    }),
+  ),
+
   http.get('*/data/power/supply-demand', () =>
     HttpResponse.json({
       timezone: 'Asia/Taipei',
