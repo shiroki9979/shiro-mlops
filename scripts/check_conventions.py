@@ -8,6 +8,36 @@ Checks:
   debt-markers
              TODO/FIXME/HACK/XXX in tracked source files must name their tech-debt issue,
              as in `TODO(#123): ...` (see docs/agents/tech-debt.md).
+  comment-refs
+             Tracked Python comments must refer to things that exist: each path in a
+             SYNC(...) tag must be a tracked file, other paths starting with a tracked top-level
+             directory must exist, and ADR-NNNN needs a docs/adr/NNNN-*.md. Other paths with
+             glob or placeholder characters (* ? [ ] < > { } $) are skipped.
+             To fix: point the comment at the renamed path, or rewrite or delete it with the
+             removed file. A path-like word that is really a name (an MLflow experiment, say)
+             should refer to the constant holding it, not be reworded to dodge the check.
+  comment-kinds
+             Comment blocks in src/ and scripts/ Python files that --base..--head adds or
+             modifies must start with an allowed kind. A block is full-line comments on
+             adjacent lines at one indent, and only its first line carries the tag; a trailing
+             comment is its own block. Changing any line of a block checks the whole block, and
+             changing a code line checks the trailing comment on it. Allowed kinds:
+               WHY-NOT(<name>): <reason>          a deliberate design someone might "fix"
+               SYNC(<path>[, <path>...]): <note>  deliberate duplication; paths from the root
+               TODO(#n), FIXME(#n), HACK(#n), XXX(#n)
+                                                  tech debt, see docs/agents/tech-debt.md
+               noqa or type: ignore followed by a reason; pragma, fmt:, ruff:;
+               a shebang on line 1; a PEP 263 coding line on line 1 or 2
+             A WHY-NOT name (its last dotted part) must be an identifier in the code it
+             protects: after a full-line block, the next logical line (the rest of the statement
+             when the block sits inside brackets), or the decorators plus the def or class line
+             of a decorated definition; for a trailing comment, its own logical line. A
+             full-line WHY-NOT is also checked when that code is changed or removed.
+             To fix: delete a comment that only restates the code, dividers and section labels
+             included (split functions or modules instead); turn design notes into WHY-NOT, sync
+             reminders into SYNC, and to-dos into TODO(#n) once a tech-debt issue exists; give
+             noqa and type: ignore a reason. When a WHY-NOT name is missing, move the comment
+             onto the code it protects or correct the name, or delete it with removed code.
 """
 
 from __future__ import annotations
@@ -17,8 +47,9 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+import tokenize
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -27,6 +58,8 @@ MAKEFILE = "Makefile"
 WORKFLOW_GLOB = ".github/workflows/*.yml"
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
+COMMENT_KINDS_DIRS = ("src", "scripts")
+CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds")
 
 # Single source for terminology: banned term -> preferred replacement.
 BANNED_TERMS = {
@@ -60,6 +93,44 @@ DEBT_MARKER_EXEMPT = frozenset(
         "tests/integration/test_check_conventions_git.py",
     }
 )
+
+# WHY-NOT(PATH_CANDIDATE): glob and placeholder characters continue the match instead of ending
+# it, so a pattern is skipped whole rather than cut down to a concrete-looking directory.
+PATH_CANDIDATE = re.compile(
+    r"(?<![A-Za-z0-9_./${}<>*?\[\]-])(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_./${}<>*?\[\]-]*)"
+)
+# WHY-NOT(PATH_PATTERN_CHARS): a pattern is skipped, not glob-matched against tracked files:
+# `<topic>` and `{name}` are placeholders rather than globs, and an example glob that matches
+# nothing today documents a layout, not a broken reference.
+PATH_PATTERN_CHARS = frozenset("*?[]<>{}$")
+ADR_REF = re.compile(r"\bADR-(?P<number>\d{4})\b")
+ADR_FILE = re.compile(r"docs/adr/\d{4}-[^/]+\.md")
+
+WHY_NOT_TAG = "WHY-NOT"
+WHY_NOT = re.compile(r"WHY-NOT\((?P<name>[A-Za-z_][A-Za-z0-9_.]*)\):\s*\S")
+NON_CODE_TOKENS = frozenset(
+    {tokenize.COMMENT, tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
+)
+SYNC_TAG = "SYNC"
+SYNC = re.compile(r"SYNC\((?P<paths>[^()\s,][^()]*)\):\s*\S")
+LINKED_DEBT_MARKER = re.compile(r"(?:TODO|FIXME|HACK|XXX)\(#\d+\)")
+SHEBANG = "#!"
+ENCODING_DECLARATION = re.compile(r"#.*?coding[:=][ \t]*[-\w.]+")
+DECORATOR = "@"
+SUPPRESSION = re.compile(
+    r"(?P<directive>noqa(?::\s*[A-Z]+[0-9]+(?:\s*,\s*[A-Z]+[0-9]+)*)?|type:\s*ignore(?:\[[^\]]*\])?)"
+    r"(?P<reason>.*)"
+)
+REASON_SEPARATORS = " \t-:;,\u2013\u2014"
+TOOL_DIRECTIVE = re.compile(r"(?:pragma\b|fmt:|ruff:)")
+ALLOWED_COMMENT_KINDS = (
+    "WHY-NOT(<name>): <reason>, SYNC(<path>[, <path>...]): <note>, "
+    "TODO/FIXME/HACK/XXX(#<issue>), or a tool directive (noqa or type: ignore followed by "
+    "a reason, pragma, fmt:, ruff:, a shebang or coding line)"
+)
+HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+DIFF_FILE_HEADER = "diff --git "
+DIFF_NEW_PATH = "+++ b/"
 
 LAST_UPDATED = re.compile(
     r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
@@ -107,6 +178,8 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
+    "comment-refs": lambda args: check_comment_refs(REPO_ROOT),
+    "comment-kinds": lambda args: check_comment_kinds(GitRange(REPO_ROOT, args.base, args.head)),
 }
 
 
@@ -125,11 +198,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("checks", nargs="+", choices=list(CHECKS))
-    parser.add_argument("--base", help="base ref for doc-dates, e.g. origin/dev or a PR base SHA")
-    parser.add_argument("--head", default="HEAD", help="head ref for doc-dates (default: HEAD)")
+    parser.add_argument(
+        "--base", help="base ref for doc-dates and comment-kinds, e.g. origin/dev or a PR base SHA"
+    )
+    parser.add_argument(
+        "--head", default="HEAD", help="head ref for doc-dates and comment-kinds (default: HEAD)"
+    )
     args = parser.parse_args(argv)
-    if "doc-dates" in args.checks and not args.base:
-        parser.error("doc-dates requires --base")
+    for name in CHECKS_REQUIRING_BASE:
+        if name in args.checks and not args.base:
+            parser.error(f"{name} requires --base")
     return args
 
 
@@ -151,9 +229,6 @@ def describe(error: Exception) -> str:
     if isinstance(error, subprocess.CalledProcessError):
         return f"{' '.join(error.cmd)} exited {error.returncode}: {(error.stderr or '').strip()}"
     return str(error)
-
-
-# --- python-uv -------------------------------------------------------------
 
 
 def check_python_uv(repo_root: Path) -> list[Violation]:
@@ -308,9 +383,6 @@ def command_words(tokens: list[str]) -> list[str]:
     return words
 
 
-# --- terms -----------------------------------------------------------------
-
-
 def check_terms(repo_root: Path) -> list[Violation]:
     return [
         Violation(path, hit.line, f"banned term '{hit.term}'; use '{hit.replacement}'")
@@ -335,9 +407,6 @@ def find_banned_terms(text: str) -> list[TermHit]:
         for term, replacement in BANNED_TERMS.items()
         if term in line
     ]
-
-
-# --- debt-markers ----------------------------------------------------------
 
 
 def check_debt_markers(repo_root: Path) -> list[Violation]:
@@ -367,7 +436,244 @@ def find_unlinked_debt_markers(text: str) -> list[SourceLine]:
     ]
 
 
-# --- doc-dates -------------------------------------------------------------
+def check_comment_refs(repo_root: Path) -> list[Violation]:
+    tracked = tracked_files(repo_root)
+    tree = TrackedTree(tracked)
+    adrs = {Path(path).name[:4] for path in tracked if ADR_FILE.fullmatch(path)}
+    return [
+        Violation(path, comment.line, message)
+        for path in tracked
+        if path.endswith(".py")
+        for comment in source_comments(path, (repo_root / path).read_text(encoding="utf-8"))
+        for message in comment_ref_problems(comment, tree, adrs)
+    ]
+
+
+def source_comments(path: str, source: str) -> list[Comment]:
+    try:
+        return list(python_comments(source))
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+
+
+def comment_ref_problems(comment: Comment, tree: TrackedTree, adrs: set[str]) -> list[str]:
+    sync_paths = comment_kind(comment).sync_paths
+    problems = [
+        f"SYNC path '{path}' is not a tracked file; list each file to change together by its "
+        "path from the repository root, or update the list if a file was renamed or removed"
+        for path in sync_paths
+        if path not in tree.files
+    ]
+    problems += [
+        f"comment refers to missing path '{ref}'; point it at the renamed path, or rewrite or "
+        "delete it if the file was removed"
+        for ref in find_path_refs(comment.text, tree.top_level_dirs)
+        if ref not in sync_paths and not tree.contains(ref)
+    ]
+    problems += [
+        f"comment refers to {match[0]}, but docs/adr/ has no {match['number']}-*.md"
+        for match in ADR_REF.finditer(comment.text)
+        if match["number"] not in adrs
+    ]
+    return problems
+
+
+def find_path_refs(text: str, top_level_dirs: Iterable[str]) -> list[str]:
+    refs = []
+    for match in PATH_CANDIDATE.finditer(text):
+        candidate = match["path"].rstrip(".")
+        top, _, rest = candidate.partition("/")
+        if top in top_level_dirs and rest and not PATH_PATTERN_CHARS.intersection(candidate):
+            refs.append(candidate)
+    return refs
+
+
+class TrackedTree:
+    """The tracked files of a repository, queried as a tree of files and directories."""
+
+    def __init__(self, tracked: Iterable[str]) -> None:
+        self.files = frozenset(tracked)
+        self.dirs = frozenset(
+            "/".join(parts[:end])
+            for parts in (Path(path).parts for path in self.files)
+            for end in range(1, len(parts))
+        )
+        self.top_level_dirs = frozenset(path for path in self.dirs if "/" not in path)
+
+    def contains(self, path: str) -> bool:
+        stripped = path.rstrip("/")
+        return stripped in self.dirs or (stripped == path and path in self.files)
+
+
+def check_comment_kinds(revisions: GitRange) -> list[Violation]:
+    return [
+        violation
+        for path, changes in revisions.changed_lines(*COMMENT_KINDS_DIRS).items()
+        if path.endswith(".py")
+        for violation in comment_kind_violations(path, revisions.read_at_head(path), changes)
+    ]
+
+
+def comment_kind_violations(path: str, source: str, changes: FileChanges) -> list[Violation]:
+    """Check each comment block that `changes` touches, or whose WHY-NOT anchor code it touches."""
+    code = logical_lines(source)
+    violations = []
+    for block in comment_blocks(source_comments(path, source)):
+        kind = comment_kind(block.first)
+        anchor = why_not_anchor(kind.why_not, block, code) if kind.why_not is not None else None
+        anchor_changed = (
+            anchor is not None
+            and block.first.full_line
+            and changes.touches_after(block.last_line, anchor.last_line)
+        )
+        if not (changes.touches(block.lines) or anchor_changed):
+            continue
+        problem = kind.problem or (anchor.problem() if anchor is not None else None)
+        if problem is not None:
+            violations.append(Violation(path, block.first.line, problem))
+    return violations
+
+
+@dataclass(frozen=True)
+class CommentBlock:
+    """Comments read as one unit; only the first one carries the kind tag."""
+
+    comments: tuple[Comment, ...]
+
+    @property
+    def first(self) -> Comment:
+        return self.comments[0]
+
+    @property
+    def last_line(self) -> int:
+        return self.comments[-1].line
+
+    @property
+    def lines(self) -> set[int]:
+        return {comment.line for comment in self.comments}
+
+
+def comment_blocks(comments: Iterable[Comment]) -> list[CommentBlock]:
+    """Group full-line comments on adjacent lines at one indent; a trailing comment stands alone."""
+    groups: list[list[Comment]] = []
+    for comment in comments:
+        previous = groups[-1][-1] if groups else None
+        if previous is not None and continues_block(previous, comment):
+            groups[-1].append(comment)
+        else:
+            groups.append([comment])
+    return [CommentBlock(tuple(group)) for group in groups]
+
+
+def continues_block(previous: Comment, comment: Comment) -> bool:
+    return (
+        previous.full_line
+        and comment.full_line
+        and comment.line == previous.line + 1
+        and comment.column == previous.column
+        and not is_file_directive(previous)
+        and not is_file_directive(comment)
+    )
+
+
+def is_file_directive(comment: Comment) -> bool:
+    """A shebang on line 1 or a PEP 263 encoding declaration on line 1 or 2."""
+    if comment.line == 1 and comment.text.startswith(SHEBANG):
+        return True
+    return (
+        comment.line <= 2 and comment.full_line and bool(ENCODING_DECLARATION.match(comment.text))
+    )
+
+
+@dataclass(frozen=True)
+class CommentKind:
+    """What the first comment of a block declares, or why it is not an allowed kind."""
+
+    problem: str | None = None
+    why_not: str | None = None
+    sync_paths: tuple[str, ...] = ()
+
+
+def comment_kind(comment: Comment) -> CommentKind:
+    body = comment.body
+    if body.startswith(WHY_NOT_TAG):
+        if (why_not := WHY_NOT.match(body)) is not None:
+            return CommentKind(why_not=why_not["name"])
+        return CommentKind(
+            "WHY-NOT comment must read `WHY-NOT(<name>): <reason>`, naming the code it protects"
+        )
+    if body.startswith(SYNC_TAG):
+        if (sync := SYNC.match(body)) is not None:
+            return CommentKind(sync_paths=tuple(path.strip() for path in sync["paths"].split(",")))
+        return CommentKind(
+            "SYNC comment must read `SYNC(<path>[, <path>...]): <note>` with repo-rooted paths"
+        )
+    if LINKED_DEBT_MARKER.match(body) or TOOL_DIRECTIVE.match(body) or is_file_directive(comment):
+        return CommentKind()
+    suppression = SUPPRESSION.match(body)
+    if suppression is not None:
+        if suppression["reason"].strip(REASON_SEPARATORS):
+            return CommentKind()
+        directive = suppression["directive"]
+        return CommentKind(
+            f"`{directive}` needs a reason after it, e.g. `# {directive} — <why it is needed>`"
+        )
+    return CommentKind(
+        f"comment block does not start with an allowed kind ({ALLOWED_COMMENT_KINDS}); "
+        "delete it if the code already says it, otherwise tag its first line "
+        "(`scripts/check_conventions.py --help` explains each kind)"
+    )
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """The code a WHY-NOT name must appear in, and how to describe where it was looked for."""
+
+    name: str
+    tokens: tuple[CodeToken, ...]
+    where: str
+
+    @property
+    def last_line(self) -> int | None:
+        return self.tokens[-1].line if self.tokens else None
+
+    def problem(self) -> str | None:
+        """Require the name among the anchor's identifiers; a dotted name matches its last part."""
+        name = self.name.rpartition(".")[2]
+        if any(token.is_name and token.text == name for token in self.tokens):
+            return None
+        named = f"'{name}'" if name == self.name else f"'{name}' (from '{self.name}')"
+        return (
+            f"WHY-NOT name {named} must appear on {self.where}; move the comment onto the code "
+            "it protects or correct the name, and delete it along with code that was removed"
+        )
+
+
+def why_not_anchor(name: str, block: CommentBlock, code: list[LogicalLine]) -> Anchor:
+    """Find the code a WHY-NOT block protects: the next statement, or its own for a trailing one."""
+    if not block.first.full_line:
+        tokens = next(
+            (line.tokens for line in reversed(code) if line.first <= block.first.line), ()
+        )
+        return Anchor(name, tokens, f"the same logical line (line {block.first.line})")
+    end = block.last_line
+    index = next((index for index, line in enumerate(code) if line.ends_after(end)), None)
+    if index is None:
+        return Anchor(name, (), "the next logical line, but no code follows the comment")
+    if code[index].first > end and code[index].is_decorator:
+        tokens = decorated_definition(code, index)
+        lines = f"lines {tokens[0].line}-{tokens[-1].line}"
+        return Anchor(name, tokens, f"the decorated definition ({lines})")
+    tokens = code[index].tokens_after(end)
+    return Anchor(name, tokens, f"the next logical line (line {tokens[0].line})")
+
+
+def decorated_definition(code: list[LogicalLine], index: int) -> tuple[CodeToken, ...]:
+    """Tokens of the decorators starting at `code[index]` and of the `def` or `class` line after."""
+    end = index
+    while end < len(code) and code[end].is_decorator:
+        end += 1
+    return tuple(token for line in code[index : end + 1] for token in line.tokens)
 
 
 def check_doc_dates(revisions: GitRange) -> list[Violation]:
@@ -421,6 +727,66 @@ class GitRange:
     def read_at_head(self, path: str) -> str:
         return git(self.repo_root, "show", f"{self.head}:{path}")
 
+    def changed_lines(self, *pathspecs: str) -> dict[str, FileChanges]:
+        """Where the diff adds, modifies or removes lines in each changed file, renames followed."""
+        output = git(
+            self.repo_root,
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            "--diff-filter=AMR",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            f"{self.base}...{self.head}",
+            "--",
+            *pathspecs,
+        )
+        return parse_changed_lines(output)
+
+
+@dataclass
+class FileChanges:
+    """Where a diff touches one file, in head-side line numbers."""
+
+    changed: set[int] = field(default_factory=set)
+    """Lines added or modified."""
+    deleted_after: set[int] = field(default_factory=set)
+    """Lines that removed lines used to follow directly; 0 is the start of the file."""
+
+    def touches(self, lines: Iterable[int]) -> bool:
+        return not self.changed.isdisjoint(lines)
+
+    def touches_after(self, start: int, end: int | None) -> bool:
+        """Whether lines after `start`, through `end` or the end of file, were changed or removed."""
+        last = sys.maxsize if end is None else end
+        return any(start < line <= last for line in self.changed) or any(
+            start <= line < last for line in self.deleted_after
+        )
+
+
+def parse_changed_lines(diff: str) -> dict[str, FileChanges]:
+    """Read a `--unified=0` diff into the head-side lines each file's hunks touch."""
+    files: dict[str, FileChanges] = {}
+    changes = FileChanges()
+    in_file_header = False
+    for line in diff.split("\n"):
+        if line.startswith(DIFF_FILE_HEADER):
+            in_file_header = True
+        elif in_file_header and line.startswith(DIFF_NEW_PATH):
+            changes = files.setdefault(line.removeprefix(DIFF_NEW_PATH), FileChanges())
+        elif (hunk := HUNK_HEADER.match(line)) is not None:
+            in_file_header = False
+            start, count = int(hunk["start"]), int(hunk["count"] or 1)
+            if count:
+                changes.changed.update(range(start, start + count))
+            else:
+                changes.deleted_after.add(start)
+    return files
+
 
 def is_doc_date_excluded(path: str) -> bool:
     return bool(DOC_DATES_EXCLUDED_DIRS.intersection(Path(path).parts[:1]))
@@ -453,7 +819,78 @@ def find_last_updated(text: str) -> HeaderDate | None:
     return None
 
 
-# --- shared ----------------------------------------------------------------
+@dataclass(frozen=True)
+class Comment:
+    """A `#` comment found by tokenize, so `#` inside string literals is never one."""
+
+    line: int
+    column: int
+    text: str
+    full_line: bool
+
+    @property
+    def body(self) -> str:
+        """The comment text after `#` and the spaces that follow it."""
+        return self.text[1:].strip()
+
+
+def python_comments(source: str) -> Iterator[Comment]:
+    """Yield every comment in Python source in order; raise ValueError if it cannot tokenize."""
+    for token in python_tokens(source):
+        if token.type == tokenize.COMMENT:
+            line, column = token.start
+            full_line = not token.line[:column].strip()
+            yield Comment(line, column, token.string, full_line)
+
+
+@dataclass(frozen=True)
+class CodeToken:
+    line: int
+    text: str
+    is_name: bool
+
+
+@dataclass(frozen=True)
+class LogicalLine:
+    """One statement as tokenize ends it at NEWLINE, however many physical lines it spans."""
+
+    tokens: tuple[CodeToken, ...]
+
+    @property
+    def first(self) -> int:
+        return self.tokens[0].line
+
+    @property
+    def is_decorator(self) -> bool:
+        return self.tokens[0].text == DECORATOR
+
+    def ends_after(self, line: int) -> bool:
+        return self.tokens[-1].line > line
+
+    def tokens_after(self, line: int) -> tuple[CodeToken, ...]:
+        return tuple(token for token in self.tokens if token.line > line)
+
+
+def logical_lines(source: str) -> list[LogicalLine]:
+    """Split Python source into logical lines of code tokens; comments and blank lines drop out."""
+    lines: list[LogicalLine] = []
+    tokens: list[CodeToken] = []
+    for token in python_tokens(source):
+        if token.type == tokenize.NEWLINE:
+            if tokens:
+                lines.append(LogicalLine(tuple(tokens)))
+            tokens = []
+        elif token.type not in NON_CODE_TOKENS:
+            tokens.append(CodeToken(token.start[0], token.string, token.type == tokenize.NAME))
+    return lines
+
+
+def python_tokens(source: str) -> Iterator[tokenize.TokenInfo]:
+    readline = iter(source.splitlines(keepends=True)).__next__
+    try:
+        yield from tokenize.generate_tokens(readline)
+    except (tokenize.TokenError, SyntaxError) as error:
+        raise ValueError(f"cannot tokenize Python source: {error}") from error
 
 
 def git(repo_root: Path, *args: str) -> str:

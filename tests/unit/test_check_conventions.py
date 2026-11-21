@@ -10,6 +10,7 @@ from check_conventions import (
     find_last_updated,
     find_unlinked_debt_markers,
     is_debt_marker_source,
+    python_comments,
 )
 
 
@@ -263,3 +264,23 @@ def test_docs_data_and_the_checker_itself_are_not_scanned_for_debt_markers() -> 
     ]
 
     assert not any(is_debt_marker_source(path) for path in skipped)
+
+
+def test_comments_are_full_line_only_when_nothing_but_indentation_precedes_them() -> None:
+    source = (
+        "# header\n"
+        "def load():\n"
+        "    # indented\n"
+        '    text = """first\n'
+        'last"""  # after a multi-line string\n'
+        "    return text  # trailing\n"
+    )
+
+    comments = python_comments(source)
+
+    assert [(comment.line, comment.full_line) for comment in comments] == [
+        (1, True),
+        (3, True),
+        (5, False),
+        (6, False),
+    ]
