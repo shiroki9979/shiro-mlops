@@ -1,11 +1,15 @@
 import { createRoute } from '@tanstack/react-router'
 import { rootRoute } from './__root'
-import { usePrediction } from '@/hooks/use-prediction'
+import { useLatestIssuedForecast } from '@/hooks/use-latest-issued-forecast'
+import { stepsWithinHorizon } from '@/lib/horizon-window'
+import { useDashboardStore } from '@/store/dashboard-store'
 import { ForecastChart } from '@/components/dashboard/forecast-chart'
 import { HorizonControls } from '@/components/dashboard/horizon-controls'
 import { MetricCards } from '@/components/dashboard/metric-cards'
 import { PredictionTable } from '@/components/dashboard/prediction-table'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, CalendarClock } from 'lucide-react'
+import { formatDateTime } from '@shiro-mlops/shared/i18n/format'
+import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
 
 export const indexRoute = createRoute({
@@ -14,9 +18,15 @@ export const indexRoute = createRoute({
   component: OverviewPage,
 })
 
-function OverviewPage() {
-  const { data, isLoading, isError, error } = usePrediction()
+// Exported so the integration test renders the real page rather than a hand-assembled copy.
+export function OverviewPage() {
+  const { data, isLoading, isError, error } = useLatestIssuedForecast()
+  const { horizonHours } = useDashboardStore()
   const m = useMessages()
+  const locale = useLocale()
+
+  const issuedAt = data?.issued_at ?? null
+  const steps = issuedAt === null ? undefined : stepsWithinHorizon(issuedAt, data?.steps ?? [], horizonHours)
 
   return (
     <div className="space-y-6">
@@ -35,21 +45,24 @@ function OverviewPage() {
         </div>
       )}
 
+      {issuedAt !== null && (
+        <p className="flex items-center gap-1.5 text-xs text-slate-400">
+          <CalendarClock className="h-3.5 w-3.5 text-cyan-400" />
+          {m.dashboard.issuedAt(formatDateTime(issuedAt, locale))}
+        </p>
+      )}
+
       {/* Horizon & Filter Controls */}
       <HorizonControls />
 
       {/* Metric Cards */}
-      <MetricCards predictions={data?.predictions} isLoading={isLoading} />
+      <MetricCards steps={steps} isLoading={isLoading} />
 
-      {/* Dual Axis Interactive Chart */}
-      <ForecastChart predictions={data?.predictions} isLoading={isLoading} />
+      {/* Predicted Load Chart */}
+      <ForecastChart steps={steps} isLoading={isLoading} />
 
-      {/* Hourly Detail Table */}
-      <PredictionTable
-        predictions={data?.predictions}
-        isLoading={isLoading}
-        subject={data?.subject}
-      />
+      {/* Hourly Detail Table; keyed by preset so a shorter window never opens on a page past its end */}
+      <PredictionTable key={horizonHours} steps={steps} isLoading={isLoading} issuedAt={issuedAt} />
     </div>
   )
 }
