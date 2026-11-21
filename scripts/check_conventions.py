@@ -15,6 +15,8 @@ Checks:
              Comment blocks in src/ and scripts/ Python files that --base..--head adds or modifies
              must start with WHY-NOT(<name>): <reason>, SYNC(<path>[, <path>...]): <note>,
              TODO(#<issue>), or a tool directive; noqa and type: ignore need a reason.
+             A WHY-NOT name (its last dotted part) must be an identifier on the next logical
+             line after the block, or on the comment's own logical line for a trailing comment.
 """
 
 from __future__ import annotations
@@ -84,6 +86,9 @@ ADR_FILE = re.compile(r"docs/adr/\d{4}-[^/]+\.md")
 
 WHY_NOT_TAG = "WHY-NOT"
 WHY_NOT = re.compile(r"WHY-NOT\((?P<name>[A-Za-z_][A-Za-z0-9_.]*)\):\s*\S")
+NON_CODE_TOKENS = frozenset(
+    {tokenize.COMMENT, tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
+)
 SYNC_TAG = "SYNC"
 SYNC = re.compile(r"SYNC\((?P<paths>[^()\s,][^()]*)\):\s*\S")
 TODO_WITH_ISSUE = re.compile(r"TODO\(#\d+\)")
@@ -485,11 +490,13 @@ def is_comment_kinds_source(path: str) -> bool:
 
 def comment_kind_violations(path: str, source: str, added: set[int]) -> list[Violation]:
     """Check each comment block of `source` that has a line among the `added` line numbers."""
+    blocks = comment_blocks(source_comments(path, source))
+    code = logical_lines(source)
     return [
         Violation(path, block.first.line, problem)
-        for block in comment_blocks(source_comments(path, source))
+        for block in blocks
         if block.lines & added
-        for problem in [comment_kind_problem(block)]
+        for problem in [comment_kind_problem(block) or why_not_anchor_problem(block, code)]
         if problem is not None
     ]
 
@@ -552,6 +559,34 @@ def comment_kind_problem(block: CommentBlock) -> str | None:
         f"comment block does not start with an allowed kind ({ALLOWED_COMMENT_KINDS}); "
         "tag its first line with one of them, or delete the comment if the code already says it "
         "(see CODING_STANDARDS.md, 程式碼註解)"
+    )
+
+
+def why_not_anchor_problem(block: CommentBlock, code: list[LogicalLine]) -> str | None:
+    """Require the WHY-NOT name on the code the block protects; dotted names match their last part."""
+    match = WHY_NOT.match(block.first.body)
+    if match is None:
+        return None
+    name = match["name"].rpartition(".")[2]
+    if block.first.full_line:
+        end = max(block.lines)
+        tokens = next((line.tokens_after(end) for line in code if line.ends_after(end)), ())
+        where = (
+            f"the next logical line (line {tokens[0].line})"
+            if tokens
+            else "the next logical line, but no code follows the comment"
+        )
+    else:
+        tokens = next(
+            (line.tokens for line in reversed(code) if line.first <= block.first.line), ()
+        )
+        where = f"the same logical line (line {block.first.line})"
+    if any(token.is_name and token.text == name for token in tokens):
+        return None
+    named = f"'{name}'" if name == match["name"] else f"'{name}' (from '{match['name']}')"
+    return (
+        f"WHY-NOT name {named} must appear on {where}; anchor the comment on the code it "
+        "protects, or update or delete it if that code was renamed or removed"
     )
 
 
@@ -691,13 +726,55 @@ class Comment:
 
 def python_comments(source: str) -> Iterator[Comment]:
     """Yield every comment in Python source in order; raise ValueError if it cannot tokenize."""
+    for token in python_tokens(source):
+        if token.type == tokenize.COMMENT:
+            line, column = token.start
+            full_line = not token.line[:column].strip()
+            yield Comment(line, column, token.string, full_line)
+
+
+@dataclass(frozen=True)
+class CodeToken:
+    line: int
+    text: str
+    is_name: bool
+
+
+@dataclass(frozen=True)
+class LogicalLine:
+    """One statement as tokenize ends it at NEWLINE, however many physical lines it spans."""
+
+    tokens: tuple[CodeToken, ...]
+
+    @property
+    def first(self) -> int:
+        return self.tokens[0].line
+
+    def ends_after(self, line: int) -> bool:
+        return self.tokens[-1].line > line
+
+    def tokens_after(self, line: int) -> tuple[CodeToken, ...]:
+        return tuple(token for token in self.tokens if token.line > line)
+
+
+def logical_lines(source: str) -> list[LogicalLine]:
+    """Split Python source into logical lines of code tokens; comments and blank lines drop out."""
+    lines: list[LogicalLine] = []
+    tokens: list[CodeToken] = []
+    for token in python_tokens(source):
+        if token.type == tokenize.NEWLINE:
+            if tokens:
+                lines.append(LogicalLine(tuple(tokens)))
+            tokens = []
+        elif token.type not in NON_CODE_TOKENS:
+            tokens.append(CodeToken(token.start[0], token.string, token.type == tokenize.NAME))
+    return lines
+
+
+def python_tokens(source: str) -> Iterator[tokenize.TokenInfo]:
     readline = iter(source.splitlines(keepends=True)).__next__
     try:
-        for token in tokenize.generate_tokens(readline):
-            if token.type == tokenize.COMMENT:
-                line, column = token.start
-                full_line = not token.line[:column].strip()
-                yield Comment(line, column, token.string, full_line)
+        yield from tokenize.generate_tokens(readline)
     except (tokenize.TokenError, SyntaxError) as error:
         raise ValueError(f"cannot tokenize Python source: {error}") from error
 

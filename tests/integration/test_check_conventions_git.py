@@ -419,3 +419,160 @@ def test_comment_kinds_without_base_exits_2() -> None:
         main(["comment-kinds"])
 
     assert exit_info.value.code == 2
+
+
+def _why_not(repo: Path, source: str) -> int:
+    """Add `source` after one line of code and run comment-kinds over that change."""
+    return _comment_kinds(repo, {"src/pkg/load.py": "x = 1\n"}, {"src/pkg/load.py": source})
+
+
+def test_why_not_fails_when_its_name_is_missing_from_the_next_logical_line(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n# WHY-NOT(retries): the upstream rate limit resets every minute.\ntimeout = 30\n"
+    )
+
+    assert _why_not(repo, source) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:2: " in err
+    assert "'retries'" in err
+    assert "next logical line (line 3)" in err
+
+
+def test_why_not_fails_when_its_name_appears_only_on_a_later_line(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "# WHY-NOT(retries): the upstream rate limit resets every minute.\n"
+        "timeout = 30\n"
+        "retries = 3\n"
+    )
+
+    assert _why_not(repo, source) == 1
+    assert "next logical line (line 3)" in capsys.readouterr().err
+
+
+def test_why_not_matches_a_name_anywhere_in_a_multi_line_statement(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "# WHY-NOT(retries): the upstream rate limit resets every minute.\n"
+        "client = connect(\n"
+        "    host,\n"
+        "    retries=3,\n"
+        ")\n"
+    )
+
+    assert _why_not(repo, source) == 0
+
+
+def test_why_not_inside_a_call_matches_the_rest_of_that_statement(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "client = connect(\n"
+        "    retries=3,\n"
+        "    # WHY-NOT(host): the proxy pins one upstream.\n"
+        "    host=HOST,\n"
+        "    # WHY-NOT(retries): named only above this block.\n"
+        "    timeout=30,\n"
+        ")\n"
+    )
+
+    assert _why_not(repo, source) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:6: " in err
+    assert "src/pkg/load.py:4: " not in err
+
+
+def test_why_not_matches_a_function_name_on_its_def_line(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "# WHY-NOT(load_rows): rows stay lazy because the cache is larger than memory.\n"
+        "def load_rows(limit):\n"
+        "    return limit\n"
+    )
+
+    assert _why_not(repo, source) == 0
+
+
+def test_why_not_matches_a_parameter_name_inside_a_decorator(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "# WHY-NOT(retry_policy): 重試間隔加總必須小於 10 分鐘 slot，否則會和下一輪排程重疊\n"
+        "@asset(\n"
+        "    description='Rows.',\n"
+        "    retry_policy=RetryPolicy(max_retries=2),\n"
+        ")\n"
+        "def rows():\n"
+        "    return 1\n"
+    )
+
+    assert _why_not(repo, source) == 0
+
+
+def test_why_not_matches_the_last_part_of_a_dotted_name(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    matching = "x = 1\n# WHY-NOT(Settings.max_wait): slots are ten minutes.\nself.max_wait = 5\n"
+    assert _why_not(repo, matching) == 0
+
+    missing = "x = 1\n# WHY-NOT(max_wait.Settings): slots are ten minutes.\nself.max_wait = 5\n"
+    assert _why_not(repo, missing) == 1
+    assert "'Settings' (from 'max_wait.Settings')" in capsys.readouterr().err
+
+
+def test_why_not_trailing_comment_must_name_code_on_its_own_logical_line(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "timeout = 30  # WHY-NOT(retries): the upstream rate limit resets every minute.\n"
+        "retries = 3\n"
+    )
+
+    assert _why_not(repo, source) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:2: " in err
+    assert "'retries' must appear on the same logical line (line 2)" in err
+
+
+def test_why_not_trailing_comment_inside_a_multi_line_statement_passes(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "x = 1\n"
+        "client = connect(\n"
+        "    host,  # WHY-NOT(retries): the upstream rate limit resets every minute.\n"
+        "    retries=3,\n"
+        ")\n"
+    )
+
+    assert _why_not(repo, source) == 0
+
+
+def test_why_not_fails_when_no_code_follows_the_block(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = "x = 1\n# WHY-NOT(retries): the upstream rate limit resets every minute.\n"
+
+    assert _why_not(repo, source) == 1
+    assert "no code follows the comment" in capsys.readouterr().err
