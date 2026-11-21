@@ -277,6 +277,17 @@ export const zhTW = {
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset}趨勢圖；欄位：${fields}；序列：${series}`,
     },
+    sparkline: {
+      loading: '載入小圖中...',
+      empty: '沒有可繪製的資料。',
+      failed: '小圖查詢失敗。',
+      lineLabel: (dataset: string, range: string, fields: string, series: string) =>
+        `${dataset}${range}走勢；欄位：${fields}；序列：${series}`,
+      statusGridLabel: (dataset: string, range: string, summary: string) => `${dataset}${range}每小時狀態：${summary}`,
+      statusHours: (status: string, hours: string) => `${status} ${hours} 小時`,
+      noRecord: '無紀錄',
+      cellTitle: (hour: string, status: string) => `${hour}：${status}`,
+    },
     detail: {
       title: '資料明細',
     },

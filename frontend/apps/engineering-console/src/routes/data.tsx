@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { createRoute } from '@tanstack/react-router'
 import { rootRoute } from './__root'
 import { DatasetStatusCard } from '@/components/data-explorer/status-card'
@@ -14,6 +15,8 @@ export const dataRoute = createRoute({
 function DataExplorerOverview() {
   const { data, isLoading, isError } = useDatasetStatus()
   const m = useMessages()
+  // Fixed on entry so re-renders and refetches keep every card on the same 24 hours.
+  const [now] = useState(() => new Date())
 
   return (
     <div className="space-y-6">
@@ -30,7 +33,7 @@ function DataExplorerOverview() {
       {isError && <p className="text-xs text-rose-300">{m.explorer.statusError}</p>}
       <div className="grid gap-4 md:grid-cols-2">
         {data?.datasets.map((status) => (
-          <DatasetStatusCard key={status.id} status={status} />
+          <DatasetStatusCard key={status.id} status={status} now={now} />
         ))}
       </div>
     </div>
