@@ -1,6 +1,7 @@
 // Verifies the Forecast View build (the only frontend deployed to the cloud) carries no Engineering
 // Console trace (ADR-0014 §4): no console route paths in the built files, and no console source module
-// or console-only dependency among the bundled modules. Run after the frontend build, via
+// or console-only dependency among the bundled modules. It also rejects any on-demand inference call,
+// since the Forecast View only reads the precomputed `/published/` files (ADR-0015 §2.4). Run after the frontend build, via
 // `make frontend-bundle-check` locally and in the CI frontend job. Its negative controls live in
 // frontend/tooling/check-forecast-view-bundle.test.mjs.
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -19,6 +20,9 @@ const TEXT_EXTENSIONS = /\.(html|js|mjs|css|json|svg|txt|map|webmanifest)$/
 // console's Vite `base` without its trailing slash (CONSOLE_BASE_PATH in
 // frontend/apps/engineering-console/vite.config.ts); keep in sync.
 export const FORBIDDEN_PATHS = ['/console', '/monitoring', '/data/']
+
+// API endpoints for on-demand inference, which the cloud surface has no origin for (ADR-0015).
+export const FORBIDDEN_INFERENCE_PATHS = ['/predict']
 
 // Runtime dependencies that only the Engineering Console declares. Workspace packages are skipped:
 // their sources are checked by path instead.
@@ -43,8 +47,12 @@ function packageOf(moduleId) {
 export function findBundleViolations({ files, moduleIds, consoleOnly }) {
   const violations = []
   for (const { path, text } of files) {
-    const found = FORBIDDEN_PATHS.filter((forbidden) => text.includes(forbidden))
-    if (found.length > 0) violations.push(`${path} contains console paths: ${found.join(', ')}`)
+    const consolePaths = FORBIDDEN_PATHS.filter((forbidden) => text.includes(forbidden))
+    if (consolePaths.length > 0) violations.push(`${path} contains console paths: ${consolePaths.join(', ')}`)
+    const inferencePaths = FORBIDDEN_INFERENCE_PATHS.filter((forbidden) => text.includes(forbidden))
+    if (inferencePaths.length > 0) {
+      violations.push(`${path} contains on-demand inference paths: ${inferencePaths.join(', ')}`)
+    }
   }
   const consoleOnlySet = new Set(consoleOnly)
   for (const id of moduleIds) {
