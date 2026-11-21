@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -13,6 +14,7 @@ from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
+from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError, ExplorerQueryError
 from shiro_mlops.service.data_explorer.hourly_load import (
     HOURLY_LOAD_SERIES,
@@ -38,13 +40,20 @@ from shiro_mlops.service.data_explorer.series import (
     TooManyPointsError,
 )
 from shiro_mlops.service.data_explorer.weather import (
+    FORECAST_SERIES,
+    OBSERVATION_SERIES,
     ForecastAuditReader,
     ForecastReader,
+    ForecastSeriesField,
     ObservationAuditReader,
     ObservationReader,
+    ObservationSeriesField,
+    plan_forecast_series,
 )
 
 router = APIRouter(prefix="/data", tags=["data-explorer"])
+
+SeriesPlan = Callable[[ExplorerDb, dict[str, str]], tuple[SeriesSpec, dict[str, str]]]
 
 
 def _repository(request: Request) -> TimeSeriesRepository:
@@ -87,13 +96,17 @@ def _run_series(
     fields: list[str] | None,
     bucket: Bucket,
     agg: Agg,
+    plan: SeriesPlan | None = None,
 ) -> SeriesResponse:
+    """Read a series; `plan` lets a dataset specialise its spec from the request first."""
     _ensure_enabled()
     try:
-        series_request = SeriesRequest.build(
-            spec, _series_query_params(request), fields=fields, bucket=bucket, agg=agg
-        )
-        return SeriesReader(_engine(request), spec).read(series_request)
+        engine = _engine(request)
+        params = _series_query_params(request)
+        if plan is not None:
+            spec, params = plan(ExplorerDb(engine), params)
+        series_request = SeriesRequest.build(spec, params, fields=fields, bucket=bucket, agg=agg)
+        return SeriesReader(engine, spec).read(series_request)
     except TooManyPointsError as exc:
         suggested = exc.suggested_bucket.value if exc.suggested_bucket else None
         raise HTTPException(
@@ -184,10 +197,68 @@ def list_observations(request: Request) -> ListEnvelope:
     return _run_list(request, ObservationReader)
 
 
+@router.get("/weather/observations/series", response_model=SeriesResponse)
+def observation_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    station_id: str | None = None,
+    fields: list[ObservationSeriesField] | None = Query(default=None),
+    bucket: Bucket = Bucket.AUTO,
+    agg: Agg = Agg.AVG,
+) -> SeriesResponse:
+    """Chart series of CWA station observations, one per station and field.
+
+    Stations are never combined, so `group_by` is rejected with 422. `fields` defaults to
+    `temperature_c`; hours without an observation up to now appear as `null` points.
+    """
+    del start, end, station_id
+    return _run_series(
+        request,
+        OBSERVATION_SERIES,
+        fields=[field.value for field in fields] if fields else None,
+        bucket=bucket,
+        agg=agg,
+    )
+
+
 @router.get("/weather/forecasts", response_model=ListEnvelope)
 def list_forecasts(request: Request) -> ListEnvelope:
     """List persisted CWA township forecast vintages."""
     return _run_list(request, ForecastReader)
+
+
+@router.get("/weather/forecasts/series", response_model=SeriesResponse)
+def forecast_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    dataset_id: str | None = None,
+    geocode: str | None = None,
+    issued_at: str | None = None,
+    source_updated_at: str | None = None,
+    all_vintages: bool = False,
+    fields: list[ForecastSeriesField] | None = Query(default=None),
+    bucket: Bucket = Bucket.AUTO,
+    agg: Agg = Agg.AVG,
+) -> SeriesResponse:
+    """Chart series of CWA township forecasts on `valid_from`, one per geocode.
+
+    Like the list, the latest release is shown unless a version is named; with
+    `all_vintages=true` or a version filter each issue (`dataset_id`, `issued_at`, using its
+    newest correction unless `source_updated_at` is given) is a separate series per geocode.
+    Forecasts are not gap-filled: only points with a value are returned. `fields` defaults
+    to `temperature_c`.
+    """
+    del start, end, dataset_id, geocode, issued_at, source_updated_at, all_vintages
+    return _run_series(
+        request,
+        FORECAST_SERIES,
+        fields=[field.value for field in fields] if fields else None,
+        bucket=bucket,
+        agg=agg,
+        plan=plan_forecast_series,
+    )
 
 
 @router.get("/audits/cwa-observations", response_model=ListEnvelope)

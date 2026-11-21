@@ -68,6 +68,11 @@ class SeriesSpec:
     the time window, bucketing, limits and gap-fill come from this module. `slot_lag` is
     how long after its timestamp a slot is expected to exist (an hourly load row labels
     the hour it summarises, so it is due only once that hour has ended).
+    `default_fields` is what a request without `fields` gets; empty means every field.
+    Without `gap_fill` a series carries only points that have a value. `instant_group_columns`
+    are group columns holding instants, reported as RFC 3339 +08:00 like point times.
+    `rows_share_time` marks datasets where one series may hold several rows at a timestamp,
+    each carrying a different subset of the fields; `raw` then keeps each field's value.
     """
 
     dataset: str
@@ -79,6 +84,9 @@ class SeriesSpec:
     filters: SeriesFilters
     gap_fill: bool = True
     slot_lag: timedelta = timedelta(0)
+    default_fields: tuple[str, ...] = ()
+    instant_group_columns: frozenset[str] = frozenset()
+    rows_share_time: bool = False
 
     @property
     def cadence(self) -> timedelta:
@@ -126,7 +134,9 @@ class SeriesRequest:
             for key, value in query_params.items()
             if key in spec.filter_keys and value != ""
         }
-        chosen = tuple(dict.fromkeys(fields)) if fields else tuple(spec.fields)
+        chosen = (
+            tuple(dict.fromkeys(fields)) if fields else spec.default_fields or tuple(spec.fields)
+        )
         return cls(window=window, fields=chosen, bucket=bucket, agg=agg, filters=filters)
 
 
@@ -166,7 +176,15 @@ class SeriesReader:
         rows = self.db.fetch(
             f"SELECT DISTINCT {', '.join(groups)} FROM {self.spec.table} WHERE {where}", params
         )
-        return sorted(tuple(str(row[column]) for column in groups) for row in rows)
+        return sorted({self._group_key(row) for row in rows})
+
+    def _group_key(self, row: dict[str, Any]) -> tuple[str, ...]:
+        return tuple(
+            format_taiwan_time(to_taiwan(row[column]), timespec="auto")
+            if column in self.spec.instant_group_columns
+            else str(row[column])
+            for column in self.spec.group_columns
+        )
 
     def _resolve_bucket(self, request: SeriesRequest, *, series_count: int) -> Bucket:
         fitting = [
@@ -188,7 +206,11 @@ class SeriesReader:
     def _points_sql(self, request: SeriesRequest, bucket: Bucket, where: str) -> str:
         groups = list(self.spec.group_columns)
         fields = [self.spec.fields[name] for name in request.fields]
-        if bucket is Bucket.RAW:
+        if bucket is Bucket.RAW and self.spec.rows_share_time:
+            time_sql = self.spec.time_column
+            values = [f"MAX({field.sql}) AS v{index}" for index, field in enumerate(fields)]
+            tail = f" GROUP BY {', '.join([time_sql, *groups])}"
+        elif bucket is Bucket.RAW:
             time_sql = self.spec.time_column
             values = [f"{field.sql} AS v{index}" for index, field in enumerate(fields)]
             tail = ""
@@ -210,7 +232,7 @@ class SeriesReader:
         groups = self.spec.group_columns
         by_key: dict[tuple[str, ...], list[dict[str, Any]]] = {key: [] for key in keys}
         for row in rows:
-            by_key[tuple(str(row[column]) for column in groups)].append(row)
+            by_key[self._group_key(row)].append(row)
         expected = self._fill_slots(request.window, bucket)
         series = []
         for index, name in enumerate(request.fields):
@@ -219,12 +241,15 @@ class SeriesReader:
                 observed = {
                     to_taiwan(row["bucket_at"]): to_float(row[f"v{index}"]) for row in key_rows
                 }
+                points = self._points(observed, expected, bucket)
+                if not points:
+                    continue
                 series.append(
                     Series(
                         field=name,
                         unit=field.unit,
                         group=dict(zip(groups, key, strict=True)),
-                        points=self._points(observed, expected, bucket),
+                        points=points,
                     )
                 )
         return series
@@ -245,20 +270,27 @@ class SeriesReader:
         expected: list[datetime],
         bucket: Bucket,
     ) -> list[SeriesPoint]:
+        if not self.spec.gap_fill:
+            valued = {moment: value for moment, value in observed.items() if value is not None}
+            return _as_points(valued)
         covered = {self._slot_of(moment, bucket) for moment in observed}
         merged: dict[datetime, float | None] = {
             slot: None for slot in expected if slot not in covered
         }
         merged.update(observed)
-        return [
-            SeriesPoint(t=format_taiwan_time(moment, timespec="auto"), v=value)
-            for moment, value in sorted(merged.items())
-        ]
+        return _as_points(merged)
 
     def _slot_of(self, moment: datetime, bucket: Bucket) -> datetime:
         if bucket is not Bucket.RAW:
             return moment
         return pd.Timestamp(moment).floor(self.spec.cadence).to_pydatetime()
+
+
+def _as_points(values: dict[datetime, float | None]) -> list[SeriesPoint]:
+    return [
+        SeriesPoint(t=format_taiwan_time(moment, timespec="auto"), v=value)
+        for moment, value in sorted(values.items())
+    ]
 
 
 def expected_bucket_starts(

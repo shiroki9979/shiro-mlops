@@ -1,7 +1,7 @@
 # 營運資料檢視器 (Data Explorer)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 4 節拆出。
@@ -50,7 +50,7 @@
 ## 5. 介面與 API 邊界
 
 - **前端路由**：在 `/console/` 之下提供 `/data/power/load`、`/data/power/supply-demand`、`/data/power/regional`、`/data/power/units`、`/data/weather/observations`、`/data/weather/forecasts` 與 `/data/audits` nested routes，支援重新整理與 deep link。側邊欄在 Data Explorer 啟用時列出上述資料集與 CWA audits。`GET /data/status` 回傳的 `href` 是不含 base path 的工程主控台路由（如 `/data/power/load`），前端產生連結時補上 `/console`。
-- **資料 API**：每個領域 dataset 使用獨立 typed read endpoint：`GET /data/power/load`、`GET /data/power/supply-demand`、`GET /data/power/regional`、`GET /data/power/units`、`GET /data/weather/observations`、`GET /data/weather/forecasts`、`GET /data/audits/cwa-observations` 與 `GET /data/audits/cwa-forecasts`。所有 list endpoints 共用 cursor pagination response envelope。圖表另以 list 路徑加 `/series` 的有界序列 endpoint 讀取（目前為 `GET /data/power/load/series`），契約見 [rest-api.md](rest-api.md) §5。兩者都不提供任意 SQL 或任意實體資料表查詢。
+- **資料 API**：每個領域 dataset 使用獨立 typed read endpoint：`GET /data/power/load`、`GET /data/power/supply-demand`、`GET /data/power/regional`、`GET /data/power/units`、`GET /data/weather/observations`、`GET /data/weather/forecasts`、`GET /data/audits/cwa-observations` 與 `GET /data/audits/cwa-forecasts`。所有 list endpoints 共用 cursor pagination response envelope。圖表另以 list 路徑加 `/series` 的有界序列 endpoint 讀取（目前為 `GET /data/power/load/series`、`GET /data/weather/observations/series` 與 `GET /data/weather/forecasts/series`），契約見 [rest-api.md](rest-api.md) §5。兩者都不提供任意 SQL 或任意實體資料表查詢。
 - **Audit 呈現**：CWA observation 與 forecast 資料頁顯示最新 audit 狀態及 Audit History 連結；`/data/audits` 提供批次歷史與 missing identifiers，但不提供完整 `raw_payload`。
 
 ## 6. 交互與診斷行為
@@ -84,7 +84,9 @@
 ## 8. 圖表與聚合語意
 
 - **圖表卡片**：有圖表的資料頁在表格上方顯示一張圖表卡片，與表格共用同一個窗口與篩選。粒度（`bucket`）與聚合（`agg`）選單寫入 URL，預設值（`auto`、`avg`）不寫入；這兩個參數不送進 list 請求、不綁進 cursor，因此改圖表設定時 cursor 保留，而改窗口或篩選時 cursor 照常清除、圖表設定保留。Refresh 同時重新取得狀態、圖表與表格。點擊資料點只顯示 tooltip，不跳轉。
-- **成員合成**：一個分組內同一時間點有多個成員時（例如同一 `unit_type` 下的多部機組），先在該時間點把成員加總成一個值，`NULL` 成員略過，全部成員皆為 `NULL` 時該點為 `null`。逐時負載每個 `subject` 每小時只有一列，沒有成員合成。
+- **成員合成**：一個分組內同一時間點有多個成員時（例如同一 `unit_type` 下的多部機組），先在該時間點把成員加總成一個值，`NULL` 成員略過，全部成員皆為 `NULL` 時該點為 `null`。逐時負載每個 `subject` 每小時只有一列，沒有成員合成。氣溫、濕度、機率等欄位永不跨成員合成：測站觀測固定依測站分組，鄉鎮預報固定依 `geocode` 分組，避免 GLOSSARY「加權天氣」列為 Avoid 的等權平均。
+- **測站觀測圖**：預設每個測站一條 `temperature_c` 線，顏色依測站固定；series endpoint 不接受 `group_by`。可選欄位為相對濕度、氣壓、降水量與風速；觀測表沒有露點，風向不列入。逐時補值，規則同下方補值規則。
+- **鄉鎮預報圖**：時間軸為 `valid_from`，預設每個 `geocode` 一條最新發布版本的 `temperature_c` 線，版本解析與表格相同。開啟 `all_vintages` 時必須指定 `geocode`：有 `geocode` 時每個發布版本（`dataset_id`、`issued_at`）一條線，以發布時間命名，最新版本最亮、較舊版本漸暗（超過色階的較舊版本共用最暗的顏色）；同一發布時間有多個更正版本時取 `source_updated_at` 最新者。沒有 `geocode` 時不送 series 請求，圖表位置提示使用者指定 `geocode`，表格照常查詢。預報不補值，只回傳有值的點，線段連接相鄰的點、不畫灰底帶。
 - **時間聚合**：`1h` 與 `1d` 在每個 bucket 內對合成後的值取 `avg`、`min` 或 `max`；不提供 `sum`（`agg=sum` 回 422）。`raw` 不做時間聚合並忽略 `agg`。
 - **計算順序**：先套用窗口與篩選，再做成員合成，最後做時間聚合；因此邊界 bucket 只用窗口內的資料計算。例：機組 A 為 100..150、B 為 60..0 時，逐點合計為 160, 150, …，`1h` 的 `max` 為 160，而不是各成員最大值相加的 210。
 - **Bucket 對齊**：`1h` 對齊整點，`1d` 對齊台北日界（00:00 `+08:00`），bucket 時間標示其起點。TimescaleDB 以 `time_bucket(..., 'Asia/Taipei')` 計算；SQLite 以對應的時間截斷計算，台北無日光節約時間，固定 +8 小時即可精確對齊。只涵蓋到一部分的邊界 bucket 仍保留。

@@ -1,7 +1,7 @@
 # API 介面規格 (REST Interface)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 2 節拆出。
@@ -193,7 +193,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 參數 | 型別 | 預設 | 說明 |
 | --- | --- | --- | --- |
 | `start`、`end` | RFC 3339 | `end` = 現在，`start` = `end` − 24 小時 | 與 list 相同的精確閉區間；無 offset 時視為台北時間。窗口最長 92 天，與各 list 的天數上限無關。 |
-| `fields` | 可重複的列舉 | 該資料集白名單的全部欄位 | `fields=a&fields=b`；重複的欄位只產生一條 series。 |
+| `fields` | 可重複的列舉 | 該資料集的預設欄位（§5.4） | `fields=a&fields=b`；重複的欄位只產生一條 series。 |
 | `bucket` | `auto` \| `raw` \| `1h` \| `1d` | `auto` | `auto` 解析為同時符合兩個點數上限的最細粒度（依 `raw`、`1h`、`1d` 順序）。 |
 | `agg` | `avg` \| `min` \| `max` | `avg` | bucket 內的時間聚合；`raw` 忽略此參數。 |
 | 資料集篩選 | 依資料集 | — | 見 §5.4。 |
@@ -225,7 +225,8 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 - `bucket`：實際採用的粒度，不會是 `auto`。
 - `agg`：實際採用的聚合；`bucket` 為 `raw` 時為 `null`。
 - `series`：每個（欄位, 分組鍵值）一條，依欄位請求順序、再依分組鍵值排序。`group` 為分組欄位到值的對應，未分組時為 `{}`。
-- `points`：依時間遞增。`t` 為 bucket 起點（`raw` 時為資料本身的時間，保留微秒），帶 `+08:00`；`v` 為數值，`null` 代表該 bucket 沒有資料（補值規則見 data-explorer.md §8）。
+- `points`：依時間遞增。`t` 為 bucket 起點（`raw` 時為資料本身的時間，保留微秒），帶 `+08:00`；`v` 為數值，`null` 代表該 bucket 沒有資料（補值規則見 data-explorer.md §8）。不補值的資料集只回傳有值的點，不出現 `null`；窗口內沒有任何值的 series 不列出。
+- `group` 中的時間值（例如鄉鎮預報的 `issued_at`）與 `t` 同格式，帶 `+08:00`。
 
 ### 5.3 上限與 HTTP 語意
 
@@ -245,3 +246,9 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 資料集 | 路徑 | `fields` 白名單（單位） | 分組 | 篩選 | 補值 |
 | --- | --- | --- | --- | --- | --- |
 | 逐時負載 | `GET /data/power/load/series` | `load_mw`（MW） | 固定依 `subject` | `subject` | 有（節奏 1 小時） |
+| 測站觀測 | `GET /data/weather/observations/series` | `temperature_c`（°C，預設）、`relative_humidity_pct`（%）、`air_pressure_hpa`（hPa）、`precipitation_mm`（mm）、`wind_speed_m_s`（m/s） | 固定依 `station_id`；不接受 `group_by` | `station_id` | 有（節奏 1 小時） |
+| 鄉鎮預報 | `GET /data/weather/forecasts/series` | `temperature_c`（°C，預設）、`apparent_temperature_c`（°C）、`dew_point_c`（°C）、`relative_humidity_pct`（%）、`probability_of_precipitation_pct`（%）、`wind_speed_m_s`（m/s） | 預設依 `geocode`；版本未隱含釘選時依 `geocode`、`dataset_id`、`issued_at` | `dataset_id`、`geocode`、`issued_at`、`source_updated_at`、`all_vintages` | 無 |
+
+- **測站觀測**：觀測表沒有露點欄位，因此白名單不含露點；風向（`wind_direction_deg`）是方位角，平均值沒有意義，不列入。
+- **鄉鎮預報**：時間軸為 `valid_from`。版本解析與 list 相同：沒有指定 `issued_at`、`source_updated_at` 也沒有開啟 `all_vintages` 時，釘選最新發布版本（有 `dataset_id` 時取該資料集的最新版本），每個 `geocode` 一條 series，`group` 為 `{"geocode": ...}`。開啟 `all_vintages` 或指定版本篩選時，每個（`geocode`, `dataset_id`, `issued_at`）一條 series，`group` 帶這三個鍵；同一 `issued_at` 有多個更正版本時取 `source_updated_at` 最新者，有指定 `source_updated_at` 時改用該版本。兩個版本永不合併成同一條線。
+- **鄉鎮預報的同時間多列**：同一版本、同一 `geocode`、同一 `valid_from` 可能有逐時列與三小時降雨機率列，各自只帶部分欄位；`raw` 取每個欄位在該時點的值。
