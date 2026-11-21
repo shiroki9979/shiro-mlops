@@ -79,6 +79,8 @@ export const zhTW = {
     description: '已發布預報與事後實際負載的對照，最近 30 天。',
     cutoff: (time: string) => `統計截至時刻：${time}`,
     loadError: '目前無法取得預報實績',
+    accumulatedDays: (days: number) => `已累積 ${days} 天`,
+    staleHint: '預報實績已超過 24 小時未更新',
     metrics: {
       lead24Mape: '提前 24 小時 MAPE',
       lead24Mae: '提前 24 小時 MAE',
