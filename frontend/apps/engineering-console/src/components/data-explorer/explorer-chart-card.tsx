@@ -1,5 +1,6 @@
 import { type ComponentType, useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shiro-mlops/shared/ui/select'
 import { EMPTY_VALUE } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { LineChart as LineChartIcon } from 'lucide-react'
@@ -175,25 +176,24 @@ interface ChartSelectProps {
 }
 
 function ChartSelect({ label, value, options, disabled, onChange }: ChartSelectProps) {
-  const id = useId()
+  const labelId = useId()
   return (
     <span className="flex items-center gap-2">
-      <label htmlFor={id} className="text-slate-400">
+      <span id={labelId} className="text-slate-400">
         {label}
-      </label>
-      <select
-        id={id}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className="rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-slate-200 disabled:opacity-50"
-      >
-        {options.map(([option, text]) => (
-          <option key={option} value={option}>
-            {text}
-          </option>
-        ))}
-      </select>
+      </span>
+      <Select value={value} disabled={disabled} onValueChange={onChange}>
+        <SelectTrigger aria-labelledby={labelId} className="h-auto w-auto gap-2 px-2 py-1 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(([option, text]) => (
+            <SelectItem key={option} value={option}>
+              {text}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </span>
   )
 }

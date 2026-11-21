@@ -102,7 +102,7 @@ describe('Data Explorer audit status timeline', () => {
     expect(params.has('type')).toBe(false)
     await waitFor(() => expect(within(figure).getByText(m.status.completeness.incomplete)).toBeInTheDocument())
     expect(within(figure).getByText(m.status.completeness.complete)).toBeInTheDocument()
-    expect(within(figure).queryByLabelText(chart.agg)).not.toBeInTheDocument()
+    expect(within(figure).queryByRole('combobox', { name: chart.agg })).not.toBeInTheDocument()
   })
 
   it('requests forecast version counts for the forecast audit page', async () => {

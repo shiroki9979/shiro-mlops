@@ -50,6 +50,12 @@ const totalBody = {
   series: [{ ...unitSeries('', [13000, 13100, 7150]), group: {} }],
 }
 
+// Chart settings use the shared Radix select: open the labelled combobox, then pick the option text.
+async function choose(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
+  await user.click(screen.getByRole('combobox', { name: label }))
+  await user.click(await screen.findByRole('option', { name: option }))
+}
+
 function renderPath(path: string) {
   const history = createMemoryHistory({ initialEntries: [`/console${path}`] })
   const router = createAppRouter(history)
@@ -102,7 +108,7 @@ describe('Data Explorer unit generation chart', () => {
     const router = renderPath(`/data/power/units?${WINDOW}&cursor=page-2`)
     await screen.findByRole('figure')
 
-    await user.selectOptions(screen.getByLabelText(chart.groupBy), chart.groupOptions.none)
+    await choose(user, chart.groupBy, chart.groupOptions.none)
 
     await waitFor(() => expect(requests.series.at(-1)!.searchParams.get('group_by')).toBe('none'))
     expect(router.state.location.search).toMatchObject({ group_by: 'none', cursor: 'page-2' })
@@ -123,9 +129,9 @@ describe('Data Explorer unit generation chart', () => {
     const user = userEvent.setup()
     const router = renderPath(`/data/power/units?${WINDOW}&group_by=none`)
     await screen.findByRole('figure')
-    expect(screen.getByLabelText(chart.groupBy)).toHaveValue('none')
+    expect(screen.getByRole('combobox', { name: chart.groupBy })).toHaveTextContent(chart.groupOptions.none)
 
-    await user.selectOptions(screen.getByLabelText(chart.groupBy), chart.groupOptions.unit_type)
+    await choose(user, chart.groupBy, chart.groupOptions.unit_type)
 
     await waitFor(() => expect((router.state.location.search as Record<string, string>).group_by).toBeUndefined())
   })
@@ -134,6 +140,6 @@ describe('Data Explorer unit generation chart', () => {
     renderPath('/data/power/load')
     await screen.findByRole('figure')
 
-    expect(screen.queryByLabelText(chart.groupBy)).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: chart.groupBy })).not.toBeInTheDocument()
   })
 })
