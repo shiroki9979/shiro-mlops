@@ -1,6 +1,8 @@
 """Task type seam: pure computation adapters fed with in-memory data by the runner (ADR-0009).
 
-Task types never touch repositories. The runner applies the shared components
+Task types never touch repositories and never see Dagster or Feast:
+tests/unit/test_task_type_import_boundary.py rejects direct imports of the data
+layer, SQLAlchemy, Dagster and Feast. The runner applies the shared components
 (accumulation gate, data retrieval, stale load anchor, weather resolution with
 degradation) and hands each task type frames it can trust.
 """
