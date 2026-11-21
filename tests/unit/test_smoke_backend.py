@@ -36,7 +36,7 @@ def _json(status: int, document: object) -> Response:
     return Response(status, json.dumps(document).encode("utf-8"))
 
 
-class Server:
+class StubService:
     """A loopback stub whose response each test overrides per path."""
 
     def __init__(self, routes: dict[str, Response | list[Response]]) -> None:
@@ -51,7 +51,7 @@ class Server:
         return route
 
 
-def _serve(stub: Server) -> Iterator[Server]:
+def _serve(stub: StubService) -> Iterator[StubService]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             response = stub.respond(self.path)
@@ -79,19 +79,19 @@ def _serve(stub: Server) -> Iterator[Server]:
 
 
 @pytest.fixture
-def api() -> Iterator[Server]:
+def api() -> Iterator[StubService]:
     yield from _serve(
-        Server({"/data/status": _json(200, DATA_STATUS), "/ready": _json(503, NOT_READY)})
+        StubService({"/data/status": _json(200, DATA_STATUS), "/ready": _json(503, NOT_READY)})
     )
 
 
 @pytest.fixture
-def mlflow() -> Iterator[Server]:
-    yield from _serve(Server({"/health": Response(200, b"OK", "text/plain")}))
+def mlflow() -> Iterator[StubService]:
+    yield from _serve(StubService({"/health": Response(200, b"OK", "text/plain")}))
 
 
 def _run(
-    api: Server, mlflow: Server, capsys: pytest.CaptureFixture[str], *extra: str
+    api: StubService, mlflow: StubService, capsys: pytest.CaptureFixture[str], *extra: str
 ) -> tuple[int, str]:
     exit_code = main(["--api-url", api.base_url, "--mlflow-url", mlflow.base_url, *extra])
     captured = capsys.readouterr()
@@ -175,3 +175,14 @@ def test_every_check_still_failing_at_the_deadline_is_listed(api, mlflow, capsys
     [data_status, mlflow_health] = _failure_lines(output)
     assert data_status == "- API /data/status: HTTP 500, expected 200"
     assert mlflow_health.startswith("- MLflow /health: cannot reach http://127.0.0.1:9/health")
+
+
+def test_not_ready_without_a_reason_fails(api, mlflow, capsys) -> None:
+    api.routes["/ready"] = _json(503, {**NOT_READY, "reason": None})
+
+    exit_code, output = _run(api, mlflow, capsys)
+
+    assert exit_code == 1
+    assert _failure_lines(output) == [
+        "- API /ready: reason is None with HTTP 503, expected a non-empty string"
+    ]

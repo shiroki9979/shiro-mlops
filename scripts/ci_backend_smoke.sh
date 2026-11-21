@@ -2,7 +2,9 @@
 # Build the backend images from docker/docker-compose.yml, start the API and MLflow with the
 # TimescaleDB and Redis they depend on, and check them with scripts/smoke_backend.py. Catches
 # failures that only show inside the containers: DDL initialisation, TimescaleDB connection and
-# MLflow startup. The dagster-webserver image is built but not started; nothing here checks it.
+# MLflow startup. The API's own DDL initialisation is checked in its log: the postgres service
+# also runs the DDL from its init directory, so /data/status alone still passes when the API
+# image cannot. The dagster-webserver image is built but not started; nothing here checks it.
 # Shared by CI and `make backend-smoke-ci`. Uses its own Compose project and volumes, which it
 # removes on exit, but the fixed container names and host ports in docker/docker-compose.yml
 # mean the local full stack must be stopped first.
@@ -26,6 +28,8 @@ readonly WAIT_SECONDS=180
 # Must match the host ports the api and mlflow services publish in docker/docker-compose.yml.
 readonly API_URL="http://127.0.0.1:8000"
 readonly MLFLOW_URL="http://127.0.0.1:5001"
+# Must match the message `lifespan` in src/shiro_mlops/service/api.py logs when init_db() fails.
+readonly API_DDL_FAILURE="Database initialization failed"
 
 main() {
   trap cleanup EXIT
@@ -37,9 +41,14 @@ main() {
   "${COMPOSE[@]}" up -d "${SERVICES[@]}"
 
   echo "==> Checking API data status, API readiness and MLflow health"
-  if ! uv run --no-project python "${REPO_ROOT}/scripts/smoke_backend.py" \
-    --api-url "$API_URL" --mlflow-url "$MLFLOW_URL" --wait-seconds "$WAIT_SECONDS"; then
-    print_diagnostics
+  uv run --no-project python "${REPO_ROOT}/scripts/smoke_backend.py" \
+    --api-url "$API_URL" --mlflow-url "$MLFLOW_URL" --wait-seconds "$WAIT_SECONDS"
+
+  echo "==> Checking the API initialised the database schema itself"
+  # Not `grep --quiet`: it exits on the first match, and with pipefail the SIGPIPE it leaves
+  # `docker compose logs` can turn a match into a false condition.
+  if "${COMPOSE[@]}" logs --no-color api | grep --fixed-strings "$API_DDL_FAILURE" >&2; then
+    echo "API log reports \"${API_DDL_FAILURE}\"" >&2
     exit 1
   fi
 
@@ -53,8 +62,12 @@ print_diagnostics() {
   "${COMPOSE[@]}" logs --no-color >&2
 }
 
+# Runs on every exit, so a failed build or start prints the same diagnostics as a failed check.
 cleanup() {
   local status=$?
+  if ((status != 0)); then
+    print_diagnostics || true
+  fi
   "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || status=1
   exit "$status"
 }

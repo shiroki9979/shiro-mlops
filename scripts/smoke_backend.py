@@ -18,9 +18,13 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import urlopen
 
 REQUEST_TIMEOUT_SECONDS = 10
-# docs/reference/rest-api.md §2; this script runs with `uv run --no-project` and cannot import
-# shiro_mlops, so keep it in sync with ReadyResponse in src/shiro_mlops/service/api.py.
+# SYNC(docs/reference/rest-api.md, src/shiro_mlops/data/weather_resolution.py): the modes a ready
+# task reports (`WeatherResolutionMode` minus "unavailable"); this script runs with
+# `uv run --no-project` and cannot import shiro_mlops.
 READY_MODES = ("normal", "degraded")
+
+
+PlannedCheck = tuple[str, Callable[[], None]]
 
 
 class CheckFailedError(Exception):
@@ -72,20 +76,27 @@ def check_ready(api_url: str) -> None:
     expected_status = "ready" if response.status == 200 else "not_ready"
     if body.get("status") != expected_status:
         raise CheckFailedError(
-            f"status is {_describe(body, 'status')} with HTTP {response.status},"
+            f"status is {_repr_or_missing(body, 'status')} with HTTP {response.status},"
             f" expected {expected_status!r}"
         )
     if response.status == 200 and body.get("mode") not in READY_MODES:
+        expected_modes = " or ".join(repr(mode) for mode in READY_MODES)
         raise CheckFailedError(
-            f"mode is {_describe(body, 'mode')} with HTTP 200, expected 'normal' or 'degraded'"
+            f"mode is {_repr_or_missing(body, 'mode')} with HTTP 200, expected {expected_modes}"
+        )
+    reason = body.get("reason")
+    if response.status == 503 and not (isinstance(reason, str) and reason):
+        raise CheckFailedError(
+            f"reason is {_repr_or_missing(body, 'reason')} with HTTP 503,"
+            " expected a non-empty string"
         )
     if not isinstance(body.get("model_loaded"), bool):
         raise CheckFailedError(
-            f"model_loaded is {_describe(body, 'model_loaded')}, expected a boolean"
+            f"model_loaded is {_repr_or_missing(body, 'model_loaded')}, expected a boolean"
         )
 
 
-def _describe(body: dict[str, object], key: str) -> str:
+def _repr_or_missing(body: dict[str, object], key: str) -> str:
     return repr(body[key]) if key in body else "missing"
 
 
@@ -93,7 +104,7 @@ def check_mlflow_health(mlflow_url: str) -> None:
     require_status(fetch(mlflow_url, "/health"), 200)
 
 
-def planned_checks(api_url: str, mlflow_url: str) -> list[tuple[str, Callable[[], None]]]:
+def planned_checks(api_url: str, mlflow_url: str) -> list[PlannedCheck]:
     return [
         ("API /data/status", lambda: check_data_status(api_url)),
         ("API /ready", lambda: check_ready(api_url)),
@@ -101,7 +112,7 @@ def planned_checks(api_url: str, mlflow_url: str) -> list[tuple[str, Callable[[]
     ]
 
 
-def run_checks(planned: list[tuple[str, Callable[[], None]]]) -> list[str]:
+def run_checks(planned: list[PlannedCheck]) -> list[str]:
     failures: list[str] = []
     for name, check in planned:
         try:
@@ -112,7 +123,7 @@ def run_checks(planned: list[tuple[str, Callable[[], None]]]) -> list[str]:
 
 
 def run_until_deadline(
-    planned: list[tuple[str, Callable[[], None]]], wait_seconds: float, interval_seconds: float
+    planned: list[PlannedCheck], wait_seconds: float, interval_seconds: float
 ) -> list[str]:
     deadline = time.monotonic() + wait_seconds
     while True:
