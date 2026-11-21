@@ -259,102 +259,83 @@ resource "aws_cloudfront_function" "spa_rewrite" {
   code    = file("${path.module}/functions/spa-rewrite.js")
 }
 
-# Edge TTLs per behavior; no cache key includes headers, cookies or query strings.
-# A 0/0/0 policy disables caching and CloudFront then rejects the gzip and Brotli
-# flags, leaving the behavior without edge compression. max_ttl = 1 keeps both
-# flags; the uploads set no Cache-Control, so the edge still applies default_ttl = 0.
-resource "aws_cloudfront_cache_policy" "index" {
-  name        = "shiro-mlops-forecast-view-index"
-  comment     = "Default behavior: index.html is not cached at the edge"
-  min_ttl     = 0
-  default_ttl = 0
-  max_ttl     = 1
-
-  parameters_in_cache_key_and_forwarded_to_origin {
-    enable_accept_encoding_gzip   = true
-    enable_accept_encoding_brotli = true
-
-    cookies_config {
-      cookie_behavior = "none"
-    }
-    headers_config {
-      header_behavior = "none"
-    }
-    query_strings_config {
-      query_string_behavior = "none"
-    }
-  }
-}
-
-resource "aws_cloudfront_cache_policy" "assets" {
-  name        = "shiro-mlops-forecast-view-assets"
-  comment     = "/assets/*: hashed file names, cached for one year"
-  min_ttl     = 31536000
-  default_ttl = 31536000
-  max_ttl     = 31536000
-
-  parameters_in_cache_key_and_forwarded_to_origin {
-    enable_accept_encoding_gzip   = true
-    enable_accept_encoding_brotli = true
-
-    cookies_config {
-      cookie_behavior = "none"
-    }
-    headers_config {
-      header_behavior = "none"
-    }
-    query_strings_config {
-      query_string_behavior = "none"
-    }
-  }
-}
-
-resource "aws_cloudfront_cache_policy" "published" {
-  name        = "shiro-mlops-forecast-view-published"
-  comment     = "/published/*: exported JSON, cached for 60 seconds"
-  min_ttl     = 60
-  default_ttl = 60
-  max_ttl     = 60
-
-  parameters_in_cache_key_and_forwarded_to_origin {
-    enable_accept_encoding_gzip   = true
-    enable_accept_encoding_brotli = true
-
-    cookies_config {
-      cookie_behavior = "none"
-    }
-    headers_config {
-      header_behavior = "none"
-    }
-    query_strings_config {
-      query_string_behavior = "none"
-    }
-  }
-}
-
-# Browser Cache-Control per behavior (forecast-view-hosting.md §2) plus the same
-# security headers as the managed SecurityHeadersPolicy (§3). A behavior takes one
-# response headers policy, so the managed policy is copied into each one rather
-# than attached. The uploads set no Cache-Control metadata; override = true keeps
-# these values even if an object gains some. Edge TTLs stay with the cache policies.
+# Cache rules per behavior (forecast-view-hosting.md §2): edge TTLs for the cache
+# policies and browser Cache-Control for the response headers policies. Where the
+# browser max-age equals the edge TTL, both come from one value.
 locals {
-  browser_cache_control = {
-    index     = "no-cache"
-    assets    = "public, max-age=31536000, immutable"
-    published = "public, max-age=60"
+  assets_ttl_seconds    = 31536000
+  published_ttl_seconds = 60
+
+  behavior_caching = {
+    # A 0/0/0 policy disables caching and CloudFront then rejects the gzip and
+    # Brotli flags, leaving the behavior without edge compression. max_ttl = 1
+    # keeps both flags; the uploads set no Cache-Control, so the edge still
+    # applies default_ttl = 0.
+    index = {
+      comment       = "Default behavior: index.html is not cached at the edge"
+      min_ttl       = 0
+      default_ttl   = 0
+      max_ttl       = 1
+      cache_control = "no-cache"
+    }
+    assets = {
+      comment       = "/assets/*: hashed file names, cached for one year"
+      min_ttl       = local.assets_ttl_seconds
+      default_ttl   = local.assets_ttl_seconds
+      max_ttl       = local.assets_ttl_seconds
+      cache_control = "public, max-age=${local.assets_ttl_seconds}, immutable"
+    }
+    published = {
+      comment       = "/published/*: exported JSON, cached for ${local.published_ttl_seconds} seconds"
+      min_ttl       = local.published_ttl_seconds
+      default_ttl   = local.published_ttl_seconds
+      max_ttl       = local.published_ttl_seconds
+      cache_control = "public, max-age=${local.published_ttl_seconds}"
+    }
   }
 }
 
+# No cache key includes headers, cookies or query strings.
+resource "aws_cloudfront_cache_policy" "forecast_view" {
+  for_each = local.behavior_caching
+
+  name        = "shiro-mlops-forecast-view-${each.key}"
+  comment     = each.value.comment
+  min_ttl     = each.value.min_ttl
+  default_ttl = each.value.default_ttl
+  max_ttl     = each.value.max_ttl
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "none"
+    }
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+# Browser Cache-Control per behavior plus the same security headers as the managed
+# SecurityHeadersPolicy (§3). A behavior takes one response headers policy, so the
+# managed policy is copied into each one rather than attached. The uploads set no
+# Cache-Control metadata; override = true keeps these values even if an object
+# gains some.
 resource "aws_cloudfront_response_headers_policy" "forecast_view" {
-  for_each = local.browser_cache_control
+  for_each = local.behavior_caching
 
   name    = "shiro-mlops-forecast-view-${each.key}"
-  comment = "Cache-Control: ${each.value}; managed SecurityHeadersPolicy headers"
+  comment = "Cache-Control: ${each.value.cache_control}; managed SecurityHeadersPolicy headers"
 
   custom_headers_config {
     items {
       header   = "Cache-Control"
-      value    = each.value
+      value    = each.value.cache_control
       override = true
     }
   }
@@ -415,7 +396,7 @@ resource "aws_cloudfront_distribution" "forecast_view" {
     allowed_methods            = local.read_only_methods
     cached_methods             = local.read_only_methods
     compress                   = true
-    cache_policy_id            = aws_cloudfront_cache_policy.index.id
+    cache_policy_id            = aws_cloudfront_cache_policy.forecast_view["index"].id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.forecast_view["index"].id
 
     function_association {
@@ -431,7 +412,7 @@ resource "aws_cloudfront_distribution" "forecast_view" {
     allowed_methods            = local.read_only_methods
     cached_methods             = local.read_only_methods
     compress                   = true
-    cache_policy_id            = aws_cloudfront_cache_policy.assets.id
+    cache_policy_id            = aws_cloudfront_cache_policy.forecast_view["assets"].id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.forecast_view["assets"].id
   }
 
@@ -442,7 +423,7 @@ resource "aws_cloudfront_distribution" "forecast_view" {
     allowed_methods            = local.read_only_methods
     cached_methods             = local.read_only_methods
     compress                   = true
-    cache_policy_id            = aws_cloudfront_cache_policy.published.id
+    cache_policy_id            = aws_cloudfront_cache_policy.forecast_view["published"].id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.forecast_view["published"].id
   }
 
