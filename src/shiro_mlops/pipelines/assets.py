@@ -257,6 +257,7 @@ def raw_taipower_unit_generation_snapshot(
 
 @multi_asset(
     name=FEAST_EXPORT_ASSET,
+    description="Publish the Feast offline Parquet contracts from the forecast training table",
     ins={"features": AssetIn(key=AssetKey(FEAST_TASK_NAMES.features))},
     outs={
         "taipower_features": AssetOut(
