@@ -35,7 +35,7 @@ export const en: Messages = {
     },
     empty: 'There is no issued forecast to show yet',
     noStepsInHorizon: 'This forecast has no target hours within the selected horizon',
-    stale: 'This forecast has not been updated for more than 24 hours',
+    stale: (hours: number) => `This forecast has not been updated for more than ${hours} hours`,
     issuedAt: (time) => `Forecast time: ${time}`,
     predictionSubject: 'Prediction Subject: Nationwide',
     autoRefresh: 'Auto refresh (60s)',

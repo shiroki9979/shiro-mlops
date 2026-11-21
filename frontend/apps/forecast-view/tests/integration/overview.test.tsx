@@ -265,7 +265,8 @@ describe('Overview page states', () => {
 
     renderOverview()
 
-    expect(await screen.findByText(dashboard.stale)).toBeInTheDocument()
+    // ADR-0015 §2.5's wording, kept verbatim.
+    expect(await screen.findByText('預報已超過 24 小時未更新')).toBeInTheDocument()
     expect(screen.getByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
     expect(screen.getByText(dashboard.metrics.peakTitle)).toBeInTheDocument()
     expect(screen.getByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
@@ -278,7 +279,7 @@ describe('Overview page states', () => {
     renderOverview()
 
     expect(await screen.findByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
-    expect(screen.queryByText(dashboard.stale)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.stale(24))).not.toBeInTheDocument()
   })
 
   // Local Nginx answers a missing file with 404, CloudFront with 403 (ADR-0015 §2.4): neither means "not issued yet".
@@ -375,7 +376,7 @@ describe('Overview page states', () => {
 
     servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
     const stale = renderOverview()
-    expect(await screen.findByText(en.dashboard.stale)).toBeInTheDocument()
+    expect(await screen.findByText('This forecast has not been updated for more than 24 hours')).toBeInTheDocument()
     stale.unmount()
 
     servePublished({ issued_at: null, steps: [] })

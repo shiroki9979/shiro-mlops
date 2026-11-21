@@ -34,7 +34,7 @@ export const zhTW = {
     },
     empty: '目前還沒有可顯示的已發布預報',
     noStepsInHorizon: '此預報在所選預測時效內沒有目標小時',
-    stale: '預報已超過 24 小時未更新',
+    stale: (hours: number) => `預報已超過 ${hours} 小時未更新`,
     issuedAt: (time: string) => `預報時刻：${time}`,
     predictionSubject: '預測對象：全台',
     autoRefresh: '自動輪詢 (60s)',

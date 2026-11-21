@@ -12,11 +12,12 @@ import { formatDateTime } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
 
-const STALE_AFTER_MS = 24 * 3_600_000
+// One threshold for both the comparison and the notice that states it (ADR-0015 §2.5).
+const STALE_AFTER_HOURS = 24
 
 // Compared against the viewer's clock on render only; no timer re-checks it (ADR-0015 §2.5).
 function isStale(issuedAt: string): boolean {
-  return Date.now() - Date.parse(issuedAt) > STALE_AFTER_MS
+  return Date.now() - Date.parse(issuedAt) > STALE_AFTER_HOURS * 3_600_000
 }
 
 export const indexRoute = createRoute({
@@ -56,7 +57,7 @@ export function OverviewPage() {
       {issuedAt !== null && isStale(issuedAt) && (
         <p className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           <Clock className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-          {m.dashboard.stale}
+          {m.dashboard.stale(STALE_AFTER_HOURS)}
         </p>
       )}
 
