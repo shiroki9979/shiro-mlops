@@ -78,3 +78,58 @@
 - apply 角色的 IAM 權限只限 `shiro-mlops-*`，並對 state bucket、OIDC provider、plan 與 apply 角色有明確 Deny；在 state bucket 內只能存取主設定的 state 與 lockfile。
 - state bucket 開啟 versioning、SSE 與完整的 public access block。
 - 網站上傳角色只能寫 `site/*`；`budget_alert_email` 為 sensitive。
+
+## 5. Plan 安全檢查
+
+`scripts/check_plan_safety.py` 判斷 CI 能否套用一份已存 plan，只用 Python 標準函式庫，PR plan 與 `main` 的部署 job 都呼叫它：
+
+```bash
+terraform show -json tfplan > tfplan.json
+uv run --no-project python scripts/check_plan_safety.py tfplan.json
+```
+
+- **輸入**：`terraform show -json` 對已存 plan 的輸出。沒有任何資源的設定不含 `resource_changes`，視為沒有變更。
+- **規則採白名單**：每個 resource change 的 `actions` 只能由 `no-op`、`create`、`read`、`update` 組成。出現 `delete`（包括替換時的 `delete`＋`create` 與 `create`＋`delete`）或 `forget`（從 state 移除）都視為不安全，其他未知的動作也一樣。
+- **輸出**：stdout 為 Markdown 摘要，寫進 job summary：結果（safe／unsafe）、各類動作的計數表與資源位址；不安全時另列出每個違規的資源位址與動作。摘要只含資源位址與動作，不含屬性值。錯誤訊息寫到 stderr。
+
+| 結束碼 | 意義 |
+| :--- | :--- |
+| `0` | 安全：沒有刪除、替換或 `forget` |
+| `1` | 不安全：至少一個 resource change 刪除、替換或 `forget` 資源 |
+| `2` | 參數錯誤、檔案無法讀取、JSON 無法解析，或不是 `terraform show -json` 的 plan |
+
+## 6. PR plan
+
+`.github/workflows/ci.yml` 的 `terraform-plan` job 讓 release 審查者在合併前看到雲端會怎麼變：
+
+- **觸發**：只在 base 為 `main` 的 PR（`dev` → `main` 的 release PR）執行；base 為 `dev` 的 PR 不執行。
+- **權限**：只有這個 job 取得 `id-token: write`，以 GitHub OIDC assume plan 角色（第 3 節）；plan 角色沒有寫入權限，因此 plan 以 `-lock=false` 執行，不寫 lockfile。
+- **步驟**：對主設定執行 `terraform init -backend-config="bucket=<TF_STATE_BUCKET>"`、`terraform plan -lock=false -out=tfplan`、`terraform show -json tfplan`，再以第 5 節的腳本判斷。
+- **結果**：摘要出現在 job summary，不寫 PR comment，因此不需要 `pull-requests: write` 或第三方 action。plan 不安全時 job 失敗，摘要列出違規資源。
+- **`budget_alert_email`**：只由 Actions secret `BUDGET_ALERT_EMAIL` 以 `TF_VAR_budget_alert_email` 傳入。變數標為 sensitive，plan 輸出顯示為 `(sensitive value)`；已存 plan 與其 JSON 含明文，只留在 runner 上，不上傳為 artifact。
+- **AWS 尚未設定時略過**：repository variable `AWS_TERRAFORM_PLAN_ROLE_ARN` 未設定時，job 寫一行 notice 與 job summary「AWS 尚未設定，略過 Terraform plan」後成功結束，PR 不因此變紅；營運驗收設定變數後自動啟用。
+
+## 7. 需要刪除或替換時
+
+CI 不套用含刪除、替換或 `forget` 的 plan，這類變更一律由人執行：
+
+1. 以 IAM Identity Center 的管理員短期憑證登入（見[如何部署 AWS 基礎設施](../how-to/deploy-aws-infrastructure.md)）。
+2. 在本機 checkout release PR 的 head，也就是 `dev` 的程式碼，在 `infra/terraform/` 以 `terraform init -backend-config=state.s3.tfbackend` 連上遠端 state 後執行 `terraform plan`，確認刪除或替換的資源正是預期的那些，再 `terraform apply`。本機 apply 會寫 lockfile，與 CI 的 apply 互斥。
+3. 重跑 release PR 的 `terraform-plan` job。state 已反映變更，plan 不再含刪除或替換，job 轉綠後才合併。
+
+替換 CloudFront distribution 會改變公開的 `*.cloudfront.net` 網址；合併前確認這是刻意的變更。`terraform destroy` 與既有的拆除步驟不經 CI，照舊在本機執行。
+
+## 8. Repository variables 與 secrets
+
+CI 用到的值都放在 GitHub 的 **Settings > Secrets and variables > Actions**。非機密值放 repository variables，機密值放 Actions secrets；來源都是 Terraform 的輸出或營運者自己的設定。
+
+| 名稱 | 種類 | 值的來源 | 使用的 job |
+| :--- | :--- | :--- | :--- |
+| `AWS_REGION` | variable | `ap-northeast-1` | `terraform-plan`、`deploy` |
+| `TF_STATE_BUCKET` | variable | bootstrap 層輸出 `state_bucket_name` | `terraform-plan`、`deploy` |
+| `AWS_TERRAFORM_PLAN_ROLE_ARN` | variable | bootstrap 層輸出 `terraform_plan_role_arn` | `terraform-plan` |
+| `AWS_TERRAFORM_APPLY_ROLE_ARN` | variable | bootstrap 層輸出 `terraform_apply_role_arn` | `deploy` |
+| `AWS_SITE_DEPLOY_ROLE_ARN` | variable | 主設定輸出 `site_deploy_role_arn` | `deploy` |
+| `BUDGET_ALERT_EMAIL` | secret | 接收 AWS Budgets 成本警示的 email；以 `TF_VAR_budget_alert_email` 傳入 | `terraform-plan`、`deploy` |
+
+job 所需的角色 ARN variable 未設定時，該 job 寫 notice 後略過並成功結束。
