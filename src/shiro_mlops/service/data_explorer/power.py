@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from enum import StrEnum
 from typing import Any
 
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
@@ -16,6 +18,7 @@ from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import optional_time, to_float, to_mw, to_taiwan
 
@@ -186,11 +189,8 @@ class UnitGenerationReader(DatasetReader):
 
     def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
         clauses, sql_params = self.db.time_window("observed_at", query.window)
-        for name in ("unit_type", "unit_name"):
-            if query.filters.get(name):
-                clauses.append(f"{name} = :{name}")
-                sql_params[name] = query.filters[name]
-        return clauses, sql_params
+        unit_clauses, unit_params = unit_generation_filters(query.filters)
+        return [*clauses, *unit_clauses], {**sql_params, **unit_params}
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -211,3 +211,48 @@ class UnitGenerationReader(DatasetReader):
                 }
             )
         return items, []
+
+
+UNIT_FILTER_KEYS = ("unit_type", "unit_name")
+
+
+def unit_generation_filters(filters: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Narrow the member units by exact `unit_type` and `unit_name`."""
+    clauses = []
+    params: dict[str, Any] = {}
+    for name in UNIT_FILTER_KEYS:
+        if filters.get(name):
+            clauses.append(f"{name} = :{name}")
+            params[name] = filters[name]
+    return clauses, params
+
+
+class UnitSeriesField(StrEnum):
+    """Additive unit-generation power fields a series request may name."""
+
+    NET_GENERATION_MW = "net_generation_mw"
+    CAPACITY_MW = "capacity_mw"
+
+
+class UnitGroupBy(StrEnum):
+    """Unit-generation series grouping: per unit type, or one total over every member."""
+
+    UNIT_TYPE = "unit_type"
+    NONE = "none"
+
+
+UNIT_GENERATION_SERIES = SeriesSpec(
+    dataset="unit_generation",
+    table="raw_taipower_unit_generation_snapshot",
+    time_column="observed_at",
+    fields={
+        UnitSeriesField.NET_GENERATION_MW.value: SeriesField(sql="net_generation_mw", unit="MW"),
+        UnitSeriesField.CAPACITY_MW.value: SeriesField(sql="capacity_mw", unit="MW"),
+    },
+    group_columns=("unit_type",),
+    filter_keys=frozenset(UNIT_FILTER_KEYS),
+    filters=unit_generation_filters,
+    member_sum=True,
+    default_fields=(UnitSeriesField.NET_GENERATION_MW.value,),
+    group_options={UnitGroupBy.UNIT_TYPE.value: ("unit_type",), UnitGroupBy.NONE.value: ()},
+)

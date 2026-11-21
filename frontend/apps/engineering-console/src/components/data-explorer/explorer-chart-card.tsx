@@ -13,12 +13,14 @@ import { type ChartBrush, useChartBrush } from './chart-brush'
 import { gapRanges, type PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
+import { SeriesStackedAreaChart } from './series-stacked-area-chart'
 import { SeriesStatusChart } from './series-status-chart'
 import { translateCompleteness } from './status-text'
 import { CHART_DEFAULTS, type ChartSearch, type ChartSearchKey } from './use-explorer-query'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
+  stackedArea: SeriesStackedAreaChart,
   status: SeriesStatusChart,
 }
 
@@ -86,6 +88,15 @@ export function ExplorerChartCard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs">
+          {chart.groupOptions && (
+            <ChartSelect
+              label={chartText.groupBy}
+              value={optionOr(chartSearch.group_by, chart.groupOptions, chart.groupOptions[0])}
+              options={chart.groupOptions.map((option) => [option, chartText.groupOptions[option]])}
+              // The API default grouping stays out of the URL, like the default bucket and agg.
+              onChange={(value) => onSettingChange('group_by', value === chart.groupOptions?.[0] ? '' : value)}
+            />
+          )}
           <ChartSelect
             label={chartText.bucket}
             value={bucket}
@@ -200,6 +211,7 @@ function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages): 
   const palette = chart.colorBy ? CATEGORY_PALETTES[chart.colorBy.palette] : undefined
   return series.map((item, index) => ({
     key: `s${index}`,
+    field: item.field,
     name: seriesName(item, multipleFields, chart, m),
     color: categoryColor(palette, chart.colorBy ? item.group[chart.colorBy.group] : undefined, index),
     unit: item.unit,

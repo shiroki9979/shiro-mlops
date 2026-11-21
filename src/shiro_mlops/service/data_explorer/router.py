@@ -24,9 +24,12 @@ from shiro_mlops.service.data_explorer.hourly_load import (
     HourlyLoadSeriesField,
 )
 from shiro_mlops.service.data_explorer.power import (
+    UNIT_GENERATION_SERIES,
     NationalSupplyDemandReader,
     RegionalSupplyDemandReader,
     UnitGenerationReader,
+    UnitGroupBy,
+    UnitSeriesField,
 )
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
@@ -180,6 +183,35 @@ def list_regional_supply_demand(request: Request) -> ListEnvelope:
 def list_unit_generation(request: Request) -> ListEnvelope:
     """List persisted unit-generation snapshots."""
     return _run_list(request, UnitGenerationReader)
+
+
+@router.get("/power/units/series", response_model=SeriesResponse)
+def unit_generation_series(
+    request: Request,
+    start: str | None = None,
+    end: str | None = None,
+    unit_type: str | None = None,
+    unit_name: str | None = None,
+    fields: list[UnitSeriesField] | None = Query(default=None),
+    group_by: UnitGroupBy = UnitGroupBy.UNIT_TYPE,
+    bucket: Bucket = Bucket.AUTO,
+    agg: Agg = Agg.AVG,
+) -> SeriesResponse:
+    """Chart series of unit generation per unit type, or as one total, over up to 92 days.
+
+    Members sharing a timestamp are summed first (NULL members are skipped, not read as 0),
+    then the time aggregation runs over those totals: `1h` `max` is the highest 10-minute
+    total within the hour. `unit_type` and `unit_name` narrow the summed members;
+    `group_by=none` returns one series for every remaining member.
+    """
+    del start, end, unit_type, unit_name, group_by
+    return _run_series(
+        request,
+        UNIT_GENERATION_SERIES,
+        fields=[field.value for field in fields] if fields else None,
+        bucket=bucket,
+        agg=agg,
+    )
 
 
 @router.get("/weather/observations", response_model=ListEnvelope)

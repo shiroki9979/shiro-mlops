@@ -257,6 +257,8 @@ export const zhTW = {
       agg: '聚合方式',
       buckets: { auto: '自動', raw: '原始', '1h': '每小時', '1d': '每日' },
       aggs: { avg: '平均', min: '最小', max: '最大' },
+      groupBy: '分組',
+      groupOptions: { unit_type: '依類型', none: '總和' },
       brushHint: '在圖上拖曳可框選時間區間，設為新的查詢窗口。',
       applied: (bucket: string, agg: string) => `實際粒度：${bucket}／聚合：${agg}`,
       loading: '載入圖表中...',
