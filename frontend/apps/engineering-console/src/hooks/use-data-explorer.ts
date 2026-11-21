@@ -41,10 +41,11 @@ export function datasetSeriesQueryKey(path: string, params: QueryParams) {
   return ['data-explorer', 'series', path, params] as const
 }
 
-export function useDatasetSeries(path: string, params: QueryParams) {
+export function useDatasetSeries(path: string, params: QueryParams, enabled = true) {
   return useQuery({
     queryKey: datasetSeriesQueryKey(path, params),
     queryFn: () => apiClient.getDataSeries(path, params),
+    enabled,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     retry: shouldRetryListQuery,

@@ -104,7 +104,7 @@ export function SeriesLineChart({ series, brush, bands }: ChartBodyProps) {
               strokeWidth={2}
               dot={showDots ? { r: 2, fill: item.color } : false}
               activeDot={{ r: 4 }}
-              connectNulls={false}
+              connectNulls={item.connectNulls ?? false}
               isAnimationActive={false}
             />
           ))}

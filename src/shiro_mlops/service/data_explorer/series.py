@@ -82,6 +82,12 @@ class SeriesSpec:
     fields may set it. `group_options` maps each selectable `group_by` value to its group
     columns; without options the dataset's grouping is fixed to `group_columns`.
     `default_fields` names the fields charted when a request names none (all if empty).
+
+    Without `gap_fill` a series carries only points that have a value, and a series with
+    none is left out. `instant_group_columns` are group columns holding instants, reported
+    as RFC 3339 +08:00 like point times. `rows_share_time` marks datasets where one series
+    may hold several rows at a timestamp, each carrying a different subset of the fields;
+    `raw` then keeps each field's value.
     """
 
     dataset: str
@@ -97,6 +103,8 @@ class SeriesSpec:
     member_sum: bool = False
     default_fields: tuple[str, ...] = ()
     group_options: Mapping[str, tuple[str, ...]] = MappingProxyType({})
+    instant_group_columns: frozenset[str] = frozenset()
+    rows_share_time: bool = False
 
     @property
     def request_params(self) -> frozenset[str]:
@@ -209,7 +217,15 @@ class SeriesReader:
         rows = self.db.fetch(
             f"SELECT DISTINCT {', '.join(groups)} FROM {self.spec.table} WHERE {where}", params
         )
-        return sorted(tuple(str(row[column]) for column in groups) for row in rows)
+        return sorted({self._group_key(row, groups) for row in rows})
+
+    def _group_key(self, row: dict[str, Any], groups: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            format_taiwan_time(to_taiwan(row[column]), timespec="auto")
+            if column in self.spec.instant_group_columns
+            else str(row[column])
+            for column in groups
+        )
 
     def _resolve_bucket(self, request: SeriesRequest, *, series_count: int) -> Bucket:
         fitting = [
@@ -231,7 +247,11 @@ class SeriesReader:
     def _points_sql(self, request: SeriesRequest, bucket: Bucket, where: str) -> str:
         groups = list(request.group_columns)
         source, value_sql = self._source(request, where)
-        if bucket is Bucket.RAW:
+        if bucket is Bucket.RAW and self.spec.rows_share_time:
+            time_sql = self.spec.time_column
+            values = [f"MAX({sql}) AS v{index}" for index, sql in enumerate(value_sql)]
+            tail = f" GROUP BY {', '.join([time_sql, *groups])}"
+        elif bucket is Bucket.RAW:
             time_sql = self.spec.time_column
             values = [f"{sql} AS v{index}" for index, sql in enumerate(value_sql)]
             tail = ""
@@ -267,7 +287,7 @@ class SeriesReader:
         groups = request.group_columns
         by_key: dict[tuple[str, ...], list[dict[str, Any]]] = {key: [] for key in keys}
         for row in rows:
-            by_key[tuple(str(row[column]) for column in groups)].append(row)
+            by_key[self._group_key(row, groups)].append(row)
         expected = self._fill_slots(request.window, bucket)
         series = []
         for index, name in enumerate(request.fields):
@@ -276,12 +296,15 @@ class SeriesReader:
                 observed = [
                     (to_taiwan(row["bucket_at"]), to_float(row[f"v{index}"])) for row in key_rows
                 ]
+                points = self._points(observed, expected, bucket)
+                if not points:
+                    continue
                 series.append(
                     Series(
                         field=name,
                         unit=field.unit,
                         group=dict(zip(groups, key, strict=True)),
-                        points=self._points(observed, expected, bucket),
+                        points=points,
                     )
                 )
         return series
@@ -302,18 +325,23 @@ class SeriesReader:
         expected: list[datetime],
         bucket: Bucket,
     ) -> list[SeriesPoint]:
+        if not self.spec.gap_fill:
+            return _as_points([(moment, value) for moment, value in observed if value is not None])
         covered = {self._slot_of(moment, bucket) for moment, _value in observed}
         missing = [(slot, None) for slot in expected if slot not in covered]
-        merged = sorted([*missing, *observed], key=lambda point: point[0])
-        return [
-            SeriesPoint(t=format_taiwan_time(moment, timespec="auto"), v=value)
-            for moment, value in merged
-        ]
+        return _as_points([*missing, *observed])
 
     def _slot_of(self, moment: datetime, bucket: Bucket) -> datetime:
         if bucket is not Bucket.RAW:
             return moment
         return pd.Timestamp(moment).floor(self.spec.cadence).to_pydatetime()
+
+
+def _as_points(values: list[tuple[datetime, float | None]]) -> list[SeriesPoint]:
+    return [
+        SeriesPoint(t=format_taiwan_time(moment, timespec="auto"), v=value)
+        for moment, value in sorted(values, key=lambda point: point[0])
+    ]
 
 
 def expected_bucket_starts(

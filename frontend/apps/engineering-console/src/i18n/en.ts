@@ -276,6 +276,7 @@ export const en: Messages = {
       wanKw: (value: string) => ` (${value} × 10,000 kW)`,
       gapLegend: 'Gray band: no data for that period',
       count: 'Count',
+      requiresFilter: (filter: string, toggle: string) => `With "${toggle}" on, set "${filter}" to compare forecast vintages.`,
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset} trend chart; fields: ${fields}; series: ${series}`,
     },

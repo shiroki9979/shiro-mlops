@@ -1,9 +1,12 @@
-"""CWA observation, forecast, and audit readers behind the typed query seam."""
+"""CWA observation, forecast, and audit readers and chart series specs behind the typed seams."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
+from enum import StrEnum
+from functools import partial
 from typing import Any, NamedTuple
 
 from shiro_mlops.service.data_explorer.completeness import gaps_until_now, observation_gaps
@@ -11,6 +14,7 @@ from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql_utc
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
@@ -144,15 +148,24 @@ def _restore_cursor_forecast_version(
 
 def _forecast_filters(db: ExplorerDb, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
     clauses, params = db.time_window("valid_from", query.window)
+    version_clauses, version_params = _forecast_version_filters(db, query.filters)
+    return [*clauses, *version_clauses], {**params, **version_params}
+
+
+def _forecast_version_filters(
+    db: ExplorerDb, filters: Mapping[str, Any]
+) -> tuple[list[str], dict[str, Any]]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
     for name in ("dataset_id", "geocode"):
-        if query.filters.get(name):
+        if filters.get(name):
             clauses.append(f"{name} = :{name}")
-            params[name] = query.filters[name]
+            params[name] = filters[name]
     for name in ("issued_at", "source_updated_at"):
-        if query.filters.get(name):
+        if filters.get(name):
             clauses.append(db.time_equals(name, name))
             try:
-                params[name] = to_sql_utc(query.filters[name])
+                params[name] = to_sql_utc(filters[name])
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ExplorerQueryError(f"{name} must be a valid RFC 3339 timestamp") from exc
     return clauses, params
@@ -193,12 +206,9 @@ class ObservationReader(DatasetReader):
     """
 
     def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-        station_id = query.filters.get("station_id")
         clauses, sql_params = self.db.time_window("observed_at", query.window)
-        if station_id:
-            clauses.append("station_id = :station_id")
-            sql_params["station_id"] = station_id
-        return clauses, sql_params
+        station_clauses, station_params = observation_filters(query.filters)
+        return [*clauses, *station_clauses], {**sql_params, **station_params}
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -225,6 +235,51 @@ class ObservationReader(DatasetReader):
             query.window, lambda window: observation_gaps(self.db, window, station_id)
         )
         return items, gaps
+
+
+def observation_filters(filters: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Apply the optional station filter shared by the observation list and series."""
+    station_id = filters.get("station_id")
+    if not station_id:
+        return [], {}
+    return ["station_id = :station_id"], {"station_id": station_id}
+
+
+class ObservationSeriesField(StrEnum):
+    """Numeric observation fields a series request may name.
+
+    Wind direction is left out: an average of compass bearings is not a direction.
+    """
+
+    TEMPERATURE_C = "temperature_c"
+    RELATIVE_HUMIDITY_PCT = "relative_humidity_pct"
+    AIR_PRESSURE_HPA = "air_pressure_hpa"
+    PRECIPITATION_MM = "precipitation_mm"
+    WIND_SPEED_M_S = "wind_speed_m_s"
+
+
+OBSERVATION_FIELD_UNITS = {
+    ObservationSeriesField.TEMPERATURE_C: "°C",
+    ObservationSeriesField.RELATIVE_HUMIDITY_PCT: "%",
+    ObservationSeriesField.AIR_PRESSURE_HPA: "hPa",
+    ObservationSeriesField.PRECIPITATION_MM: "mm",
+    ObservationSeriesField.WIND_SPEED_M_S: "m/s",
+}
+
+OBSERVATION_SERIES = SeriesSpec(
+    dataset="cwa_observations",
+    table="raw_cwa_station_observation",
+    time_column="observed_at",
+    fields={
+        field.value: SeriesField(sql=field.value, unit=unit)
+        for field, unit in OBSERVATION_FIELD_UNITS.items()
+    },
+    group_columns=("station_id",),
+    filter_keys=frozenset({"station_id"}),
+    filters=observation_filters,
+    default_fields=(ObservationSeriesField.TEMPERATURE_C.value,),
+)
+"""Stations are never combined, so there is no `group_by`: one series per station."""
 
 
 class ForecastReader(DatasetReader):
@@ -261,6 +316,96 @@ class ForecastReader(DatasetReader):
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
         return [_forecast_item(row) for row in rows], []
+
+
+class ForecastSeriesField(StrEnum):
+    """Numeric township forecast fields a series request may name."""
+
+    TEMPERATURE_C = "temperature_c"
+    APPARENT_TEMPERATURE_C = "apparent_temperature_c"
+    DEW_POINT_C = "dew_point_c"
+    RELATIVE_HUMIDITY_PCT = "relative_humidity_pct"
+    PROBABILITY_OF_PRECIPITATION_PCT = "probability_of_precipitation_pct"
+    WIND_SPEED_M_S = "wind_speed_m_s"
+
+
+FORECAST_FIELD_UNITS = {
+    ForecastSeriesField.TEMPERATURE_C: "°C",
+    ForecastSeriesField.APPARENT_TEMPERATURE_C: "°C",
+    ForecastSeriesField.DEW_POINT_C: "°C",
+    ForecastSeriesField.RELATIVE_HUMIDITY_PCT: "%",
+    ForecastSeriesField.PROBABILITY_OF_PRECIPITATION_PCT: "%",
+    ForecastSeriesField.WIND_SPEED_M_S: "m/s",
+}
+FORECAST_VINTAGE_COLUMNS = ("geocode", "dataset_id", "issued_at")
+NEWEST_CORRECTION_SQL = """
+    (dataset_id, issued_at, geocode, source_updated_at) IN (
+        SELECT dataset_id, issued_at, geocode, MAX(source_updated_at)
+        FROM raw_cwa_township_forecast
+        {where}
+        GROUP BY dataset_id, issued_at, geocode
+    )
+"""
+
+
+def _unplanned_forecast_filters(filters: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    raise RuntimeError("forecast series filters are bound by plan_forecast_series")
+
+
+FORECAST_SERIES = SeriesSpec(
+    dataset="cwa_forecasts",
+    table="raw_cwa_township_forecast",
+    time_column="valid_from",
+    fields={
+        field.value: SeriesField(sql=field.value, unit=unit)
+        for field, unit in FORECAST_FIELD_UNITS.items()
+    },
+    group_columns=("geocode",),
+    filter_keys=frozenset(
+        {"dataset_id", "geocode", "issued_at", "source_updated_at", "all_vintages"}
+    ),
+    filters=_unplanned_forecast_filters,
+    gap_fill=False,
+    default_fields=(ForecastSeriesField.TEMPERATURE_C.value,),
+    instant_group_columns=frozenset({"issued_at"}),
+    rows_share_time=True,
+)
+"""Forecast series template; `plan_forecast_series` binds its filters and grouping."""
+
+
+def plan_forecast_series(
+    db: ExplorerDb, params: Mapping[str, str]
+) -> tuple[SeriesSpec, dict[str, str]]:
+    """Resolve the forecast version the way the list does, so chart and table agree.
+
+    Without an explicit version the latest release is pinned and each geocode is one series.
+    Otherwise (`all_vintages` or a version filter) one series per geocode and issue, drawn
+    from the issue's newest correction unless `source_updated_at` names one; two releases
+    are never merged into one line.
+    """
+    if _has_explicit_forecast_version(params):
+        spec = replace(
+            FORECAST_SERIES,
+            group_columns=FORECAST_VINTAGE_COLUMNS,
+            filters=partial(_forecast_vintage_series_filters, db),
+        )
+        return spec, dict(params)
+    pinned = dict(params)
+    latest = latest_forecast_version(db, params.get("dataset_id"))
+    if latest is not None:
+        pinned.update(_version_filters(latest))
+    return replace(FORECAST_SERIES, filters=partial(_forecast_version_filters, db)), pinned
+
+
+def _forecast_vintage_series_filters(
+    db: ExplorerDb, filters: Mapping[str, Any]
+) -> tuple[list[str], dict[str, Any]]:
+    """Keep each issue's newest correction; the inner query repeats the outer filters."""
+    clauses, params = _forecast_version_filters(db, filters)
+    if filters.get("source_updated_at"):
+        return clauses, params
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return [*clauses, NEWEST_CORRECTION_SQL.format(where=where)], params
 
 
 class ObservationAuditReader(DatasetReader):

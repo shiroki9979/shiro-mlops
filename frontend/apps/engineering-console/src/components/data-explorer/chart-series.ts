@@ -13,6 +13,8 @@ export interface PlottedSeries {
   points: Series['points']
   // A second reading for the tooltip, e.g. MW also shown in Taipower's 萬瓩.
   tooltipAlternate?: TooltipAlternate
+  // Set for datasets the API does not gap-fill: an instant without a point is no gap, so the line continues.
+  connectNulls?: boolean
 }
 
 export interface TooltipAlternate {

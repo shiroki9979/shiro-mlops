@@ -273,6 +273,7 @@ export const zhTW = {
       wanKw: (value: string) => `（${value} 萬瓩）`,
       gapLegend: '灰底區段：該時段沒有資料',
       count: '計數',
+      requiresFilter: (filter: string, toggle: string) => `開啟「${toggle}」時，請先指定「${filter}」，才能比較各發布版本。`,
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset}趨勢圖；欄位：${fields}；序列：${series}`,
     },
