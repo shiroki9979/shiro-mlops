@@ -8,3 +8,13 @@ export const apiDevProxy = {
     rewrite: (path: string) => path.replace(/^\/api/, ''),
   },
 }
+
+// The `vite dev` stand-in for the Forecast View's `/published/` reads: forwards the path unchanged to
+// the local Compose Nginx, which serves the exported JSON at `/published/` itself
+// (docs/reference/forecast-view-hosting.md §4). The Engineering Console never reads `/published/`.
+export const publishedDevProxy = {
+  '/published': {
+    target: 'http://localhost:8080',
+    changeOrigin: true,
+  },
+}

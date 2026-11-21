@@ -1,7 +1,7 @@
 # shiro-mlops Frontend
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 
 React 19 + TypeScript + Vite + TanStack 的 pnpm workspace，依 [ADR-0014](../docs/adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) 拆成兩個應用與一個共用套件：
 
@@ -31,7 +31,7 @@ frontend/
 預報檢視（`apps/forecast-view`）：
 
 1. **即時預測總覽 (`/`)**：1~72 小時動態用電負載與氣溫雙軸曲線、尖離峰指標卡、逐時明細表與 CSV 匯出。
-2. **歷史回測與評估 (`/history`)**：目前以瀏覽器產生的 72 小時示範序列與固定指標呈現回測介面，尚未讀取實際評估結果。
+2. **預報實績 (`/history`)**：讀取 `/published/forecast_track_record.json`，顯示提前 24 小時的 MAPE 與 MAE 指標卡與統計截至時刻，不呼叫 API；讀取規則見[預報檢視託管 §4](../docs/reference/forecast-view-hosting.md#4-前端讀取-published)。
 
 工程主控台（`apps/engineering-console`，`/console/` 開啟監控頁）：
 

@@ -1,7 +1,7 @@
 # 預報檢視的雲端託管
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-21
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 8 節拆出。
@@ -64,8 +64,9 @@ bucket policy 只授權 CloudFront 服務主體經該 distribution 的 `s3:GetOb
 ## 4. 前端讀取 `/published/`
 
 - 預報檢視以相對路徑 `/published/` 讀取 JSON，沒有 API base URL 設定；`VITE_API_BASE_URL` 只供工程主控台使用。
-- 非 2xx、網路錯誤或 JSON 解析失敗一律顯示中性的錯誤狀態（例如「目前無法取得預報」），不區分原因；空狀態只由匯出 JSON 的內容決定，不由 HTTP 狀態碼推斷。
-- `pnpm dev` 時，Vite dev server 以 proxy 把 `/published` 轉送到地端 Compose 的 Nginx（`:8080`）；Vitest 使用 fixtures。
+- 非 2xx、網路錯誤、JSON 解析失敗或內容不符[資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished)（以 zod schema 驗證，未知的多餘欄位忽略）一律顯示中性的錯誤狀態（例如「目前無法取得預報」），不區分原因；空狀態只由匯出 JSON 的內容決定，不由 HTTP 狀態碼推斷。
+- `/history` 的預報實績在背景每 5 分鐘重新讀取一次，失敗不自動重試，由下一次背景讀取恢復；已有資料時背景讀取失敗，保留畫面上的內容，不切換到錯誤狀態。
+- `pnpm dev` 時，預報檢視的 Vite dev server 以 proxy 把 `/published` 原樣（不改寫路徑）轉送到地端 Compose 的 Nginx（`http://localhost:8080`）；Vitest 以 MSW 攔截 `/published/` 請求。
 
 ## 5. 部署與驗證
 

@@ -15,7 +15,7 @@ export const en: Messages = {
   nav: {
     sectionTitle: 'Core Features',
     dashboard: 'Live Forecast Overview',
-    history: 'Backtesting & Evaluation',
+    history: 'Forecast Track Record',
     liveBadge: 'Live',
   },
   header: {
@@ -76,33 +76,13 @@ export const en: Messages = {
     },
   },
   history: {
-    title: 'Historical Backtesting & Error Evaluation',
-    description:
-      'Uses the past 72 hours of Taipower actual load as ground truth to evaluate MAPE, RMSE, and peak error of LightGBM recursive inference.',
-    conclusionTitle: 'Findings & Recommendations',
-    conclusionAccuracy:
-      '1. Under typical sunlight and temperature variation, 24h MAPE stays at 2.14%, meeting the production forecasting requirement (< 3.5%).',
-    conclusionPeak:
-      '2. Peak-load alerts (14:00 - 16:00) reach a 96.8% hit rate, capturing air-conditioning surges driven by hot weather.',
-    backtest: {
-      title: '72-Hour Actual Load vs Model Forecast Backtest',
-      legend: 'Solid teal: Taipower actual load | Dashed purple: LightGBM forecast',
-      actual: 'Actual load:',
-      predicted: 'Forecast load:',
-      residual: 'Residual:',
-      actualSeries: 'Taipower Actual Load (MW)',
-      predictedSeries: 'LightGBM Backtest Forecast (MW)',
-    },
+    title: 'Forecast Track Record',
+    description: 'Issued forecasts compared with the actual load that followed, over the last 30 days.',
+    cutoff: (time) => `Track record cutoff: ${time}`,
+    loadError: 'The forecast track record is unavailable right now',
     metrics: {
-      mape: 'MAPE (Mean Absolute Percentage Error)',
-      mapeBaseline: 'Better than baseline (<3.5%)',
-      mapeNote: 'Rolling backtest over the last 7 days',
-      rmse: 'RMSE (Root Mean Squared Error)',
-      rmseNote: 'Overall error within an acceptable range',
-      mae: 'MAE (Mean Absolute Error)',
-      maeNote: 'Mean absolute deviation',
-      peakHitRate: 'Peak Forecast Hit Rate (Top 5%)',
-      peakHitRateNote: 'High-accuracy peak-period alerts',
+      lead24Mape: 'MAPE at 24-hour lead time',
+      lead24Mae: 'MAE at 24-hour lead time',
     },
   },
 }
