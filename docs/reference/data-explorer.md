@@ -29,7 +29,7 @@
 ## 3. 導覽與查詢行為
 
 - **頂層導覽**：Data Explorer 屬於工程主控台，使用獨立 `/console/data` 路由；`/console/monitoring` 專注於健康與新鮮度摘要，並可連結至對應資料集的篩選結果。前端路由皆在工程主控台的 base path `/console/` 之下（[ADR-0014](../adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) §2.5），本文件其餘段落省略此前綴。
-- **排序與分頁**：八個列表以各資料集固定的完整複合鍵降冪排序，使用 v2 server-side keyset cursor；排序、翻頁比較與 cursor 均保留原始微秒精度。每頁預設 50 筆、上限 200 筆，不提供無界全表載入。
+- **排序與分頁**：八個列表以各資料集固定的完整複合鍵降冪排序，使用 v2 server-side keyset cursor；排序、翻頁比較與 cursor 均保留原始微秒精度。API 每頁預設 50 筆、上限 200 筆，不提供無界全表載入；工程主控台的列表請求固定帶 `limit=200`，區域供需一天的快照約 3 頁可看完，不提供每頁筆數選單。
 - **時間窗口**：列表與完整度查詢共用精確閉區間 `[start, end]`；兩端點納入、窗口外一微秒排除，`start = end` 合法。cursor 固定第一次解析的窗口，頁面顯示時間維持既有整秒格式。
 - **歷史可達性**：使用者可透過有界時間範圍與 cursor 逐頁檢視所有保留中的歷史資料。
 - **時間呈現**：API 回傳帶 `+08:00` offset 的 RFC 3339 timestamp；介面明示時區為 `Asia/Taipei`。
@@ -55,7 +55,7 @@
 ## 6. 交互與診斷行為
 
 - **Freshness 維度**：分別顯示 ingestion age 與 source age。前者表示距上次成功入庫所經時間，後者表示最新來源事件或發布時間距今時間；不得以其中一者取代另一者。
-- **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。
+- **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。Data Explorer 表格採緊湊列距（列高約為共用表格預設的 60%），表格區塊高度受限並於內部捲動，表頭固定在上方；緊湊列距與固定表頭只套用於 Data Explorer，共用表格元件預設值與 Forecast View 表格外觀不變。數值欄靠右對齊並使用 tabular-nums；等寬字體只用於數值與識別碼（測站編號、geocode、鄉鎮代碼），時間與文字欄位使用一般字體；單位只寫在欄標題。`slot_complete` 與 audit `status` 以沿用資料集狀態配色的徽章呈現（完整為綠、不完整為琥珀），`region`、`unit_type`、`dataset_id` 以中性 chip 呈現；徽章與 chip 內文與明細 drawer 相同。相鄰兩列首欄時間的台北日期不同時，中間插入日期分隔列（標示下方資料列的日期）；分隔列不可點選，不影響明細 drawer 與 CSV 匯出內容。
 - **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供預測對象（`subject`，如 `nationwide`），區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
   - **值集合固定的欄位**：`region`（北部、中部、南部、東部）、區域供需 `completeness` 與 audit `status`（`complete`、`incomplete`）使用下拉選單，第一個選項「不篩選」清除該篩選；選項以 API 原始值寫入 URL，`completeness` 與 `status` 的顯示文字隨介面語系。`all_vintages` 使用開關，開啟時寫入 `all_vintages=true`，關閉時自 URL 移除。
   - **值集合開放的欄位**：`subject`、`unit_type`、`unit_name`、`station_id`、`geocode`、`dataset_id`、`issued_at`、`source_updated_at` 與 `missing_*` 維持文字輸入；不提供列出 distinct 值的 endpoint。

@@ -255,7 +255,7 @@ describe('Data Explorer routes', () => {
       expect(await screen.findByText('31.5')).toBeInTheDocument()
       expect(screen.queryByText('27.5')).not.toBeInTheDocument()
       expect(requests).toHaveLength(3)
-      expect(Object.fromEntries(requests[2].searchParams)).toEqual(Object.fromEntries(filters))
+      expect(Object.fromEntries(requests[2].searchParams)).toEqual({ ...Object.fromEntries(filters), limit: '200' })
     },
   )
 
@@ -312,7 +312,7 @@ describe('Data Explorer routes', () => {
     await scenario.edit(user)
 
     expect(await screen.findByText('first-page-row')).toBeInTheDocument()
-    expect(Object.fromEntries(requests.at(-1)!.searchParams)).toEqual({ ...queryWindow, ...scenario.sent })
+    expect(Object.fromEntries(requests.at(-1)!.searchParams)).toEqual({ ...queryWindow, ...scenario.sent, limit: '200' })
   })
 
   it('closes the open detail when switching audit type from the sidebar', async () => {
@@ -487,13 +487,65 @@ describe('Data Explorer language switch', () => {
     }
 
     expect(requests).toEqual([
-      '?start=2026-09-09T00%3A00%3A00%2B08%3A00&end=2026-09-09T20%3A00%3A00%2B08%3A00&subject=nationwide',
-      '?start=2026-09-09T00%3A00%3A00%2B08%3A00&end=2026-09-09T20%3A00%3A00%2B08%3A00&subject=nationwide',
+      '?start=2026-09-09T00%3A00%3A00%2B08%3A00&end=2026-09-09T20%3A00%3A00%2B08%3A00&subject=nationwide&limit=200',
+      '?start=2026-09-09T00%3A00%3A00%2B08%3A00&end=2026-09-09T20%3A00%3A00%2B08%3A00&subject=nationwide&limit=200',
     ])
     const csv = await Promise.all(exported.map(readBlobText))
     expect(csv).toEqual([
       '"datetime","subject","load_mw"\r\n"2026-09-09T20:00:00+08:00","nationwide","32100.5"',
       '"datetime","subject","load_mw"\r\n"2026-09-09T20:00:00+08:00","nationwide","32100.5"',
     ])
+  })
+})
+
+describe('Data Explorer table', () => {
+  it('asks the API for its largest page of 200 rows', async () => {
+    const requests: URL[] = []
+    server.use(http.get('*/data/power/regional', ({ request }) => {
+      requests.push(new URL(request.url))
+      return HttpResponse.json({ timezone: 'Asia/Taipei', items: [], has_more: false, next_cursor: null, missing_slots: [] })
+    }))
+    renderPath('/data/power/regional')
+
+    await screen.findByText(results.empty)
+
+    expect(requests.at(-1)!.searchParams.get('limit')).toBe('200')
+  })
+
+  it('separates rows that fall on different Taipei days without making the separator selectable', async () => {
+    server.use(http.get('*/data/power/regional', () => HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      items: [
+        { observed_at: '2026-11-21T00:00:00+08:00', region: 'north', load_mw: 9419, slot_complete: true },
+        { observed_at: '2026-11-20T23:50:00+08:00', region: 'south', load_mw: 8288, slot_complete: true },
+      ],
+      has_more: false, next_cursor: null, missing_slots: [],
+    })))
+    const user = userEvent.setup()
+    renderPath('/data/power/regional')
+    const table = await screen.findByRole('table')
+
+    const rowNames = within(table).getAllByRole('row').map((row) => row.textContent)
+    const separator = within(table).getByRole('row', { name: '2026/11/20' })
+    const separatorIndex = rowNames.indexOf(separator.textContent)
+    expect(rowNames[separatorIndex - 1]).toContain('north')
+    expect(rowNames[separatorIndex + 1]).toContain('south')
+
+    await user.click(separator)
+    expect(screen.queryByText(m.explorer.detail.title)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['/data/audits?type=forecasts', '*/data/audits/cwa-forecasts', { issued_at: '2026-11-21T05:00:00+08:00', status: 'incomplete' }, m.status.completeness.incomplete],
+    ['/data/power/regional', '*/data/power/regional', { observed_at: '2026-11-21T21:00:00+08:00', slot_complete: false }, m.common.no],
+  ])('reads the status badge on %s as translated text', async (path, apiPath, row, label) => {
+    server.use(http.get(apiPath, () => HttpResponse.json({
+      timezone: 'Asia/Taipei', items: [row], has_more: false, next_cursor: null, missing_slots: [],
+    })))
+    renderPath(path)
+
+    const table = await screen.findByRole('table')
+
+    expect(within(table).getByRole('cell', { name: label })).toBeInTheDocument()
   })
 })

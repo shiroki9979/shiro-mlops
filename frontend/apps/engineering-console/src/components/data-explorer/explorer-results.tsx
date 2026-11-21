@@ -1,19 +1,11 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@shiro-mlops/shared/ui/table'
 import { formatNumber } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
-import { explorerFieldLabel, formatExplorerField } from './field-format'
+import { ExplorerTable } from './explorer-table'
 
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
@@ -84,26 +76,7 @@ export function ExplorerResults({
                 {resultsText.gaps(formatNumber(data.missing_slots.length, locale))}
               </p>
             )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {dataset.columns.map((column) => (
-                    <TableHead key={column}>{explorerFieldLabel(column, m)}</TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.items.map((row, index) => (
-                  <TableRow key={index} className="cursor-pointer" onClick={() => onSelect(row)}>
-                    {dataset.columns.map((column) => (
-                      <TableCell key={column} className="font-mono text-xs">
-                        {formatExplorerField(column, row[column], { locale, m })}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ExplorerTable columns={dataset.columns} rows={data.items} onSelect={onSelect} />
             {data.has_more && (
               <Button
                 className="mt-4"
