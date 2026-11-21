@@ -15,6 +15,7 @@ interface ExplorerFiltersProps {
   filterValues: Record<string, string | undefined>
   fetchedAt: string
   items: Record<string, unknown>[]
+  csvDisabled: boolean
   onRefresh: () => void
   onStartChange: (value: string) => void
   onEndChange: (value: string) => void
@@ -29,6 +30,7 @@ export function ExplorerFilters({
   filterValues,
   fetchedAt,
   items,
+  csvDisabled,
   onRefresh,
   onStartChange,
   onEndChange,
@@ -49,7 +51,7 @@ export function ExplorerFilters({
             <RefreshCw className="h-3.5 w-3.5" />
             {m.common.refresh}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => exportCsv(`${dataset.id}.csv`, items)}>
+          <Button variant="outline" size="sm" disabled={csvDisabled} onClick={() => exportCsv(`${dataset.id}.csv`, items)}>
             <Download className="h-3.5 w-3.5" />
             {m.common.exportCsv}
           </Button>
