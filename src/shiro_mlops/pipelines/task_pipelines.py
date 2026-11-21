@@ -4,7 +4,8 @@ Each task definition yields ``{task_id}__features`` -> ``{task_id}__model`` ->
 ``{task_id}__monitoring``, a training job and a monitoring job, and their
 schedules in Asia/Taipei time. Ingestion assets stay source-centric and shared,
 so no task ever triggers an external API or reads snapshot tables. Assets only
-talk to the runner; task types never see Dagster.
+talk to the runner; task types never see Dagster
+(tests/unit/test_task_type_import_boundary.py).
 """
 
 from collections.abc import Mapping
