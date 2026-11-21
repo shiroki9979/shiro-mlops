@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -17,6 +18,14 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
 from shiro_mlops.service.data_explorer.values import to_taiwan
+
+
+def gaps_until_now(window: TimeWindow, find_gaps: Callable[[TimeWindow], list[str]]) -> list[str]:
+    """Run a list gap finder only over the part of the window that has already happened."""
+    elapsed_end = min(window.end, now_taiwan())
+    if elapsed_end < window.start:
+        return []
+    return find_gaps(TimeWindow(window.start, elapsed_end))
 
 
 def hourly_gaps(db: ExplorerDb, window: TimeWindow, subject: str | None) -> list[str]:
@@ -99,6 +108,19 @@ def regional_slot_map(db: ExplorerDb, window: TimeWindow) -> dict[datetime, set[
     for row in rows:
         grouped.setdefault(to_taiwan(row["observed_at"]), set()).add(row["region"])
     return grouped
+
+
+def regional_gaps(db: ExplorerDb, window: TimeWindow) -> list[str]:
+    """Return expected 10-minute slots holding fewer than all four regions, zero included."""
+    slot_regions = regional_slot_map(db, window)
+    expected_regions = set(REGIONAL_SUPPLY_DEMAND_REGIONS)
+    start = pd.Timestamp(window.start).ceil("10min")
+    expected = pd.date_range(start, window.end, freq="10min")
+    return [
+        format_taiwan_time(ts.to_pydatetime())
+        for ts in expected
+        if slot_regions.get(ts.to_pydatetime(), set()) != expected_regions
+    ]
 
 
 def missing_regional_identifiers(present: set[str]) -> list[str]:

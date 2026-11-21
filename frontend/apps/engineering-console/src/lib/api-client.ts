@@ -15,6 +15,10 @@ import {
   StatusResponseSchema,
 } from '@/schemas/data-explorer'
 
+// The API caps a list page at 200 rows (MAX_LIMIT in src/shiro_mlops/service/data_explorer/query.py);
+// asking for the cap lets one day of regional snapshots fit in three pages.
+const LIST_PAGE_SIZE = '200'
+
 export type QueryParams = Record<string, string | string[] | undefined>
 
 // Array values become repeated keys (`fields=a&fields=b`), which the series API reads as a list.
@@ -54,7 +58,8 @@ export const apiClient = {
     path: string,
     params: Record<string, string | undefined> = {},
   ): Promise<ListEnvelope> {
-    return request<ListEnvelope>(`${path}${toQuery(params)}`, { method: 'GET' }, ListEnvelopeSchema)
+    const query = toQuery({ ...params, limit: LIST_PAGE_SIZE })
+    return request<ListEnvelope>(`${path}${query}`, { method: 'GET' }, ListEnvelopeSchema)
   },
 
   async getDataSeries(path: string, params: QueryParams = {}): Promise<SeriesResponse> {

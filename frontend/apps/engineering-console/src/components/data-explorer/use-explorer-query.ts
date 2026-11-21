@@ -3,6 +3,7 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { datasetListQueryKey, useDatasetList } from '@/hooks/use-data-explorer'
 import { defaultWindow, toRfc3339 } from '@/lib/data-explorer'
+import type { ExplorerWindow } from '@/lib/explorer-window'
 import type { ExplorerDatasetConfig } from './catalog'
 
 type SearchValues = Record<string, string | undefined>
@@ -18,18 +19,18 @@ export const CHART_DEFAULTS: Partial<Record<ChartSearchKey, string>> = { bucket:
 export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const search = useRouterState().location.search as SearchValues
+  const search = useRouterState().location.search as Record<string, unknown>
   const fallbackWindow = useDefaultWindow(dataset)
-  const start = search.start || fallbackWindow.start
-  const end = search.end || fallbackWindow.end
+  const start = searchText(search.start) || fallbackWindow.start
+  const end = searchText(search.end) || fallbackWindow.end
   const filterValues = declaredFilterValues(dataset, search)
   const query: SearchValues = { start, end, ...filterValues }
-  const cursor = search.cursor
+  const cursor = searchText(search.cursor)
   const chartSearch = pickChartSearch(search)
   const list = useDatasetList(dataset.apiPath, { ...query, cursor })
 
   const navigateTo = (nextSearch: Record<string, unknown>) => {
-    void navigate({ to: dataset.path as never, search: withoutBlanks(nextSearch) as never })
+    void navigate({ to: dataset.path as never, search: toSearchParams(withoutBlanks(nextSearch)) as never })
   }
   const showPage = (nextQuery: SearchValues, nextCursor?: string) => {
     navigateTo({ ...dataset.search, ...nextQuery, ...chartSearch, cursor: nextCursor })
@@ -57,6 +58,8 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     canRestart: Boolean(cursor),
     setStart: (value: string) => showFirstPageOf({ start: value }),
     setEnd: (value: string) => showFirstPageOf({ end: value }),
+    // Quick ranges and shifts replace both ends in one navigation so no half-moved window is fetched.
+    setWindow: (window: ExplorerWindow) => showFirstPageOf({ start: window.start, end: window.end }),
     setFilter: (key: string, value: string) => showFirstPageOf({ [key]: value }),
     goToNextPage: (nextCursor: string | undefined) => showPage(query, nextCursor),
     restartFromFirstPage,
@@ -73,8 +76,31 @@ function useDefaultWindow(dataset: ExplorerDatasetConfig): { start: string; end:
   }, [dataset.defaultHours, dataset.lookAheadHours])
 }
 
-function declaredFilterValues(dataset: ExplorerDatasetConfig, search: SearchValues): SearchValues {
-  return Object.fromEntries(dataset.filters.map((field) => [field.key, search[field.key]]))
+function declaredFilterValues(dataset: ExplorerDatasetConfig, search: Record<string, unknown>): SearchValues {
+  return Object.fromEntries(dataset.filters.map((field) => [field.key, searchText(search[field.key])]))
+}
+
+// The router parses each search value as JSON, so `all_vintages=true` or `geocode=63000000`
+// arrive as a boolean or a number; the API and the controls work with the text.
+function searchText(value: unknown): string | undefined {
+  return value === undefined || value === null ? undefined : String(value)
+}
+
+// The router also quotes strings that would parse as JSON (`"true"`); handing it the primitive
+// keeps such values bare in the URL. Text that does not round-trip exactly (e.g. `007`) stays a string.
+function toSearchParams(values: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, toSearchParam(value)]))
+}
+
+function toSearchParam(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try {
+    const parsed: unknown = JSON.parse(value)
+    const isBarePrimitive = typeof parsed === 'boolean' || typeof parsed === 'number'
+    return isBarePrimitive && String(parsed) === value ? parsed : value
+  } catch {
+    return value
+  }
 }
 
 function pickChartSearch(search: Record<string, unknown>): ChartSearch {

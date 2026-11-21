@@ -1,19 +1,10 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@shiro-mlops/shared/ui/table'
-import { formatNumber } from '@shiro-mlops/shared/i18n/format'
-import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
-import { explorerFieldLabel, formatExplorerField } from './field-format'
+import { ExplorerGapList } from './explorer-gap-list'
+import { ExplorerTable } from './explorer-table'
 
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
@@ -61,7 +52,6 @@ export function ExplorerResults({
   onRestart,
 }: ExplorerResultsProps) {
   const m = useMessages()
-  const locale = useLocale()
   const resultsText = m.explorer.results
   return (
     <Card>
@@ -79,31 +69,8 @@ export function ExplorerResults({
           <p className="text-xs text-slate-500">{resultsText.empty}</p>
         ) : (
           <>
-            {data.missing_slots.length > 0 && (
-              <p className="text-xs text-amber-300 mb-3">
-                {resultsText.gaps(formatNumber(data.missing_slots.length, locale))}
-              </p>
-            )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {dataset.columns.map((column) => (
-                    <TableHead key={column}>{explorerFieldLabel(column, m)}</TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.items.map((row, index) => (
-                  <TableRow key={index} className="cursor-pointer" onClick={() => onSelect(row)}>
-                    {dataset.columns.map((column) => (
-                      <TableCell key={column} className="font-mono text-xs">
-                        {formatExplorerField(column, row[column], { locale, m })}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ExplorerGapList datasetId={dataset.id} missingSlots={data.missing_slots} />
+            <ExplorerTable columns={dataset.columns} rows={data.items} onSelect={onSelect} />
             {data.has_more && (
               <Button
                 className="mt-4"
