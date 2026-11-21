@@ -8,7 +8,7 @@
 >
 > - **目標象限**：How-To Guide
 > - **目標讀者**：負責雲端基礎設施部署的 MLOps / DevOps 工程師
-> - **核心目標**：指引如何以 IAM Identity Center 的短期憑證建立 Terraform 的 bootstrap 層與 S3 遠端 state、首次 apply 預報檢視的靜態託管資源（S3 與 CloudFront）、建立與輪替地端上傳用 access key、取得預報檢視的網址與執行雲端 smoke check，以及依序拆除兩層
+> - **核心目標**：指引如何以 IAM Identity Center 的短期憑證建立 Terraform 的 bootstrap 層與 S3 遠端 state、首次 apply 預報檢視的靜態託管資源（S3 與 CloudFront）、建立與輪替地端上傳用 access key、設定 CI 使用的 GitHub variables 與 secrets、取得預報檢視的網址與執行雲端 smoke check，以及依序拆除兩層
 > - **排除內容（Avoid）**：AWS 基本概念入門、AWS Organizations 與 IAM Identity Center 的開通、本機快速預測操作、CD 管線設定
 
 依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只存放並提供預報檢視的發布產物。Terraform 分成兩層，結構、state 與各角色的信任與權限見 [Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)：
@@ -145,7 +145,7 @@ state bucket 由 bootstrap 層自己建立，因此第一次以本機 state appl
 
 ---
 
-## 5. 取得輸出並設定 GitHub Repository Variables
+## 5. 取得輸出並設定 GitHub Variables 與 Secrets
 
 主設定 apply 完成後，Terraform 會輸出以下值（bootstrap 層的輸出 `state_bucket_name`、`terraform_plan_role_arn` 與 `terraform_apply_role_arn` 在 `infra/terraform/bootstrap/` 以 `terraform output` 取得）：
 
@@ -156,14 +156,21 @@ state bucket 由 bootstrap 層自己建立，因此第一次以本機 state appl
 - `forecast_view_url`
 - `cloudfront_distribution_id`
 
-前往 GitHub Repository 設置（**Settings > Secrets and variables > Actions**），新增 Repository Variables：
+前往 GitHub Repository 設置（**Settings > Secrets and variables > Actions**），新增以下 Repository Variables 與 Actions secret（各值的用途見 [Terraform state 與部署權責 §8](../reference/terraform-state-and-deployment.md#8-repository-variables-與-secrets)）：
 
-- `AWS_SITE_DEPLOY_ROLE_ARN`: `<site_deploy_role_arn 輸出值>`
+- Repository Variables：
+  - `AWS_REGION`: `ap-northeast-1`
+  - `TF_STATE_BUCKET`: `<bootstrap 層 state_bucket_name 輸出值>`
+  - `AWS_TERRAFORM_PLAN_ROLE_ARN`: `<bootstrap 層 terraform_plan_role_arn 輸出值>`
+  - `AWS_SITE_DEPLOY_ROLE_ARN`: `<site_deploy_role_arn 輸出值>`
+  - `AWS_TERRAFORM_APPLY_ROLE_ARN`: `<bootstrap 層 terraform_apply_role_arn 輸出值>`；最後設定，見下方提醒
+- Actions secret：
+  - `BUDGET_ALERT_EMAIL`: 與第 4 節 `terraform.tfvars` 的 `budget_alert_email` 相同
 
-網站上傳角色只接受 `main` 分支 push 的 workflow 執行，PR 或其他分支的 workflow 無法 assume。
+設定 `AWS_TERRAFORM_PLAN_ROLE_ARN` 後，base 為 `main` 的 PR 會附上主設定的 plan 摘要。plan 角色只接受 PR 的 token；apply 角色與網站上傳角色只接受 `main` 分支 push 的 workflow 執行，PR 或其他分支的 workflow 無法 assume。
 
 > [!IMPORTANT]
-> **第一次 release 前，地端 key 與匯出須先上線**：設定 `AWS_TERRAFORM_APPLY_ROLE_ARN` 後，每次 `main` push 都會 apply、上傳 `site/` 並執行雲端 smoke check（見 [Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)的「CD 部署 (main)」一節）。先依第 6 節建立地端 access key，並確認匯出已上傳到 `published/`，再合併第一次 release；否則 smoke check 的 `/published/` JSON 與預報時刻新鮮度項目會失敗，workflow 標紅。
+> **第一次 release 前，地端 key 與匯出須先上線**：設定 `AWS_TERRAFORM_APPLY_ROLE_ARN` 後，每次 `main` push 都會 apply、上傳 `site/` 並執行雲端 smoke check（見 [Terraform state 與部署權責 §9](../reference/terraform-state-and-deployment.md#9-cd-部署-main)）。先依第 6 節建立地端 access key，並確認匯出已上傳到 `published/`，再設定這個變數並合併第一次 release；否則 smoke check 的 `/published/` JSON 與預報時刻新鮮度項目會失敗，workflow 標紅。
 
 ---
 
