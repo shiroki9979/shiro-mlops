@@ -3,9 +3,9 @@ output "s3_bucket_name" {
   description = "The S3 bucket holding the Forecast View release artefacts (site/ and published/)"
 }
 
-output "github_actions_role_arn" {
-  value       = aws_iam_role.github_actions_role.arn
-  description = "IAM Role ARN to assume in GitHub Actions; may write site/ only"
+output "site_deploy_role_arn" {
+  value       = aws_iam_role.site_deploy.arn
+  description = "IAM Role ARN that GitHub Actions on main assumes to upload the Forecast View; may write site/ only"
 }
 
 output "aws_region" {

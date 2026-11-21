@@ -14,7 +14,7 @@
 依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只存放並提供預報檢視的發布產物。本指南說明如何透過 Terraform 建立下列資源：
 
 - S3 bucket（名稱取自變數 `s3_bucket_name`）：`site/` 放前端建置產物、`published/` 放匯出的 JSON（配置見[預報檢視的雲端託管 §1](../reference/forecast-view-hosting.md#1-s3-配置與寫入權限)）；保留 versioning，舊版本 30 天後過期。
-- GitHub Actions OIDC provider 與 CI 角色：只能寫入 `site/*`。
+- GitHub Actions OIDC provider 與網站上傳角色 `shiro-mlops-site-deploy`：只信任 `shiroki9979/shiro-mlops` 的 `main` 分支 push 所取得的 token，只能列出、寫入與刪除 `site/*`。
 - 地端上傳用 IAM 使用者（名稱見輸出 `onprem_publisher_user_name`）：只能 `PutObject` 到 `published/*`。
 - CloudFront distribution：經 Origin Access Control（OAC）讀取 bucket 的 `site/` 與 `published/`，含 SPA 改寫函式 `spa-rewrite` 與各 behavior 的 cache policy（配置見[預報檢視的雲端託管 §2](../reference/forecast-view-hosting.md#2-origin-與-behavior)、[§3](../reference/forecast-view-hosting.md#3-distribution-其他設定)）；bucket policy 只授權這個 distribution 讀取這兩個 prefix。
 - AWS Budgets：月實際支出達 5 美元、預測支出達 10 美元時寄 email 警示。
@@ -27,9 +27,9 @@ Terraform state 與 apply 權責待 [GitHub #129](https://github.com/shiroki9979
 
 ## 1. 前置準備
 
-- 已安裝 [Terraform](https://developer.hashicorp.com/terraform/downloads) ($\ge 1.5.0$)
+- 已安裝 [Terraform](https://developer.hashicorp.com/terraform/downloads) ($\ge 1.11.0$)
 - 已配置 AWS CLI 管理員憑證（具備 IAM、S3、CloudFront、Budgets 管理權限）；除第 5 節的權限確認外，指令都以這組憑證執行
-- 已確定目標 GitHub Repository 名稱（例如 `shiro/shiro-mlops`）
+- 已確定目標 GitHub Repository 名稱；變數 `github_repo` 預設為 `shiroki9979/shiro-mlops`，部署其他 repository 時才需覆寫
 - 已確定接收成本警示的 email 地址
 
 ---
@@ -44,12 +44,12 @@ cat <<EOF > terraform.tfvars
 aws_region         = "ap-northeast-1"
 environment        = "dev"
 s3_bucket_name     = "shiro-mlops-forecast-view"
-github_repo        = "shiro/shiro-mlops"
+github_repo        = "shiroki9979/shiro-mlops"
 budget_alert_email = "ops@example.com"
 EOF
 ```
 
-`budget_alert_email` 沒有預設值，必須提供。
+`budget_alert_email` 沒有預設值，必須提供；它標為 sensitive，`plan` 與 `apply` 的輸出不會顯示這個地址。AWS 帳號 ID 由目前憑證的身分取得，不需要設定變數。
 
 ---
 
@@ -81,14 +81,16 @@ EOF
 
 - `s3_bucket_name`
 - `aws_region`
-- `github_actions_role_arn`
+- `site_deploy_role_arn`
 - `onprem_publisher_user_name`
 - `forecast_view_url`
 - `cloudfront_distribution_id`
 
 前往 GitHub Repository 設置（**Settings > Secrets and variables > Actions**），新增 Repository Variables：
 
-- `AWS_ROLE_TO_ASSUME`: `<github_actions_role_arn 輸出值>`
+- `AWS_SITE_DEPLOY_ROLE_ARN`: `<site_deploy_role_arn 輸出值>`
+
+網站上傳角色只接受 `main` 分支 push 的 workflow 執行，PR 或其他分支的 workflow 無法 assume。
 
 ---
 

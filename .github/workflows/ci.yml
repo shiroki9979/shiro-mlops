@@ -104,9 +104,9 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.11.4"
 
-      - name: Test CloudFront Functions and check Terraform formatting and validity
+      - name: Test CloudFront Functions, check Terraform formatting and validity, and run Terraform tests
         run: make infra-check
 
   docs:
