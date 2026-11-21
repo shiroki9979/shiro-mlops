@@ -224,3 +224,197 @@ def test_comment_refs_skips_globs_placeholders_and_section_numbers(
     )
 
     assert main(["comment-refs"]) == 0
+
+
+def _comment_kinds(repo: Path, before: dict[str, str], after: dict[str, str | None]) -> int:
+    """Commit `before`, then `after`, and run comment-kinds over the second commit."""
+    base = _commit(repo, before, "2026-11-21")
+    head = _commit(repo, after, "2026-11-21")
+    return main(["comment-kinds", "--base", base, "--head", head])
+
+
+def test_comment_kinds_fails_on_an_added_untagged_comment(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = {"src/pkg/load.py": "x = 1\n"}
+    after = {"src/pkg/load.py": "x = 1\n# --- helpers ---\ny = 2\n"}
+
+    assert _comment_kinds(repo, before, after) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:2: " in err
+    assert "WHY-NOT(<name>): <reason>" in err
+
+
+def test_comment_kinds_passes_when_legacy_comments_are_left_untouched(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    legacy = "# Load the rows.\nx = 1  # one row\n"
+    before = {"src/pkg/load.py": legacy}
+    after = {"src/pkg/load.py": legacy + "y = 2\n"}
+
+    assert _comment_kinds(repo, before, after) == 0
+
+
+def test_comment_kinds_fails_when_a_modified_line_keeps_its_legacy_trailing_comment(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = {"src/pkg/load.py": "x = 1\nretries = 3  # retry a few times\n"}
+    after = {"src/pkg/load.py": "x = 1\nretries = 5  # retry a few times\n"}
+
+    assert _comment_kinds(repo, before, after) == 1
+    assert "src/pkg/load.py:2: " in capsys.readouterr().err
+
+
+def test_comment_kinds_needs_a_tag_only_on_the_first_line_of_a_block(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    block = (
+        "def load():\n"
+        "    # WHY-NOT(retries): the upstream rate limit resets every minute, so retrying\n"
+        "    # faster only burns the quota.\n"
+        "    retries = 3\n"
+    )
+    before = {"src/pkg/load.py": "x = 1\n"}
+    after = {"src/pkg/load.py": "x = 1\n" + block}
+
+    assert _comment_kinds(repo, before, after) == 0
+
+
+def test_comment_kinds_checks_a_whole_legacy_block_when_one_of_its_lines_changes(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = {"src/pkg/load.py": "# Load the rows\n# from the cache.\nx = 1\n"}
+    after = {"src/pkg/load.py": "# Load the rows\n# from the warm cache.\nx = 1\n"}
+
+    assert _comment_kinds(repo, before, after) == 1
+    assert "src/pkg/load.py:1: " in capsys.readouterr().err
+
+
+def test_comment_kinds_starts_a_new_block_after_a_blank_line_or_an_indent_change(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "# WHY-NOT(load): rows stay lazy because the cache is larger than memory.\n"
+        "\n"
+        "# Loads rows.\n"
+        "def load():\n"
+        "    # TODO(#12): stream instead of batching.\n"
+        "        # Batch size.\n"
+        "    return 1\n"
+    )
+    before = {"src/pkg/load.py": "x = 1\n"}
+    after = {"src/pkg/load.py": source}
+
+    assert _comment_kinds(repo, before, after) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:3: " in err
+    assert "src/pkg/load.py:6: " in err
+    assert "src/pkg/load.py:1: " not in err
+    assert "src/pkg/load.py:5: " not in err
+
+
+def test_comment_kinds_passes_every_allowed_kind(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    source = (
+        "# ruff: noqa: E501\n"
+        "# WHY-NOT(retry.policy): 重試間隔加總必須小於 10 分鐘 slot，否則會和下一輪排程重疊\n"
+        "policy = retry.policy\n"
+        "# SYNC(scripts/smoke_nginx.py, docs/guide.md): 發布檔名清單刻意重複\n"
+        "NAMES = ()\n"
+        "# TODO(#42): read the names from the manifest.\n"
+        "def Load():  # noqa: N802 — 名稱由 #66 的介面設計固定\n"
+        "    return x  # type: ignore[name-defined]  # x comes from a star import\n"
+        "# fmt: off\n"
+        "GRID = [1,0,\n"
+        "        0,1]\n"
+        "# fmt: on\n"
+        "if DEBUG:  # pragma: no cover\n"
+        "    pass\n"
+    )
+    before = {"src/pkg/load.py": "x = 1\n"}
+    after = {"src/pkg/load.py": source}
+
+    assert _comment_kinds(repo, before, after) == 0
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("x = 1  # noqa: E741\n", "`noqa: E741` needs a reason"),
+        ("x = 1  # noqa\n", "`noqa` needs a reason"),
+        ("x = 1  # type: ignore[assignment]\n", "`type: ignore[assignment]` needs a reason"),
+        ("# WHY-NOT(x)\nx = 1\n", "WHY-NOT(<name>): <reason>"),
+        ("# WHY-NOT: x stays one\nx = 1\n", "WHY-NOT(<name>): <reason>"),
+        ("# SYNC(): keep in step\nx = 1\n", "SYNC(<path>[, <path>...]): <note>"),
+        ("# why-not(x): lower case is not a tag\nx = 1\n", "allowed kind"),
+        ("# TODO: no issue\nx = 1\n", "allowed kind"),
+    ],
+)
+def test_comment_kinds_fails_on_malformed_tags_and_unexplained_suppressions(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    line: str,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = {"src/pkg/load.py": "y = 2\n"}
+    after = {"src/pkg/load.py": "y = 2\n" + line}
+
+    assert _comment_kinds(repo, before, after) == 1
+    err = capsys.readouterr().err
+    assert "src/pkg/load.py:2: " in err
+    assert expected in err
+
+
+def test_comment_kinds_ignores_files_outside_the_package_and_scripts(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    untagged = "# Arrange\nx = 1\n"
+    before = {"README.md": "# Repo\n"}
+    after = {
+        "tests/unit/test_load.py": untagged,
+        "lab/2026-11-17-topic/study.py": untagged,
+        "scripts/build.sh": untagged,
+        "docs/conf.py": untagged,
+    }
+
+    assert _comment_kinds(repo, before, after) == 0
+
+
+def test_comment_kinds_checks_scripts_too(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    before = {"README.md": "# Repo\n"}
+    after = {"scripts/report.py": "# Print the report.\nprint(1)\n"}
+
+    assert _comment_kinds(repo, before, after) == 1
+    assert "scripts/report.py:1: " in capsys.readouterr().err
+
+
+def test_comment_kinds_follows_renames_instead_of_rechecking_every_comment(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    legacy = "".join(f"# Legacy note {n}.\nvalue_{n} = {n}\n" for n in range(10))
+    before = {"src/pkg/old.py": legacy}
+    after = {"src/pkg/old.py": None, "src/pkg/new.py": legacy + "extra = 1\n"}
+
+    assert _comment_kinds(repo, before, after) == 0
+
+
+def test_comment_kinds_without_base_exits_2() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["comment-kinds"])
+
+    assert exit_info.value.code == 2

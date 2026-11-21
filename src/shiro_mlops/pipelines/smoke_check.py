@@ -85,10 +85,10 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
     ),
 }
 
-# 發布排程的固定契約：與擷取排程一樣不受 --task 篩選。冷啟動期間刻意停用，首次訓練成功後才開啟，
+# SYNC(src/shiro_mlops/pipelines/issued_forecast.py, docs/reference/dagster-schedules.md): 發布排程
+# 的固定契約（該文件第 6 項）；名稱與 cron 刻意重述而不引用來源模組，才能檢出部署漂移。
+# 與擷取排程一樣不受 --task 篩選。冷啟動期間刻意停用，首次訓練成功後才開啟，
 # 因此停用時回報 WAIT 而非 FAIL；未開啟的每一小時都不會留下已發布預報，且無法回補。
-# 名稱與 cron 刻意重述而不引用 src/shiro_mlops/pipelines/issued_forecast.py，才能檢出部署漂移；
-# 變更時須同步 src/shiro_mlops/pipelines/issued_forecast.py 與 docs/reference/dagster-schedules.md 第 6 項。
 ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
     "issued_forecast_schedule": ExpectedSchedule(
         "issued_forecast_job",
@@ -100,10 +100,10 @@ ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
 }
 
 
-# 預報實績排程的固定契約：與擷取排程一樣不受 --task 篩選，停用時也回報 FAIL。
+# SYNC(src/shiro_mlops/pipelines/forecast_track_record.py, docs/reference/dagster-schedules.md): 預報實績排程
+# 的固定契約（該文件第 7 項）；名稱與 cron 刻意重述而不引用來源模組，才能檢出部署漂移。
+# 與擷取排程一樣不受 --task 篩選，停用時也回報 FAIL。
 # 彙整不依賴模型，尚無已發布預報時照常產出 0 天，因此冷啟動時就與擷取排程一起開啟。
-# 名稱與 cron 刻意重述而不引用 src/shiro_mlops/pipelines/forecast_track_record.py，才能檢出部署漂移；
-# 變更時須同步 src/shiro_mlops/pipelines/forecast_track_record.py 與 docs/reference/dagster-schedules.md 第 7 項。
 FORECAST_TRACK_RECORD_SCHEDULES: dict[str, ExpectedSchedule] = {
     "forecast_track_record_schedule": ExpectedSchedule(
         "forecast_track_record_job", "25 * * * *", TAIWAN_TZ
@@ -111,10 +111,10 @@ FORECAST_TRACK_RECORD_SCHEDULES: dict[str, ExpectedSchedule] = {
 }
 
 
-# 預報檢視匯出排程的固定契約：比照預報實績排程，不受 --task 篩選、停用時回報 FAIL。
+# SYNC(src/shiro_mlops/pipelines/forecast_view_export.py, docs/reference/dagster-schedules.md): 預報檢視匯出排程
+# 的固定契約（該文件第 8 項）；名稱與 cron 刻意重述而不引用來源模組，才能檢出部署漂移。
+# 比照預報實績排程，不受 --task 篩選、停用時回報 FAIL。
 # 匯出不依賴模型，尚無已發布預報時照常寫出空狀態，冷啟動時就與預報實績排程一起開啟。
-# 名稱與 cron 刻意重述而不引用 src/shiro_mlops/pipelines/forecast_view_export.py，才能檢出部署漂移；
-# 變更時須同步 src/shiro_mlops/pipelines/forecast_view_export.py 與 docs/reference/dagster-schedules.md 第 8 項。
 FORECAST_VIEW_EXPORT_SCHEDULES: dict[str, ExpectedSchedule] = {
     "forecast_view_export_schedule": ExpectedSchedule(
         "forecast_view_export_job", "35 * * * *", TAIWAN_TZ

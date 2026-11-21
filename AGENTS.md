@@ -50,7 +50,7 @@ uv run ruff check .
 uv run ruff format --check .
 
 # Repository convention & Markdown checks (also run in CI)
-uv run python scripts/check_conventions.py python-uv terms debt-markers comment-refs doc-dates --base origin/dev
+uv run python scripts/check_conventions.py python-uv terms debt-markers comment-refs doc-dates comment-kinds --base origin/dev
 npx markdownlint-cli2 "**/*.md"
 
 # Local API dev server
