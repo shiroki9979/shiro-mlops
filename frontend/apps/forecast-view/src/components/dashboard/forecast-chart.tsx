@@ -16,7 +16,8 @@ import {
 } from 'recharts'
 
 interface ForecastChartProps {
-  steps?: ForecastStep[]
+  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
+  steps: ForecastStep[]
   isLoading: boolean
 }
 
@@ -66,7 +67,7 @@ export function ForecastChart({ steps, isLoading }: ForecastChartProps) {
   const locale = useLocale()
   const chartText = useMessages().dashboard.chart
 
-  if (isLoading || !steps || steps.length === 0) {
+  if (isLoading) {
     return (
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>

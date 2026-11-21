@@ -34,6 +34,7 @@ export const en: Messages = {
       week: '7 days (168h)',
     },
     empty: 'There is no issued forecast to show yet',
+    noStepsInHorizon: 'This forecast has no target hours within the selected horizon',
     stale: 'This forecast has not been updated for more than 24 hours',
     issuedAt: (time) => `Forecast time: ${time}`,
     predictionSubject: 'Prediction Subject: Nationwide',

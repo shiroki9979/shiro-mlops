@@ -5,7 +5,7 @@ import { zhTW } from '@/i18n/zh-TW'
 
 describe('MetricCards Component', () => {
   it('renders skeleton cards when loading', () => {
-    const { container } = render(<MetricCards isLoading={true} steps={undefined} />)
+    const { container } = render(<MetricCards isLoading={true} steps={[]} />)
     const cards = container.querySelectorAll('.animate-pulse')
     expect(cards.length).toBe(3)
   })

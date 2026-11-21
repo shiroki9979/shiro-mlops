@@ -6,7 +6,8 @@ import { useMessages } from '@/i18n/messages'
 import { Activity, ArrowUpRight, Gauge, Zap } from 'lucide-react'
 
 interface MetricCardsProps {
-  steps?: ForecastStep[]
+  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
+  steps: ForecastStep[]
   isLoading: boolean
 }
 
@@ -15,7 +16,7 @@ export function MetricCards({ steps, isLoading }: MetricCardsProps) {
   const locale = useLocale()
   const metricsText = m.dashboard.metrics
 
-  if (isLoading || !steps || steps.length === 0) {
+  if (isLoading) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {[1, 2, 3].map((i) => (

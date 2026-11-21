@@ -27,18 +27,21 @@ export const indexRoute = createRoute({
 
 // Exported so the integration test renders the real page rather than a hand-assembled copy.
 export function OverviewPage() {
-  const { data, isLoading, isError } = useLatestIssuedForecast()
+  const { data, isPending, isError } = useLatestIssuedForecast()
   const { horizonHours } = useDashboardStore()
   const m = useMessages()
   const locale = useLocale()
 
   const issuedAt = data?.issued_at ?? null
-  const steps = issuedAt === null ? undefined : stepsWithinHorizon(issuedAt, data?.steps ?? [], horizonHours)
+  const steps = issuedAt === null ? [] : stepsWithinHorizon(issuedAt, data?.steps ?? [], horizonHours)
   // A failed background refetch keeps the forecast already on screen; only a page with nothing loaded
   // shows the error. Every failure looks the same, whatever the status code or cause.
   const unavailable = isError && data === undefined
   // No forecast issued yet: decided by the JSON content alone, never by an HTTP status.
   const notIssued = data !== undefined && issuedAt === null
+  // An issued forecast can cover fewer than 168 hours, down to none, or none within the preset
+  // (data contract §6.1). The read has finished, so this is a settled view, never a loading one.
+  const noStepsInHorizon = issuedAt !== null && steps.length === 0
 
   return (
     <div className="space-y-6">
@@ -73,16 +76,22 @@ export function OverviewPage() {
           <Inbox className="h-6 w-6 text-slate-500" />
           <p>{m.dashboard.empty}</p>
         </div>
+      ) : noStepsInHorizon ? (
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center text-sm text-slate-400">
+          <Inbox className="h-6 w-6 text-slate-500" />
+          <p>{m.dashboard.noStepsInHorizon}</p>
+        </div>
       ) : (
         <>
+          {/* Loading comes from the read alone; once it settles, the steps here are never empty. */}
           {/* Metric Cards */}
-          <MetricCards steps={steps} isLoading={isLoading} />
+          <MetricCards steps={steps} isLoading={isPending} />
 
           {/* Predicted Load Chart */}
-          <ForecastChart steps={steps} isLoading={isLoading} />
+          <ForecastChart steps={steps} isLoading={isPending} />
 
           {/* Hourly Detail Table; keyed by preset so a shorter window never opens on a page past its end */}
-          <PredictionTable key={horizonHours} steps={steps} isLoading={isLoading} issuedAt={issuedAt} />
+          <PredictionTable key={horizonHours} steps={steps} isLoading={isPending} issuedAt={issuedAt} />
         </>
       )}
     </div>

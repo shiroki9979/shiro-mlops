@@ -228,6 +228,36 @@ describe('Overview page states', () => {
     expect(screen.queryByText(/預報時刻/)).not.toBeInTheDocument()
   })
 
+  // An issued forecast may cover fewer than 168 hours (data contract §6.1), down to none at all, or
+  // none within the selected preset. Either way the read has finished: the page must settle, not spin.
+  const stepless: Array<[string, () => { issued_at: string; steps: Step[] }]> = [
+    ['has no steps at all', () => ({ issued_at: '2026-11-20T10:15:00+08:00', steps: [] })],
+    [
+      'has no steps within the 24-hour preset',
+      () => ({
+        issued_at: '2026-11-20T10:15:00+08:00',
+        steps: [{ target_hour: '2026-11-21T11:00:00+08:00', predicted_load_mw: 30000 }],
+      }),
+    ],
+  ]
+
+  it.each(stepless)('settles without loading or invented rows when the forecast %s', async (_case, body) => {
+    servePublished(body())
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.noStepsInHorizon)).toBeInTheDocument()
+    expect(screen.getByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.chart.loading)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.table.loading)).not.toBeInTheDocument()
+    expect(document.querySelector('.animate-pulse, .animate-spin')).toBeNull()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.metrics.peakTitle)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.unavailable)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.empty)).not.toBeInTheDocument()
+  })
+
   it('shows a stale notice alongside the forecast once it is more than 24 hours old', async () => {
     servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
     freezeViewerNow('2026-11-21T10:16:00+08:00')

@@ -33,6 +33,7 @@ export const zhTW = {
       week: '7 天 (168h)',
     },
     empty: '目前還沒有可顯示的已發布預報',
+    noStepsInHorizon: '此預報在所選預測時效內沒有目標小時',
     stale: '預報已超過 24 小時未更新',
     issuedAt: (time: string) => `預報時刻：${time}`,
     predictionSubject: '預測對象：全台',
