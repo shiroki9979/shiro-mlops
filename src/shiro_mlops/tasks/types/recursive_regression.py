@@ -93,7 +93,8 @@ class RecursiveRegression:
     health_model: ClassVar[type[RecursiveRegressionHealth]] = RecursiveRegressionHealth
 
     def requirements(self, params: RecursiveRegressionParams) -> InputRequirements:
-        # 實際負載無替代來源（GLOSSARY）：lookback 內缺任一小時即拒絕，不讓 lag 或滾動窗以缺值推演。
+        # WHY-NOT(lookback): 要求整段 lookback 完整而非只查各步用到的 lag 小時；實際負載無替代來源
+        # （GLOSSARY），滾動窗同樣不得以缺值推演，且與回測起點有效性一致。
         lookback = params.lookback_hours
         return InputRequirements(
             weather=WeatherInput.FORECAST,
