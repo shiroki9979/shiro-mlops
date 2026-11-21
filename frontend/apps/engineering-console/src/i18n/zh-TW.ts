@@ -239,6 +239,12 @@ export const zhTW = {
       backToFirstPage: '回到第一頁',
       empty: '查無符合資料，查詢成功但結果為空。',
       gaps: (count: string) => `查詢區間缺口：${count} 筆`,
+      gapListTitle: '缺口清單',
+      gapRange: (range: string, length: string) => `${range}（${length}）`,
+      gapMinutes: (minutes: string) => `${minutes} 分鐘`,
+      gapHours: (hours: string) => `${hours} 小時`,
+      gapHoursMinutes: (hours: string, minutes: string) => `${hours} 小時 ${minutes} 分鐘`,
+      gapStation: (stationId: string) => `測站 ${stationId}`,
     },
     detail: {
       title: '資料明細',

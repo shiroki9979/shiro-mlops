@@ -40,7 +40,8 @@
 
 - **新鮮度**：每個 dataset 依自身預期更新頻率判定；超過兩個預期更新週期未取得新資料時顯示 warning。CWA forecast ingestion 新鮮度與 serving 使用的七小時 stale 規則必須分開顯示，不得混為同一狀態。
 - **全台供需完整度**：每個 observation slot 預期一筆資料。
-- **區域供需完整度**：每個 observation slot 預期同時具備北、中、南、東四區；缺少任一區即標記該 slot 不完整。
+- **區域供需完整度**：每個 observation slot 預期同時具備北、中、南、東四區；缺少任一區即標記該 slot 不完整。列表的 `missing_slots` 以整個查詢窗口計算：窗口內每個預期的 10 分鐘時段只要不足四區（包含四區全缺、沒有任何資料列的時段）即列為缺口，結果不隨分頁或 `region`／`completeness` 篩選變動，口徑與逐時負載、全台供需、測站觀測一致。`GET /data/status` 仍只判定最新一個 slot 缺少的區域。
+- **列表缺口範圍**：`missing_slots` 只檢查已發生的預期時段，即 `min(end, 現在)` 之前；窗口延伸到未來時，尚未到來的時段不列為缺口。逐時負載只檢查到最近一個已完成的小時。各列表的 `missing_slots` 以時間遞增排列。
 - **CWA 完整度**：以 allowlist 與 observation batch／forecast release audit header 判定缺少的測站或行政區。
 - **逐時負載完整度**：在查詢時間區間內檢查預期的逐小時時間點，並揭露缺口。
 - **機組完整度**：機組數量可變，不以固定筆數判定失敗。
@@ -56,6 +57,7 @@
 
 - **Freshness 維度**：分別顯示 ingestion age 與 source age。前者表示距上次成功入庫所經時間，後者表示最新來源事件或發布時間距今時間；不得以其中一者取代另一者。
 - **資料表與明細**：列表只顯示核心營運欄位；點擊資料列後以 drawer 顯示該筆所有 typed fields。Data Explorer 表格採緊湊列距（列高約為共用表格預設的 60%），表格區塊高度受限並於內部捲動，表頭固定在上方；緊湊列距與固定表頭只套用於 Data Explorer，共用表格元件預設值與 Forecast View 表格外觀不變。數值欄靠右對齊並使用 tabular-nums；等寬字體只用於數值與識別碼（測站編號、geocode、鄉鎮代碼），時間與文字欄位使用一般字體；單位只寫在欄標題。`slot_complete` 與 audit `status` 以沿用資料集狀態配色的徽章呈現（完整為綠、不完整為琥珀），`region`、`unit_type`、`dataset_id` 以中性 chip 呈現；徽章與 chip 內文與明細 drawer 相同。相鄰兩列首欄時間的台北日期不同時，中間插入日期分隔列（標示下方資料列的日期）；分隔列不可點選，不影響明細 drawer 與 CSV 匯出內容。
+- **缺口清單**：有缺口時，列表上方顯示缺口時段數，展開後列出缺口區間。連續缺口依資料集節奏合併：逐時負載與測站觀測為 1 小時，全台與區域供需為 10 分鐘。每個區間標示起訖時段與長度（缺口時段數 × 節奏，如「11/20 03:00–05:00（3 小時）」）；測站觀測依測站編號分組。清單只供閱讀，點擊不改變窗口。
 - **篩選條件**：所有 datasets 皆提供時間區間篩選；逐時負載另提供預測對象（`subject`，如 `nationwide`），區域供需提供 region 與完整度，機組發電提供 unit type 與 unit name，測站觀測提供 station，鄉鎮預報提供有效時間、dataset、geocode 與發布／更新版本，audits 提供 audit type、status 與 missing identifier。
   - **值集合固定的欄位**：`region`（北部、中部、南部、東部）、區域供需 `completeness` 與 audit `status`（`complete`、`incomplete`）使用下拉選單，第一個選項「不篩選」清除該篩選；選項以 API 原始值寫入 URL，`completeness` 與 `status` 的顯示文字隨介面語系。`all_vintages` 使用開關，開啟時寫入 `all_vintages=true`，關閉時自 URL 移除。
   - **值集合開放的欄位**：`subject`、`unit_type`、`unit_name`、`station_id`、`geocode`、`dataset_id`、`issued_at`、`source_updated_at` 與 `missing_*` 維持文字輸入；不提供列出 distinct 值的 endpoint。

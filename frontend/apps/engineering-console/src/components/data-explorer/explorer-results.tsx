@@ -1,10 +1,9 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
-import { formatNumber } from '@shiro-mlops/shared/i18n/format'
-import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
+import { ExplorerGapList } from './explorer-gap-list'
 import { ExplorerTable } from './explorer-table'
 
 interface ExplorerResultsProps {
@@ -53,7 +52,6 @@ export function ExplorerResults({
   onRestart,
 }: ExplorerResultsProps) {
   const m = useMessages()
-  const locale = useLocale()
   const resultsText = m.explorer.results
   return (
     <Card>
@@ -71,11 +69,7 @@ export function ExplorerResults({
           <p className="text-xs text-slate-500">{resultsText.empty}</p>
         ) : (
           <>
-            {data.missing_slots.length > 0 && (
-              <p className="text-xs text-amber-300 mb-3">
-                {resultsText.gaps(formatNumber(data.missing_slots.length, locale))}
-              </p>
-            )}
+            <ExplorerGapList datasetId={dataset.id} missingSlots={data.missing_slots} />
             <ExplorerTable columns={dataset.columns} rows={data.items} onSelect={onSelect} />
             {data.has_more && (
               <Button

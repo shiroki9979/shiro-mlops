@@ -241,6 +241,12 @@ export const en: Messages = {
       backToFirstPage: 'Back to first page',
       empty: 'No matching data: the query succeeded but returned no rows.',
       gaps: (count) => `Gaps in query window: ${count}`,
+      gapListTitle: 'Gap list',
+      gapRange: (range, length) => `${range} (${length})`,
+      gapMinutes: (minutes) => `${minutes} min`,
+      gapHours: (hours) => `${hours} h`,
+      gapHoursMinutes: (hours, minutes) => `${hours} h ${minutes} min`,
+      gapStation: (stationId) => `Station ${stationId}`,
     },
     detail: {
       title: 'Record Details',

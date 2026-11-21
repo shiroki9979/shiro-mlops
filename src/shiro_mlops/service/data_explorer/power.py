@@ -6,7 +6,9 @@ from typing import Any
 
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
 from shiro_mlops.service.data_explorer.completeness import (
+    gaps_until_now,
     missing_regional_identifiers,
+    regional_gaps,
     regional_slot_map,
     ten_minute_gaps,
 )
@@ -133,15 +135,6 @@ def _regional_item(row: dict[str, Any], present: set[str]) -> dict[str, Any]:
     }
 
 
-def _missing_regional_slots(slot_regions: dict[Any, set[str]]) -> list[str]:
-    expected = set(REGIONAL_SUPPLY_DEMAND_REGIONS)
-    return [
-        format_taiwan_time(slot)
-        for slot, present in sorted(slot_regions.items(), reverse=True)
-        if present != expected
-    ]
-
-
 class NationalSupplyDemandReader(DatasetReader):
     """List persisted national supply-demand snapshots newest first."""
 
@@ -154,7 +147,8 @@ class NationalSupplyDemandReader(DatasetReader):
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        return [_national_item(row) for row in rows], ten_minute_gaps(self.db, query.window)
+        gaps = gaps_until_now(query.window, lambda window: ten_minute_gaps(self.db, window))
+        return [_national_item(row) for row in rows], gaps
 
 
 class RegionalSupplyDemandReader(DatasetReader):
@@ -174,7 +168,7 @@ class RegionalSupplyDemandReader(DatasetReader):
             _regional_item(row, slot_regions.get(to_taiwan(row["observed_at"]), set()))
             for row in rows
         ]
-        return items, _missing_regional_slots(slot_regions)
+        return items, gaps_until_now(query.window, lambda window: regional_gaps(self.db, window))
 
 
 class UnitGenerationReader(DatasetReader):
