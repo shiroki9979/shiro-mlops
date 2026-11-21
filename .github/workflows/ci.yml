@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, dev]
 
+env:
+  # Every job that sets up Terraform pins this version; it satisfies required_version in
+  # infra/terraform/main.tf and infra/terraform/bootstrap/main.tf.
+  TERRAFORM_VERSION: "1.11.4"
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -100,12 +105,10 @@ jobs:
         with:
           node-version-file: frontend/package.json
 
-      # Pinned version satisfies required_version in infra/terraform/main.tf and
-      # infra/terraform/bootstrap/main.tf.
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.11.4"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Test CloudFront Functions, check Terraform formatting and validity, and run Terraform tests
         run: make infra-check
@@ -165,22 +168,12 @@ jobs:
     env:
       AWS_TERRAFORM_PLAN_ROLE_ARN: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
     steps:
-      # Until the plan role exists (ops acceptance), skip without failing so release PRs stay
-      # green; setting the repository variable enables the job.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Check whether AWS is configured
         id: aws
-        run: |
-          if [ -z "$AWS_TERRAFORM_PLAN_ROLE_ARN" ]; then
-            echo "::notice::AWS 尚未設定，略過 Terraform plan"
-            echo "AWS 尚未設定（repository variable \`AWS_TERRAFORM_PLAN_ROLE_ARN\` 未設定），略過 Terraform plan。" >> "$GITHUB_STEP_SUMMARY"
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout repository
-        if: steps.aws.outputs.configured == 'true'
-        uses: actions/checkout@v4
+        run: scripts/check_aws_configured.sh AWS_TERRAFORM_PLAN_ROLE_ARN "Terraform plan"
 
       - name: Assume the Terraform plan role
         if: steps.aws.outputs.configured == 'true'
@@ -195,7 +188,7 @@ jobs:
         if: steps.aws.outputs.configured == 'true'
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.11.4"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Install uv
@@ -204,31 +197,13 @@ jobs:
         with:
           version: "latest"
 
-      - name: Initialise the main configuration against the remote state
+      # --lock=false: the plan role has no write access, so it cannot create the state lockfile.
+      - name: Plan the main configuration, check it deletes, replaces or forgets nothing, and write the job summary
         if: steps.aws.outputs.configured == 'true'
-        working-directory: infra/terraform
         env:
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
-
-      # -lock=false: the plan role has no write access, so it cannot create the state lockfile.
-      - name: Plan the main configuration
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: infra/terraform
-        env:
           TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
-        run: terraform plan -input=false -lock=false -out=tfplan
-
-      # The plan file and its JSON hold the budget alert email in plain text: they stay on the
-      # runner and are never uploaded as artifacts.
-      - name: Export the saved plan as JSON
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: infra/terraform
-        run: terraform show -json tfplan > tfplan.json
-
-      - name: Check the plan deletes, replaces or forgets nothing, and write the job summary
-        if: steps.aws.outputs.configured == 'true'
-        run: uv run --no-project python scripts/check_plan_safety.py infra/terraform/tfplan.json >> "$GITHUB_STEP_SUMMARY"
+        run: scripts/plan_terraform.sh --lock=false --summary "$GITHUB_STEP_SUMMARY" "bucket=$TF_STATE_BUCKET"
 
   # Applies the main Terraform configuration, then uploads the Forecast View and smoke-checks it
   # (docs/reference/terraform-state-and-deployment.md, "CD 部署 (main)"). Not offline-tested;
@@ -250,22 +225,12 @@ jobs:
     env:
       AWS_TERRAFORM_APPLY_ROLE_ARN: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
     steps:
-      # Until ops acceptance sets the variable, AWS is not provisioned: skip with a notice so main
-      # stays green, and start deploying as soon as it is set.
-      - name: Check that AWS deployment is configured
-        id: aws
-        run: |
-          if [ -z "$AWS_TERRAFORM_APPLY_ROLE_ARN" ]; then
-            echo "::notice::AWS 尚未設定，略過部署"
-            echo "AWS 尚未設定（repository variable \`AWS_TERRAFORM_APPLY_ROLE_ARN\` 未設定），略過 Terraform apply 與預報檢視部署。" >> "$GITHUB_STEP_SUMMARY"
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Checkout repository
-        if: steps.aws.outputs.configured == 'true'
         uses: actions/checkout@v4
+
+      - name: Check whether AWS is configured
+        id: aws
+        run: scripts/check_aws_configured.sh AWS_TERRAFORM_APPLY_ROLE_ARN "Terraform apply 與預報檢視部署"
 
       - name: Install uv
         if: steps.aws.outputs.configured == 'true'
@@ -280,7 +245,7 @@ jobs:
         if: steps.aws.outputs.configured == 'true'
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.11.4"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Assume the Terraform apply role
@@ -290,32 +255,14 @@ jobs:
           role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Initialise the main Terraform configuration with the S3 state backend
+      # Takes the state lock. Exit 1 on any delete, replacement or forget stops the job before
+      # apply; those changes are applied by hand (docs/reference/terraform-state-and-deployment.md).
+      - name: Plan the main configuration and check it deletes, replaces or forgets nothing
         if: steps.aws.outputs.configured == 'true'
-        working-directory: infra/terraform
         env:
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
-
-      - name: Plan the main Terraform configuration
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: infra/terraform
-        env:
           TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
-        run: terraform plan -input=false -out=tfplan
-
-      # The plan file and its JSON hold the budget alert email in plain text: they stay on the
-      # runner and are never uploaded as artifacts.
-      - name: Export the saved plan as JSON
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: infra/terraform
-        run: terraform show -json tfplan > tfplan.json
-
-      # Exit 1 on any delete, replacement or forget stops the job before apply; those changes are
-      # applied by hand (docs/reference/terraform-state-and-deployment.md).
-      - name: Check the plan has no deletes, replacements or forgets
-        if: steps.aws.outputs.configured == 'true'
-        run: uv run --no-project python scripts/check_plan_safety.py infra/terraform/tfplan.json >> "$GITHUB_STEP_SUMMARY"
+        run: scripts/plan_terraform.sh --summary "$GITHUB_STEP_SUMMARY" "bucket=$TF_STATE_BUCKET"
 
       # Applies the saved plan that passed the check, not a fresh plan.
       - name: Apply the checked plan

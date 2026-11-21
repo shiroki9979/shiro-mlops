@@ -126,7 +126,7 @@ state bucket 由 bootstrap 層自己建立，因此第一次以本機 state appl
    EOF
    ```
 
-   `budget_alert_email` 沒有預設值，必須提供；它標為 sensitive，`plan` 與 `apply` 的輸出不會顯示這個地址。AWS 帳號 ID 由目前憑證的身分取得，不需要設定變數。
+   `budget_alert_email` 沒有預設值，必須提供；它標為 sensitive，`plan` 與 `apply` 的輸出不會顯示這個地址。主設定不使用 AWS 帳號 ID，不需要設定對應的變數。
 
 2. **以 backend 設定檔初始化**：曾以 `make infra-check` 或 `terraform init -backend=false` 初始化過這個目錄時，加上 `-reconfigure`：
 
