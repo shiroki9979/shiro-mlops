@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
@@ -20,7 +21,8 @@ REQUEST_TIMEOUT_SECONDS = 10
 MAX_ISSUED_AGE = timedelta(hours=24)
 
 # 預報檢視匯出的兩個固定檔名與缺檔探測路徑；此腳本以 `uv run --no-project` 執行、不能 import
-# shiro_mlops，變更時須同步 src/shiro_mlops/data/forecast_view.py 與 tests/fixtures/published/。
+# shiro_mlops，變更時須同步 src/shiro_mlops/data/forecast_view.py、tests/fixtures/published/，
+# `/published/` 前綴另須同步 infra/terraform/main.tf 的 `local.published_prefix`。
 LATEST_ISSUED_PATH = "/published/latest_issued_forecast.json"
 TRACK_RECORD_PATH = "/published/forecast_track_record.json"
 MISSING_PUBLISHED_PATH = "/published/definitely-missing-smoke-check.json"
@@ -39,13 +41,22 @@ class NoRedirectHandler(HTTPRedirectHandler):
 OPENER = build_opener(NoRedirectHandler)
 
 
-def fetch(base_url: str, path: str) -> tuple[int, bytes, str]:
+@dataclass(frozen=True)
+class FetchedResponse:
+    status: int
+    body: bytes
+    content_type: str
+
+
+def fetch(base_url: str, path: str) -> FetchedResponse:
     url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
     try:
         with OPENER.open(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            return response.status, response.read(), response.headers.get("Content-Type", "")
+            return FetchedResponse(
+                response.status, response.read(), response.headers.get("Content-Type", "")
+            )
     except HTTPError as error:
-        return error.code, error.read(), error.headers.get("Content-Type", "")
+        return FetchedResponse(error.code, error.read(), error.headers.get("Content-Type", ""))
     except OSError as error:
         raise CheckFailedError(f"cannot reach {url}: {getattr(error, 'reason', error)}") from error
 
@@ -56,18 +67,18 @@ def require_ok(status: int) -> None:
 
 
 def check_html(base_url: str, path: str) -> None:
-    status, _, content_type = fetch(base_url, path)
-    require_ok(status)
-    media_type = content_type.split(";", 1)[0].strip().lower()
+    response = fetch(base_url, path)
+    require_ok(response.status)
+    media_type = response.content_type.split(";", 1)[0].strip().lower()
     if media_type != "text/html":
-        raise CheckFailedError(f"Content-Type {content_type!r}, expected text/html")
+        raise CheckFailedError(f"Content-Type {response.content_type!r}, expected text/html")
 
 
 def fetch_json(base_url: str, path: str) -> object:
-    status, body, _ = fetch(base_url, path)
-    require_ok(status)
+    response = fetch(base_url, path)
+    require_ok(response.status)
     try:
-        return json.loads(body.decode("utf-8"))
+        return json.loads(response.body.decode("utf-8"))
     except ValueError as error:
         raise CheckFailedError(f"body is not valid JSON: {error}") from error
 
@@ -98,12 +109,11 @@ def check_track_record(base_url: str) -> None:
 
 def check_missing_published(base_url: str) -> None:
     """A missing export must not fall back to index.html with 200 (no custom error response)."""
-    status, _, _ = fetch(base_url, MISSING_PUBLISHED_PATH)
-    if status == 200:
+    if fetch(base_url, MISSING_PUBLISHED_PATH).status == 200:
         raise CheckFailedError("HTTP 200, expected an error status")
 
 
-def checks(base_url: str, now: datetime) -> list[tuple[str, Callable[[], None]]]:
+def planned_checks(base_url: str, now: datetime) -> list[tuple[str, Callable[[], None]]]:
     return [
         ("/ is HTML", lambda: check_html(base_url, "/")),
         ("/history is HTML", lambda: check_html(base_url, "/history")),
@@ -149,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(exit_.code or 0)
     now = args.now or datetime.now().astimezone()
 
-    planned = checks(args.base_url, now)
+    planned = planned_checks(args.base_url, now)
     failures: list[str] = []
     for name, check in planned:
         try:
