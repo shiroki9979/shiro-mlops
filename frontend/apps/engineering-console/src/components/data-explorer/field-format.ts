@@ -57,6 +57,8 @@ const FIELD_KINDS: Record<ExplorerFieldKey, FieldKind> = {
   precipitation_mm: 'measurement',
   wind_speed_m_s: 'measurement',
   wind_direction_deg: 'measurement',
+  batch_count: 'measurement',
+  version_count: 'measurement',
   slot_complete: 'flag',
   status: 'auditStatus',
   subject: 'text',

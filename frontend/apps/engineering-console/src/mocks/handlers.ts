@@ -231,6 +231,12 @@ export const handlers = [
   http.get('*/data/weather/forecasts', () =>
     HttpResponse.json({ timezone: 'Asia/Taipei', items: [], next_cursor: null, has_more: false, missing_slots: [] }),
   ),
+  http.get('*/data/audits/cwa-observations/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: '1h', agg: null, series: [] }),
+  ),
+  http.get('*/data/audits/cwa-forecasts/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: '1h', agg: null, series: [] }),
+  ),
   http.get('*/data/audits/cwa-observations', () =>
     HttpResponse.json({ timezone: 'Asia/Taipei', items: [], next_cursor: null, has_more: false, missing_slots: [] }),
   ),

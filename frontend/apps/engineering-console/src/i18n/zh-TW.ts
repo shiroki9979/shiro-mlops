@@ -194,6 +194,8 @@ export const zhTW = {
       missing_station_id: '缺少測站編號',
       missing_geocodes: '缺少 Geocode',
       missing_geocode: '缺少 Geocode',
+      batch_count: '批次數',
+      version_count: '版本數',
     },
     statusCard: {
       latestSourceAt: (time: string) => `最新來源時間：${time}`,
@@ -264,6 +266,7 @@ export const zhTW = {
       databaseUnavailable: '資料庫目前無法連線，請稍後再試。',
       tooManyPoints: (bucket: string) => `資料點超過上限，建議改用「${bucket}」粒度。`,
       gapLegend: '灰底區段：該時段沒有資料',
+      count: '計數',
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset}趨勢圖；欄位：${fields}；序列：${series}`,
     },

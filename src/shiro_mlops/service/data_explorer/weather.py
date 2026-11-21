@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, NamedTuple
 
@@ -56,6 +57,37 @@ def _audit_status(value: str | None) -> str | None:
     if value not in {"complete", "incomplete"}:
         raise ExplorerQueryError("status must be complete or incomplete")
     return value
+
+
+def observation_audit_filters(filters: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Observation batch filters shared by the list and the series: status, missing station."""
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    status = _audit_status(filters.get("status"))
+    if status:
+        clauses.append("status = :status")
+        params["status"] = status
+    if filters.get("missing_station_id"):
+        clauses.append("CAST(missing_station_ids AS TEXT) LIKE :missing_station")
+        params["missing_station"] = f'%"{filters["missing_station_id"]}"%'
+    return clauses, params
+
+
+def forecast_audit_filters(filters: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Forecast release filters shared by the list and the series: dataset, status, geocode."""
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    status = _audit_status(filters.get("status"))
+    if filters.get("dataset_id"):
+        clauses.append("dataset_id = :dataset_id")
+        params["dataset_id"] = filters["dataset_id"]
+    if status:
+        clauses.append("status = :status")
+        params["status"] = status
+    if filters.get("missing_geocode"):
+        clauses.append("CAST(missing_geocodes AS TEXT) LIKE :missing_geocode")
+        params["missing_geocode"] = f'%"{filters["missing_geocode"]}"%'
+    return clauses, params
 
 
 def _has_explicit_forecast_version(params: dict[str, Any]) -> bool:
@@ -244,15 +276,9 @@ class ObservationAuditReader(DatasetReader):
     """
 
     def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-        status = _audit_status(query.filters.get("status"))
         clauses, sql_params = self.db.time_window("fetched_at", query.window)
-        if status:
-            clauses.append("status = :status")
-            sql_params["status"] = status
-        if query.filters.get("missing_station_id"):
-            clauses.append("CAST(missing_station_ids AS TEXT) LIKE :missing_station")
-            sql_params["missing_station"] = f'%"{query.filters["missing_station_id"]}"%'
-        return clauses, sql_params
+        audit_clauses, audit_params = observation_audit_filters(query.filters)
+        return [*clauses, *audit_clauses], {**sql_params, **audit_params}
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -286,18 +312,9 @@ class ForecastAuditReader(DatasetReader):
     """
 
     def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-        status = _audit_status(query.filters.get("status"))
         clauses, sql_params = self.db.time_window("issued_at", query.window)
-        if query.filters.get("dataset_id"):
-            clauses.append("dataset_id = :dataset_id")
-            sql_params["dataset_id"] = query.filters["dataset_id"]
-        if status:
-            clauses.append("status = :status")
-            sql_params["status"] = status
-        if query.filters.get("missing_geocode"):
-            clauses.append("CAST(missing_geocodes AS TEXT) LIKE :missing_geocode")
-            sql_params["missing_geocode"] = f'%"{query.filters["missing_geocode"]}"%'
-        return clauses, sql_params
+        audit_clauses, audit_params = forecast_audit_filters(query.filters)
+        return [*clauses, *audit_clauses], {**sql_params, **audit_params}
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
