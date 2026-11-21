@@ -5,18 +5,11 @@ import type { Locale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { type Messages, useMessages } from '@/i18n/messages'
 import { type GapRange, groupGapSlots } from '@/lib/explorer-gaps'
-import type { ExplorerDatasetId } from './catalog'
+import { datasetById, type ExplorerDatasetId } from './catalog'
 
-// SYNC: mirrors DATASET_SPECS[*]["cadence"] in src/shiro_mlops/service/data_explorer/specs.py
-// for the datasets whose list responses carry missing_slots.
-const GAP_CADENCE_MINUTES: Partial<Record<ExplorerDatasetId, number>> = {
-  hourly_load: 60,
-  national_supply_demand: 10,
-  regional_supply_demand: 10,
-  cwa_observations: 60,
-}
 const STATION_GROUPED_DATASETS: ReadonlySet<ExplorerDatasetId> = new Set(['cwa_observations'])
 const MINUTES_PER_HOUR = 60
+const SECONDS_PER_MINUTE = 60
 
 const GAP_DATE: Intl.DateTimeFormatOptions = { month: '2-digit', day: '2-digit', timeZone: TAIPEI_TIME_ZONE }
 const GAP_TIME: Intl.DateTimeFormatOptions = {
@@ -36,8 +29,8 @@ export function ExplorerGapList({ datasetId, missingSlots }: ExplorerGapListProp
   const locale = useLocale()
   const [expanded, setExpanded] = useState(false)
   const listId = useId()
-  const cadenceMinutes = GAP_CADENCE_MINUTES[datasetId]
-  if (missingSlots.length === 0 || cadenceMinutes === undefined) return null
+  if (missingSlots.length === 0) return null
+  const cadenceMinutes = datasetById(datasetId).cadenceSeconds / SECONDS_PER_MINUTE
   const resultsText = m.explorer.results
   const groups = groupGapSlots(missingSlots, cadenceMinutes, STATION_GROUPED_DATASETS.has(datasetId))
   const describe = (range: GapRange) =>

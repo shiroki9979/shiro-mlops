@@ -3,14 +3,13 @@ import type { Locale } from '@shiro-mlops/shared/i18n/locale-store'
 import type { Messages } from '@/i18n/messages'
 import { CATEGORY_PALETTES, FORECAST_VINTAGE_COLORS, categoryColor } from '@/lib/chart-palette'
 import type { Series } from '@/schemas/data-explorer'
-import type { ExplorerChartConfig } from './catalog'
+import { type ExplorerChartConfig, POWER_UNIT } from './catalog'
 import type { PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { translateCompleteness } from './status-text'
 
 // SYNC(src/shiro_mlops/service/data_explorer/values.py): WAN_KW_TO_MW.
 const MW_PER_WAN_KW = 10
-const POWER_UNIT = 'MW'
 
 const GROUP_LABELS: Record<NonNullable<ExplorerChartConfig['groupLabels']>, (value: string, m: Messages) => string> = {
   completeness: translateCompleteness,

@@ -3,6 +3,8 @@
 // least 3:1 contrast against CHART_SURFACE (WCAG non-text contrast), checked by
 // tests/unit/chart-palette.test.ts.
 
+import type { ExplorerRegion } from '@/components/data-explorer/catalog'
+
 export type CategoryPalette = Readonly<Record<string, string>>
 
 // Effective console card colour: bg-slate-900/70 composited over the bg-slate-950 layout.
@@ -18,13 +20,13 @@ export const CHART_BRUSH = '#22d3ee'
 // Ungrouped or open-ended series (subjects, unknown keys) take these in order.
 export const SERIES_COLORS = ['#22d3ee', '#fbbf24', '#f472b6', '#34d399', '#a78bfa', '#fb923c'] as const
 
-// SYNC: REGIONAL_SUPPLY_DEMAND_REGIONS in src/shiro_mlops/data/taipower_regional_supply_demand.py
-export const REGION_COLORS: CategoryPalette = {
+// Typed by the catalog's REGIONS, so adding or renaming a region fails tsc until it has a colour.
+export const REGION_COLORS = {
   北部: '#22d3ee',
   中部: '#fbbf24',
   南部: '#fb7185',
   東部: '#34d399',
-}
+} as const satisfies Readonly<Record<ExplorerRegion, string>>
 
 // Families share a hue and differ in lightness: the private gas and coal plants and the
 // storage load sit next to their public counterpart.

@@ -90,7 +90,8 @@ export const EXPLORER_NAV_GROUPS = ['power', 'weather', 'audit'] as const satisf
 export type ExplorerNavGroup = (typeof EXPLORER_NAV_GROUPS)[number]
 
 // SYNC(src/shiro_mlops/data/taipower_regional_supply_demand.py): REGIONAL_SUPPLY_DEMAND_REGIONS.
-const REGIONS = ['北部', '中部', '南部', '東部'] as const
+export const REGIONS = ['北部', '中部', '南部', '東部'] as const
+export type ExplorerRegion = (typeof REGIONS)[number]
 const COMPLETENESS_VALUES = ['complete', 'incomplete'] as const
 const COMPLETENESS_SELECT: ExplorerFilterControl = { kind: 'select', options: COMPLETENESS_VALUES }
 
@@ -105,7 +106,7 @@ function auditStatusChart(seriesApiPath: string, countField: ExplorerFieldKey): 
   }
 }
 
-const POWER_UNIT = 'MW'
+export const POWER_UNIT = 'MW'
 const PERCENT_UNIT = '%'
 // SYNC(src/shiro_mlops/service/data_explorer/supply_demand_series.py): NationalSeriesField and its units.
 const NATIONAL_FIELD_OPTIONS: ChartFieldOption[] = [
