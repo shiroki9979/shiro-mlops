@@ -1,0 +1,2 @@
+/* Tokens and base styles are shared so both apps look the same (ADR-0014 §2.3). */
+@import "@shiro-mlops/shared/styles.css";

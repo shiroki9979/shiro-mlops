@@ -109,11 +109,11 @@ After ：既有解析 interface → 天氣解析 module〔選版／查詢範圍�
 
 ### 現況與證據
 
-[use-explorer-search.ts](../../frontend/src/components/data-explorer/use-explorer-query.ts)
+[use-explorer-search.ts](../../frontend/apps/engineering-console/src/components/data-explorer/use-explorer-query.ts)
 集中 URL 合併與預設窗口，但
-[explorer-filters.tsx](../../frontend/src/components/data-explorer/explorer-filters.tsx)
+[explorer-filters.tsx](../../frontend/apps/engineering-console/src/components/data-explorer/explorer-filters.tsx)
 仍有 3 處輸入事件自行傳入 `cursor: undefined`；
-[explorer-page.tsx](../../frontend/src/components/data-explorer/explorer-page.tsx) 負責翻頁與刷新協調。
+[explorer-page.tsx](../../frontend/apps/engineering-console/src/components/data-explorer/explorer-page.tsx) 負責翻頁與刷新協調。
 
 `da538a5` 已修正開啟明細後重新 render 使預設窗口漂移，以及 Refresh 未同步更新營運狀態的問題。
 這些歷史修補顯示查詢生命週期知識跨越數個 module；新增篩選仍需再次理解 cursor invariant。
@@ -135,7 +135,7 @@ After ：畫面操作 → 查詢 module〔窗口／cursor 有效性／URL〕→ 
 
 ### 測試保留重點
 
-保留 [data-explorer.test.tsx](../../frontend/tests/integration/data-explorer.test.tsx)
+保留 [data-explorer.test.tsx](../../frontend/apps/engineering-console/tests/integration/data-explorer.test.tsx)
 中開啟明細後窗口固定、翻頁、URL 篩選與刷新營運狀態的操作測試。
 後續補強「下一頁後修改篩選回到第一頁」的使用者行為；interface 是測試面，無須另測 patch 物件形狀。
 
