@@ -79,10 +79,10 @@ def test_repeated_fields_parameter_is_read_as_a_list(series_client_for) -> None:
     assert [series["field"] for series in response.json()["series"]] == ["load_mw"]
 
 
-def test_buckets_after_now_are_not_gap_filled(
+def test_hours_not_yet_derived_are_not_gap_filled(
     series_client_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """現在之後的 bucket 不算缺口，也不補 null。"""
+    """尚未結束的小時與現在之後的 bucket 不算缺口，也不補 null，與列表缺口口徑一致。"""
     client, repo = series_client_for
     hour = datetime(2026, 11, 18, 10, 0)
     repo.upsert_taipower_load(
@@ -90,7 +90,7 @@ def test_buckets_after_now_are_not_gap_filled(
     )
     monkeypatch.setattr(
         "shiro_mlops.service.data_explorer.series.now_taiwan",
-        lambda: hour + timedelta(hours=1, minutes=30),
+        lambda: hour + timedelta(hours=2, minutes=30),
     )
 
     response = client.get(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -75,4 +76,5 @@ HOURLY_LOAD_SERIES = SeriesSpec(
     group_columns=("subject",),
     filter_keys=frozenset({"subject"}),
     filters=hourly_load_filters,
+    slot_lag=timedelta(hours=1),
 )

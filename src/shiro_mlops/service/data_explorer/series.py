@@ -65,7 +65,9 @@ class SeriesSpec:
     """Everything a dataset supplies to expose a chart series endpoint.
 
     `filters` turns the dataset's own validated filter values into extra WHERE clauses;
-    the time window, bucketing, limits and gap-fill come from this module.
+    the time window, bucketing, limits and gap-fill come from this module. `slot_lag` is
+    how long after its timestamp a slot is expected to exist (an hourly load row labels
+    the hour it summarises, so it is due only once that hour has ended).
     """
 
     dataset: str
@@ -76,6 +78,7 @@ class SeriesSpec:
     filter_keys: frozenset[str]
     filters: SeriesFilters
     gap_fill: bool = True
+    slot_lag: timedelta = timedelta(0)
 
     @property
     def cadence(self) -> timedelta:
@@ -229,7 +232,7 @@ class SeriesReader:
     def _fill_slots(self, window: TimeWindow, bucket: Bucket) -> list[datetime]:
         if not self.spec.gap_fill:
             return []
-        last_due = min(window.end, now_taiwan())
+        last_due = min(window.end, now_taiwan() - self.spec.slot_lag)
         return [
             start
             for start in expected_bucket_starts(window, bucket, self.spec.cadence)
