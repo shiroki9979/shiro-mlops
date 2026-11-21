@@ -73,3 +73,56 @@ agent 沒有跨工作階段的記憶，每次都要重新推導介面：讀得�
 ## 結論
 
 agent 讓「讀」變便宜，但沒有讓「推錯」變少，而且留下的註解會被當成指令執行。一條過時的天條，比十條過時的重述註解更危險。務實的順序是：先做 A 級清理、豁免介面文字、把天條轉成測試。若要收緊到 D 級，需要一次預先登記、採配對設計、含過時註解組的複製實驗。
+
+## 參考文獻
+
+有標註發表處的是會議或期刊論文，沒標註的多為 arXiv 預印本或網頁資料。研究環境無法開啟 arXiv 全文，所以 arXiv 文獻的數字取自摘要與檢索結果，未對照原文核實。第 4 節的 repo 證據來自 shiro-mlops 本身，逐行出處見完整版。
+
+### LLM 與註解
+
+1. Macke & Doyle，文件缺漏或錯誤對 LLM 理解程式碼的影響，Findings of NAACL 2024。[arXiv 2404.03114](https://arxiv.org/abs/2404.03114)
+2. CodeCrash：17 個模型在程式碼擾動下的穩健性，NeurIPS 2025。[arXiv 2504.14119](https://arxiv.org/html/2504.14119v3)
+3. Le et al.，When Names Disappear：識別字名稱混淆後的程式理解。[arXiv 2510.03178](https://arxiv.org/pdf/2510.03178)
+4. 註解對 bug 修復準確率的影響（微調設定）。[arXiv 2601.23059](https://arxiv.org/abs/2601.23059)
+5. Thornton：8 個前沿模型在註解操弄下的漏洞偵測。[arXiv 2602.16741](https://arxiv.org/html/2602.16741v1)
+6. Imani et al.，Inside Out：開關模型內的「註解」表徵。[arXiv 2512.16790](https://arxiv.org/abs/2512.16790)
+7. LLM 從 commit 還原架構決策。[arXiv 2609.03721](https://arxiv.org/abs/2609.03721)
+8. LLM 零樣本產生設計理由。[arXiv 2504.20781](https://arxiv.org/abs/2504.20781)
+9. Gloaguen et al.，AGENTS.md 等脈絡檔對 coding agent 的效果評估。[arXiv 2602.11988](https://arxiv.org/abs/2602.11988)
+10. Xia et al.，When Comments Mislead：過時註解對程式碼生成的影響，ASE 2026。[DOI](https://doi.org/10.1145/3832783.3834359)
+11. Comment Traps：被註解掉的缺陷程式碼對 Copilot 與 Cursor 的影響，ACM。[DOI](https://dl.acm.org/doi/10.1145/3797102)
+12. Wu & Nita-Rotaru，ALIBI：LLM 無法照指示忽略不可信註解。[arXiv 2607.24964](https://arxiv.org/abs/2607.24964)
+13. Vijayvargiya et al.，Ambig-SWE：agent 偵測需求不完整與詢問行為。[arXiv 2502.13069](https://arxiv.org/html/2502.13069v3)
+14. Edwards et al.，Ask or Assume?，Findings of EMNLP 2026。[arXiv 2603.26233](https://arxiv.org/abs/2603.26233)
+15. Anthropic，Claude prompting best practices。[文件](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-4-best-practices)
+16. Terminal Wars，Should you comment code for AI?（實務綜述，部落格）。[連結](https://terminalwars.com/posts/should-you-comment-code-for-ai/)
+
+### 實驗方法與統計
+
+1. Miller，Adding Error Bars to Evals，2024。[arXiv 2411.00640](https://arxiv.org/abs/2411.00640)；Anthropic 摘要文章：[A statistical approach to model evaluations](https://www.anthropic.com/research/statistical-approach-to-model-evals)
+2. Brown, Cai & DasGupta，二項比例的區間估計（Wilson 區間），Statistical Science 2001。[連結](https://projecteuclid.org/euclid.ss/1009213286)
+3. McHugh，Interrater reliability: the kappa statistic，2012。[PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC3900052/)
+4. Cohen's kappa（含 Landis & Koch 分級）。[Wikipedia](https://en.wikipedia.org/wiki/Cohen%27s_kappa)
+5. Yao et al.，τ-bench（pass^k 與 agent 執行變異），ICLR 2025。[arXiv 2406.12045](https://arxiv.org/abs/2406.12045)
+6. Sclar et al.，提示格式敏感度，ICLR 2024。[arXiv 2310.11324](https://arxiv.org/abs/2310.11324)
+7. Panickssery et al.，LLM 評審的自我偏好，NeurIPS 2024。[arXiv 2404.13076](https://arxiv.org/abs/2404.13076)
+8. Zheng et al.，LLM-as-a-Judge 的偏誤，NeurIPS 2023。[arXiv 2306.05685](https://arxiv.org/abs/2306.05685)
+9. CodeJudgeBench，ACL 2026。[ACL Anthology](https://aclanthology.org/2026.acl-long.888/)
+10. Zhu et al.，Agentic Benchmark Checklist。[arXiv 2507.02825](https://arxiv.org/abs/2507.02825)
+11. Bean et al.，445 個 LLM 基準的建構效度回顧，NeurIPS 2025。[arXiv 2511.04703](https://arxiv.org/abs/2511.04703)
+
+### 傳統軟體工程
+
+1. Ousterhout & Martin，A Philosophy of Software Design 與 Clean Code 的公開辯論，2024–2025。[GitHub](https://github.com/johnousterhout/aposd-vs-clean-code)
+2. Clean Code 第 4 章筆記（二手整理）。[GitHub](https://github.com/JuanCrg90/Clean-Code-Notes)
+3. PEP 257 Docstring Conventions。[連結](https://peps.python.org/pep-0257/)；PEP 8。[連結](https://peps.python.org/pep-0008/)
+4. Google Python Style Guide。[連結](https://google.github.io/styleguide/pyguide.html)
+5. Linux kernel coding style。[GitHub](https://github.com/torvalds/linux/blob/master/Documentation/process/coding-style.rst)；kernel Rust coding guidelines。[GitHub](https://github.com/torvalds/linux/blob/master/Documentation/rust/coding-guidelines.rst)
+6. Go Doc Comments。[連結](https://go.dev/doc/comment)
+7. clippy `undocumented_unsafe_blocks` 原始碼。[GitHub](https://github.com/rust-lang/rust-clippy/blob/master/clippy_lints/src/undocumented_unsafe_blocks.rs)
+8. Nygard，Documenting Architecture Decisions，2011。[連結](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions)；Fowler，Architecture Decision Record。[連結](https://www.martinfowler.com/bliki/ArchitectureDecisionRecord.html)
+9. Fluri et al.，程式碼與註解的共同演化，2009。[DOI](https://doi.org/10.1007/s11219-009-9075-x)
+10. Woodfield et al.，註解對程式理解的影響，ICSE 1981。[書目](https://bibtex.github.io/ICSE-1981-WoodfieldDS.html)
+11. Potdar & Shihab，自承技術債，ICSME 2014。[書目](https://bibtex.github.io/ICSME-2014-PotdarS.html)
+12. icontract（Python 的 Design by Contract 函式庫）。[PyPI](https://pypi.org/project/icontract/)
+13. Chesterton's fence。[thoughtbot](https://thoughtbot.com/blog/chestertons-fence)
