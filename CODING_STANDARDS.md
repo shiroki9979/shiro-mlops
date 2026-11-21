@@ -25,3 +25,7 @@
 
 - **刻意妥協須登記**：變更若明知採取捷徑（暫時繞過、已知限制、延後的清理），合併前須有 `tech-debt` issue，並於 PR 說明連結；ADR 的延後範圍或後果若會持續產生成本，同樣在該項旁連結 issue。登記格式與償還方式見 [docs/agents/tech-debt.md](docs/agents/tech-debt.md)。
 - **順手償還**：變更觸及的區域若有觸發條件已成立的 `tech-debt` issue，於同一 PR 償還或說明延後原因。
+
+## 程式碼註解
+
+- **會被工具讀取的 docstring 是介面文字，不是註解**：FastAPI 路由與 Pydantic schema 的 docstring 會成為 OpenAPI 說明，不可依註解規則刪減；Dagster asset 一律以 `description=` 明示說明，不依賴函式 docstring。
