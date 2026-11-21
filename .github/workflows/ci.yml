@@ -94,6 +94,20 @@ jobs:
       - name: Build image and smoke test both apps, API gateway, and upstream recreation
         run: make frontend-smoke-ci
 
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+
+      - name: Build backend images and smoke test API data status, API readiness and MLflow health
+        run: make backend-smoke-ci
+
   infra:
     runs-on: ubuntu-latest
     steps:
@@ -212,7 +226,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # Every pre-existing job, so no failing release reaches the cloud. Not terraform-plan: it runs on
     # pull requests only, and needing a skipped job would skip this one.
-    needs: [lint-and-test, frontend, nginx, infra, docs]
+    needs: [lint-and-test, frontend, nginx, backend, infra, docs]
     runs-on: ubuntu-latest
     # Serialises deploys so two runs never write the state or site/ at once. A deploy in progress is
     # never cancelled; GitHub keeps one pending run per group, so a newer push replaces a queued one.

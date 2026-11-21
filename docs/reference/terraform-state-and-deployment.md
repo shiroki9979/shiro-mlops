@@ -146,7 +146,7 @@ job 所需的角色 ARN variable 未設定時，該 job 寫 notice 後略過並�
 `.github/workflows/ci.yml` 的 `deploy` job 在 release 合併到 `main` 後 apply 主設定並部署預報檢視；實作於 [GitHub #188](https://github.com/shiroki9979/shiro-mlops/issues/188)。這個 job 的順序、`needs` 與 `concurrency` 不做離線測試，由營運驗收的第一次 release 驗證。
 
 - **觸發條件**：只在 `main` 分支的 push 執行；每次 push 都執行，不加 path filter，沒有基礎設施變更時 apply 是 no-op，同時能發現 drift。
-- **`needs`**：`lint-and-test`、`frontend`、`nginx`、`infra`、`docs` 全部通過才執行，任一失敗就不部署。不依賴 PR plan job：它只在 pull request 執行，push 時被略過，依賴被略過的 job 會讓部署 job 一起被略過。
+- **`needs`**：`lint-and-test`、`frontend`、`nginx`、`backend`、`infra`、`docs` 全部通過才執行，任一失敗就不部署。不依賴 PR plan job：它只在 pull request 執行，push 時被略過，依賴被略過的 job 會讓部署 job 一起被略過。
 - **權限**：只有這個 job 授予 `id-token: write`（另有 `contents: read`）；workflow 層級不另授權限。
 
 步驟依序執行，任一步失敗即停止：

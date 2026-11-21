@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint format clean compose-up compose-down smoke-check frontend-smoke frontend-smoke-ci cloud-smoke infra-check dagster mlflow api frontend frontend-test frontend-build frontend-bundle-check
+.PHONY: help install dev test lint format clean compose-up compose-down smoke-check frontend-smoke frontend-smoke-ci backend-smoke-ci cloud-smoke infra-check dagster mlflow api frontend frontend-test frontend-build frontend-bundle-check
 
 FRONTEND_SMOKE_IMAGE ?= shiro-frontend-smoke
 FRONTEND_SMOKE_PORT ?= 8080
@@ -21,6 +21,7 @@ help:
 	@echo "  make smoke-check   Verify schedules, per-task readiness and forecast issuing in the Dagster container"
 	@echo "  make frontend-smoke Verify both built apps (/, /history, /console/) and same-origin API routing through Nginx"
 	@echo "  make frontend-smoke-ci Build the frontend image and run the CI Nginx smoke (FRONTEND_SMOKE_PORT=$(FRONTEND_SMOKE_PORT))"
+	@echo "  make backend-smoke-ci Build the backend images, start the API and MLflow, and run the CI backend smoke"
 	@echo "  make cloud-smoke   Verify the deployed Forecast View URL (ARGS=\"--base-url <forecast_view_url>\")"
 	@echo "  make infra-check   Test CloudFront Functions, then check formatting and validity and run Terraform tests offline for both Terraform layers"
 	@echo "  make clean         Clean temporary files and caches"
@@ -77,6 +78,9 @@ frontend-smoke:
 frontend-smoke-ci:
 	docker build -t $(FRONTEND_SMOKE_IMAGE) frontend
 	scripts/ci_nginx_smoke.sh $(FRONTEND_SMOKE_IMAGE) $(FRONTEND_SMOKE_PORT)
+
+backend-smoke-ci:
+	scripts/ci_backend_smoke.sh
 
 cloud-smoke:
 	uv run --no-project python scripts/smoke_cloudfront.py $(ARGS)
