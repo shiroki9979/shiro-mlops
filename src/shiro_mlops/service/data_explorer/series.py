@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
@@ -104,7 +105,10 @@ class SeriesSpec:
     count_rows: bool = False
     member_sum: bool = False
     default_fields: tuple[str, ...] = ()
-    group_options: Mapping[str, tuple[str, ...]] = MappingProxyType({})
+    # Python 3.11 (the CI and container runtime) treats a mappingproxy default as mutable.
+    group_options: Mapping[str, tuple[str, ...]] = dataclass_field(
+        default_factory=lambda: MappingProxyType({})
+    )
     instant_group_columns: frozenset[str] = frozenset()
     rows_share_time: bool = False
 
