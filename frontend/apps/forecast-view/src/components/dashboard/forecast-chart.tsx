@@ -1,26 +1,23 @@
-import { PredictionItem } from '@/schemas/api'
+import type { ForecastStep } from '@/schemas/published'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
-import { formatDateTime, formatLoadThousands, formatNumber, formatPercent } from '@shiro-mlops/shared/i18n/format'
+import { formatDateTime, formatLoadThousands } from '@shiro-mlops/shared/i18n/format'
 import { type Locale, useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
-import { useDashboardStore } from '@/store/dashboard-store'
 import { formatSeriesValue } from './series-format'
 import {
   Area,
   CartesianGrid,
   ComposedChart,
   Legend,
-  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
 
-const HUMIDITY_TICK_FRACTION_DIGITS = 0
-
 interface ForecastChartProps {
-  predictions?: PredictionItem[]
+  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
+  steps: ForecastStep[]
   isLoading: boolean
 }
 
@@ -66,12 +63,11 @@ function CustomTooltip({ active, payload, label, locale }: CustomTooltipProps) {
   )
 }
 
-export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
-  const { showTemperature, showHumidity } = useDashboardStore()
+export function ForecastChart({ steps, isLoading }: ForecastChartProps) {
   const locale = useLocale()
   const chartText = useMessages().dashboard.chart
 
-  if (isLoading || !predictions || predictions.length === 0) {
+  if (isLoading) {
     return (
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader>
@@ -90,7 +86,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
   }
 
   // Find min/max for scaling
-  const loads = predictions.map((p) => p.predicted_load_mw)
+  const loads = steps.map((step) => step.predicted_load_mw)
   const minLoad = Math.floor(Math.min(...loads) * 0.95)
   const maxLoad = Math.ceil(Math.max(...loads) * 1.05)
 
@@ -110,7 +106,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
         <div className="h-[420px] w-full pt-4">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
-              data={predictions}
+              data={steps}
               margin={{ top: 10, right: 30, left: 10, bottom: 25 }}
             >
               <defs>
@@ -126,7 +122,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                 vertical={false}
               />
               <XAxis
-                dataKey="datetime"
+                dataKey="target_hour"
                 tickFormatter={(val) => formatDateTime(val, locale)}
                 stroke="#64748b"
                 fontSize={11}
@@ -134,7 +130,7 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                 axisLine={{ stroke: '#334155' }}
                 dy={10}
               />
-              {/* Left Y Axis: Power Load (MW) */}
+              {/* Y Axis: Predicted Load (MW) */}
               <YAxis
                 yAxisId="load"
                 domain={[minLoad, maxLoad]}
@@ -145,34 +141,6 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                 axisLine={{ stroke: '#334155' }}
                 dx={-5}
               />
-              {/* Right Y Axis: Temperature (°C) */}
-              {showTemperature && (
-                <YAxis
-                  yAxisId="temp"
-                  orientation="right"
-                  domain={[15, 40]}
-                  tickFormatter={(val) => `${formatNumber(val, locale)}°`}
-                  stroke="#f59e0b"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={{ stroke: '#334155' }}
-                  dx={5}
-                />
-              )}
-              {/* Optional Right Y Axis 2: Humidity (%) */}
-              {showHumidity && !showTemperature && (
-                <YAxis
-                  yAxisId="humidity"
-                  orientation="right"
-                  domain={[0, 100]}
-                  tickFormatter={(val) => formatPercent(val, locale, HUMIDITY_TICK_FRACTION_DIGITS)}
-                  stroke="#38bdf8"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={{ stroke: '#334155' }}
-                  dx={5}
-                />
-              )}
               <Tooltip content={<CustomTooltip locale={locale} />} />
               <Legend
                 verticalAlign="top"
@@ -191,31 +159,6 @@ export function ForecastChart({ predictions, isLoading }: ForecastChartProps) {
                 fill="url(#loadGradient)"
                 activeDot={{ r: 6, fill: '#06b6d4', stroke: '#ffffff', strokeWidth: 2 }}
               />
-              {/* Temperature Line */}
-              {showTemperature && (
-                <Line
-                  yAxisId="temp"
-                  type="monotone"
-                  dataKey="temperature"
-                  name={chartText.temperatureSeries}
-                  stroke="#f59e0b"
-                  strokeWidth={2}
-                  dot={false}
-                  strokeDasharray="4 4"
-                />
-              )}
-              {/* Humidity Line */}
-              {showHumidity && (
-                <Line
-                  yAxisId={showTemperature ? 'temp' : 'humidity'}
-                  type="monotone"
-                  dataKey="relative_humidity"
-                  name={chartText.humiditySeries}
-                  stroke="#38bdf8"
-                  strokeWidth={1.5}
-                  dot={false}
-                />
-              )}
             </ComposedChart>
           </ResponsiveContainer>
         </div>

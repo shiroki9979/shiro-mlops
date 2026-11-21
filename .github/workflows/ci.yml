@@ -89,6 +89,26 @@ jobs:
       - name: Build image and smoke test both apps, API gateway, and upstream recreation
         run: make frontend-smoke-ci
 
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/package.json
+
+      # Pinned version satisfies required_version in infra/terraform/main.tf.
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Test CloudFront Functions and check Terraform formatting and validity
+        run: make infra-check
+
   docs:
     runs-on: ubuntu-latest
     steps:

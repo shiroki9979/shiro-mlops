@@ -1,0 +1,8 @@
+{
+  "issued_at": "2026-11-20T10:15:00+08:00",
+  "steps": [
+    {"target_hour": "2026-11-20T11:00:00+08:00", "predicted_load_mw": 31250.5},
+    {"target_hour": "2026-11-20T12:00:00+08:00", "predicted_load_mw": 31980.0},
+    {"target_hour": "2026-11-20T13:00:00+08:00", "predicted_load_mw": 32410.25}
+  ]
+}
