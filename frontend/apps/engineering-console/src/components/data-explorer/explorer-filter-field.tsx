@@ -4,7 +4,7 @@ import { Switch } from '@shiro-mlops/shared/ui/switch'
 import { useMessages } from '@/i18n/messages'
 import type { ExplorerFilterField as FilterField } from './catalog'
 import { explorerFieldLabel } from './field-format'
-import { translateCompleteness } from './status-text'
+import { EXPLORER_VALUE_LABELS } from './status-text'
 
 // Radix forbids an empty item value, so "no filter" needs a sentinel that never reaches the URL.
 const NO_FILTER = '__no_filter__'
@@ -39,6 +39,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
   }
 
   if (control?.kind === 'select') {
+    const optionLabel = control.optionLabels ? EXPLORER_VALUE_LABELS[control.optionLabels] : undefined
     return (
       <div className="text-xs text-slate-400 space-y-1">
         <span id={labelId}>{label}</span>
@@ -50,7 +51,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
             <SelectItem value={NO_FILTER}>{m.explorer.filters.noFilter}</SelectItem>
             {control.options.map((option) => (
               <SelectItem key={option} value={option}>
-                {translateCompleteness(option, m)}
+                {optionLabel ? optionLabel(option, m) : option}
               </SelectItem>
             ))}
           </SelectContent>

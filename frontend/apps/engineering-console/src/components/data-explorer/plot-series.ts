@@ -6,14 +6,10 @@ import type { Series } from '@/schemas/data-explorer'
 import { type ExplorerChartConfig, POWER_UNIT } from './catalog'
 import type { PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
-import { translateCompleteness } from './status-text'
+import { EXPLORER_VALUE_LABELS } from './status-text'
 
 // SYNC(src/shiro_mlops/service/data_explorer/values.py): WAN_KW_TO_MW.
 const MW_PER_WAN_KW = 10
-
-const GROUP_LABELS: Record<NonNullable<ExplorerChartConfig['groupLabels']>, (value: string, m: Messages) => string> = {
-  completeness: translateCompleteness,
-}
 
 // Names and colours each series the same way on the chart card and the home sparklines.
 export function plotSeries(series: Series[], chart: ExplorerChartConfig, m: Messages, locale: Locale): PlottedSeries[] {
@@ -64,7 +60,7 @@ function plotVintages(series: Series[], vintageGroup: string, m: Messages, local
 
 function seriesName(item: Series, multipleFields: boolean, chart: ExplorerChartConfig, m: Messages): string {
   const fieldLabel = explorerFieldLabel(item.field, m)
-  const groupLabel = chart.groupLabels ? GROUP_LABELS[chart.groupLabels] : undefined
+  const groupLabel = chart.groupLabels ? EXPLORER_VALUE_LABELS[chart.groupLabels] : undefined
   const groupName = Object.values(item.group)
     .map((value) => (groupLabel ? groupLabel(value, m) : value))
     .join(' / ')

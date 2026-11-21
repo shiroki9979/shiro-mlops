@@ -2,6 +2,7 @@ import type { Messages } from '@/i18n/messages'
 import type { CategoryPaletteKey } from '@/lib/chart-palette'
 import { FORWARD_QUICK_RANGES, PAST_QUICK_RANGES, type QuickRangeId } from '@/lib/explorer-window'
 import type { ChartFieldOption } from './chart-fields'
+import type { ExplorerValueLabels } from './status-text'
 
 // Display text lives in the locale dictionaries; ids and keys are typed against them so a missing entry fails tsc.
 export type ExplorerDatasetId = keyof Messages['explorer']['datasets']
@@ -9,7 +10,7 @@ export type ExplorerFieldKey = keyof Messages['explorer']['fields']
 
 // Fields without a control are free text: their value sets are open and no endpoint lists distinct values.
 export type ExplorerFilterControl =
-  | { kind: 'select'; options: readonly string[] }
+  | { kind: 'select'; options: readonly string[]; optionLabels?: ExplorerValueLabels }
   | { kind: 'switch' }
 
 export interface ExplorerFilterField {
@@ -34,7 +35,7 @@ export interface ExplorerChartConfig {
   // label) and `agg` are never sent.
   measure?: 'count'
   // Group values with a dictionary entry are shown translated in the legend and tooltip.
-  groupLabels?: 'completeness'
+  groupLabels?: ExplorerValueLabels
   // Selectable `group_by` values, the first being the API default that the URL leaves out.
   groupOptions?: readonly ExplorerGroupOption[]
   // Fields the user may chart (with their units); omitted or a single option shows no field picker.
@@ -93,7 +94,11 @@ export type ExplorerNavGroup = (typeof EXPLORER_NAV_GROUPS)[number]
 export const REGIONS = ['北部', '中部', '南部', '東部'] as const
 export type ExplorerRegion = (typeof REGIONS)[number]
 const COMPLETENESS_VALUES = ['complete', 'incomplete'] as const
-const COMPLETENESS_SELECT: ExplorerFilterControl = { kind: 'select', options: COMPLETENESS_VALUES }
+const COMPLETENESS_SELECT: ExplorerFilterControl = {
+  kind: 'select',
+  options: COMPLETENESS_VALUES,
+  optionLabels: 'completeness',
+}
 
 function auditStatusChart(seriesApiPath: string, countField: ExplorerFieldKey): ExplorerChartConfig {
   return {
