@@ -73,7 +73,7 @@
 
 ## 7. 狀態、存取與失敗契約
 
-- **Data Explorer 首頁**：`/data` 顯示全部 datasets 的最新來源時間、最新入庫時間、freshness、completeness 與明細連結。
+- **Data Explorer 首頁**：`/data` 顯示全部 datasets 的最新來源時間、最新入庫時間、freshness、completeness 與明細連結。每張狀態卡另有一張 24 小時小圖，窗口以進入頁面當下為準、重新渲染不滑動，讓工程師不必點進資料集就能看出哪個資料集斷了或不正常。六個領域資料集畫 sparkline（無軸、無 tooltip，橫軸固定為整個窗口，資料停止時尾端留白）：逐時負載 `load_mw`、全台供需 `curr_load_mw`、區域供需 `load_mw` 四區各一條細線、機組發電 `net_generation_mw` 不分組總和（`group_by=none`）、測站觀測每站一條 `temperature_c`、鄉鎮預報未來 24 小時（`start` 為當下）最新版本每個 `geocode` 一條 `temperature_c`。sparkline 沿用圖表卡片的 series endpoint、集中配色與缺口規則：補值的 `null` 處線段斷開，鄉鎮預報不補值，線段連接相鄰的點。兩個 audit 卡片以 `bucket=1h` 讀取狀態計數，畫成 24 格每小時狀態格線，最後一格為當下所在小時：有任何非 `complete` 批次或版本為不完整，只有 `complete` 為完整，沒有紀錄的小時留空。首頁共發出 8 個 series 請求，粒度皆為 `auto`（audit 為 `1h`），只為 `GET /data/status` 列出的 dataset 發出；Monitoring 頁不顯示小圖。
 - **狀態 API**：`GET /data/status` 是 Monitoring、Data Explorer 首頁與各資料頁的共用狀態來源。Typed list endpoints 不重複計算狀態，並共用含 `items`、`next_cursor` 與 `has_more` 的 pagination envelope。
 - **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
 - **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示返回第一頁的恢復操作（字典鍵 `explorer.results.backToFirstPage`，顯示文字隨介面語系）；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。

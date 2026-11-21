@@ -53,6 +53,15 @@ export interface ExplorerChartConfig {
   sparsePoints?: boolean
 }
 
+// The `/data` home card's 24-hour preview. A `count` chart becomes an hourly status grid and
+// needs no settings; other charts draw `fields` (and `groupBy`) as a sparkline.
+export interface ExplorerSparklineConfig {
+  fields?: ExplorerFieldKey[]
+  groupBy?: ExplorerGroupOption
+  // Forecasts preview the next 24 hours of valid time instead of the last 24.
+  forward?: boolean
+}
+
 export interface ExplorerDatasetConfig {
   id: ExplorerDatasetId
   path: string
@@ -71,6 +80,7 @@ export interface ExplorerDatasetConfig {
   auditHref?: string
   auditDatasetId?: ExplorerDatasetId
   chart?: ExplorerChartConfig
+  sparkline?: ExplorerSparklineConfig
 }
 
 export const EXPLORER_NAV_GROUPS = ['power', 'weather', 'audit'] as const satisfies ReadonlyArray<
@@ -130,6 +140,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     columns: ['datetime', 'subject', 'load_mw'],
     filters: [{ key: 'subject', placeholder: 'nationwide' }],
     chart: { type: 'line', seriesApiPath: '/data/power/load/series', fields: ['load_mw'] },
+    sparkline: { fields: ['load_mw'] },
   },
   {
     id: 'national_supply_demand',
@@ -149,6 +160,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       fieldOptions: NATIONAL_FIELD_OPTIONS,
       tooltipWanKw: true,
     },
+    sparkline: { fields: ['curr_load_mw'] },
   },
   {
     id: 'regional_supply_demand',
@@ -175,6 +187,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       markIncompleteBuckets: true,
       tooltipWanKw: true,
     },
+    sparkline: { fields: ['load_mw'] },
   },
   {
     id: 'unit_generation',
@@ -195,6 +208,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       // SYNC(src/shiro_mlops/service/data_explorer/power.py): UnitGroupBy, default first.
       groupOptions: ['unit_type', 'none'],
     },
+    sparkline: { fields: ['net_generation_mw'], groupBy: 'none' },
   },
   {
     id: 'cwa_observations',
@@ -215,6 +229,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       fields: ['temperature_c'],
       colorBy: { group: 'station_id', palette: 'station_id' },
     },
+    sparkline: { fields: ['temperature_c'] },
   },
   {
     id: 'cwa_forecasts',
@@ -244,6 +259,8 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       vintageGroup: 'issued_at',
       sparsePoints: true,
     },
+    // Without a version filter the series endpoint returns the latest release, one line per geocode.
+    sparkline: { fields: ['temperature_c'], forward: true },
   },
   {
     id: 'cwa_observation_audits',
@@ -261,6 +278,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'missing_station_id' },
     ],
     chart: auditStatusChart('/data/audits/cwa-observations/series', 'batch_count'),
+    sparkline: {},
   },
   {
     id: 'cwa_forecast_audits',
@@ -279,6 +297,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'missing_geocode' },
     ],
     chart: auditStatusChart('/data/audits/cwa-forecasts/series', 'version_count'),
+    sparkline: {},
   },
 ]
 

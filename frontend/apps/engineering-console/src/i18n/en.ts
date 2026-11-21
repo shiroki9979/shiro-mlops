@@ -280,6 +280,17 @@ export const en: Messages = {
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset} trend chart; fields: ${fields}; series: ${series}`,
     },
+    sparkline: {
+      loading: 'Loading preview...',
+      empty: 'No data to draw.',
+      failed: 'Preview query failed.',
+      lineLabel: (dataset: string, range: string, fields: string, series: string) =>
+        `${dataset} trend, ${range}; fields: ${fields}; series: ${series}`,
+      statusGridLabel: (dataset: string, range: string, summary: string) => `${dataset} hourly status, ${range}: ${summary}`,
+      statusHours: (status: string, hours: string) => `${status} ${hours} h`,
+      noRecord: 'No record',
+      cellTitle: (hour: string, status: string) => `${hour}: ${status}`,
+    },
     detail: {
       title: 'Record Details',
     },
