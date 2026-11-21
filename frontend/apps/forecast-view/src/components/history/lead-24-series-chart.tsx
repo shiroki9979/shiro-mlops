@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import {
   EMPTY_VALUE,
@@ -57,10 +58,13 @@ function toHourlyGrid(series: Lead24SeriesPoint[]): SeriesRow[] {
 export function Lead24SeriesChart({ series }: { series: Lead24SeriesPoint[] }) {
   const locale = useLocale()
   const seriesText = useMessages().history.series
+  const titleId = useId()
   return (
-    <Card className="border-slate-800 bg-slate-900/60 backdrop-blur-md">
+    <Card role="figure" aria-labelledby={titleId} className="border-slate-800 bg-slate-900/60 backdrop-blur-md">
       <CardHeader>
-        <CardTitle className="text-base font-semibold text-slate-200">{seriesText.title}</CardTitle>
+        <CardTitle id={titleId} className="text-base font-semibold text-slate-200">
+          {seriesText.title}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="h-[400px] w-full">

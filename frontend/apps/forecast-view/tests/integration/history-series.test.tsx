@@ -65,12 +65,18 @@ function seriesChartData() {
   return (rows ?? []) as Array<Record<string, unknown>>
 }
 
+// The keyboard surface of the series chart, which moves its tooltip without a laid-out page.
+async function findSeriesChart(text: (typeof DICTIONARIES)[Locale]['history']) {
+  const figure = await screen.findByRole('figure', { name: text.series.title })
+  return within(figure).getByRole('application')
+}
+
 describe('Forecast View /history lead-24 series', () => {
   it.each(['zh-TW', 'en'] as const)('shows the 30-day lead-24 series chart in %s', async (locale) => {
     serveTrackRecord(TRACK_RECORD)
     const text = renderHistory(locale)
 
-    expect(await screen.findByText(text.series.title)).toBeInTheDocument()
+    expect(await screen.findByRole('figure', { name: text.series.title })).toBeInTheDocument()
   })
 
   it('plots every target hour from the first to the last point and leaves the missing one empty', async () => {
@@ -97,9 +103,8 @@ describe('Forecast View /history lead-24 series', () => {
     async (locale, targetHour, difference) => {
       serveTrackRecord(TRACK_RECORD)
       const text = renderHistory(locale)
-      const chart = await screen.findByRole('application')
+      const chart = await findSeriesChart(text)
 
-      // The chart's keyboard layer moves the tooltip without needing a laid-out page.
       act(() => chart.focus())
 
       const tooltip = await screen.findByRole('tooltip')
@@ -115,8 +120,8 @@ describe('Forecast View /history lead-24 series', () => {
 
   it('shows the missing target hour in the tooltip with empty values, not made-up ones', async () => {
     serveTrackRecord(TRACK_RECORD)
-    renderHistory()
-    const chart = await screen.findByRole('application')
+    const text = renderHistory()
+    const chart = await findSeriesChart(text)
 
     act(() => chart.focus())
     fireEvent.keyDown(chart, { key: 'ArrowRight' })
