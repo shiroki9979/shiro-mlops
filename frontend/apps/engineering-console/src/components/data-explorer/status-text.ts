@@ -15,6 +15,16 @@ export function translateCompleteness(value: string, m: Messages): string {
   return labels[value] ?? value
 }
 
+const completenessVariant: Record<string, 'success' | 'warning'> = {
+  complete: 'success',
+  incomplete: 'warning',
+}
+
+// Incomplete data lowers a dataset's overall status to warning, so its badge shares that colour.
+export function completenessBadgeVariant(value: string): 'success' | 'warning' | 'secondary' {
+  return completenessVariant[value] ?? 'secondary'
+}
+
 export function optionalTimestamp(value: string | null | undefined, locale: Locale): string {
   return value ? formatTimestamp(value, locale) : EMPTY_VALUE
 }
