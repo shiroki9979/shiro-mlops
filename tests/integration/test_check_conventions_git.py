@@ -354,6 +354,7 @@ def test_comment_kinds_passes_every_allowed_kind(
         ("# WHY-NOT(x)\nx = 1\n", "WHY-NOT(<name>): <reason>"),
         ("# WHY-NOT: x stays one\nx = 1\n", "WHY-NOT(<name>): <reason>"),
         ("# SYNC(): keep in step\nx = 1\n", "SYNC(<path>[, <path>...]): <note>"),
+        ("# SYNC(docs/guide.md):\n# note below\nx = 1\n", "SYNC(<path>[, <path>...]): <note>"),
         ("# why-not(x): lower case is not a tag\nx = 1\n", "allowed kind"),
         ("# TODO: no issue\nx = 1\n", "allowed kind"),
     ],

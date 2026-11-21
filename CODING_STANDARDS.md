@@ -37,8 +37,7 @@
   retry_policy = RetryPolicy(max_retries=3, delay=60)
   # SYNC(scripts/smoke_nginx.py): 發布檔名清單刻意重複，nginx smoke check 依此驗證部署
   PUBLISHED_FILES = ("index.html", "forecast.json")
-  def Load():  # noqa: N802 — 名稱由 #66 的介面設計固定
-      ...
+  l = hourly_load()  # noqa: E741 — 沿用論文符號，l 表示每小時負載
   ```
 
 - **`comment-kinds` 失敗時**：先問這條註解是否只是重述程式碼；是的話就刪掉，分隔線與分節標籤也一樣刪掉，改用函式或模組切分。說明刻意設計的註解改寫成 `WHY-NOT`，提醒同步的註解改寫成 `SYNC`，未登記的待辦先開 `tech-debt` issue 再寫成 `TODO(#n)`，`noqa` 與 `type: ignore` 補上理由。修改帶著舊行尾註解的程式碼行時，同時轉換或刪除那條註解。本機可以先跑 `uv run python scripts/check_conventions.py comment-kinds --base origin/dev`。
