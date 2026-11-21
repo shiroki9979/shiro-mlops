@@ -8,7 +8,7 @@ import type { QueryParams } from '@/lib/api-client'
 import { CATEGORY_PALETTES, categoryColor } from '@/lib/chart-palette'
 import type { Series } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
-import type { PlottedSeries } from './chart-series'
+import { gapRanges, type PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { CHART_DEFAULTS, type ChartSearch, type ChartSearchKey } from './use-explorer-query'
@@ -101,10 +101,12 @@ function ChartBody({ chart, query, plotted, text }: ChartBodyStateProps) {
   return (
     <>
       <Renderer series={plotted} />
-      <p className="mt-2 flex items-center gap-2 text-xs text-slate-400">
-        <span className="inline-block h-3 w-4 rounded-sm bg-slate-500/30" />
-        {text.gapLegend}
-      </p>
+      {gapRanges(plotted).length > 0 && (
+        <p className="mt-2 flex items-center gap-2 text-xs text-slate-400">
+          <span className="inline-block h-3 w-4 rounded-sm bg-slate-500/30" />
+          {text.gapLegend}
+        </p>
+      )}
     </>
   )
 }

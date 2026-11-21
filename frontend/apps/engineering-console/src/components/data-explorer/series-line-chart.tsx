@@ -32,7 +32,7 @@ export function SeriesLineChart({ series }: ChartBodyProps) {
   return (
     <div className="h-[320px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={rows} margin={{ top: 10, right: 20, left: 10, bottom: 10 }} accessibilityLayer>
+        <LineChart data={rows} margin={{ top: 28, right: 20, left: 10, bottom: 10 }} accessibilityLayer>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} opacity={0.4} vertical={false} />
           <XAxis
             dataKey="t"
@@ -55,7 +55,7 @@ export function SeriesLineChart({ series }: ChartBodyProps) {
               stroke={CHART_AXIS}
               fontSize={11}
               tickLine={false}
-              label={{ value: unit, position: 'insideTopLeft', fill: CHART_AXIS, fontSize: 11, dy: -10 }}
+              label={{ value: unit, position: 'top', offset: 14, fill: CHART_AXIS, fontSize: 11 }}
             />
           ))}
           {gapRanges(series).map((gap) => (

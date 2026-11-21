@@ -98,6 +98,7 @@ describe('Data Explorer chart card', () => {
       ),
     })
     expect(within(figure).getByText(chart.title)).toBeInTheDocument()
+    expect(within(figure).getByText(chart.gapLegend)).toBeInTheDocument()
   })
 
   it('writes bucket and agg to the URL, keeps the cursor, and leaves them out of list requests', async () => {
