@@ -4,7 +4,6 @@ import re
 import tomllib
 from pathlib import Path
 
-import pytest
 from sqlalchemy.engine import make_url
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,18 +30,33 @@ def test_compose_backend_store_uri_names_the_installed_postgres_driver() -> None
     assert url.drivername == "postgresql+psycopg2"
 
 
-def _locked_version(package: str) -> str:
+def _dockerfile_shell() -> str:
+    """Dockerfile text with line continuations joined, one instruction per line."""
+    return DOCKERFILE.read_text(encoding="utf-8").replace("\\\n", " ")
+
+
+def _locked_packages() -> set[str]:
     lock = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
-    versions = [entry["version"] for entry in lock["package"] if entry["name"] == package]
-    assert len(versions) == 1, f"expected one {package} entry in uv.lock, found {versions}"
-    return versions[0]
+    return {entry["name"] for entry in lock["package"]}
 
 
-@pytest.mark.parametrize("package", ["mlflow", "psycopg2-binary", "sqlalchemy"])
-def test_dockerfile_pins_tracking_server_packages_to_the_lockfile(package: str) -> None:
-    """映像重建時不隨上游預設值變更，且 tracking server 與專案內 MLflow client 同版本。"""
-    pins = re.findall(
-        rf"(?<![\w-]){re.escape(package)}==(\S+)",
-        DOCKERFILE.read_text(encoding="utf-8"),
-    )
-    assert pins == [_locked_version(package)]
+def test_dockerfile_installs_tracking_server_under_lockfile_constraints() -> None:
+    """映像重建時不隨上游預設值變更：所有套件（含 SQLAlchemy 等間接相依）都取 uv.lock 的版本。"""
+    shell = _dockerfile_shell()
+    exports = re.findall(r"uv export --frozen\b[^&\n]*?-o (\S+)", shell)
+    assert len(exports) == 1, f"expected one frozen uv export, found {exports}"
+    installs = re.findall(r"uv pip install\b([^&\n]*)", shell)
+    assert len(installs) == 1, f"expected one uv pip install, found {installs}"
+    args = installs[0].split()
+    assert args[args.index("-c") + 1] == exports[0]
+    assert "==" not in shell, "versions come from uv.lock, not hand-written pins"
+
+
+def test_dockerfile_installs_only_packages_the_lockfile_constrains() -> None:
+    """constraints 只約束 uv.lock 內的套件；不在 lockfile 的套件會以未鎖版本安裝。"""
+    args = re.findall(r"uv pip install\b([^&\n]*)", _dockerfile_shell())[0].split()
+    packages = [
+        arg for i, arg in enumerate(args) if not arg.startswith("-") and args[i - 1] != "-c"
+    ]
+    assert {"mlflow", "psycopg2-binary"} <= set(packages)
+    assert set(packages) <= _locked_packages()
