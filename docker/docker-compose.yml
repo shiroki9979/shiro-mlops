@@ -40,6 +40,8 @@ services:
     ports:
       - "127.0.0.1:5001:5000"
     environment:
+      # WHY-NOT(BACKEND_STORE_URI): a bare postgresql:// lets SQLAlchemy choose the driver, and 2.1
+      # defaults to psycopg v3, which the MLflow image does not install (#205).
       BACKEND_STORE_URI: postgresql+psycopg2://postgres:postgrespassword@postgres:5432/shiro_timeseries
       ARTIFACT_ROOT: /mlflow/artifacts
 

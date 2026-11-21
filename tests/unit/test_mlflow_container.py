@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from sqlalchemy.engine import make_url
 
-DOCKER_DIR = Path(__file__).resolve().parents[2] / "docker"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DOCKER_DIR = REPO_ROOT / "docker"
 COMPOSE_FILE = DOCKER_DIR / "docker-compose.yml"
 DOCKERFILE = DOCKER_DIR / "Dockerfile.mlflow"
-UV_LOCK = DOCKER_DIR.parent / "uv.lock"
+UV_LOCK = REPO_ROOT / "uv.lock"
 
 
 def _compose_backend_store_uri() -> str:
@@ -37,7 +38,7 @@ def _locked_version(package: str) -> str:
     return versions[0]
 
 
-@pytest.mark.parametrize("package", ["mlflow", "psycopg2-binary"])
+@pytest.mark.parametrize("package", ["mlflow", "psycopg2-binary", "sqlalchemy"])
 def test_dockerfile_pins_tracking_server_packages_to_the_lockfile(package: str) -> None:
     """映像重建時不隨上游預設值變更，且 tracking server 與專案內 MLflow client 同版本。"""
     pins = re.findall(
