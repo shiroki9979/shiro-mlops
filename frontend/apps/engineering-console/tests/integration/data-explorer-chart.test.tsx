@@ -1,0 +1,183 @@
+import { cloneElement, type ReactElement } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { http, HttpResponse } from 'msw'
+import { createAppRouter } from '@/router'
+import { server } from '@/mocks/server'
+import { zhTW } from '@/i18n/zh-TW'
+
+// jsdom has no layout, so the responsive wrapper would render a zero-size chart.
+vi.mock('recharts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('recharts')>()
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: ReactElement }) =>
+      cloneElement(children as ReactElement<{ width: number; height: number }>, { width: 800, height: 320 }),
+  }
+})
+
+const m = zhTW
+const chart = m.explorer.chart
+const START = '2026-09-09T00:00:00+08:00'
+const END = '2026-09-09T20:00:00+08:00'
+const WINDOW = `start=${encodeURIComponent(START)}&end=${encodeURIComponent(END)}`
+
+const seriesBody = {
+  timezone: 'Asia/Taipei',
+  bucket: 'raw',
+  agg: null,
+  series: [
+    {
+      field: 'load_mw',
+      unit: 'MW',
+      group: { subject: 'nationwide' },
+      points: [
+        { t: '2026-09-09T18:00:00+08:00', v: 30100 },
+        { t: '2026-09-09T19:00:00+08:00', v: null },
+        { t: '2026-09-09T20:00:00+08:00', v: 32100.5 },
+      ],
+    },
+  ],
+}
+
+function renderPath(path: string) {
+  const history = createMemoryHistory({ initialEntries: [`/console${path}`] })
+  const router = createAppRouter(history)
+  render(<RouterProvider router={router} />)
+  return router
+}
+
+function captureRequests() {
+  const series: URL[] = []
+  const lists: URL[] = []
+  server.use(
+    http.get('*/data/power/load/series', ({ request }) => {
+      series.push(new URL(request.url))
+      return HttpResponse.json(seriesBody)
+    }),
+    http.get('*/data/power/load', ({ request }) => {
+      lists.push(new URL(request.url))
+      return HttpResponse.json({
+        timezone: 'Asia/Taipei',
+        items: [],
+        has_more: false,
+        next_cursor: null,
+        missing_slots: [],
+      })
+    }),
+  )
+  return { series, lists }
+}
+
+describe('Data Explorer chart card', () => {
+  it('requests the hourly load series for the shared window and filters', async () => {
+    const requests = captureRequests()
+    renderPath(`/data/power/load?${WINDOW}&subject=nationwide`)
+
+    await waitFor(() => expect(requests.series.length).toBeGreaterThan(0))
+    const params = requests.series.at(-1)!.searchParams
+    expect(params.get('start')).toBe(START)
+    expect(params.get('end')).toBe(END)
+    expect(params.get('subject')).toBe('nationwide')
+    expect(params.getAll('fields')).toEqual(['load_mw'])
+    expect(params.has('bucket')).toBe(false)
+    expect(params.has('agg')).toBe(false)
+  })
+
+  it('describes the chart by dataset, field, and series name', async () => {
+    captureRequests()
+    renderPath(`/data/power/load?${WINDOW}`)
+
+    const figure = await screen.findByRole('figure', {
+      name: chart.figureLabel(
+        m.explorer.datasets.hourly_load.label,
+        m.explorer.fields.load_mw,
+        'nationwide',
+      ),
+    })
+    expect(within(figure).getByText(chart.title)).toBeInTheDocument()
+  })
+
+  it('writes bucket and agg to the URL, keeps the cursor, and leaves them out of list requests', async () => {
+    const requests = captureRequests()
+    const user = userEvent.setup()
+    const router = renderPath(`/data/power/load?${WINDOW}&cursor=page-2`)
+    await screen.findByRole('figure')
+
+    await user.selectOptions(screen.getByLabelText(chart.bucket), '1d')
+    await user.selectOptions(screen.getByLabelText(chart.agg), 'max')
+
+    await waitFor(() => expect(requests.series.at(-1)!.searchParams.get('agg')).toBe('max'))
+    expect(requests.series.at(-1)!.searchParams.get('bucket')).toBe('1d')
+    const search = router.state.location.search as Record<string, string>
+    expect(search).toMatchObject({ bucket: '1d', agg: 'max', cursor: 'page-2' })
+    for (const list of requests.lists) {
+      expect(list.searchParams.has('bucket')).toBe(false)
+      expect(list.searchParams.has('agg')).toBe(false)
+    }
+    expect(requests.lists.at(-1)!.searchParams.get('cursor')).toBe('page-2')
+  })
+
+  it('omits default chart settings from the URL and disables agg for raw', async () => {
+    captureRequests()
+    const user = userEvent.setup()
+    const router = renderPath(`/data/power/load?${WINDOW}&bucket=1h&agg=min`)
+    await screen.findByRole('figure')
+
+    await user.selectOptions(screen.getByLabelText(chart.bucket), 'auto')
+    await user.selectOptions(screen.getByLabelText(chart.agg), 'avg')
+
+    await waitFor(() => {
+      const search = router.state.location.search as Record<string, string>
+      expect(search.bucket).toBeUndefined()
+      expect(search.agg).toBeUndefined()
+    })
+    await user.selectOptions(screen.getByLabelText(chart.bucket), 'raw')
+    expect(screen.getByLabelText(chart.agg)).toBeDisabled()
+  })
+
+  it('keeps chart settings when the window changes and the cursor is cleared', async () => {
+    captureRequests()
+    const user = userEvent.setup()
+    const router = renderPath(`/data/power/load?${WINDOW}&bucket=1d&cursor=page-2`)
+    await screen.findByRole('figure')
+
+    await user.type(screen.getByPlaceholderText('nationwide'), 'n')
+
+    await waitFor(() => {
+      const search = router.state.location.search as Record<string, string>
+      expect(search.subject).toBe('n')
+    })
+    const search = router.state.location.search as Record<string, string>
+    expect(search.bucket).toBe('1d')
+    expect(search.cursor).toBeUndefined()
+  })
+
+  it('refreshes the series together with status and table', async () => {
+    const requests = captureRequests()
+    const user = userEvent.setup()
+    renderPath(`/data/power/load?${WINDOW}`)
+    await screen.findByRole('figure')
+    const before = requests.series.length
+
+    await user.click(within(screen.getByRole('main')).getByRole('button', { name: m.common.refresh }))
+
+    await waitFor(() => expect(requests.series.length).toBe(before + 1))
+  })
+
+  it('suggests the coarser bucket the API names when the chosen one has too many points', async () => {
+    server.use(
+      http.get('*/data/power/load/series', () =>
+        HttpResponse.json(
+          { detail: { message: 'too many points', suggested_bucket: '1d' } },
+          { status: 422 },
+        ),
+      ),
+    )
+    renderPath(`/data/power/load?${WINDOW}&bucket=raw`)
+
+    expect(await screen.findByText(chart.tooManyPoints(chart.buckets['1d']))).toBeInTheDocument()
+  })
+})

@@ -1,4 +1,5 @@
 import type { Messages } from '@/i18n/messages'
+import type { CategoryPaletteKey } from '@/lib/chart-palette'
 
 // Display text lives in the locale dictionaries; ids and keys are typed against them so a missing entry fails tsc.
 export type ExplorerDatasetId = keyof Messages['explorer']['datasets']
@@ -8,6 +9,18 @@ export interface ExplorerFilterField {
   key: ExplorerFieldKey
   // Placeholders show valid input values (data values), so they are not translated.
   placeholder?: string
+}
+
+export type ExplorerChartType = 'line'
+
+// What a dataset supplies to get a chart card; bucketing, limits and gap bands are shared.
+export interface ExplorerChartConfig {
+  type: ExplorerChartType
+  seriesApiPath: string
+  // Default `fields`; a `fields` value already in the URL takes precedence.
+  fields: ExplorerFieldKey[]
+  // Group key whose values pick a colour from the central palette; others use series order.
+  colorBy?: { group: string; palette: CategoryPaletteKey }
 }
 
 export interface ExplorerDatasetConfig {
@@ -22,6 +35,7 @@ export interface ExplorerDatasetConfig {
   search?: Record<string, string>
   auditHref?: string
   auditDatasetId?: ExplorerDatasetId
+  chart?: ExplorerChartConfig
 }
 
 export const EXPLORER_NAV_GROUPS = ['power', 'weather', 'audit'] as const satisfies ReadonlyArray<
@@ -39,6 +53,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     defaultHours: 24,
     columns: ['datetime', 'subject', 'load_mw'],
     filters: [{ key: 'subject', placeholder: 'nationwide' }],
+    chart: { type: 'line', seriesApiPath: '/data/power/load/series', fields: ['load_mw'] },
   },
   {
     id: 'national_supply_demand',

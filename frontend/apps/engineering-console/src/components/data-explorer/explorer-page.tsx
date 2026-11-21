@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { useDatasetStatus } from '@/hooks/use-data-explorer'
+import { useDatasetStatus, useRefetchDatasetSeries } from '@/hooks/use-data-explorer'
 import { EMPTY_VALUE, formatTimestamp } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
 import type { ExplorerDatasetConfig } from './catalog'
+import { ExplorerChartCard } from './explorer-chart-card'
 import { ExplorerDetail } from './explorer-detail'
 import { ExplorerFilters } from './explorer-filters'
 import { ExplorerResults } from './explorer-results'
@@ -15,6 +16,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const explorer = useExplorerQuery(dataset)
   const { list } = explorer
   const statusQuery = useDatasetStatus()
+  const refetchSeries = useRefetchDatasetSeries()
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null)
   const datasetStatus = statusQuery.data?.datasets.find((item) => item.id === dataset.id)
   const auditStatus = dataset.auditDatasetId
@@ -51,11 +53,21 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         onRefresh={() => {
           explorer.refetchList()
           void statusQuery.refetch()
+          if (dataset.chart) void refetchSeries(dataset.chart.seriesApiPath)
         }}
         onStartChange={explorer.setStart}
         onEndChange={explorer.setEnd}
         onFilterChange={explorer.setFilter}
       />
+      {dataset.chart && (
+        <ExplorerChartCard
+          dataset={dataset}
+          chart={dataset.chart}
+          query={explorer.query}
+          chartSearch={explorer.chartSearch}
+          onSettingChange={explorer.setChartSetting}
+        />
+      )}
       <ExplorerResults
         dataset={dataset}
         data={list.data}

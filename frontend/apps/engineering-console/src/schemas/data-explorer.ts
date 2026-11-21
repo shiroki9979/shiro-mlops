@@ -36,3 +36,26 @@ export const ListEnvelopeSchema = z.object({
 })
 
 export type ListEnvelope = z.infer<typeof ListEnvelopeSchema>
+
+export const SeriesPointSchema = z.object({
+  t: z.string(),
+  v: z.number().nullable(),
+})
+
+export const SeriesSchema = z.object({
+  field: z.string(),
+  unit: z.string(),
+  group: z.record(z.string(), z.string()).default({}),
+  points: z.array(SeriesPointSchema),
+})
+
+export type Series = z.infer<typeof SeriesSchema>
+
+export const SeriesResponseSchema = z.object({
+  bucket: z.enum(['raw', '1h', '1d']),
+  agg: z.enum(['avg', 'min', 'max']).nullable(),
+  series: z.array(SeriesSchema),
+  timezone: z.literal('Asia/Taipei').optional(),
+})
+
+export type SeriesResponse = z.infer<typeof SeriesResponseSchema>

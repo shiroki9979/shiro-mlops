@@ -32,13 +32,16 @@ export async function request<T>(
 
   if (!response.ok) {
     let errorDetail = response.statusText
+    let errorJson: unknown
     try {
-      const errorJson = await response.json()
-      errorDetail = errorJson.detail || JSON.stringify(errorJson)
+      errorJson = await response.json()
+      const detail = (errorJson as { detail?: unknown }).detail
+      errorDetail = typeof detail === 'string' ? detail : JSON.stringify(detail ?? errorJson)
     } catch {
       // ignore
     }
-    throw new ApiError(`API Error (${response.status}): ${errorDetail}`, response.status)
+    // The parsed body travels with the error so callers can read structured details.
+    throw new ApiError(`API Error (${response.status}): ${errorDetail}`, response.status, errorJson)
   }
 
   const json = await response.json()

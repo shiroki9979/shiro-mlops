@@ -228,6 +228,23 @@ export const en: Messages = {
       empty: 'No matching data: the query succeeded but returned no rows.',
       gaps: (count) => `Gaps in query window: ${count}`,
     },
+    chart: {
+      title: 'Trend',
+      bucket: 'Granularity',
+      agg: 'Aggregation',
+      buckets: { auto: 'Auto', raw: 'Raw', '1h': 'Hourly', '1d': 'Daily' },
+      aggs: { avg: 'Average', min: 'Minimum', max: 'Maximum' },
+      applied: (bucket: string, agg: string) => `Applied granularity: ${bucket} / aggregation: ${agg}`,
+      loading: 'Loading chart...',
+      empty: 'No data to plot in the query window.',
+      queryFailed: 'Chart query failed. Try again later.',
+      invalidQuery: 'Invalid chart settings. Keep the window within 92 days and check the fields.',
+      databaseUnavailable: 'The database is unavailable. Try again later.',
+      tooManyPoints: (bucket: string) => `Too many points; switch to the "${bucket}" granularity.`,
+      gapLegend: 'Gray band: no data for that period',
+      figureLabel: (dataset: string, fields: string, series: string) =>
+        `${dataset} trend chart; fields: ${fields}; series: ${series}`,
+    },
     detail: {
       title: 'Record Details',
     },

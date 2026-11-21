@@ -7,6 +7,12 @@ import type { ExplorerDatasetConfig } from './catalog'
 
 type SearchValues = Record<string, string | undefined>
 
+// Chart settings live in the URL beside the window but never reach the list request or its cursor.
+export const CHART_SEARCH_KEYS = ['fields', 'group_by', 'bucket', 'agg'] as const
+export type ChartSearchKey = (typeof CHART_SEARCH_KEYS)[number]
+export type ChartSearch = Partial<Record<ChartSearchKey, string | string[]>>
+export const CHART_DEFAULTS: Partial<Record<ChartSearchKey, string>> = { bucket: 'auto', agg: 'avg' }
+
 // A v2 cursor is bound to the window and filters it was issued for, so every change
 // other than paging must land on the first page; only paging sets a cursor.
 export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
@@ -19,11 +25,19 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
   const filterValues = declaredFilterValues(dataset, search)
   const query: SearchValues = { start, end, ...filterValues }
   const cursor = search.cursor
+  const chartSearch = pickChartSearch(search)
   const list = useDatasetList(dataset.apiPath, { ...query, cursor })
 
+  const navigateTo = (nextSearch: Record<string, unknown>) => {
+    void navigate({ to: dataset.path as never, search: withoutBlanks(nextSearch) as never })
+  }
   const showPage = (nextQuery: SearchValues, nextCursor?: string) => {
-    const nextSearch = withoutBlanks({ ...dataset.search, ...nextQuery, cursor: nextCursor })
-    void navigate({ to: dataset.path as never, search: nextSearch as never })
+    navigateTo({ ...dataset.search, ...nextQuery, ...chartSearch, cursor: nextCursor })
+  }
+  // A chart setting changes neither the rows nor what the cursor is bound to, so the page stays.
+  const setChartSetting = (key: ChartSearchKey, value: string) => {
+    const stored = CHART_DEFAULTS[key] === value ? undefined : value
+    navigateTo({ ...dataset.search, ...query, ...chartSearch, [key]: stored, cursor })
   }
   const showFirstPageOf = (patch: SearchValues) => showPage({ ...query, ...patch })
 
@@ -37,6 +51,8 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     start,
     end,
     filterValues,
+    query,
+    chartSearch,
     list,
     canRestart: Boolean(cursor),
     setStart: (value: string) => showFirstPageOf({ start: value }),
@@ -44,6 +60,7 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     setFilter: (key: string, value: string) => showFirstPageOf({ [key]: value }),
     goToNextPage: (nextCursor: string | undefined) => showPage(query, nextCursor),
     restartFromFirstPage,
+    setChartSetting,
     refetchList: () => void list.refetch(),
   }
 }
@@ -60,7 +77,13 @@ function declaredFilterValues(dataset: ExplorerDatasetConfig, search: SearchValu
   return Object.fromEntries(dataset.filters.map((field) => [field.key, search[field.key]]))
 }
 
+function pickChartSearch(search: Record<string, unknown>): ChartSearch {
+  return Object.fromEntries(
+    CHART_SEARCH_KEYS.filter((key) => search[key] !== undefined).map((key) => [key, search[key]]),
+  ) as ChartSearch
+}
+
 // Blank values fall back to defaults (window ends) or mean "no filter".
-function withoutBlanks(values: SearchValues): SearchValues {
+function withoutBlanks(values: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => Boolean(value)))
 }

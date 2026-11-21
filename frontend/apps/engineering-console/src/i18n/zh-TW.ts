@@ -226,6 +226,23 @@ export const zhTW = {
       empty: '查無符合資料，查詢成功但結果為空。',
       gaps: (count: string) => `查詢區間缺口：${count} 筆`,
     },
+    chart: {
+      title: '趨勢圖',
+      bucket: '時間粒度',
+      agg: '聚合方式',
+      buckets: { auto: '自動', raw: '原始', '1h': '每小時', '1d': '每日' },
+      aggs: { avg: '平均', min: '最小', max: '最大' },
+      applied: (bucket: string, agg: string) => `實際粒度：${bucket}／聚合：${agg}`,
+      loading: '載入圖表中...',
+      empty: '查詢區間內沒有可繪製的資料。',
+      queryFailed: '圖表查詢失敗，請稍後再試。',
+      invalidQuery: '圖表參數無效，請確認時間範圍不超過 92 天且欄位正確。',
+      databaseUnavailable: '資料庫目前無法連線，請稍後再試。',
+      tooManyPoints: (bucket: string) => `資料點超過上限，建議改用「${bucket}」粒度。`,
+      gapLegend: '灰底區段：該時段沒有資料',
+      figureLabel: (dataset: string, fields: string, series: string) =>
+        `${dataset}趨勢圖；欄位：${fields}；序列：${series}`,
+    },
     detail: {
       title: '資料明細',
     },

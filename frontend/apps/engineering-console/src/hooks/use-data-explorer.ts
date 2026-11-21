@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
-import { apiClient } from '@/lib/api-client'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { apiClient, type QueryParams } from '@/lib/api-client'
 
 function shouldRetryListQuery(failureCount: number, error: unknown): boolean {
   if (failureCount >= 1 || typeof error !== 'object' || error === null || !('status' in error)) {
@@ -35,4 +35,24 @@ export function useDatasetList(
     refetchOnWindowFocus: false,
     retry: shouldRetryListQuery,
   })
+}
+
+export function datasetSeriesQueryKey(path: string, params: QueryParams) {
+  return ['data-explorer', 'series', path, params] as const
+}
+
+export function useDatasetSeries(path: string, params: QueryParams) {
+  return useQuery({
+    queryKey: datasetSeriesQueryKey(path, params),
+    queryFn: () => apiClient.getDataSeries(path, params),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: shouldRetryListQuery,
+  })
+}
+
+// Refresh re-reads whichever chart the page shows without knowing its series parameters.
+export function useRefetchDatasetSeries() {
+  const queryClient = useQueryClient()
+  return (path: string) => queryClient.refetchQueries({ queryKey: ['data-explorer', 'series', path], type: 'active' })
 }

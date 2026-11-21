@@ -182,6 +182,26 @@ export const handlers = [
     return HttpResponse.json(loadEnvelope)
   }),
 
+  http.get('*/data/power/load/series', () =>
+    HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      bucket: 'raw',
+      agg: null,
+      series: [
+        {
+          field: 'load_mw',
+          unit: 'MW',
+          group: { subject: 'nationwide' },
+          points: [
+            { t: '2026-09-09T18:00:00+08:00', v: 30100.0 },
+            { t: '2026-09-09T19:00:00+08:00', v: null },
+            { t: '2026-09-09T20:00:00+08:00', v: 32100.5 },
+          ],
+        },
+      ],
+    }),
+  ),
+
   http.get('*/data/power/supply-demand', () =>
     HttpResponse.json({
       timezone: 'Asia/Taipei',
