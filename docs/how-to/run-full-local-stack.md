@@ -73,6 +73,14 @@ make frontend-smoke-ci FRONTEND_SMOKE_PORT=18080
 
 輸出最後一行為 `Nginx CI smoke passed` 即與 CI 結果一致。CI 執行同一個 target，檢查內容見 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) 與 [`scripts/ci_nginx_smoke.sh`](../../scripts/ci_nginx_smoke.sh)。
 
+修改 `src/`、`docker/` 的 Dockerfile 或 `uv.lock` 後，可在本機重現 CI 的後端映像檢查。此指令使用獨立的 Compose 專案與 volume，結束後一併移除，不影響本機資料；但容器名稱與主機連接埠與完整環境相同，請先執行 `make compose-down`：
+
+```bash
+make backend-smoke-ci
+```
+
+輸出最後一行為 `Backend CI smoke passed` 即與 CI 結果一致；失敗時會印出所有容器的狀態與日誌。CI 執行同一個 target，檢查內容見 [`scripts/ci_backend_smoke.sh`](../../scripts/ci_backend_smoke.sh) 與 [`scripts/smoke_backend.py`](../../scripts/smoke_backend.py)。
+
 ---
 
 ## 4. 準備資料並訓練模型
