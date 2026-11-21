@@ -263,6 +263,10 @@ export const zhTW = {
       invalidQuery: '圖表參數無效，請確認時間範圍不超過 92 天且欄位正確。',
       databaseUnavailable: '資料庫目前無法連線，請稍後再試。',
       tooManyPoints: (bucket: string) => `資料點超過上限，建議改用「${bucket}」粒度。`,
+      fieldPicker: '欄位',
+      fieldUnitLimit: '一張圖最多兩種單位：第一種用左軸，第二種用右軸。',
+      incompleteLegend: '琥珀色區段：部分序列缺值（例如某區缺少資料）',
+      wanKw: (value: string) => `（${value} 萬瓩）`,
       gapLegend: '灰底區段：該時段沒有資料',
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset}趨勢圖；欄位：${fields}；序列：${series}`,

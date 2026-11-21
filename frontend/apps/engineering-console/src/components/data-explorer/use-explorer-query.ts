@@ -39,7 +39,8 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     navigateTo({ ...dataset.search, ...nextQuery, ...chartSearch, cursor: nextCursor })
   }
   // A chart setting changes neither the rows nor what the cursor is bound to, so the page stays.
-  const setChartSetting = (key: ChartSearchKey, value: string) => {
+  // `undefined` restores the default; the caller decides what the default is for array settings.
+  const setChartSetting = (key: ChartSearchKey, value: string | string[] | undefined) => {
     const stored = CHART_DEFAULTS[key] === value ? undefined : value
     navigateTo({ ...dataset.search, ...query, ...chartSearch, [key]: stored, cursor })
   }

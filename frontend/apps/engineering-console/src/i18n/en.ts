@@ -266,6 +266,10 @@ export const en: Messages = {
       invalidQuery: 'Invalid chart settings. Keep the window within 92 days and check the fields.',
       databaseUnavailable: 'The database is unavailable. Try again later.',
       tooManyPoints: (bucket: string) => `Too many points; switch to the "${bucket}" granularity.`,
+      fieldPicker: 'Fields',
+      fieldUnitLimit: 'Up to two units per chart: the first uses the left axis, the second the right.',
+      incompleteLegend: 'Amber band: some series have no data (e.g. a region is missing)',
+      wanKw: (value: string) => ` (${value} × 10,000 kW)`,
       gapLegend: 'Gray band: no data for that period',
       figureLabel: (dataset: string, fields: string, series: string) =>
         `${dataset} trend chart; fields: ${fields}; series: ${series}`,

@@ -1,6 +1,7 @@
 import type { Messages } from '@/i18n/messages'
 import type { CategoryPaletteKey } from '@/lib/chart-palette'
 import { FORWARD_QUICK_RANGES, PAST_QUICK_RANGES, type QuickRangeId } from '@/lib/explorer-window'
+import type { ChartFieldOption } from './chart-fields'
 
 // Display text lives in the locale dictionaries; ids and keys are typed against them so a missing entry fails tsc.
 export type ExplorerDatasetId = keyof Messages['explorer']['datasets']
@@ -28,6 +29,14 @@ export interface ExplorerChartConfig {
   fields: ExplorerFieldKey[]
   // Group key whose values pick a colour from the central palette; others use series order.
   colorBy?: { group: string; palette: CategoryPaletteKey }
+  // Fields the user may chart (with their units); omitted or a single option shows no field picker.
+  fieldOptions?: ChartFieldOption[]
+  // Dataset filters the series endpoint accepts; omitted sends every declared filter.
+  seriesFilters?: ExplorerFieldKey[]
+  // Mark buckets where some, but not all, series are null (e.g. a region missing from a slot).
+  markIncompleteBuckets?: boolean
+  // Taipower publishes power in 萬瓩, so the tooltip also shows MW ÷ 10 for its MW series.
+  tooltipWanKw?: boolean
 }
 
 export interface ExplorerDatasetConfig {
@@ -61,6 +70,28 @@ const REGIONS = ['北部', '中部', '南部', '東部'] as const
 const COMPLETENESS_VALUES = ['complete', 'incomplete'] as const
 const COMPLETENESS_SELECT: ExplorerFilterControl = { kind: 'select', options: COMPLETENESS_VALUES }
 
+const POWER_UNIT = 'MW'
+const PERCENT_UNIT = '%'
+// SYNC(src/shiro_mlops/service/data_explorer/supply_demand_series.py): NationalSeriesField and its units.
+const NATIONAL_FIELD_OPTIONS: ChartFieldOption[] = [
+  { field: 'curr_load_mw', unit: POWER_UNIT },
+  { field: 'real_hr_maxi_sply_capacity_mw', unit: POWER_UNIT },
+  { field: 'curr_util_rate_pct', unit: PERCENT_UNIT },
+  { field: 'fore_maxi_sply_capacity_mw', unit: POWER_UNIT },
+  { field: 'fore_peak_dema_load_mw', unit: POWER_UNIT },
+  { field: 'fore_peak_resv_capacity_mw', unit: POWER_UNIT },
+  { field: 'fore_peak_resv_rate_pct', unit: PERCENT_UNIT },
+  { field: 'yday_maxi_sply_capacity_mw', unit: POWER_UNIT },
+  { field: 'yday_peak_dema_load_mw', unit: POWER_UNIT },
+  { field: 'yday_peak_resv_capacity_mw', unit: POWER_UNIT },
+  { field: 'yday_peak_resv_rate_pct', unit: PERCENT_UNIT },
+]
+// SYNC(src/shiro_mlops/service/data_explorer/supply_demand_series.py): RegionalSeriesField and its units.
+const REGIONAL_FIELD_OPTIONS: ChartFieldOption[] = [
+  { field: 'load_mw', unit: POWER_UNIT },
+  { field: 'generation_mw', unit: POWER_UNIT },
+]
+
 export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
   {
     id: 'hourly_load',
@@ -86,6 +117,13 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
     quickRanges: PAST_QUICK_RANGES,
     columns: ['observed_at', 'curr_load_mw', 'curr_util_rate_pct'],
     filters: [],
+    chart: {
+      type: 'line',
+      seriesApiPath: '/data/power/supply-demand/series',
+      fields: ['curr_load_mw', 'real_hr_maxi_sply_capacity_mw'],
+      fieldOptions: NATIONAL_FIELD_OPTIONS,
+      tooltipWanKw: true,
+    },
   },
   {
     id: 'regional_supply_demand',
@@ -101,6 +139,17 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       { key: 'region', control: { kind: 'select', options: REGIONS } },
       { key: 'completeness', control: COMPLETENESS_SELECT },
     ],
+    chart: {
+      type: 'line',
+      seriesApiPath: '/data/power/regional/series',
+      fields: ['load_mw'],
+      fieldOptions: REGIONAL_FIELD_OPTIONS,
+      colorBy: { group: 'region', palette: 'region' },
+      // Completeness filters table rows; the chart shows every slot and marks incomplete ones instead.
+      seriesFilters: ['region'],
+      markIncompleteBuckets: true,
+      tooltipWanKw: true,
+    },
   },
   {
     id: 'unit_generation',
