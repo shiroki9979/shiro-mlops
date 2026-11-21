@@ -79,6 +79,8 @@ export const zhTW = {
     description: '已發布預報與事後實際負載的對照，最近 30 天。',
     cutoff: (time: string) => `統計截至時刻：${time}`,
     loadError: '目前無法取得預報實績',
+    accumulatedDays: (days: number) => `已累積 ${days} 天`,
+    staleHint: '預報實績已超過 24 小時未更新',
     metrics: {
       lead24Mape: '提前 24 小時 MAPE',
       lead24Mae: '提前 24 小時 MAE',
@@ -88,6 +90,14 @@ export const zhTW = {
       actual: '實際負載',
       predicted: '預測負載',
       difference: '差值',
+    },
+    leadTimeCurve: {
+      title: 'MAPE 對提前時數',
+      leadTimeAxis: '提前時數（小時）',
+      mapeAxis: 'MAPE（%）',
+      leadTime: (hours: number) => `提前 ${hours} 小時`,
+      mape: 'MAPE',
+      mae: 'MAE',
     },
   },
 }

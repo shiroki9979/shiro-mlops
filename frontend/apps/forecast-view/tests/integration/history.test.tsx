@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
@@ -8,6 +8,9 @@ import { createAppRouter } from '@/router'
 import { server } from '@/mocks/server'
 import { en } from '@/i18n/en'
 import { zhTW } from '@/i18n/zh-TW'
+// The repo-level published fixture the backend checks its export against (data contracts §6):
+// 3 accumulated days, metrics null.
+import emptyTrackRecord from '../../../../../tests/fixtures/published/forecast_track_record.json'
 
 const TRACK_RECORD_URL = '/published/forecast_track_record.json'
 
@@ -30,9 +33,15 @@ const TRACK_RECORD = {
 }
 
 const DICTIONARIES = { 'zh-TW': zhTW, en } as const
+type HistoryText = (typeof DICTIONARIES)[Locale]['history']
 
 function serveTrackRecord(body: unknown) {
   server.use(http.get(TRACK_RECORD_URL, () => HttpResponse.json(body)))
+}
+
+// Only Date is faked: fake timers would stall TanStack Query and MSW.
+function setNow(isoTime: string) {
+  vi.setSystemTime(new Date(isoTime))
 }
 
 function renderHistory(locale: Locale = 'zh-TW') {
@@ -43,6 +52,16 @@ function renderHistory(locale: Locale = 'zh-TW') {
 }
 
 describe('Forecast View /history track record', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // Two hours after the 10:00 Taipei cutoff used by every sample: fresh.
+    setNow('2026-11-20T04:00:00Z')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it.each([
     ['zh-TW', '11/20 10:00'],
     ['en', '11/20, 10:00'],
@@ -111,5 +130,51 @@ describe('Forecast View /history track record', () => {
 
     expect(await screen.findByText(text.loadError)).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: text.metrics.lead24Mape })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['zh-TW', '11/20 10:00'],
+    ['en', '11/20, 10:00'],
+  ] as const)('shows the accumulated days and the cutoff, and no metrics, while accumulating in %s', async (locale, cutoffText) => {
+    serveTrackRecord(emptyTrackRecord)
+    const text = renderHistory(locale)
+
+    expect(await screen.findByText(text.accumulatedDays(3))).toBeInTheDocument()
+    expect(screen.getByText(text.cutoff(cutoffText))).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: text.metrics.lead24Mape })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: text.metrics.lead24Mae })).not.toBeInTheDocument()
+  })
+
+  // Both samples are cut off at 10:00 Taipei on 11/20, which is 02:00 UTC.
+  describe.each([
+    ['with metrics', TRACK_RECORD, (text: HistoryText) => screen.findByRole('group', { name: text.metrics.lead24Mape })],
+    ['while accumulating', emptyTrackRecord, (text: HistoryText) => screen.findByText(text.accumulatedDays(3))],
+  ] as const)('the stale hint %s', (_state, trackRecord, findContent) => {
+    it('shows with the content still visible once the cutoff is more than 24 hours old', async () => {
+      setNow('2026-11-21T02:00:01Z')
+      serveTrackRecord(trackRecord)
+      const text = renderHistory()
+
+      expect(await findContent(text)).toBeInTheDocument()
+      expect(screen.getByText(text.staleHint)).toBeInTheDocument()
+    })
+
+    it('stays hidden when the cutoff is exactly 24 hours old', async () => {
+      setNow('2026-11-21T02:00:00Z')
+      serveTrackRecord(trackRecord)
+      const text = renderHistory()
+
+      expect(await findContent(text)).toBeInTheDocument()
+      expect(screen.queryByText(text.staleHint)).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows no stale hint in the error state', async () => {
+    setNow('2026-11-30T00:00:00Z')
+    server.use(http.get(TRACK_RECORD_URL, () => new HttpResponse(null, { status: 500 })))
+    const text = renderHistory()
+
+    expect(await screen.findByText(text.loadError)).toBeInTheDocument()
+    expect(screen.queryByText(text.staleHint)).not.toBeInTheDocument()
   })
 })
