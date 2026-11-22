@@ -38,6 +38,7 @@ from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
 )
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload
@@ -350,6 +351,7 @@ class TimeSeriesRepository:
             engine=self.engine, auto_init=False
         )
         self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
+        self.hourly_actual_load_store = HourlyActualLoadStore(self.engine)
 
     def upsert_taipower_load(
         self,
