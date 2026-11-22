@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.served_tasks import (
     Loaded,
@@ -185,7 +186,8 @@ def test_a_stale_load_anchor_makes_the_task_unavailable(
 
 def _broken_repository(error: Exception) -> MagicMock:
     repository = MagicMock(spec=TimeSeriesRepository)
-    repository.fetch_latest_load.side_effect = error
+    repository.hourly_actual_load_store = MagicMock(spec=HourlyActualLoadStore)
+    repository.hourly_actual_load_store.latest_observation.side_effect = error
     return repository
 
 

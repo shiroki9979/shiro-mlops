@@ -123,6 +123,19 @@ def test_training_gate_counts_only_load_known_by_as_of(
     assert error.value.readiness.required_hours == HOURS
 
 
+def test_training_reads_no_target_hour_starting_after_as_of(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    as_of = LAST_HOUR - pd.Timedelta(minutes=30)
+    known = replace(
+        task, policies=task.policies.model_copy(update={"min_training_hours": HOURS - 1})
+    )
+
+    data = load_training_data(known, runtime, as_of=as_of)
+
+    assert data.load["datetime"].max() == ANCHOR - pd.Timedelta(hours=1)
+
+
 def test_training_data_splits_the_latest_validation_fraction_of_target_hours(
     task: TaskDefinition, runtime: TaskRuntime
 ) -> None:
@@ -315,21 +328,11 @@ def test_serving_reads_load_history_bounded_by_the_task_lookback(
     model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = runtime.repository
-    calls: list[dict] = []
-    fetch_load_range = repository.fetch_load_range
-
-    def record(**kwargs):
-        calls.append(kwargs)
-        return fetch_load_range(**kwargs)
-
-    monkeypatch.setattr(repository, "fetch_load_range", record)
+    reads = _record_load_reads(runtime, monkeypatch)
 
     predict_task(task, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS)
 
-    assert [(call["start_time"], call["end_time"]) for call in calls] == [
-        (ANCHOR - pd.Timedelta(hours=168), ANCHOR)
-    ]
+    assert reads == [(ANCHOR - pd.Timedelta(hours=168), ANCHOR)]
 
 
 def test_rows_persisted_after_as_of_never_anchor_the_forecast(
@@ -524,28 +527,20 @@ def test_observed_prediction_reads_history_for_the_window_and_the_longest_horizo
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = runtime.repository
-    load_calls: list[dict] = []
+    load_reads = _record_load_reads(runtime, monkeypatch)
     weather_calls: list[dict] = []
-    fetch_load_range, fetch_weather_range = (
-        repository.fetch_load_range,
-        repository.fetch_weather_range,
-    )
-
-    def record_load(**kwargs):
-        load_calls.append(kwargs)
-        return fetch_load_range(**kwargs)
+    fetch_weather_range = repository.fetch_weather_range
 
     def record_weather(**kwargs):
         weather_calls.append(kwargs)
         return fetch_weather_range(**kwargs)
 
-    monkeypatch.setattr(repository, "fetch_load_range", record_load)
     monkeypatch.setattr(repository, "fetch_weather_range", record_weather)
 
     predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
     window = (ANCHOR - pd.Timedelta(hours=24 + 168), ANCHOR)
-    assert [(call["start_time"], call["end_time"]) for call in load_calls] == [window]
+    assert load_reads == [window]
     assert [(call["start_time"], call["end_time"]) for call in weather_calls] == [window]
 
 
@@ -771,3 +766,20 @@ def test_observed_prediction_weights_every_point_and_reports_each_observation(
     assert outcome.weather["temperature"].iloc[-1] == pytest.approx(at_anchor + WEIGHTED_OFFSET)
     observation = {"source": "station_observation", "observed_at": ANCHOR.isoformat()}
     assert outcome.weather_sources[-1]["temperature"] == dict.fromkeys(GEOCODES, observation)
+
+
+def _record_load_reads(
+    runtime: TaskRuntime, monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Record the first and last hour of every target series the runner reads."""
+    store = runtime.hourly_actual_load
+    series = store.series
+    reads: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+
+    def record(**kwargs):
+        load = series(**kwargs)
+        reads.append((load["datetime"].min(), load["datetime"].max()))
+        return load
+
+    monkeypatch.setattr(store, "series", record)
+    return reads

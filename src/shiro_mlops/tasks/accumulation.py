@@ -9,20 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
 
 from shiro_mlops.core.constants import HOURS_PER_DAY
-from shiro_mlops.data.hourly_actual_load import HourlyLoadAccumulation
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 
 LEGACY_LOAD_GUIDE = "docs/how-to/remove-legacy-d015046-load-rows.md"
-
-
-class LoadAccumulationSource(Protocol):
-    """Anything that can summarize persisted derived hourly load."""
-
-    def summarize_hourly_load_accumulation(
-        self, subject: str, at_or_before: datetime | None = None
-    ) -> HourlyLoadAccumulation: ...
 
 
 @dataclass(frozen=True)
@@ -59,16 +50,14 @@ class TrainingLoadReadiness:
 
 
 def check_training_load_readiness(
-    repository: LoadAccumulationSource,
+    hourly_actual_load: HourlyActualLoadStore,
     required_hours: int,
     subject: str,
     *,
     as_of: datetime | None = None,
 ) -> TrainingLoadReadiness:
     """Summarize persisted derived load against the minimum training accumulation."""
-    accumulation = repository.summarize_hourly_load_accumulation(
-        subject=subject, at_or_before=as_of
-    )
+    accumulation = hourly_actual_load.accumulation(as_of, subject=subject)
     return TrainingLoadReadiness(
         valid_hours=accumulation.valid_hours,
         required_hours=required_hours,

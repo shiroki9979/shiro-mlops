@@ -100,14 +100,15 @@ def _drop_load_hours(
     runtime: TaskRuntime, monkeypatch: pytest.MonkeyPatch, start: pd.Timestamp, hours: int
 ) -> None:
     """Serve persisted load without ``hours`` consecutive hours from ``start``."""
-    fetch_load_range = runtime.repository.fetch_load_range
+    store = runtime.hourly_actual_load
+    series = store.series
     end = start + pd.Timedelta(hours=hours - 1)
 
     def gapped(**kwargs):
-        load = fetch_load_range(**kwargs)
-        return load[~pd.to_datetime(load["time"]).between(start, end)]
+        load = series(**kwargs)
+        return load[~load["datetime"].between(start, end)]
 
-    monkeypatch.setattr(runtime.repository, "fetch_load_range", gapped)
+    monkeypatch.setattr(store, "series", gapped)
 
 
 @pytest.mark.parametrize(

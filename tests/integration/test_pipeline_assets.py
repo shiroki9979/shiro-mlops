@@ -353,7 +353,7 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     def refuse_full_history(*_: object, **__: object) -> None:
         raise AssertionError("Hourly monitoring must not read the full load history")
 
-    monkeypatch.setattr(test_repo, "fetch_load_range", refuse_full_history)
+    monkeypatch.setattr(test_repo.hourly_actual_load_store, "series", refuse_full_history)
     monitoring = job_defs.resolve_job_def(NAMES.monitoring_job).execute_in_process(
         instance=dagster_instance
     )
