@@ -22,8 +22,13 @@ from shiro_mlops.core.constants import (
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
-from shiro_mlops.core.datetime_utils import taiwan_local_to_utc, utc_to_taiwan_datetime
-from shiro_mlops.core.storage_time import from_storage_time, half_open_window, to_storage_time
+from shiro_mlops.core.storage_time import (
+    from_storage_time,
+    from_storage_time_series,
+    half_open_window,
+    to_storage_time,
+    to_storage_time_or_none,
+)
 from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
     CWAObservationBatch,
@@ -56,14 +61,6 @@ logger = logging.getLogger(__name__)
 _TRACK_RECORD_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
 
 
-def _taiwan_instant_to_utc(value: datetime | pd.Timestamp | None) -> datetime | None:
-    """Convert a Taiwan-local timestamp to a timezone-naive UTC datetime."""
-    if value is None:
-        return None
-    converted = taiwan_local_to_utc(pd.Series([value])).iloc[0]
-    return pd.Timestamp(converted).to_pydatetime()
-
-
 def _serialize_raw_payload(payload: Any) -> str:
     """Serialize a source payload for JSONB or SQLite TEXT storage."""
     return json.dumps(payload, ensure_ascii=False)
@@ -86,7 +83,7 @@ def _prepare_load_df(df: pd.DataFrame, default_subject: str) -> pd.DataFrame:
     else:
         work_df[SUBJECT_COL] = work_df[SUBJECT_COL].fillna(default_subject)
 
-    work_df["time"] = taiwan_local_to_utc(work_df["time"])
+    work_df["time"] = work_df["time"].map(lambda value: to_storage_time(pd.Timestamp(value)))
     return work_df.drop_duplicates(subset=["time", SUBJECT_COL], keep="last")
 
 
@@ -100,13 +97,11 @@ def _build_time_filter(
 
     if start_time is not None:
         clauses.append("time >= :start_time")
-        dt_start = taiwan_local_to_utc(pd.Series([start_time])).iloc[0]
-        params["start_time"] = pd.to_datetime(dt_start).to_pydatetime()
+        params["start_time"] = to_storage_time(pd.Timestamp(start_time))
 
     if end_time is not None:
         clauses.append("time <= :end_time")
-        dt_end = taiwan_local_to_utc(pd.Series([end_time])).iloc[0]
-        params["end_time"] = pd.to_datetime(dt_end).to_pydatetime()
+        params["end_time"] = to_storage_time(pd.Timestamp(end_time))
 
     return " AND ".join(clauses), params
 
@@ -132,11 +127,15 @@ FORECAST_TIME_COLUMNS = ("issued_at", "source_updated_at", "valid_from", "valid_
 
 
 class ForecastVersion(NamedTuple):
-    """Identity of one forecast vintage; both instants are naive UTC, as stored."""
+    """Identity of one forecast vintage, comparable across the release and forecast tables.
+
+    Both tables store the instants as aware UTC; the identity holds them read back as
+    Taiwan-local naive datetimes, so every stored form of one instant yields one key.
+    """
 
     dataset_id: str
-    issued_at: pd.Timestamp
-    source_updated_at: pd.Timestamp
+    issued_at: datetime
+    source_updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -209,10 +208,6 @@ class _ForecastRowFilter:
         return clauses, params
 
 
-def _utc_cutoff(value: datetime | str | None) -> datetime | None:
-    return None if value is None else _taiwan_instant_to_utc(pd.Timestamp(value).to_pydatetime())
-
-
 def _forecast_window_filter(bound: _WindowBound, include_adjacent_points: bool) -> str:
     """Keep interpolation endpoints from the same location and forecast vintage."""
     within_window = f"{bound.column} {bound.operator} :{bound.param}"
@@ -233,16 +228,11 @@ def _forecast_window_filter(bound: _WindowBound, include_adjacent_points: bool) 
 
 
 def _forecast_version_key(row: pd.Series) -> ForecastVersion:
-    """Build a comparable forecast-vintage identity from a query row."""
-
-    def normalize(value: object) -> pd.Timestamp:
-        timestamp = pd.Timestamp(value)
-        return timestamp.tz_convert("UTC").tz_localize(None) if timestamp.tzinfo else timestamp
-
+    """Build the forecast-vintage identity of a release header or forecast row."""
     return ForecastVersion(
         str(row["dataset_id"]),
-        normalize(row["issued_at"]),
-        normalize(row["source_updated_at"]),
+        from_storage_time(row["issued_at"], column="issued_at"),
+        from_storage_time(row["source_updated_at"], column="source_updated_at"),
     )
 
 
@@ -313,14 +303,15 @@ def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> se
 
 
 def _in_versions(frame: pd.DataFrame, versions: set[ForecastVersion]) -> pd.DataFrame:
-    return frame.loc[frame.apply(lambda row: _forecast_version_key(row) in versions, axis=1)]
+    selected = [_forecast_version_key(row) in versions for _, row in frame.iterrows()]
+    return frame.loc[pd.Series(selected, index=frame.index, dtype=bool)]
 
 
 def _forecast_rows_in_taiwan_time(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=FORECAST_ROW_COLUMNS)
     for column in FORECAST_TIME_COLUMNS:
-        frame[column] = utc_to_taiwan_datetime(frame[column])
+        frame[column] = from_storage_time_series(frame[column])
     return frame
 
 
@@ -399,11 +390,7 @@ class TimeSeriesRepository:
 
         records: list[dict[str, Any]] = [
             {
-                "time": (
-                    row["time"].to_pydatetime()
-                    if hasattr(row["time"], "to_pydatetime")
-                    else row["time"]
-                ),
+                "time": to_storage_time(row["time"]),
                 "subject": str(row[SUBJECT_COL]),
                 "load_mw": float(row[LOAD_MW_COL]),
                 "source": source,
@@ -441,14 +428,14 @@ class TimeSeriesRepository:
     def upsert_cwa_observation_batch(self, batch: CWAObservationBatch) -> int:
         """Persist one canonical CWA observation batch and its typed children atomically."""
         header = {
-            "fetched_at": _taiwan_instant_to_utc(batch.fetched_at),
+            "fetched_at": to_storage_time(batch.fetched_at),
             "status": batch.status,
             "missing_station_ids": _serialize_raw_payload(list(batch.missing_station_ids)),
             "raw_payload": _serialize_raw_payload(batch.raw_payload),
         }
         observation_records = [
             {
-                "observed_at": _taiwan_instant_to_utc(observation.observed_at),
+                "observed_at": to_storage_time(observation.observed_at),
                 "station_id": observation.station_id,
                 "station_name": observation.station_name,
                 "town_code": observation.town_code,
@@ -511,10 +498,10 @@ class TimeSeriesRepository:
         params: dict[str, Any] = {}
         if start_time is not None:
             clauses.append("observed_at >= :start_time")
-            params["start_time"] = _taiwan_instant_to_utc(pd.Timestamp(start_time).to_pydatetime())
+            params["start_time"] = to_storage_time(pd.Timestamp(start_time))
         if end_time is not None:
             clauses.append("observed_at <= :end_time")
-            params["end_time"] = _taiwan_instant_to_utc(pd.Timestamp(end_time).to_pydatetime())
+            params["end_time"] = to_storage_time(pd.Timestamp(end_time))
         if station_id is not None:
             clauses.append("station_id = :station_id")
             params["station_id"] = station_id
@@ -544,7 +531,7 @@ class TimeSeriesRepository:
                     "created_at",
                 ]
             )
-        frame["observed_at"] = utc_to_taiwan_datetime(frame["observed_at"])
+        frame["observed_at"] = from_storage_time_series(frame["observed_at"])
         return frame
 
     def upsert_cwa_forecast_release(self, release: CWAForecastRelease) -> int:
@@ -559,9 +546,9 @@ class TimeSeriesRepository:
     def _upsert_cwa_forecast_release(self, conn: Connection, release: CWAForecastRelease) -> int:
         header = {
             "dataset_id": release.dataset_id,
-            "issued_at": _taiwan_instant_to_utc(release.issued_at),
-            "source_updated_at": _taiwan_instant_to_utc(release.source_updated_at),
-            "fetched_at": _taiwan_instant_to_utc(release.fetched_at),
+            "issued_at": to_storage_time(release.issued_at),
+            "source_updated_at": to_storage_time(release.source_updated_at),
+            "fetched_at": to_storage_time(release.fetched_at),
             "status": release.status,
             "missing_geocodes": _serialize_raw_payload(list(release.missing_geocodes)),
             "raw_payload": _serialize_raw_payload(release.raw_payload),
@@ -569,10 +556,10 @@ class TimeSeriesRepository:
         child_records = [
             {
                 "dataset_id": release.dataset_id,
-                "issued_at": _taiwan_instant_to_utc(release.issued_at),
-                "source_updated_at": _taiwan_instant_to_utc(release.source_updated_at),
-                "valid_from": _taiwan_instant_to_utc(point.valid_from),
-                "valid_to": _taiwan_instant_to_utc(point.valid_to),
+                "issued_at": to_storage_time(release.issued_at),
+                "source_updated_at": to_storage_time(release.source_updated_at),
+                "valid_from": to_storage_time(point.valid_from),
+                "valid_to": to_storage_time(point.valid_to),
                 "geocode": point.geocode,
                 "location_name": point.location_name,
                 "temperature_c": point.temperature_c,
@@ -643,14 +630,18 @@ class TimeSeriesRepository:
         valid_end: datetime | str | None = None,
         include_adjacent_points: bool = False,
     ) -> pd.DataFrame:
-        """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
+        """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff.
+
+        Cutoffs and window bounds are Taiwan-local instants or their text; ``pd.Timestamp``
+        parses the text and turns an omitted bound into ``NaT``, which binds no condition.
+        """
         filters = _ForecastRowFilter(
             geocode=geocode,
             dataset_id=dataset_id,
-            issued_before=_utc_cutoff(issued_before),
-            source_updated_before=_utc_cutoff(source_updated_before),
-            valid_start=_utc_cutoff(valid_start),
-            valid_end=_utc_cutoff(valid_end),
+            issued_before=to_storage_time_or_none(pd.Timestamp(issued_before)),
+            source_updated_before=to_storage_time_or_none(pd.Timestamp(source_updated_before)),
+            valid_start=to_storage_time_or_none(pd.Timestamp(valid_start)),
+            valid_end=to_storage_time_or_none(pd.Timestamp(valid_end)),
             include_adjacent_points=include_adjacent_points,
         )
         with self.engine.connect() as conn:
@@ -731,7 +722,7 @@ class TimeSeriesRepository:
             empty_df["time"] = pd.to_datetime(empty_df["time"])
             return empty_df
 
-        df["time"] = utc_to_taiwan_datetime(df["time"])
+        df["time"] = from_storage_time_series(df["time"])
         return df
 
     def summarize_hourly_load_accumulation(
@@ -755,10 +746,9 @@ class TimeSeriesRepository:
         with self.engine.connect() as conn:
             row = conn.execute(query, params).one()
 
-        latest_hour = None
-        if row.latest_time is not None:
-            latest = utc_to_taiwan_datetime(pd.Series([row.latest_time])).iloc[0]
-            latest_hour = latest.to_pydatetime()
+        latest_hour = (
+            None if row.latest_time is None else from_storage_time(row.latest_time, column="time")
+        )
         return HourlyLoadAccumulation(
             valid_hours=int(row.valid_hours),
             legacy_rows=int(row.legacy_rows),
