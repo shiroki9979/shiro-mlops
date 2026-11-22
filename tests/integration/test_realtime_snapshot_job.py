@@ -1,20 +1,20 @@
 """Integration tests for Taipower realtime snapshot Dagster job execution."""
 
 import json
-from dataclasses import dataclass, replace
+import math
+from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
-import httpx
 import pytest
 from dagster import Definitions, RetryPolicy, build_schedule_context
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.assets import (
+    TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE,
+    TAIPOWER_SUPPLY_DEMAND_SOURCE,
+    TAIPOWER_UNIT_GENERATION_SOURCE,
     raw_taipower_regional_supply_demand_snapshot,
     raw_taipower_supply_demand_snapshot,
     raw_taipower_unit_generation_snapshot,
@@ -23,49 +23,40 @@ from shiro_mlops.pipelines.schedules import (
     build_taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
+from tests.helpers import FIXTURES_DIR, FixtureSource
 
-FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 SCHEDULED_EXECUTION_TIME = datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
 OBSERVED_SLOT = datetime(2026, 9, 5, 17, 30)
 
 
-class FailureScenario(StrEnum):
-    """測試來源擷取失敗情境。"""
-
-    NONE = "none"
-    UNIT_ONCE = "unit_once"
-    UNIT_ALWAYS = "unit_always"
-
-
 @dataclass(frozen=True)
-class SnapshotFixtures:
-    """台電三個即時來源的測試 payload。"""
+class SnapshotSources:
+    """台電三個即時來源的 fixture adapter。"""
 
-    sd_payload: dict
-    reg_csv: str
-    unit_payload: dict
+    supply_demand: FixtureSource
+    regional: FixtureSource
+    unit: FixtureSource
+
+    def resources(self) -> dict[str, FixtureSource]:
+        return {
+            TAIPOWER_SUPPLY_DEMAND_SOURCE: self.supply_demand,
+            TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE: self.regional,
+            TAIPOWER_UNIT_GENERATION_SOURCE: self.unit,
+        }
 
 
-def _load_fixtures() -> SnapshotFixtures:
+def _fixture_sources(*, unit_fail_first: float = 0) -> SnapshotSources:
     with open(FIXTURES_DIR / "taipower_supply_demand_sample.json", encoding="utf-8") as f:
-        sd_data = json.load(f)
-    with open(FIXTURES_DIR / "taipower_regional_supply_demand_sample.csv", encoding="utf-8") as f:
-        reg_data = f.read()
+        sd_payload = json.load(f)
+    reg_csv = (FIXTURES_DIR / "taipower_regional_supply_demand_sample.csv").read_text(
+        encoding="utf-8"
+    )
     with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
-        unit_data = json.load(f)
-    return SnapshotFixtures(sd_payload=sd_data, reg_csv=reg_data, unit_payload=unit_data)
-
-
-def _build_test_defs(repo: TimeSeriesRepository, job=None) -> Definitions:
-    resolved_job = job or build_taipower_supply_demand_snapshot_job()
-    return Definitions(
-        assets=[
-            raw_taipower_supply_demand_snapshot,
-            raw_taipower_regional_supply_demand_snapshot,
-            raw_taipower_unit_generation_snapshot,
-        ],
-        jobs=[resolved_job],
-        resources={"time_series_repo": repo},
+        unit_payload = json.load(f)
+    return SnapshotSources(
+        supply_demand=FixtureSource(sd_payload),
+        regional=FixtureSource(reg_csv),
+        unit=FixtureSource(unit_payload, fail_first=unit_fail_first),
     )
 
 
@@ -78,6 +69,7 @@ def _build_schedule_run_request():
 
 def _build_realtime_job_def(
     repo: TimeSeriesRepository,
+    sources: SnapshotSources,
     *,
     retry_policy: RetryPolicy | None = None,
 ):
@@ -86,74 +78,24 @@ def _build_realtime_job_def(
         if retry_policy is None
         else build_taipower_supply_demand_snapshot_job(op_retry_policy=retry_policy)
     )
-    return _build_test_defs(repo, job=job).resolve_job_def("taipower_supply_demand_snapshot_job")
-
-
-def _build_failure_case(
-    repo: TimeSeriesRepository,
-    failure_scenario: FailureScenario,
-):
-    fixtures = _load_fixtures()
-    router = MockHTTPXRouter(fixtures, failure_scenario=failure_scenario)
-    job_def = _build_realtime_job_def(
-        repo,
-        retry_policy=RetryPolicy(max_retries=2, delay=0),
+    defs = Definitions(
+        assets=[
+            raw_taipower_supply_demand_snapshot,
+            raw_taipower_regional_supply_demand_snapshot,
+            raw_taipower_unit_generation_snapshot,
+        ],
+        jobs=[job],
+        resources={"time_series_repo": repo, **sources.resources()},
     )
-    return _build_schedule_run_request(), router, job_def
+    return defs.resolve_job_def("taipower_supply_demand_snapshot_job")
 
 
-class MockHTTPXRouter:
-    """Mock HTTPX client routing requests by Taipower open-data URL."""
-
-    def __init__(
-        self,
-        fixtures: SnapshotFixtures,
-        failure_scenario: FailureScenario = FailureScenario.NONE,
-    ):
-        self.fixtures = fixtures
-        self.failure_scenario = failure_scenario
-        self.sd_call_count = 0
-        self.reg_call_count = 0
-        self.unit_call_count = 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-    def get(self, url, *args, **kwargs):
-        url_str = str(url)
-        resp = MagicMock()
-
-        if "d006020" in url_str:
-            self.sd_call_count += 1
-            resp.raise_for_status.return_value = None
-            resp.json.return_value = self.fixtures.sd_payload
-            return resp
-
-        if "d006019" in url_str:
-            self.reg_call_count += 1
-            resp.raise_for_status.return_value = None
-            resp.text = self.fixtures.reg_csv
-            return resp
-
-        if "d006001" in url_str:
-            self.unit_call_count += 1
-            if self.failure_scenario == FailureScenario.UNIT_ALWAYS or (
-                self.failure_scenario == FailureScenario.UNIT_ONCE and self.unit_call_count == 1
-            ):
-                resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-                    "Unit 500 error", request=MagicMock(), response=MagicMock(status_code=500)
-                )
-            else:
-                resp.raise_for_status.return_value = None
-                resp.content = json.dumps(self.fixtures.unit_payload, ensure_ascii=False).encode(
-                    "utf-8"
-                )
-            return resp
-
-        raise ValueError(f"Unexpected URL: {url_str}")
+def _build_failure_case(repo: TimeSeriesRepository, *, unit_fail_first: float):
+    sources = _fixture_sources(unit_fail_first=unit_fail_first)
+    job_def = _build_realtime_job_def(
+        repo, sources, retry_policy=RetryPolicy(max_retries=2, delay=0)
+    )
+    return _build_schedule_run_request(), sources, job_def
 
 
 def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
@@ -163,13 +105,10 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     slot = OBSERVED_SLOT
     run_req = _build_schedule_run_request()
 
-    fixtures = _load_fixtures()
-    router = MockHTTPXRouter(fixtures)
+    sources = _fixture_sources()
+    job_def = _build_realtime_job_def(test_repo, sources)
 
-    job_def = _build_realtime_job_def(test_repo)
-
-    with patch("httpx.Client", return_value=router):
-        res = job_def.execute_in_process(run_config=run_req.run_config)
+    res = job_def.execute_in_process(run_config=run_req.run_config)
 
     assert res.success
 
@@ -190,23 +129,12 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     assert target_unit.net_generation_mw == pytest.approx(670.4)
 
     # 模擬同一 slot 重新執行並取得修正後的資料
-    revised_sd = json.loads(json.dumps(fixtures.sd_payload))
-    revised_sd["records"][0]["curr_load"] = "3400.0"
+    # fixture adapter 是 run 間共用的 resource 物件，原地修改 payload 即模擬來源修正。
+    sources.supply_demand.payload["records"][0]["curr_load"] = "3400.0"
+    sources.regional.payload = sources.regional.payload.replace("1091.7", "1300.0")
+    sources.unit.payload["aaData"][0]["淨發電量(MW)"] = "700.0"
 
-    revised_reg = fixtures.reg_csv.replace("1091.7", "1300.0")
-
-    revised_unit = json.loads(json.dumps(fixtures.unit_payload))
-    revised_unit["aaData"][0]["淨發電量(MW)"] = "700.0"
-
-    revised_fixtures = replace(
-        fixtures,
-        sd_payload=revised_sd,
-        reg_csv=revised_reg,
-        unit_payload=revised_unit,
-    )
-    router_revised = MockHTTPXRouter(revised_fixtures)
-    with patch("httpx.Client", return_value=router_revised):
-        res2 = job_def.execute_in_process(run_config=run_req.run_config)
+    res2 = job_def.execute_in_process(run_config=run_req.run_config)
 
     assert res2.success
 
@@ -246,19 +174,15 @@ def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
 ) -> None:
     """任一來源暫時性失敗時，應依政策有限重試並成功完成 run。"""
     slot = OBSERVED_SLOT
-    run_req, router, job_def = _build_failure_case(
-        test_repo,
-        FailureScenario.UNIT_ONCE,
-    )
+    run_req, sources, job_def = _build_failure_case(test_repo, unit_fail_first=1)
 
-    with patch("httpx.Client", return_value=router):
-        res = job_def.execute_in_process(run_config=run_req.run_config)
+    res = job_def.execute_in_process(run_config=run_req.run_config)
 
     assert res.success
     # 驗證機組來源確實依 job 重試政策重試（共呼叫 2 次）
-    assert router.unit_call_count == 2
-    assert router.sd_call_count == 1
-    assert router.reg_call_count == 1
+    assert sources.unit.calls == 2
+    assert sources.supply_demand.calls == 1
+    assert sources.regional.calls == 1
 
     assert test_repo.fetch_supply_demand_snapshot(slot) is not None
     assert len(test_repo.fetch_regional_supply_demand_snapshots(slot)) == 4
@@ -270,20 +194,16 @@ def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_
 ) -> None:
     """任一來源持續失敗耗盡重試時，run 失敗且該來源不得寫入資料。"""
     slot = OBSERVED_SLOT
-    run_req, router, job_def = _build_failure_case(
-        test_repo,
-        FailureScenario.UNIT_ALWAYS,
-    )
+    run_req, sources, job_def = _build_failure_case(test_repo, unit_fail_first=math.inf)
 
-    with patch("httpx.Client", return_value=router):
-        res = job_def.execute_in_process(
-            run_config=run_req.run_config,
-            raise_on_error=False,
-        )
+    res = job_def.execute_in_process(
+        run_config=run_req.run_config,
+        raise_on_error=False,
+    )
 
     assert not res.success
     # 首次 + 2 次重試 = 3 次呼叫
-    assert router.unit_call_count == 3
+    assert sources.unit.calls == 3
 
     # 驗證失敗的機組來源絕對不寫入任何資料
     assert len(test_repo.fetch_unit_generation_snapshots(slot)) == 0

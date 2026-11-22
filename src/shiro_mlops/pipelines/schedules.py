@@ -20,7 +20,7 @@ from dagster import (
 from dagster_shared.check import CheckError
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
-from shiro_mlops.data.taipower_supply_demand import floor_to_ten_minutes
+from shiro_mlops.data.taipower_supply_demand import resolve_snapshot_observed_at
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -115,9 +115,9 @@ def _to_taiwan_local(scheduled_execution_time: datetime) -> datetime:
 
 
 def _taiwan_tick_iso(scheduled_execution_time: datetime) -> str:
-    """將排程 tick 正規化為台灣本地時間的十分快照觀測 slot。"""
+    """將排程 tick 正規化為台灣本地時間的十分快照觀測 slot，與 asset 解析 config 同一規則。"""
     local_tick = _to_taiwan_local(scheduled_execution_time)
-    return floor_to_ten_minutes(local_tick).isoformat(timespec="seconds")
+    return resolve_snapshot_observed_at(local_tick).isoformat(timespec="seconds")
 
 
 @schedule(
