@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime, timedelta
 from functools import cached_property
 from typing import Any
 
-import pandas as pd
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -20,7 +18,6 @@ from shiro_mlops.service.data_explorer.datasets.definition import (
     AuditHeader,
     Dataset,
     FreshnessSource,
-    GapPolicy,
     LastCompletedHours,
     LatestAudit,
     LatestSlot,
@@ -29,6 +26,7 @@ from shiro_mlops.service.data_explorer.datasets.definition import (
 )
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
+from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import paginate_raw_list, sort_order
 from shiro_mlops.service.data_explorer.query import ExplorerQuery, TimeWindow
 from shiro_mlops.service.data_explorer.schemas import (
@@ -131,21 +129,10 @@ class DatasetQuery:
 
     def _list_gaps(self, query: ExplorerQuery) -> list[str]:
         """Missing slots of the whole window that have already happened, ascending."""
-        dataset, gaps = query.dataset, query.dataset.gaps
-        if gaps is None:
+        if query.dataset.gaps is None:
             return []
-        now = now_taiwan()
-        elapsed_end = min(query.window.end, now)
-        if elapsed_end < query.window.start:
-            return []
-        return _missing_slots(
-            self.db,
-            dataset,
-            gaps,
-            TimeWindow(query.window.start, elapsed_end),
-            query.filters,
-            due_by=now - gaps.slot_lag,
-        )
+        scan = GapScan(self.db, query.dataset, query.filters)
+        return scan.due_missing_slots(query.window, now_taiwan())
 
     def _status(self, dataset: Dataset, as_of: datetime) -> DatasetStatus:
         latest = _latest_row(self.db, dataset.freshness_source)
@@ -178,13 +165,12 @@ class DatasetQuery:
         return status
 
     def _status_gaps(self, dataset: Dataset, window: TimeWindow) -> list[str]:
-        gaps = _require_gaps(dataset)
-        return _missing_slots(self.db, dataset, gaps, window, {})
+        return GapScan(self.db, dataset).missing_slots(window)
 
     def _missing_members(self, dataset: Dataset, slot: datetime) -> list[str]:
-        gaps = _require_gaps(dataset)
-        present = _present_members(self.db, dataset, gaps, TimeWindow(slot, slot), {})
-        return _absent_members(dataset, gaps, present.get(slot, set()), {})
+        scan = GapScan(self.db, dataset)
+        present = scan.present_members(TimeWindow(slot, slot))
+        return scan.absent_members(present.get(slot, set()))
 
     def _earliest(self, dataset: Dataset, window: TimeWindow) -> datetime | None:
         clauses, params = self.db.time_window(dataset.time_column, window)
@@ -209,94 +195,15 @@ class _WindowPage:
     """The request window a page projection may consult, read lazily and once per page."""
 
     def __init__(self, db: ExplorerDb, query: ExplorerQuery) -> None:
-        self.db = db
-        self.query = query
+        self.scan = GapScan(db, query.dataset, query.filters)
+        self.window = query.window
 
     @cached_property
     def _present(self) -> dict[datetime, set[str]]:
-        gaps = _require_gaps(self.query.dataset)
-        return _present_members(
-            self.db, self.query.dataset, gaps, self.query.window, self.query.filters
-        )
+        return self.scan.present_members(self.window)
 
     def missing_members(self, slot: datetime) -> list[str]:
-        gaps = _require_gaps(self.query.dataset)
-        found = self._present.get(slot, set())
-        return _absent_members(self.query.dataset, gaps, found, self.query.filters)
-
-
-def _require_gaps(dataset: Dataset) -> GapPolicy:
-    if dataset.gaps is None:
-        raise ValueError(f"dataset {dataset.id} declares no gap policy")
-    return dataset.gaps
-
-
-def _missing_slots(
-    db: ExplorerDb,
-    dataset: Dataset,
-    gaps: GapPolicy,
-    window: TimeWindow,
-    filters: Mapping[str, Any],
-    *,
-    due_by: datetime | None = None,
-) -> list[str]:
-    """Each expected slot from the first at or after `window.start` that no row fills."""
-    present = _present_members(db, dataset, gaps, window, filters)
-    last = window.end if due_by is None else min(window.end, due_by)
-    first = pd.Timestamp(window.start).ceil(dataset.cadence)
-    missing: list[str] = []
-    for timestamp in pd.date_range(first, last, freq=dataset.cadence):
-        slot = timestamp.to_pydatetime()
-        label = format_taiwan_time(slot)
-        if gaps.members is None:
-            if slot not in present:
-                missing.append(label)
-            continue
-        absent = _absent_members(dataset, gaps, present.get(slot, set()), filters)
-        if gaps.members.listed:
-            missing.extend(f"{label}:{member}" for member in absent)
-        elif absent:
-            missing.append(label)
-    return missing
-
-
-def _present_members(
-    db: ExplorerDb,
-    dataset: Dataset,
-    gaps: GapPolicy,
-    window: TimeWindow,
-    filters: Mapping[str, Any],
-) -> dict[datetime, set[str]]:
-    """The slots rows fill inside the window, each with the gap members present in it."""
-    clauses, params = db.time_window(dataset.time_column, window)
-    scope_clauses, scope_params = dataset.gap_clauses(db, filters)
-    member = gaps.members.column if gaps.members is not None else None
-    columns = dataset.time_column if member is None else f"{dataset.time_column}, {member}"
-    rows = db.fetch(
-        f"SELECT DISTINCT {columns} FROM {dataset.table} "
-        f"WHERE {' AND '.join([*clauses, *scope_clauses])}",
-        {**params, **scope_params},
-    )
-    present: dict[datetime, set[str]] = {}
-    for row in rows:
-        moment = row_time(row, dataset.time_column)
-        slot = (
-            moment
-            if gaps.exact_instant
-            else pd.Timestamp(moment).floor(dataset.cadence).to_pydatetime()
-        )
-        members = present.setdefault(slot, set())
-        if member is not None:
-            members.add(str(row[member]))
-    return present
-
-
-def _absent_members(
-    dataset: Dataset, gaps: GapPolicy, found: set[str], filters: Mapping[str, Any]
-) -> list[str]:
-    """Expected members missing from one slot."""
-    del gaps
-    return [member for member in dataset.expected_gap_members(filters) if member not in found]
+        return self.scan.absent_members(self._present.get(slot, set()))
 
 
 def _latest_row(db: ExplorerDb, source: FreshnessSource) -> Row | None:
