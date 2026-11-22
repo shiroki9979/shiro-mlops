@@ -1,5 +1,8 @@
-"""Nationwide hourly actual load persisted in ``raw_taipower_load`` (ADR-0008).
+"""The owner of ``raw_taipower_load``: nationwide hourly actual load (ADR-0008).
 
+Outside this module only schema init and migration, the Data Explorer's declarative
+hourly load dataset and the forecast track-record join in
+``TimeSeriesRepository.fetch_track_record_pairs`` touch the table.
 Every row this store writes carries the derived source, and every derived hour it reads
 selects only that source, so d015046-era rows (NULL source) and other sources never
 mix into the derived series. Two reads look past the source: the accumulation counts
