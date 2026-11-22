@@ -168,7 +168,7 @@ HOURLY_LOAD = Dataset(
     instant_columns=frozenset({"time"}),
     list_columns=("time", "subject", "load_mw", "created_at"),
     project=each(_hourly_load_item),
-    status=LastCompletedHours(hours=24),
+    status_policy=LastCompletedHours(hours=24),
     pinned=(Pinned("source = :source", {"source": REGIONAL_SNAPSHOT_SUM_SOURCE}),),
     filters=(Exact(name="subject", narrows_gaps=True),),
     gaps=GapPolicy(slot_lag=LOAD_HOUR_DUE_AFTER),
@@ -240,7 +240,7 @@ NATIONAL_SUPPLY_DEMAND = Dataset(
         "created_at",
     ),
     project=each(_national_item),
-    status=TrailingWindow(span=timedelta(hours=24)),
+    status_policy=TrailingWindow(span=timedelta(hours=24)),
     gaps=GapPolicy(exact_instant=True),
     series=NATIONAL_SERIES,
 )
@@ -310,7 +310,7 @@ REGIONAL_SUPPLY_DEMAND = Dataset(
         "created_at",
     ),
     project=_regional_page,
-    status=LatestSlot(incomplete_href="/data/power/regional?completeness=incomplete"),
+    status_policy=LatestSlot(incomplete_href="/data/power/regional?completeness=incomplete"),
     filters=(
         OneOf(name="region", values=REGIONAL_SUPPLY_DEMAND_REGIONS),
         SlotCompleteness(name="completeness", values=COMPLETENESS_VALUES, in_series=False),
@@ -359,7 +359,7 @@ UNIT_GENERATION = Dataset(
         "created_at",
     ),
     project=each(_unit_item),
-    status=AlwaysComplete(),
+    status_policy=AlwaysComplete(),
     filters=(Exact(name="unit_type"), Exact(name="unit_name")),
     series=UNIT_GENERATION_SERIES,
 )

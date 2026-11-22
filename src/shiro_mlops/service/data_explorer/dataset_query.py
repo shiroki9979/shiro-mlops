@@ -149,7 +149,7 @@ class DatasetQuery:
 
     def _status(self, dataset: Dataset, as_of: datetime) -> DatasetStatus:
         latest = _latest_row(self.db, dataset.freshness_source)
-        policy = dataset.status
+        policy = dataset.status_policy
         missing: list[str] = []
         match policy:
             case LastCompletedHours(hours=hours) if latest is not None:

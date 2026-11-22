@@ -82,7 +82,7 @@ CWA_OBSERVATION_AUDITS = Dataset(
     instant_columns=frozenset({"fetched_at"}),
     list_columns=("fetched_at", "status", "missing_station_ids", "created_at"),
     project=each(_observation_audit_item),
-    status=LatestAudit(OBSERVATION_BATCH_AUDIT),
+    status_policy=LatestAudit(OBSERVATION_BATCH_AUDIT),
     filters=(
         OneOf(name="status", values=AUDIT_STATUSES),
         JsonContains(name="missing_station_id", column="missing_station_ids"),
@@ -123,7 +123,7 @@ CWA_FORECAST_AUDITS = Dataset(
         "created_at",
     ),
     project=each(_forecast_audit_item),
-    status=LatestAudit(FORECAST_RELEASE_AUDIT),
+    status_policy=LatestAudit(FORECAST_RELEASE_AUDIT),
     freshness=FORECAST_RELEASES,
     filters=(
         Exact(name="dataset_id"),

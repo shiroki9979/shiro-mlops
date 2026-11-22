@@ -126,7 +126,7 @@ def test_inconsistent_gap_declarations_are_rejected(
 
 def test_status_policies_follow_the_per_dataset_contract() -> None:
     """status 完整度依資料集口徑：近 24 個完成小時、最新 slot、最新 audit、機組恆為完整。"""
-    policies = {dataset.id: dataset.status for dataset in DATASETS.values()}
+    policies = {dataset.id: dataset.status_policy for dataset in DATASETS.values()}
     audits = {
         dataset_id: (policy.header.table, policy.header.incomplete_placeholder)
         for dataset_id, policy in policies.items()

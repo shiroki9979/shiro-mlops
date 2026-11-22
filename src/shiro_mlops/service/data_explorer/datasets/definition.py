@@ -233,9 +233,9 @@ class Dataset:
     column holding an instant is in `instant_columns` so cursors carry it at microsecond
     precision. `list_columns` is the list SELECT, which must include every sort column.
     `project` turns one page of rows into response items, and `gaps` declares which slots
-    the list reports missing. `status` and `freshness` declare how `GET /data/status` judges
-    completeness and where it reads the newest row (by default the dataset's own table and
-    time column). `series` declares the chart series endpoint, and `resolve_version`
+    the list reports missing. `status_policy` and `freshness` declare how `GET /data/status`
+    judges completeness and where it reads the newest row (by default the dataset's own
+    table and time column). `series` declares the chart series endpoint, and `resolve_version`
     resolves the forecast version both list and series read. Inconsistent declarations
     raise `ValueError`.
     """
@@ -252,7 +252,7 @@ class Dataset:
     instant_columns: frozenset[str]
     list_columns: tuple[str, ...]
     project: PageProjector
-    status: StatusPolicy
+    status_policy: StatusPolicy
     pinned: tuple[Pinned, ...] = ()
     filters: tuple[Filter, ...] = ()
     gaps: GapPolicy | None = None
