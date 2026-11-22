@@ -2,14 +2,13 @@ import { useId } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shiro-mlops/shared/ui/select'
 import { Switch } from '@shiro-mlops/shared/ui/switch'
 import { useMessages } from '@/i18n/messages'
+import { isFlagOn } from '@/lib/data-explorer'
 import type { ExplorerFilterField as FilterField } from './catalog'
 import { explorerFieldLabel } from './field-format'
 import { EXPLORER_VALUE_LABELS } from './status-text'
 
 // Radix forbids an empty item value, so "no filter" needs a sentinel that never reaches the URL.
 const NO_FILTER = '__no_filter__'
-// SYNC(src/shiro_mlops/service/data_explorer/values.py): is_truthy.
-const TRUTHY_VALUES = new Set(['1', 'true', 'yes'])
 
 interface ExplorerFilterFieldProps {
   field: FilterField
@@ -30,7 +29,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
         <div className="flex h-[34px] items-center">
           <Switch
             aria-labelledby={labelId}
-            checked={TRUTHY_VALUES.has(value.toLowerCase())}
+            checked={isFlagOn(value)}
             onCheckedChange={(checked) => onChange(checked ? 'true' : '')}
           />
         </div>

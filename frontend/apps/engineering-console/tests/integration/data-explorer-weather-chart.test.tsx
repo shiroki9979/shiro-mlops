@@ -91,16 +91,21 @@ describe('Data Explorer weather charts', () => {
     expect(params.has('all_vintages')).toBe(false)
   })
 
-  it('asks for a geocode instead of requesting series when all vintages are on without one', async () => {
-    const requests = captureSeries('/data/weather/forecasts', [])
-    renderPath(`/data/weather/forecasts?${WINDOW}&all_vintages=true`)
+  // Hand-written links may use any spelling the API treats as on, not only the `true` the switch writes.
+  it.each(['true', '1', 'yes', 'TRUE', 'Yes'])(
+    'asks for a geocode instead of requesting series when all vintages are on (%s) without one',
+    async (allVintages) => {
+      const requests = captureSeries('/data/weather/forecasts', [])
+      renderPath(`/data/weather/forecasts?${WINDOW}&all_vintages=${allVintages}`)
 
-    expect(
-      await screen.findByText(chart.requiresFilter(m.explorer.fields.geocode, m.explorer.fields.all_vintages)),
-    ).toBeInTheDocument()
-    await screen.findByText(m.explorer.results.empty)
-    expect(requests).toHaveLength(0)
-  })
+      expect(
+        await screen.findByText(chart.requiresFilter(m.explorer.fields.geocode, m.explorer.fields.all_vintages)),
+      ).toBeInTheDocument()
+      await screen.findByText(m.explorer.results.empty)
+      expect(screen.getByRole('switch', { name: m.explorer.fields.all_vintages })).toBeChecked()
+      expect(requests).toHaveLength(0)
+    },
+  )
 
   it('draws one line per issue time, newest first, when all vintages are on for a geocode', async () => {
     const requests = captureSeries('/data/weather/forecasts', [

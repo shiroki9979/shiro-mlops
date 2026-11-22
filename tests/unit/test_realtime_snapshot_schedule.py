@@ -53,3 +53,13 @@ def test_realtime_schedule_cron_and_shared_tick_config() -> None:
         for asset_name in TAIPOWER_REALTIME_SNAPSHOT_ASSETS
     }
     assert observed_values == {"2026-09-05T17:30:00"}
+
+
+def test_realtime_schedule_without_tick_time_requests_an_unkeyed_unconfigured_run() -> None:
+    """Manual evaluation without a tick requests a run with no run key and no shared observed_at."""
+    execution = taipower_supply_demand_snapshot_schedule.evaluate_tick(build_schedule_context())
+
+    assert execution.run_requests is not None
+    request = execution.run_requests[0]
+    assert request.run_key is None
+    assert request.run_config == {}
