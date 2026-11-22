@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.engine import Engine
@@ -13,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.cursor import CursorError
-from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery, validate_cursor
+from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery, validate_list_request
 from shiro_mlops.service.data_explorer.datasets import (
     CWA_FORECAST_AUDITS,
     CWA_FORECASTS,
@@ -60,16 +59,18 @@ def _ensure_enabled() -> None:
         raise HTTPException(status_code=404, detail="Data Explorer is not enabled")
 
 
-def _query_params(request: Request) -> dict[str, Any]:
-    return {key: value for key, value in request.query_params.items() if value not in (None, "")}
+def _query_params(request: Request) -> dict[str, str]:
+    """Last value of each query parameter, empty ones included so an undeclared one is still
+    rejected; series read `fields` separately as a list."""
+    return dict(request.query_params)
 
 
 def _run_list(request: Request, dataset: Dataset) -> ListEnvelope:
     _ensure_enabled()
     try:
-        params = _query_params(request)
-        validate_cursor(dataset, params)
-        return DatasetQuery(_engine(request)).list(dataset, params)
+        query = _query_params(request)
+        validate_list_request(dataset, query)
+        return DatasetQuery(_engine(request)).list(dataset, query)
     except CursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ExplorerQueryError as exc:
@@ -90,7 +91,7 @@ def _run_series(
     try:
         return DatasetQuery(_engine(request)).series(
             dataset,
-            _series_query_params(request),
+            _query_params(request),
             fields=_field_names(fields),
             bucket=bucket,
             agg=agg,
@@ -108,11 +109,6 @@ def _run_series(
 
 def _field_names(fields: Sequence[StrEnum] | None) -> list[str] | None:
     return [field.value for field in fields] if fields else None
-
-
-def _series_query_params(request: Request) -> dict[str, str]:
-    """Single-valued view of the query string; `fields` is read separately as a list."""
-    return {key: value for key, value in request.query_params.items() if value != ""}
 
 
 @router.get("/status", response_model=StatusResponse)

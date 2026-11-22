@@ -5,6 +5,7 @@ Status judgement lives in `dataset_status` and gap finding in `gap_scan`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from functools import cached_property
 from typing import Any
@@ -20,18 +21,32 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
 from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import paginate_raw_list
-from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.query import ExplorerQuery, list_params
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
     StatusResponse,
 )
-from shiro_mlops.service.data_explorer.series import Agg, Bucket, SeriesReader, SeriesRequest
+from shiro_mlops.service.data_explorer.series import (
+    Agg,
+    Bucket,
+    SeriesReader,
+    SeriesRequest,
+    series_params,
+)
 from shiro_mlops.service.data_explorer.timefmt import now_taiwan
 
 
+def validate_list_request(dataset: Dataset, query: Mapping[str, str]) -> dict[str, str]:
+    """Reject undeclared parameters, then validate the whole cursor, before any database read;
+    return the request's non-empty parameters."""
+    params = list_params(dataset, query)
+    validate_cursor(dataset, params)
+    return params
+
+
 def validate_cursor(dataset: Dataset, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Validate the whole cursor before any database read; return the filters it binds."""
+    """Validate the whole cursor; return the filters it binds."""
     cursor = params.get("cursor")
     if not cursor:
         return None
@@ -52,7 +67,8 @@ class DatasetQuery:
     def __init__(self, engine: Engine) -> None:
         self.db = ExplorerDb(engine)
 
-    def list(self, dataset: Dataset, params: dict[str, Any]) -> ListEnvelope:
+    def list(self, dataset: Dataset, query: Mapping[str, str]) -> ListEnvelope:
+        params = list_params(dataset, query)
         cursor_filters = validate_cursor(dataset, params)
         try:
             query_params = (
@@ -68,7 +84,7 @@ class DatasetQuery:
     def series(
         self,
         dataset: Dataset,
-        params: dict[str, str],
+        query: Mapping[str, str],
         *,
         fields: list[str] | None,
         bucket: Bucket,
@@ -78,6 +94,7 @@ class DatasetQuery:
         if dataset.series is None:
             raise ValueError(f"dataset {dataset.id} declares no series")
         options = dataset.series
+        params = series_params(dataset, options, query)
         if dataset.resolve_version is not None:
             options, params = dataset.resolve_version.plan_series(self.db, options, params)
         request = SeriesRequest.build(

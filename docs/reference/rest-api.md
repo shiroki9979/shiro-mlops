@@ -208,7 +208,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 資料集篩選 | 依資料集 | — | 見 §5.4。 |
 
 - 參數一律以列舉驗證；欄位與分組名稱只對應程式內建的 SQL 常數，不從輸入字串組進 SQL。
-- 未宣告的參數（例如 `cursor`、`limit` 或其他資料集的分組參數）回 HTTP 422。
+- 未宣告的參數（例如 `cursor`、`limit` 或其他資料集的分組參數）即使值為空也回 HTTP 422；值為空的已宣告參數視為沒有給；list endpoints 採同一規則，只是接受 `limit`、`cursor` 而不接受 series 的參數（[data-explorer.md](data-explorer.md) §7）。
 
 ### 5.2 回應 Schema
 

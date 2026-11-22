@@ -79,6 +79,26 @@ def test_undeclared_parameters_are_rejected(series_client_for) -> None:
     assert client.get(LOAD_SERIES_PATH, params={"group_by": "subject"}).status_code == 422
 
 
+def test_undeclared_parameter_sent_empty_is_rejected(series_client_for) -> None:
+    """值為空的未宣告參數也回 422，與 list 相同。"""
+    client, _repo = series_client_for
+
+    response = client.get(LOAD_SERIES_PATH, params={"regoin": ""})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported series parameters: regoin"
+
+
+def test_declared_filter_sent_empty_is_read_as_not_given(series_client_for) -> None:
+    """值為空的已宣告篩選視為沒有篩選。"""
+    client, _repo = series_client_for
+
+    with_empty = client.get(LOAD_SERIES_PATH, params={"subject": ""})
+
+    assert with_empty.status_code == 200
+    assert with_empty.json()["series"] == client.get(LOAD_SERIES_PATH).json()["series"]
+
+
 def test_repeated_fields_parameter_is_read_as_a_list(series_client_for) -> None:
     """fields 可重複出現，重複的欄位只產生一條 series。"""
     client, repo = series_client_for
