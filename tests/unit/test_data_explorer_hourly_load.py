@@ -20,7 +20,7 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
     sqlite_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 13, 15),
     )
     rows = [
@@ -87,7 +87,7 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
     legacy_upgraded_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 13, 15),
     )
     with legacy_upgraded_engine.begin() as conn:
@@ -128,7 +128,7 @@ def test_hourly_load_gaps_only_include_completed_hours_inside_the_window(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch, hours, missing
 ) -> None:
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 12, 15),
     )
     _upsert_hours(test_repo, [datetime(2026, 9, 20, hour) for hour in hours])

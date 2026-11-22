@@ -8,18 +8,25 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, NamedTuple
 
-from shiro_mlops.service.data_explorer.completeness import gaps_until_now, observation_gaps
+from shiro_mlops.core.config import settings
+from shiro_mlops.service.data_explorer.datasets.audits import (
+    FORECAST_RELEASE_AUDIT,
+    FORECAST_RELEASES,
+    OBSERVATION_BATCH_AUDIT,
+)
 from shiro_mlops.service.data_explorer.datasets.definition import (
     Clauses,
     Dataset,
     Exact,
     Flag,
+    GapMembers,
+    GapPolicy,
     InstantEquals,
+    LatestAudit,
     Row,
     each,
 )
 from shiro_mlops.service.data_explorer.db import ExplorerDb
-from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesOptions
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import (
@@ -80,9 +87,8 @@ def _observation_item(row: Row) -> dict[str, Any]:
     }
 
 
-def _observation_gaps(db: ExplorerDb, query: ExplorerQuery) -> list[str]:
-    station_id = query.filters.get("station_id")
-    return gaps_until_now(query.window, lambda window: observation_gaps(db, window, station_id))
+def _allowlisted_station_ids() -> tuple[str, ...]:
+    return tuple(item.station_id for item in settings.cwa_locations.values())
 
 
 CWA_OBSERVATIONS = Dataset(
@@ -109,8 +115,11 @@ CWA_OBSERVATIONS = Dataset(
         "created_at",
     ),
     project=each(_observation_item),
-    filters=(Exact(name="station_id"),),
-    list_gaps=_observation_gaps,
+    status_policy=LatestAudit(OBSERVATION_BATCH_AUDIT),
+    filters=(Exact(name="station_id", narrows_gaps=True),),
+    gaps=GapPolicy(
+        members=GapMembers(column="station_id", expected=_allowlisted_station_ids, listed=True)
+    ),
     series=OBSERVATION_SERIES,
 )
 
@@ -330,6 +339,8 @@ CWA_FORECASTS = Dataset(
         "created_at",
     ),
     project=each(_forecast_item),
+    status_policy=LatestAudit(FORECAST_RELEASE_AUDIT, flags_stale_release=True),
+    freshness=FORECAST_RELEASES,
     filters=(
         Exact(name="dataset_id"),
         Exact(name="geocode"),

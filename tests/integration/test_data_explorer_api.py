@@ -518,7 +518,7 @@ def test_missing_slots_exclude_slots_after_now(explorer_client, monkeypatch) -> 
     """窗口延伸到未來時，尚未發生的時段不是缺口。"""
     client, _ = explorer_client
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 6, 8, 25),
     )
     window = {"start": "2026-09-06T08:00:00+08:00", "end": "2026-09-06T09:00:00+08:00"}
