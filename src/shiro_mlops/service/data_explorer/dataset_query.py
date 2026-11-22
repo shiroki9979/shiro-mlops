@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from functools import cached_property
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -37,16 +37,20 @@ from shiro_mlops.service.data_explorer.series import (
 from shiro_mlops.service.data_explorer.timefmt import now_taiwan
 
 
-def validate_list_request(dataset: Dataset, query: Mapping[str, str]) -> dict[str, str]:
-    """Reject undeclared parameters, then validate the whole cursor, before any database read;
-    return the request's non-empty parameters."""
+class ListRequest(NamedTuple):
+    """A list request's non-empty declared parameters and the filters its cursor binds."""
+
+    params: dict[str, str]
+    cursor_filters: dict[str, Any] | None
+
+
+def validate_list_request(dataset: Dataset, query: Mapping[str, str]) -> ListRequest:
+    """Reject undeclared parameters, then validate the whole cursor, before any database read."""
     params = list_params(dataset, query)
-    validate_cursor(dataset, params)
-    return params
+    return ListRequest(params, _validate_cursor(dataset, params))
 
 
-def validate_cursor(dataset: Dataset, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Validate the whole cursor; return the filters it binds."""
+def _validate_cursor(dataset: Dataset, params: dict[str, str]) -> dict[str, Any] | None:
     cursor = params.get("cursor")
     if not cursor:
         return None
@@ -68,8 +72,7 @@ class DatasetQuery:
         self.db = ExplorerDb(engine)
 
     def list(self, dataset: Dataset, query: Mapping[str, str]) -> ListEnvelope:
-        params = list_params(dataset, query)
-        cursor_filters = validate_cursor(dataset, params)
+        params, cursor_filters = validate_list_request(dataset, query)
         try:
             query_params = (
                 dataset.resolve_version.pin(self.db, params, cursor_filters)
