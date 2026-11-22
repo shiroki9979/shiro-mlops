@@ -142,13 +142,13 @@ class HourlyActualLoadStore:
         unoccupied = derived[~occupied].reset_index(drop=True)
         if dry_run:
             return unoccupied
-        return self.write_unoccupied(unoccupied)
+        return self._write_unoccupied(unoccupied)
 
-    def write_unoccupied(self, hourly_load: pd.DataFrame) -> pd.DataFrame:
+    def _write_unoccupied(self, hourly_load: pd.DataFrame) -> pd.DataFrame:
         """Insert derived nationwide hours that hold no row yet; return the hours inserted.
 
-        The insert itself skips an occupied hour, so a row another writer stores after the
-        caller looked for free hours is never overwritten either.
+        The insert itself skips an occupied hour, so a row another writer stores after
+        ``rederive`` looked for free hours is never overwritten either.
         """
         records = _derived_load_records(hourly_load, NATIONWIDE_SUBJECT)
         statement = text(f"{_INSERT_DERIVED_HOURS} DO NOTHING")

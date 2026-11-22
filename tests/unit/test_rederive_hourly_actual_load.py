@@ -87,14 +87,20 @@ def test_dry_run_writes_nothing_and_lists_the_hours_a_run_then_writes(
     pd.testing.assert_frame_equal(written, planned)
 
 
-def test_a_row_written_after_the_free_hours_were_found_is_not_overwritten(
-    store: HourlyActualLoadStore, sqlite_engine: Engine
+def test_rederive_does_not_overwrite_a_row_written_after_it_found_the_free_hours(
+    store: HourlyActualLoadStore, sqlite_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _store_snapshots(sqlite_engine, [HOUR_A, HOUR_B])
-    planned = store.rederive(WINDOW, min_samples=4, dry_run=True)
-    store.write(pd.DataFrame({"datetime": [HOUR_B], "load_mw": [31234.0]}))  # 排程搶先寫入
+    find_occupied_hours = store._occupied_hours
 
-    written = store.write_unoccupied(planned)
+    def schedule_writes_right_after_the_check(window: HourWindow) -> list[datetime]:
+        occupied = find_occupied_hours(window)
+        store.write(pd.DataFrame({"datetime": [HOUR_B], "load_mw": [31234.0]}))
+        return occupied
+
+    monkeypatch.setattr(store, "_occupied_hours", schedule_writes_right_after_the_check)
+
+    written = store.rederive(WINDOW, min_samples=4)
 
     assert written["datetime"].tolist() == [pd.Timestamp(HOUR_A)]
     assert _stored_rows(sqlite_engine) == {
