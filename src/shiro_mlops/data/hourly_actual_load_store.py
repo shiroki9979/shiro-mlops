@@ -29,12 +29,12 @@ from shiro_mlops.core.constants import (
     STORAGE_TIME_COL,
 )
 from shiro_mlops.core.storage_time import (
-    WindowCondition,
     from_storage_time,
     from_storage_time_or_none,
     from_storage_time_series,
     half_open_window,
     to_storage_time,
+    window_before,
 )
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
@@ -233,7 +233,9 @@ class HourlyActualLoadStore:
         Without ``start`` the series begins at the earliest derived hour. The frame
         holds ``datetime`` and ``load_mw``, the columns ``write`` takes.
         """
-        window = _window_ending(end, start)
+        window = (
+            window_before("time", end) if start is None else half_open_window("time", start, end)
+        )
         query = text(
             f"""
             SELECT time, load_mw
@@ -300,11 +302,3 @@ def _derived_load_records(hourly_load: pd.DataFrame, subject: str) -> list[dict[
         }
         for hour, load_mw in zip(hourly_load[DATETIME_COL], hourly_load[LOAD_MW_COL], strict=True)
     ]
-
-
-def _window_ending(end: datetime, start: datetime | None) -> WindowCondition:
-    if start is not None:
-        return half_open_window(STORAGE_TIME_COL, start, end)
-    return WindowCondition(
-        sql=f"{STORAGE_TIME_COL} < :time_end", params={"time_end": to_storage_time(end)}
-    )
