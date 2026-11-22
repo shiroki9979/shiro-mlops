@@ -22,7 +22,7 @@ from shiro_mlops.service.data_explorer.weather import (
     ObservationAuditReader,
     ObservationReader,
 )
-from tests.helpers import TAIWAN, rfc3339
+from tests.helpers import TAIWAN, explorer_pages, rfc3339
 
 
 def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
@@ -53,15 +53,7 @@ def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
         "limit": 1,
     }
 
-    pages = []
-    cursor = None
-    while True:
-        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
-        pages.append(page)
-        if not page.has_more:
-            break
-        assert page.next_cursor is not None
-        cursor = page.next_cursor
+    pages = explorer_pages(reader, params)
 
     assert [page.items[0]["temperature_c"] for page in pages] == [4.0, 3.0, 2.0, 1.0]
     assert [page.items[0]["observed_at"] for page in pages[:3]] == ["2026-09-20T12:00:00+08:00"] * 3

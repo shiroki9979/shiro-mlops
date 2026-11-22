@@ -5,12 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from shiro_mlops.core.storage_time import to_storage_time
+from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
 from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, parse_api_time
-from shiro_mlops.service.data_explorer.values import to_taiwan
 
 CURSOR_TIME_COLS = {
     "time",
@@ -65,7 +64,9 @@ def raw_cursor_key(row: dict[str, Any], columns: tuple[str, ...]) -> dict[str, A
     """Serialize full-precision sort values without using display timestamps."""
     return {
         column: (
-            format_taiwan_time(to_taiwan(row[column]), timespec="microseconds")
+            format_taiwan_time(
+                from_storage_time(row[column], column=column), timespec="microseconds"
+            )
             if is_cursor_time_column(column)
             else row[column]
         )

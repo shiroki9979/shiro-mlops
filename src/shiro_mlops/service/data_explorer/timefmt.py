@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
-from shiro_mlops.data.repository_utils import utc_instant_to_taiwan
 
 TAIWAN = ZoneInfo(TAIWAN_TZ)
 
@@ -32,11 +31,3 @@ def format_taiwan_time(value: datetime | str, *, timespec: str = "seconds") -> s
     """Format a Taiwan-local naive timestamp as RFC 3339 with +08:00."""
     parsed = parse_api_time(value)
     return parsed.replace(tzinfo=TAIWAN).isoformat(timespec=timespec)
-
-
-def format_utc_as_taiwan(value: object) -> str:
-    """Format a UTC database timestamp as RFC 3339 with +08:00."""
-    taiwan = utc_instant_to_taiwan(value)
-    if taiwan is None:
-        raise ValueError("Timestamp is required")
-    return format_taiwan_time(taiwan)

@@ -2,29 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-from shiro_mlops.data.repository_utils import deserialize_raw_payload, utc_instant_to_taiwan
+from shiro_mlops.core.storage_time import from_storage_time_or_none
+from shiro_mlops.data.repository_utils import deserialize_raw_payload
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 
 # SYNC(frontend/apps/engineering-console/src/components/data-explorer/plot-series.ts): MW_PER_WAN_KW.
 WAN_KW_TO_MW = 10.0
 
 
-def to_taiwan(value: object) -> datetime:
-    converted = utc_instant_to_taiwan(value)
-    if converted is None:
-        raise ValueError("Timestamp is required")
-    return converted
-
-
 def optional_time(value: object) -> str | None:
-    if value is None or pd.isna(value):
-        return None
-    return format_taiwan_time(to_taiwan(value))
+    taiwan = from_storage_time_or_none(value)
+    return None if taiwan is None else format_taiwan_time(taiwan)
 
 
 def to_float(value: object) -> float | None:

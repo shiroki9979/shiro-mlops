@@ -9,7 +9,7 @@ from enum import StrEnum
 from functools import partial
 from typing import Any, NamedTuple
 
-from shiro_mlops.core.storage_time import to_storage_time
+from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
 from shiro_mlops.service.data_explorer.completeness import gaps_until_now, observation_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
@@ -17,7 +17,7 @@ from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, parse_api_time
-from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
+from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float
 
 
 class PinnedForecastVersion(NamedTuple):
@@ -58,8 +58,8 @@ def latest_forecast_version(
         return None
     return PinnedForecastVersion(
         dataset_id=row["dataset_id"],
-        issued_at=to_taiwan(row["issued_at"]),
-        source_updated_at=to_taiwan(row["source_updated_at"]),
+        issued_at=from_storage_time(row["issued_at"], column="issued_at"),
+        source_updated_at=from_storage_time(row["source_updated_at"], column="source_updated_at"),
     )
 
 
@@ -182,10 +182,12 @@ def _forecast_version_filters(
 def _forecast_item(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "dataset_id": row["dataset_id"],
-        "issued_at": format_taiwan_time(to_taiwan(row["issued_at"])),
-        "source_updated_at": format_taiwan_time(to_taiwan(row["source_updated_at"])),
-        "valid_from": format_taiwan_time(to_taiwan(row["valid_from"])),
-        "valid_to": format_taiwan_time(to_taiwan(row["valid_to"])),
+        "issued_at": format_taiwan_time(from_storage_time(row["issued_at"], column="issued_at")),
+        "source_updated_at": format_taiwan_time(
+            from_storage_time(row["source_updated_at"], column="source_updated_at")
+        ),
+        "valid_from": format_taiwan_time(from_storage_time(row["valid_from"], column="valid_from")),
+        "valid_to": format_taiwan_time(from_storage_time(row["valid_to"], column="valid_to")),
         "geocode": row["geocode"],
         "location_name": row["location_name"],
         "temperature_c": to_float(row["temperature_c"]),
@@ -195,7 +197,9 @@ def _forecast_item(row: dict[str, Any]) -> dict[str, Any]:
         "probability_of_precipitation_pct": to_float(row["probability_of_precipitation_pct"]),
         "wind_speed_m_s": to_float(row["wind_speed_m_s"]),
         "wind_direction": row["wind_direction"],
-        "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+        "ingested_at": format_taiwan_time(
+            from_storage_time(row["created_at"], column="created_at")
+        ),
     }
 
 
@@ -225,7 +229,9 @@ class ObservationReader(DatasetReader):
         for row in rows:
             items.append(
                 {
-                    "observed_at": format_taiwan_time(to_taiwan(row["observed_at"])),
+                    "observed_at": format_taiwan_time(
+                        from_storage_time(row["observed_at"], column="observed_at")
+                    ),
                     "station_id": row["station_id"],
                     "station_name": row["station_name"],
                     "town_code": row["town_code"],
@@ -235,7 +241,9 @@ class ObservationReader(DatasetReader):
                     "precipitation_mm": to_float(row["precipitation_mm"]),
                     "wind_speed_m_s": to_float(row["wind_speed_m_s"]),
                     "wind_direction_deg": to_float(row["wind_direction_deg"]),
-                    "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+                    "ingested_at": format_taiwan_time(
+                        from_storage_time(row["created_at"], column="created_at")
+                    ),
                 }
             )
         station_id = query.filters.get("station_id")
@@ -447,12 +455,16 @@ class ObservationAuditReader(DatasetReader):
         for row in rows:
             items.append(
                 {
-                    "fetched_at": format_taiwan_time(to_taiwan(row["fetched_at"])),
+                    "fetched_at": format_taiwan_time(
+                        from_storage_time(row["fetched_at"], column="fetched_at")
+                    ),
                     "status": row["status"],
                     "missing_station_ids": [
                         str(item) for item in json_list(row["missing_station_ids"])
                     ],
-                    "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+                    "ingested_at": format_taiwan_time(
+                        from_storage_time(row["created_at"], column="created_at")
+                    ),
                 }
             )
         return items, []
@@ -484,12 +496,20 @@ class ForecastAuditReader(DatasetReader):
             items.append(
                 {
                     "dataset_id": row["dataset_id"],
-                    "issued_at": format_taiwan_time(to_taiwan(row["issued_at"])),
-                    "source_updated_at": format_taiwan_time(to_taiwan(row["source_updated_at"])),
-                    "fetched_at": format_taiwan_time(to_taiwan(row["fetched_at"])),
+                    "issued_at": format_taiwan_time(
+                        from_storage_time(row["issued_at"], column="issued_at")
+                    ),
+                    "source_updated_at": format_taiwan_time(
+                        from_storage_time(row["source_updated_at"], column="source_updated_at")
+                    ),
+                    "fetched_at": format_taiwan_time(
+                        from_storage_time(row["fetched_at"], column="fetched_at")
+                    ),
                     "status": row["status"],
                     "missing_geocodes": [str(item) for item in json_list(row["missing_geocodes"])],
-                    "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+                    "ingested_at": format_taiwan_time(
+                        from_storage_time(row["created_at"], column="created_at")
+                    ),
                 }
             )
         return items, []

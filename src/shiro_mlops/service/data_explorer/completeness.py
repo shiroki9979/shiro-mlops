@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.storage_time import from_storage_time
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     recent_completed_hours,
@@ -17,7 +18,6 @@ from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEM
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
-from shiro_mlops.service.data_explorer.values import to_taiwan
 
 
 def gaps_until_now(window: TimeWindow, find_gaps: Callable[[TimeWindow], list[str]]) -> list[str]:
@@ -40,7 +40,10 @@ def hourly_gaps(db: ExplorerDb, window: TimeWindow, subject: str | None) -> list
         f"SELECT DISTINCT time FROM raw_taipower_load WHERE {' AND '.join(clauses)}",
         params,
     )
-    present = {to_taiwan(row["time"]).replace(minute=0, second=0, microsecond=0) for row in rows}
+    present = {
+        from_storage_time(row["time"], column="time").replace(minute=0, second=0, microsecond=0)
+        for row in rows
+    }
     start = pd.Timestamp(window.start).ceil("h")
     last_completed = recent_completed_hours(now_taiwan(), 1).start
     expected = pd.date_range(start, min(window.end, last_completed), freq="h")
@@ -63,7 +66,9 @@ def observation_gaps(db: ExplorerDb, window: TimeWindow, station_id: str | None)
     )
     present = {
         (
-            to_taiwan(row["observed_at"]).replace(minute=0, second=0, microsecond=0),
+            from_storage_time(row["observed_at"], column="observed_at").replace(
+                minute=0, second=0, microsecond=0
+            ),
             row["station_id"],
         )
         for row in rows
@@ -86,7 +91,7 @@ def ten_minute_gaps(db: ExplorerDb, window: TimeWindow) -> list[str]:
         f"WHERE {' AND '.join(clauses)}",
         params,
     )
-    present = {to_taiwan(row["observed_at"]) for row in rows}
+    present = {from_storage_time(row["observed_at"], column="observed_at") for row in rows}
     start = pd.Timestamp(window.start).ceil("10min")
     expected = pd.date_range(start, window.end, freq="10min")
     return [
@@ -106,7 +111,9 @@ def regional_slot_map(db: ExplorerDb, window: TimeWindow) -> dict[datetime, set[
     )
     grouped: dict[datetime, set[str]] = {}
     for row in rows:
-        grouped.setdefault(to_taiwan(row["observed_at"]), set()).add(row["region"])
+        grouped.setdefault(from_storage_time(row["observed_at"], column="observed_at"), set()).add(
+            row["region"]
+        )
     return grouped
 
 

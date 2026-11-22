@@ -13,7 +13,7 @@ from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from tests.helpers import TAIWAN, rfc3339
+from tests.helpers import TAIWAN, explorer_pages, rfc3339
 
 
 def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
@@ -44,15 +44,7 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
         "limit": 1,
     }
 
-    pages = []
-    cursor = None
-    while True:
-        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
-        pages.append(page)
-        if not page.has_more:
-            break
-        assert page.next_cursor is not None
-        cursor = page.next_cursor
+    pages = explorer_pages(reader, params)
 
     assert [page.items[0]["load_mw"] for page in pages] == [4.0, 3.0, 2.0, 1.0]
     assert [page.items[0]["datetime"] for page in pages[:3]] == ["2026-09-20T12:00:00+08:00"] * 3
@@ -86,16 +78,9 @@ def test_hourly_load_cursor_orders_whole_second_before_fractional_rows(
     reader = HourlyLoadReader(sqlite_engine)
     params = {"start": "2026-09-20T12:00:00+08:00", "end": "2026-09-20T12:00:01+08:00", "limit": 1}
 
-    loads = []
-    cursor = None
-    while True:
-        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
-        loads.extend(item["load_mw"] for item in page.items)
-        if not page.has_more:
-            break
-        cursor = page.next_cursor
+    pages = explorer_pages(reader, params)
 
-    assert loads == [3.0, 2.0, 1.0]
+    assert [item["load_mw"] for page in pages for item in page.items] == [3.0, 2.0, 1.0]
 
 
 def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(

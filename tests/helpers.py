@@ -12,7 +12,8 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_local_to_utc
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
@@ -63,6 +64,20 @@ OFFICIAL_2026_WEEKDAY_DAYS_OFF = {
 def rfc3339(value: datetime) -> str:
     """測試時間統一套用臺灣時區，避免各測試產生不同 offset 語意。"""
     return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
+
+
+def explorer_pages(reader, params: dict[str, Any], *, max_pages: int = 20) -> list:
+    """Follow a Data Explorer reader's cursors from the first page to the last.
+
+    A cursor that never reaches the last page fails at ``max_pages`` instead of hanging.
+    """
+    pages = [reader.list(params)]
+    while pages[-1].has_more:
+        assert len(pages) < max_pages, f"cursor paging did not end within {max_pages} pages"
+        assert pages[-1].next_cursor is not None
+        pages.append(reader.list({**params, "cursor": pages[-1].next_cursor}))
+    assert pages[-1].next_cursor is None
+    return pages
 
 
 def supply_demand_snapshot(
@@ -233,14 +248,13 @@ def create_location_keyed_load_table(engine: Engine) -> None:
 
 def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
     """Insert a d015046-era row without source after migrating the schema to allow NULL source."""
-    utc_time = pd.Timestamp(taiwan_local_to_utc(pd.Series([taiwan_time])).iloc[0])
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO raw_taipower_load (time, subject, load_mw) "
                 "VALUES (:time, 'nationwide', :load_mw)"
             ),
-            {"time": utc_time.to_pydatetime(), "load_mw": load_mw},
+            {"time": to_storage_time(taiwan_time), "load_mw": load_mw},
         )
 
 

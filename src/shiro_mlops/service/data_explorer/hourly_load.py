@@ -7,13 +7,13 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import Any
 
+from shiro_mlops.core.storage_time import from_storage_time
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.service.data_explorer.completeness import hourly_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
-from shiro_mlops.service.data_explorer.values import to_taiwan
 
 
 class HourlyLoadReader(DatasetReader):
@@ -38,8 +38,8 @@ class HourlyLoadReader(DatasetReader):
     ) -> tuple[list[dict[str, Any]], list[str]]:
         items = []
         for row in rows:
-            observed = to_taiwan(row["time"])
-            ingested = to_taiwan(row["created_at"])
+            observed = from_storage_time(row["time"], column="time")
+            ingested = from_storage_time(row["created_at"], column="created_at")
             items.append(
                 {
                     "datetime": format_taiwan_time(observed),

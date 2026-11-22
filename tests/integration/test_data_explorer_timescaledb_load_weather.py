@@ -8,18 +8,7 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
 from shiro_mlops.service.data_explorer.weather import ObservationReader
-
-
-def _all_pages(reader, params: dict) -> list:
-    pages = []
-    cursor = None
-    while True:
-        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
-        pages.append(page)
-        if not page.has_more:
-            return pages
-        assert page.next_cursor is not None
-        cursor = page.next_cursor
+from tests.helpers import explorer_pages
 
 
 def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
@@ -73,8 +62,10 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
             "end": "2040-09-20T12:00:01+08:00",
             "limit": 1,
         }
-        load_pages = _all_pages(HourlyLoadReader(data_explorer_timescaledb_engine), params)
-        observation_pages = _all_pages(ObservationReader(data_explorer_timescaledb_engine), params)
+        load_pages = explorer_pages(HourlyLoadReader(data_explorer_timescaledb_engine), params)
+        observation_pages = explorer_pages(
+            ObservationReader(data_explorer_timescaledb_engine), params
+        )
 
         assert [page.items[0]["load_mw"] for page in load_pages] == [4.0, 3.0, 2.0, 1.0]
         assert [page.items[0]["temperature_c"] for page in observation_pages] == [
