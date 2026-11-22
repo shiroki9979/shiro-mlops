@@ -14,9 +14,14 @@ from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 from shiro_mlops.features.transformers import merge_weather_features
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.tasks.definition import TaskDefinition
+from shiro_mlops.tasks.prediction_inputs import (
+    InsufficientLoadHistoryError,
+    TaskUnavailableError,
+    admit_prediction_inputs,
+)
 from shiro_mlops.tasks.runner import fit_task
 from shiro_mlops.tasks.types import get_task_type
-from shiro_mlops.tasks.types.base import PredictionData, TrainingData
+from shiro_mlops.tasks.types.base import InputRequirements, PredictionData, TrainingData
 from shiro_mlops.tasks.types.recursive_regression import TASK_TYPE_NAME as RECURSIVE_REGRESSION
 from shiro_mlops.tasks.types.recursive_regression import training_features
 
@@ -111,8 +116,9 @@ def eligible_origins(
 ) -> tuple[pd.Timestamp, ...]:
     """Every hourly origin that ``rolling_origin_backtest`` would accept for ``data``.
 
-    Runs the same three origin checks as the backtest without fitting a model, so a
-    study can see how many origins its snapshot offers before choosing any.
+    Runs the same origin checks as the backtest, prediction input gate included,
+    without fitting a model, so a study can see how many origins its snapshot
+    offers before choosing any.
     """
     if horizon_hours < 1:
         raise ValueError("horizon_hours must be >= 1.")
@@ -246,7 +252,7 @@ class _BacktestContext:
     weather: pd.DataFrame
     horizon_hours: int
     min_history_hours: int
-    lookback_hours: int
+    requirements: InputRequirements
 
     @property
     def weather_fields(self) -> list[str]:
@@ -266,7 +272,7 @@ def _build_context(
         weather=weather,
         horizon_hours=horizon_hours,
         min_history_hours=min_history_hours,
-        lookback_hours=get_task_type(task.task_type).requirements(task.params).lookback_hours,
+        requirements=get_task_type(task.task_type).requirements(task.params),
     )
 
 
@@ -312,35 +318,35 @@ def _evaluate_single_origin(
     context: _BacktestContext,
     origin: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train_load, horizon_load, aligned_weather = _check_origin(context, origin)
-    forecast = _fit_and_predict_origin(context, origin, train_load, aligned_weather)
-    return horizon_load, forecast
+    admitted = _check_origin(context, origin)
+    forecast = _fit_and_predict_origin(context, origin, admitted)
+    return admitted.horizon_load, forecast
 
 
-def _check_origin(
-    context: _BacktestContext,
-    origin: pd.Timestamp,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Apply the three origin checks (docs/reference/lab.md §2); raise ``ValueError`` naming the first failure."""
+@dataclass(frozen=True)
+class _AdmittedOrigin:
+    """An origin that passed every check: its training load, target actuals and gated inputs."""
+
+    train_load: pd.DataFrame
+    horizon_load: pd.DataFrame
+    prediction_data: PredictionData
+
+
+def _check_origin(context: _BacktestContext, origin: pd.Timestamp) -> _AdmittedOrigin:
+    """Apply the origin checks (docs/reference/lab.md §2); raise ``ValueError`` naming the first failure."""
     train_load = _slice_and_validate_origin_history(
         load=context.load,
         origin=origin,
         min_history_hours=context.min_history_hours,
-        lookback_hours=context.lookback_hours,
     )
     horizon_times = target_hours(origin, context.horizon_hours)
+    prediction_data = _admit_origin_inputs(context, origin, train_load, horizon_times)
     horizon_load = _slice_and_validate_horizon_load(
         load=context.load,
         origin=origin,
         horizon_times=horizon_times,
     )
-    aligned_weather = _align_and_validate_horizon_weather(
-        weather=context.weather,
-        weather_fields=context.weather_fields,
-        origin=origin,
-        horizon_times=horizon_times,
-    )
-    return train_load, horizon_load, aligned_weather
+    return _AdmittedOrigin(train_load, horizon_load, prediction_data)
 
 
 def _slice_and_validate_origin_history(
@@ -348,7 +354,6 @@ def _slice_and_validate_origin_history(
     load: pd.DataFrame,
     origin: pd.Timestamp,
     min_history_hours: int,
-    lookback_hours: int,
 ) -> pd.DataFrame:
     train_load = load[load[DATETIME_COL] <= origin].reset_index(drop=True)
     accumulated_hours = int(train_load[DATETIME_COL].nunique())
@@ -358,16 +363,47 @@ def _slice_and_validate_origin_history(
             f"{accumulated_hours} valid load hours <= origin, "
             f"requires min_history_hours={min_history_hours}."
         )
-
-    expected_lookback = pd.date_range(end=origin, periods=lookback_hours, freq="h")
-    missing_lookback = expected_lookback.difference(pd.DatetimeIndex(train_load[DATETIME_COL]))
-    if len(missing_lookback) > 0:
-        raise ValueError(
-            f"Origin {origin.isoformat()} failed lookback load completeness check: "
-            f"missing {len(missing_lookback)} hour(s) in {lookback_hours}h lookback window "
-            f"(first missing: {missing_lookback[0].isoformat()})."
-        )
     return train_load
+
+
+def _admit_origin_inputs(
+    context: _BacktestContext,
+    origin: pd.Timestamp,
+    train_load: pd.DataFrame,
+    horizon_times: pd.DatetimeIndex,
+) -> PredictionData:
+    """Hand the origin's load and aligned observed weather to the gate serving uses."""
+    try:
+        return admit_prediction_inputs(
+            context.requirements,
+            anchor=origin,
+            load=train_load,
+            weather=_align_horizon_weather(context, horizon_times),
+            weather_fields=context.weather_fields,
+            horizon_hours=context.horizon_hours,
+            subject=context.task.subject,
+        )
+    except TaskUnavailableError as error:
+        condition = (
+            "lookback load completeness"
+            if isinstance(error, InsufficientLoadHistoryError)
+            else "horizon weather completeness"
+        )
+        raise ValueError(
+            f"Origin {origin.isoformat()} failed {condition} check (prediction input gate): {error}"
+        ) from error
+
+
+def _align_horizon_weather(
+    context: _BacktestContext, horizon_times: pd.DatetimeIndex
+) -> pd.DataFrame:
+    """Observed weather on the target hours, each matched within two hours backward."""
+    horizon_grid = pd.DataFrame({DATETIME_COL: horizon_times})
+    weather = context.weather[context.weather[DATETIME_COL] <= horizon_times[-1]]
+    aligned = merge_weather_features(horizon_grid, weather)
+    return aligned[[DATETIME_COL, *context.weather_fields]].sort_values(
+        DATETIME_COL, ignore_index=True
+    )
 
 
 def _slice_and_validate_horizon_load(
@@ -389,53 +425,21 @@ def _slice_and_validate_horizon_load(
     return horizon_load
 
 
-def _align_and_validate_horizon_weather(
-    *,
-    weather: pd.DataFrame,
-    weather_fields: list[str],
-    origin: pd.Timestamp,
-    horizon_times: pd.DatetimeIndex,
-) -> pd.DataFrame:
-    horizon_grid = pd.DataFrame({DATETIME_COL: horizon_times})
-    weather_for_horizon = weather[weather[DATETIME_COL] <= horizon_times[-1]]
-    aligned_weather = merge_weather_features(horizon_grid, weather_for_horizon)
-    aligned_weather = aligned_weather[[DATETIME_COL, *weather_fields]].sort_values(
-        DATETIME_COL, ignore_index=True
-    )
-    missing_weather_mask = aligned_weather[weather_fields].isna().any(axis=1)
-    if missing_weather_mask.any():
-        first_missing_wx = pd.Timestamp(
-            aligned_weather.loc[missing_weather_mask, DATETIME_COL].iloc[0]
-        )
-        raise ValueError(
-            f"Origin {origin.isoformat()} failed horizon weather completeness check: "
-            f"missing aligned weather in target horizon "
-            f"(first missing: {first_missing_wx.isoformat()})."
-        )
-    return aligned_weather
-
-
 def _fit_and_predict_origin(
     context: _BacktestContext,
     origin: pd.Timestamp,
-    train_load: pd.DataFrame,
-    aligned_weather: pd.DataFrame,
+    admitted: _AdmittedOrigin,
 ) -> pd.DataFrame:
     train_weather = context.weather[context.weather[DATETIME_COL] <= origin].reset_index(drop=True)
     truncated_data = TrainingData(
-        load=train_load,
+        load=admitted.train_load,
         weather=train_weather,
         validation_start=origin + pd.Timedelta(hours=1),
     )
     trained = fit_task(context.task, truncated_data)
-
-    prediction_data = PredictionData(
-        anchor=origin,
-        load_history=train_load,
-        weather=aligned_weather,
-        horizon_hours=context.horizon_hours,
+    return trained.model.predict(admitted.prediction_data).sort_values(
+        DATETIME_COL, ignore_index=True
     )
-    return trained.model.predict(prediction_data).sort_values(DATETIME_COL, ignore_index=True)
 
 
 def _compute_horizon_mape(

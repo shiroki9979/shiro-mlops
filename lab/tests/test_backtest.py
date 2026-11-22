@@ -18,6 +18,10 @@ from lab.backtest import (
 from pydantic import BaseModel
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.tasks.prediction_inputs import (
+    InsufficientLoadHistoryError,
+    WeatherUnavailableError,
+)
 from shiro_mlops.tasks.runner import fit_task
 from shiro_mlops.tasks.types.base import PredictionData, TrainingData
 from tests.helpers import hourly_load_with_weather
@@ -128,6 +132,7 @@ def test_rolling_origin_backtest_rejects_origin_with_missing_lookback_load(
             horizon_hours=HORIZON_HOURS,
         )
     assert "lookback" in str(exc_info.value).lower()
+    assert isinstance(exc_info.value.__cause__, InsufficientLoadHistoryError)
 
 
 def test_rolling_origin_backtest_rejects_origin_with_missing_horizon_load(
@@ -168,6 +173,7 @@ def test_rolling_origin_backtest_rejects_horizon_weather_gap_beyond_alignment_to
         )
 
     assert "weather" in str(exc_info.value).lower()
+    assert isinstance(exc_info.value.__cause__, WeatherUnavailableError)
 
 
 def test_rolling_origin_backtest_fills_single_missing_weather_hour_in_horizon(

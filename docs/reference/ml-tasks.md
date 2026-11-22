@@ -67,7 +67,7 @@
 
 ### 預測輸入關卡（`tasks/prediction_inputs.py`）
 
-`admit_prediction_inputs(requirements, *, anchor, load, weather, weather_fields, horizon_hours, subject) -> PredictionData` 是唯一判定「這個負載起點的輸入夠不夠預測」的地方。它是純函式：不讀資料庫，也不知道請求時刻；呼叫端（serving 的 runner）先挑選負載起點並讀取資料，再把記憶體中的負載與天氣 frame 交給它。`load` 至少涵蓋 `(anchor - lookback_hours, anchor]`，可含 NaN 與更早的列；`FORECAST` 任務的 `weather` 為目標小時的天氣，`OBSERVED` 任務的為 lookback 內的觀測；`subject` 只用於拒絕訊息。
+`admit_prediction_inputs(requirements, *, anchor, load, weather, weather_fields, horizon_hours, subject) -> PredictionData` 是唯一判定「這個負載起點的輸入夠不夠預測」的地方。它是純函式：不讀資料庫，也不知道請求時刻；呼叫端（serving 的 runner 與滾動起點回測，[研究空間 §2](lab.md#2-滾動起點回測labbacktestpy)）先挑選負載起點並取得資料，再把記憶體中的負載與天氣 frame 交給它。`load` 至少涵蓋 `(anchor - lookback_hours, anchor]`，可含 NaN 與更早的列；`FORECAST` 任務的 `weather` 為目標小時的天氣，`OBSERVED` 任務的為 lookback 內的觀測；`subject` 只用於拒絕訊息。
 
 關卡內的規則：
 
@@ -78,7 +78,7 @@
 不在關卡內的規則：
 
 - **負載起點過舊**：屬於 runner 依請求時刻挑選起點的那一步（`StaleLoadAnchorError`）；沒有任何負載時的 `MissingLoadHistoryError` 亦同。
-- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責。取得結果為不可用（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，runner 在關卡判定負載之後以取得步驟的原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`；因此負載與天氣同時不足時回報負載不足。
+- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。取得結果為不可用（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，runner 在關卡判定負載之後以取得步驟的原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`；因此負載與天氣同時不足時回報負載不足。
 - **`OBSERVED` 任務的天氣與時間窗完整性**：由任務類型組窗後判定；runner 的 readiness probe 與 `ObservedInputsIncompleteError` 照舊。
 
 拒絕沿用 `TaskUnavailableError` 子類別；`TaskUnavailableError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError` 定義於關卡模組，`tasks/runner.py` 重新匯出，既有匯入路徑與 API 的 503 對應不變。
