@@ -11,13 +11,15 @@ from lab.backtest import (
     origin_runs,
     rolling_origin_backtest,
     split_search_and_eval_origins,
+    target_hours,
     training_row_count,
     verify_non_overlapping_target_windows,
 )
 from pydantic import BaseModel
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.types.base import TrainingData
+from shiro_mlops.tasks.runner import fit_task
+from shiro_mlops.tasks.types.base import PredictionData, TrainingData
 from tests.helpers import hourly_load_with_weather
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
@@ -416,3 +418,68 @@ def test_training_row_count_grows_with_the_origin_and_drops_rows_without_weather
 
     assert training_row_count(fast_task, complete, origin + pd.Timedelta(hours=1)) == count + 1
     assert training_row_count(fast_task, gapped, origin) < count
+
+
+def test_eligible_origins_characterize_load_and_weather_gaps(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: eligible_origins on a snapshot with load and weather gaps; recorded before #268's refactor.
+
+    The set is a characterization: the prediction input gate must accept exactly the
+    origins the backtest's own checks accepted. Index 60 (missing row) and 270 (NaN load)
+    break the lookback; 240..242 leave 242 beyond the 2-hour weather alignment; 250 and
+    the NaN humidity at 255 are filled per field from the hour before.
+    """
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    times = load["datetime"]
+    load = load[times != times.iloc[60]].reset_index(drop=True)
+    load.loc[load["datetime"] == times.iloc[270], "load_mw"] = float("nan")
+    beyond_tolerance = times.iloc[[240, 241, 242]]
+    weather = weather[~weather["datetime"].isin([*beyond_tolerance, times.iloc[250]])]
+    weather = weather.reset_index(drop=True)
+    weather.loc[weather["datetime"] == times.iloc[255], "relative_humidity"] = float("nan")
+
+    eligible = eligible_origins(
+        fast_task, _training_data(load, weather), HORIZON_HOURS, min_history_hours=168
+    )
+
+    assert origin_runs(eligible) == [
+        (pd.Timestamp("2026-09-18 12:00"), pd.Timestamp("2026-09-18 19:00")),
+        (pd.Timestamp("2026-09-19 02:00"), pd.Timestamp("2026-09-19 23:00")),
+    ]
+
+
+def test_rolling_origin_backtest_predicts_as_if_given_all_load_before_the_origin(
+    fast_task: TaskDefinition,
+) -> None:
+    """Seam: trimming load_history to the lookback leaves the forecast equal to one fed all prior load."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    data = _training_data(load, weather)
+    report = rolling_origin_backtest(
+        fast_task, data, origins=[ORIGIN_1], horizon_hours=HORIZON_HOURS
+    )
+    prior_load = load[load["datetime"] <= ORIGIN_1].reset_index(drop=True)
+    trained = fit_task(
+        fast_task,
+        TrainingData(
+            load=prior_load[["datetime", "subject", "load_mw"]],
+            weather=data.weather[data.weather["datetime"] <= ORIGIN_1].reset_index(drop=True),
+            validation_start=ORIGIN_1 + pd.Timedelta(hours=1),
+        ),
+    )
+    horizon_weather = data.weather[
+        data.weather["datetime"].isin(target_hours(ORIGIN_1, HORIZON_HOURS))
+    ].reset_index(drop=True)
+
+    untrimmed = trained.model.predict(
+        PredictionData(
+            anchor=ORIGIN_1,
+            load_history=prior_load[["datetime", "subject", "load_mw"]],
+            weather=horizon_weather,
+            horizon_hours=HORIZON_HOURS,
+        )
+    )
+
+    assert report.predictions[ORIGIN_1] == pytest.approx(
+        tuple(untrimmed["predicted_load_mw"]), abs=1e-9
+    )
