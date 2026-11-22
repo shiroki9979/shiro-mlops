@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 1 節拆出。
@@ -51,7 +51,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 - **資料來源**：中央氣象署 OpenData 原始檔 API `F-D0047-089`（未來三日）與 `F-D0047-091`（未來一週）。預報 ingestion 必須使用保留 `IssueTime`／`Update` 的原始 XML 檔，不得使用省略版本時間的 flattened REST 回應。
 - **身分契約**：以來源 `Geocode` 作為穩定行政區識別；鄉鎮名稱僅作顯示與跨來源映射。
-- **版本契約**：同一行政區與預報有效時間的不同發布版本必須並存，不得以新版覆寫舊版；資料身分至少包含資料集編號、發布時間、有效時間與 `Geocode`。
+- **版本契約**：同一行政區與預報有效時間的不同發布版本必須並存，不得以新版覆寫舊版；資料身分至少包含預報產品編號、發布時間、有效時間與 `Geocode`。
 - **時間契約**：發布時間與預報有效時間分開保存，以支援 point-in-time correct 的預測重現與回測。
 - **版本時間驗證**：來源未提供或無法解析 `IssueTime`／`Update` 時，ingestion 必須失敗；不得以擷取時間冒充來源版本時間。
 - **Typed 氣象因子**：溫度、露點溫度、體感溫度、相對濕度、降雨機率、風速與風向；天氣現象、舒適度描述及其他來源欄位仍保留於完整原始回應。
@@ -100,7 +100,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
      - `valid_from`、`valid_to` (TIMESTAMPTZ, NOT NULL)：預報有效區間；來源為時間點 `DataTime` 時兩者相同，來源為 `StartTime`／`EndTime` 時保留原始區間。
      - `geocode` (VARCHAR(16), NOT NULL)：來源行政區代碼；行政區名稱不參與身分判定。
      - typed 氣象欄位為 `temperature_c`、`dew_point_c`、`apparent_temperature_c`、`relative_humidity_pct`、`probability_of_precipitation_pct`、`wind_speed_m_s`、`wind_direction`，可因來源解析度或缺值為 `NULL`。
-     - **Constraint**: `PRIMARY KEY (dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode)`；不同資料集與來源更新不得互相覆寫。
+     - **Constraint**: `PRIMARY KEY (dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode)`；不同預報產品與來源更新不得互相覆寫。
      - **Hypertable**: `create_hypertable('raw_cwa_township_forecast', 'valid_from')`。
   6. `raw_taipower_supply_demand_snapshot`:
      - **資料來源**：台電官方開放資料端點 `https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json`。
