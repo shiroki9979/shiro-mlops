@@ -185,11 +185,17 @@ class AlwaysComplete:
 
 @dataclass(frozen=True, kw_only=True)
 class AuditHeader:
-    """The newest audit header a dataset's completeness is read from."""
+    """The newest audit header a dataset's completeness is read from.
+
+    `status_column` holds the header's audit status; `incomplete_status` is its value for
+    a header that judged its batch or release incomplete.
+    """
 
     table: str
     order: tuple[str, ...]
     ids_column: str
+    status_column: str
+    incomplete_status: str
     incomplete_placeholder: str
 
 

@@ -19,7 +19,9 @@ from shiro_mlops.service.data_explorer.datasets.definition import (
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesOptions
 from shiro_mlops.service.data_explorer.values import format_row_time, json_list
 
-AUDIT_STATUSES = ("complete", "incomplete")
+AUDIT_STATUS_COLUMN = "status"
+AUDIT_INCOMPLETE = "incomplete"
+AUDIT_STATUSES = ("complete", AUDIT_INCOMPLETE)
 AUDIT_COUNT_UNIT = "count"
 HOURLY = timedelta(hours=1)
 OBSERVATION_BATCH_TABLE = "raw_cwa_observation_batch"
@@ -30,12 +32,16 @@ OBSERVATION_BATCH_AUDIT = AuditHeader(
     table=OBSERVATION_BATCH_TABLE,
     order=("fetched_at",),
     ids_column="missing_station_ids",
+    status_column=AUDIT_STATUS_COLUMN,
+    incomplete_status=AUDIT_INCOMPLETE,
     incomplete_placeholder="incomplete_batch",
 )
 FORECAST_RELEASE_AUDIT = AuditHeader(
     table=FORECAST_RELEASE_TABLE,
     order=FORECAST_RELEASE_ORDER,
     ids_column="missing_geocodes",
+    status_column=AUDIT_STATUS_COLUMN,
+    incomplete_status=AUDIT_INCOMPLETE,
     incomplete_placeholder="incomplete_release",
 )
 FORECAST_RELEASES = FreshnessSource(
@@ -48,14 +54,14 @@ FORECAST_RELEASES = FreshnessSource(
 
 OBSERVATION_AUDIT_SERIES = SeriesOptions(
     fields={"batch_count": SeriesField(sql="1", unit=AUDIT_COUNT_UNIT)},
-    group_columns=("status",),
+    group_columns=(AUDIT_STATUS_COLUMN,),
     gap_fill=False,
     count_rows=True,
 )
 
 FORECAST_AUDIT_SERIES = SeriesOptions(
     fields={"version_count": SeriesField(sql="1", unit=AUDIT_COUNT_UNIT)},
-    group_columns=("status",),
+    group_columns=(AUDIT_STATUS_COLUMN,),
     gap_fill=False,
     count_rows=True,
 )
@@ -84,7 +90,7 @@ CWA_OBSERVATION_AUDITS = Dataset(
     project=each(_observation_audit_item),
     status_policy=LatestAudit(OBSERVATION_BATCH_AUDIT),
     filters=(
-        OneOf(name="status", values=AUDIT_STATUSES),
+        OneOf(name=AUDIT_STATUS_COLUMN, values=AUDIT_STATUSES),
         JsonContains(name="missing_station_id", column="missing_station_ids"),
     ),
     series=OBSERVATION_AUDIT_SERIES,
@@ -127,7 +133,7 @@ CWA_FORECAST_AUDITS = Dataset(
     freshness=FORECAST_RELEASES,
     filters=(
         Exact(name="dataset_id"),
-        OneOf(name="status", values=AUDIT_STATUSES),
+        OneOf(name=AUDIT_STATUS_COLUMN, values=AUDIT_STATUSES),
         JsonContains(name="missing_geocode", column="missing_geocodes"),
     ),
     series=FORECAST_AUDIT_SERIES,

@@ -321,7 +321,8 @@ def _latest_row(db: ExplorerDb, source: FreshnessSource) -> Row | None:
 
 def _latest_audit(db: ExplorerDb, header: AuditHeader) -> Row | None:
     return db.fetch_one(
-        f"SELECT status, {header.ids_column} AS missing_ids FROM {header.table} "
+        f"SELECT {header.status_column} AS status, {header.ids_column} AS missing_ids "
+        f"FROM {header.table} "
         f"ORDER BY {sort_order(header.order)} LIMIT 1"
     )
 
@@ -330,7 +331,7 @@ def _audit_missing_identifiers(audit: Row | None, header: AuditHeader) -> list[s
     if audit is None:
         return []
     missing = [str(item) for item in json_list(audit["missing_ids"])]
-    if audit["status"] == "incomplete" and not missing:
+    if audit["status"] == header.incomplete_status and not missing:
         return [header.incomplete_placeholder]
     return missing
 
