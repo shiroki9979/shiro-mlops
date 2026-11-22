@@ -4,10 +4,10 @@ import os
 from collections.abc import Generator
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine, make_url
 
-from shiro_mlops.core.database import ensure_timescale_hypertables
+from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def data_explorer_timescaledb_engine(
         pytest.fail("Acceptance URI must point to local pagination_acceptance database")
 
     timezone = getattr(request, "param", "UTC")
-    engine = create_engine(uri, connect_args={"options": f"-c timezone={timezone}"})
+    engine = get_timescale_engine(uri, connect_args={"options": f"-c timezone={timezone}"})
     try:
         with engine.connect() as connection:
             assert connection.execute(
