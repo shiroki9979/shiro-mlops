@@ -4,7 +4,7 @@
 - 建立日期：2026-11-22
 - 最後更新：2026-11-22
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；其餘 6 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
+- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 5 已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；其餘 5 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
 - 檢視基準：`45f4b8e9d004e5e316c96d79086b71a9dd0dbebd`
 - 前次檢視：[2026-09-27 架構檢視](2026-09-27-architecture-review.md)
 
@@ -21,7 +21,7 @@
 | 2. 集中儲存時刻轉換 | Strong | 單一儲存形式，跨表 SQL join 可用 | 併入 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160)；已實作（2026-11-22，子 issue [#237](https://github.com/shiroki9979/shiro-mlops/issues/237)–[#242](https://github.com/shiroki9979/shiro-mlops/issues/242)） |
 | 3. 由單一 module 擁有全台逐時實際負載的存取 | Strong | ADR-0008 的口徑規則只在一處成立 | 下次修改全台逐時實際負載的推算或讀取時（[#228](https://github.com/shiroki9979/shiro-mlops/issues/228)） |
 | 4. 以資料集定義推導營運資料檢視器的查詢 | Strong | series 端點一次實作，8 個資料集共用 | M9 series 端點開工前（[#229](https://github.com/shiroki9979/shiro-mlops/issues/229)） |
-| 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)） |
+| 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)）；已實作（2026-11-22） |
 | 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 下次新增擷取來源或修改 asset 的 fetch 時（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)）；已實作（2026-11-22） |
 | 7. 已發布預報擁有預報步與提前時數 | Worth exploring | 提前時數只有一份定義 | 下次修改提前時數或已發布預報的欄位契約時（[#232](https://github.com/shiroki9979/shiro-mlops/issues/232)） |
 | 8. TimeSeriesRepository 收斂為 composition root | Worth exploring | 刪除 12 個 pass-through 方法 | 候選 2、3 完成後（[#233](https://github.com/shiroki9979/shiro-mlops/issues/233)） |
@@ -168,6 +168,9 @@ After ：資料集定義 ×8 → 資料集查詢 module〔keyset 分頁／cursor
 綁定內部的測試（`test_data_explorer_exact_window.py`、completeness helper 測試、斷言白名單內容的測試）可移除；`cursor.py` 的測試保留。
 
 ## 候選 5：集中已部署任務的模型狀態與預測
+
+> **狀態（2026-11-22）**：已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作。[served_tasks.py](../../src/shiro_mlops/service/served_tasks.py) 的 `ServedTasks` 擁有模型狀態（含 sha256）、就緒判定、預測與錯誤分類，API 以 `create_app` 注入；`/health` 逐任務回報 `model_sha256` 與 `reason`，repository 只在啟動時建立一次。
+> 本節記錄檢視基準當時的狀態；對照 dev `4e2a7d4` 有三處校正：完整的「查 key 再問原因」只在 `_readiness`、`_predict`，`health_check` 只查 key；monkeypatch 為 33 處（含 `tests/scenarios/` 2 處）；#204 改到 `api.py` 的是 `c725139`、`7062546` 兩次。
 
 ### 現況與證據
 

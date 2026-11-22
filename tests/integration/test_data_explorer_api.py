@@ -15,7 +15,7 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.service.api import app
+from shiro_mlops.service.api import create_app
 from shiro_mlops.service.data_explorer.cursor import encode_cursor
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from tests.helpers import (
@@ -50,8 +50,7 @@ def _replace_cursor_key(cursor: str, key: dict[str, str]) -> str:
 def explorer_client(test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch):
     """Enable Data Explorer against an isolated SQLite repository."""
     monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
-    monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
-    with TestClient(app) as client:
+    with TestClient(create_app(repository=test_repo)) as client:
         yield client, test_repo
 
 
@@ -74,9 +73,8 @@ def test_data_explorer_is_unavailable_when_disabled(
     """未啟用時不得暴露 Data Explorer 路由。"""
     monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", False)
     monkeypatch.setattr(settings, "ENVIRONMENT", "test")
-    monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     monkeypatch.setattr("shiro_mlops.core.database.init_db", lambda: None)
-    with TestClient(app) as client:
+    with TestClient(create_app(repository=test_repo)) as client:
         assert client.get("/data/status").status_code == 404
         assert client.get("/health").json()["data_explorer_enabled"] is False
 
@@ -265,9 +263,8 @@ def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
         _upsert_hours(repo, [derived_hour])
         insert_legacy_load_row(engine, legacy_hour, 99999.0)
         monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
-        monkeypatch.setattr("shiro_mlops.service.api.repository_store", repo)
 
-        with TestClient(app) as client:
+        with TestClient(create_app(repository=repo)) as client:
             window = {"start": rfc3339(derived_hour), "end": rfc3339(current_hour)}
             page = client.get("/data/power/load", params=window)
             status = client.get("/data/status")

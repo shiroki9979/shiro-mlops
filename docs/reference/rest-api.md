@@ -22,15 +22,21 @@
     "tasks": {
       "dynamic_horizon_forecast": {
         "task_type": "recursive_regression",
-        "model_loaded": true
+        "model_loaded": true,
+        "model_sha256": "3f6c…（64 字元）",
+        "reason": null
       },
       "high_load_alert": {
         "task_type": "direct_classification",
-        "model_loaded": false
+        "model_loaded": false,
+        "model_sha256": null,
+        "reason": "Model is not loaded or trained yet."
       },
       "load_pattern_anomaly": {
         "task_type": "unsupervised_reconstruction",
-        "model_loaded": true
+        "model_loaded": true,
+        "model_sha256": "9a01…（64 字元）",
+        "reason": null
       }
     },
     "data_explorer_enabled": true
@@ -39,6 +45,7 @@
 
 - 此端點只代表 process liveness，存活時固定回傳 HTTP 200；不得因模型或資料尚未就緒而改回 503。
 - `model_loaded` 為相容欄位，僅代表 `/predict` 所服務的動態視界預報任務模型；`tasks` 以 `task_id` 為鍵，逐一揭露每個已部署任務的任務類型與模型載入狀態。
+- `tasks.<task_id>.model_sha256` 為 API 啟動時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)），與已發布預報的 `model_sha256` 同一定義；沒有模型時為 `null`。`reason` 在沒有模型時說明原因，與該任務 `/ready` 的 `reason` 相同（未訓練或載入失敗，見 [§2](#2-就緒狀態檢查)）；模型已載入時為 `null`。
 - `data_explorer_enabled` 表示當前 process 是否開放 Data Explorer 讀取面（`ENVIRONMENT=local` 或 `DATA_EXPLORER_ENABLED=true`）。
 
 ## 2. 就緒狀態檢查
@@ -51,6 +58,7 @@
 - **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過任務設定 `[policies].stale_anchor_max_lag_hours`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
 - **模型**：API 啟動時依任務設定逐一載入 `DATA_DIR/models/<task_id>/`（[ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）；單一任務的模型目錄不存在或無法載入時，只有該任務維持 `not_ready`，其他任務照常服務。未訓練（模型目錄不存在）時 `reason` 為 `Model is not loaded or trained yet.`；載入失敗時 `reason` 為 `Model failed to load: <例外類型>: <訊息>`，完整 traceback 寫入日誌。兩者皆回傳 HTTP 503，該任務的 `/predict` 以同一字串作為 `detail`。既有 `DATA_DIR/model.joblib` 不載入，首次以新格式重新訓練前 `/ready` 維持 `not_ready`。任務設定無效時 API 啟動失敗。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
+- **資料庫**：API 啟動時確保一次 schema（`init_db`），之後所有 request 共用同一個 repository 與連線池，不再逐 request 執行 DDL。啟動時資料庫無法連線只記錄錯誤，API 之後不會自行補建 schema；資料庫恢復連線後即可讀取既有資料表。
 
 ## 3. 隨需動態視界負載預報
 

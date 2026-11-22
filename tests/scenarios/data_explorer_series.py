@@ -13,7 +13,7 @@ from sqlalchemy import text
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.service.api import app
+from shiro_mlops.service.api import create_app
 from tests.helpers import rfc3339
 
 LOAD_SERIES_PATH = "/data/power/load/series"
@@ -24,8 +24,7 @@ def series_client(repo: TimeSeriesRepository) -> Iterator[TestClient]:
     """HTTP client bound to the given repository without running the app lifespan."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
-        patch.setattr("shiro_mlops.service.api.repository_store", repo)
-        yield TestClient(app)
+        yield TestClient(create_app(repository=repo))
 
 
 @contextmanager

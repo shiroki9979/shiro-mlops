@@ -1,5 +1,6 @@
 """Offline resiliency tests for CWA ingestion failures and degraded or refused serving."""
 
+from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
@@ -26,8 +27,9 @@ from shiro_mlops.pipelines.schedules import (
     cwa_forecast_job,
     cwa_observation_job,
 )
-from shiro_mlops.service.api import app, model_store
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
+from shiro_mlops.service.api import create_app
+from shiro_mlops.service.served_tasks import Loaded, ServedTasks
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from shiro_mlops.tasks.types.base import TaskModel
 from tests.helpers import (
     FixtureCWASource,
@@ -128,17 +130,12 @@ def _stale_forecast_release() -> CWAForecastRelease:
 
 @pytest.fixture
 def serving_repo(
-    test_repo: TimeSeriesRepository,
-    taipower_raw_df: pd.DataFrame,
-    fitted_task_model: TaskModel,
-    monkeypatch: pytest.MonkeyPatch,
+    test_repo: TimeSeriesRepository, taipower_raw_df: pd.DataFrame
 ) -> TimeSeriesRepository:
-    """A loaded model reading persisted nationwide load history, with no weather yet."""
+    """Persisted nationwide load history, with no weather yet."""
     test_repo.upsert_taipower_load(
         with_dynamic_horizon_lookback(taipower_raw_df), default_subject="nationwide"
     )
-    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
-    monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     return test_repo
 
 
@@ -149,18 +146,36 @@ def degraded_weather_repo(serving_repo: TimeSeriesRepository) -> TimeSeriesRepos
     return serving_repo
 
 
-def _request_at(monkeypatch: pytest.MonkeyPatch, request_time: pd.Timestamp) -> None:
-    monkeypatch.setattr("shiro_mlops.service.api.request_clock", lambda: request_time)
+@dataclass
+class _ServingApi:
+    """The API serving a loaded model from ``repository`` as of ``request_time``."""
+
+    repository: TimeSeriesRepository
+    model: TaskModel
+    request_time: pd.Timestamp = FRESH_REQUEST_TIME
+
+    def predict(self, horizon_hours: int = HORIZON_HOURS) -> httpx.Response:
+        return self._client().post(
+            "/predict", json={"horizon_hours": horizon_hours, "location": "Taipei"}
+        )
+
+    def ready(self) -> httpx.Response:
+        return self._client().get("/ready")
+
+    def _client(self) -> TestClient:
+        """Built per request, so task definitions overridden in a test take effect."""
+        served = ServedTasks(
+            deployed_tasks(),
+            {DYNAMIC_HORIZON_FORECAST: Loaded(self.model, "0" * 64)},
+            repository=self.repository,
+            clock=lambda: self.request_time,
+        )
+        return TestClient(create_app(repository=self.repository, served_tasks=served))
 
 
-def _predict(horizon_hours: int = HORIZON_HOURS) -> httpx.Response:
-    return TestClient(app).post(
-        "/predict", json={"horizon_hours": horizon_hours, "location": "Taipei"}
-    )
-
-
-def _ready() -> httpx.Response:
-    return TestClient(app).get("/ready")
+@pytest.fixture
+def api(serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel) -> _ServingApi:
+    return _ServingApi(serving_repo, fitted_task_model)
 
 
 # --- CWA ingestion: bounded retries never mutate persisted data ---------------------------
@@ -243,11 +258,9 @@ def test_second_cwa_product_failure_keeps_forecast_versions_unchanged(
 
 
 def test_stale_forecast_degrades_predict_with_per_field_fallback_sources(
-    degraded_weather_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+    degraded_weather_repo: TimeSeriesRepository, api: _ServingApi
 ) -> None:
-    _request_at(monkeypatch, FRESH_REQUEST_TIME)
-
-    response = _predict()
+    response = api.predict()
 
     assert response.status_code == 200
     body = response.json()
@@ -263,28 +276,22 @@ def test_stale_forecast_degrades_predict_with_per_field_fallback_sources(
 
 
 def test_fresh_forecast_keeps_predict_in_normal_mode(
-    serving_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+    serving_repo: TimeSeriesRepository, api: _ServingApi
 ) -> None:
     """Separates request success from forecast quality: the same success status, normal mode."""
     serving_repo.upsert_cwa_forecast_release(
         _forecast_release(FRESH_REQUEST_TIME - pd.Timedelta(hours=1), 30.0)
     )
-    _request_at(monkeypatch, FRESH_REQUEST_TIME)
-
-    response = _predict()
+    response = api.predict()
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     assert response.json()["mode"] == "normal"
 
 
-def test_missing_forecast_and_fallback_weather_returns_503(
-    serving_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _request_at(monkeypatch, FRESH_REQUEST_TIME)
-
-    predict_response = _predict()
-    ready_response = _ready()
+def test_missing_forecast_and_fallback_weather_returns_503(api: _ServingApi) -> None:
+    predict_response = api.predict()
+    ready_response = api.ready()
 
     assert predict_response.status_code == 503
     assert "No weather coverage" in predict_response.json()["detail"]
@@ -296,12 +303,12 @@ def test_missing_forecast_and_fallback_weather_returns_503(
 
 
 def test_stale_load_anchor_refuses_predict_and_ready(
-    degraded_weather_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+    degraded_weather_repo: TimeSeriesRepository, api: _ServingApi
 ) -> None:
-    _request_at(monkeypatch, STALE_REQUEST_TIME)
+    api.request_time = STALE_REQUEST_TIME
 
-    predict_response = _predict()
-    ready_response = _ready()
+    predict_response = api.predict()
+    ready_response = api.ready()
 
     assert predict_response.status_code == 503
     assert "stale load anchor" in predict_response.json()["detail"].lower()
@@ -316,7 +323,6 @@ def test_newer_legacy_rows_never_anchor_serving(
     legacy_upgraded_engine,
     taipower_raw_df: pd.DataFrame,
     fitted_task_model: TaskModel,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Under ADR-0008, newer legacy rows cannot mask a stale derived-load anchor."""
     repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
@@ -324,12 +330,10 @@ def test_newer_legacy_rows_never_anchor_serving(
     insert_legacy_load_row(
         legacy_upgraded_engine, STALE_REQUEST_TIME.floor("h").to_pydatetime(), load_mw=26500.0
     )
-    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
-    monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
-    _request_at(monkeypatch, STALE_REQUEST_TIME)
+    api = _ServingApi(repository, fitted_task_model, STALE_REQUEST_TIME)
 
-    predict_response = _predict()
-    ready_response = _ready()
+    predict_response = api.predict()
+    ready_response = api.ready()
 
     assert predict_response.status_code == 503
     detail = predict_response.json()["detail"]
@@ -339,13 +343,13 @@ def test_newer_legacy_rows_never_anchor_serving(
 
 
 def test_load_anchor_lag_threshold_is_configurable(
-    degraded_weather_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+    degraded_weather_repo: TimeSeriesRepository, api: _ServingApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     override_task_policies(monkeypatch, stale_anchor_max_lag_hours=6)
-    _request_at(monkeypatch, STALE_REQUEST_TIME)
+    api.request_time = STALE_REQUEST_TIME
 
-    assert _predict().status_code == 200
-    assert _ready().status_code == 200
+    assert api.predict().status_code == 200
+    assert api.ready().status_code == 200
 
 
 def test_load_anchor_lag_threshold_defaults_to_three_hours() -> None:
@@ -358,13 +362,11 @@ def test_load_anchor_lag_threshold_defaults_to_three_hours() -> None:
 
 
 def test_serving_path_never_constructs_a_cwa_client(
-    degraded_weather_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
+    degraded_weather_repo: TimeSeriesRepository, api: _ServingApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def refuse_construction(*_: object, **__: object) -> None:
         raise AssertionError("Serving must read canonical tables instead of calling CWA")
 
     monkeypatch.setattr(CWAClient, "__init__", refuse_construction)
-    _request_at(monkeypatch, FRESH_REQUEST_TIME)
-
-    assert _predict().status_code == 200
-    assert _ready().status_code == 200
+    assert api.predict().status_code == 200
+    assert api.ready().status_code == 200
