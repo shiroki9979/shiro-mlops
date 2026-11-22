@@ -144,7 +144,7 @@ After ：上述呼叫端 → 全台逐時實際負載 module〔口徑內建／�
 ### 現況與證據
 
 一個資料集的知識（表、時間欄、排序鍵、篩選、完整度）散在 4 到 6 個 module。
-以逐時用電負載為例：[specs.py](../../src/shiro_mlops/service/data_explorer/specs.py) 宣告排序，`hourly_load.py`、`catalog.py`、`completeness.py` 各自寫表名與口徑篩選（其中兩段 where 組裝逐行相同），`pagination.py` 的 `CURSOR_TIME_COLS` 另記時間欄。
+以逐時用電負載為例：[specs.py](https://github.com/shiroki9979/shiro-mlops/blob/45f4b8e9d004e5e316c96d79086b71a9dd0dbebd/src/shiro_mlops/service/data_explorer/specs.py) 宣告排序，`hourly_load.py`、`catalog.py`、`completeness.py` 各自寫表名與口徑篩選（其中兩段 where 組裝逐行相同），`pagination.py` 的 `CURSOR_TIME_COLS` 另記時間欄。
 `DATASET_SPECS` 是被動的 dict，不擁有任何行為。
 
 [query.py](../../src/shiro_mlops/service/data_explorer/query.py) 以 14 個鍵的白名單決定哪些篩選寫入 cursor；新增篩選若沒有同步加進白名單，篩選會被靜默丟棄。
