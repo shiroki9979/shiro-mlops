@@ -122,11 +122,10 @@ class DirectClassification:
     health_model: ClassVar[type[DirectClassificationHealth]] = DirectClassificationHealth
 
     def requirements(self, params: DirectClassificationParams) -> InputRequirements:
-        threshold = params.threshold
         return InputRequirements(
             weather=WeatherInput.FORECAST,
             lookback_hours=params.lookback_hours,
-            history_coverage=HistoryCoverage(threshold.window_hours, threshold.window_hours),
+            history_coverage=HistoryCoverage.complete(params.threshold.window_hours),
         )
 
     def train(self, params: DirectClassificationParams, data: TrainingData) -> Trained:

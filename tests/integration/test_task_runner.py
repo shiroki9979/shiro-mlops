@@ -13,6 +13,7 @@ from shiro_mlops.tasks import runner
 from shiro_mlops.tasks.definition import TaskDefinition, WeightedReferencePoint
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import (
+    InsufficientLoadHistoryError,
     MissingLoadHistoryError,
     ObservedInputsIncompleteError,
     StaleLoadAnchorError,
@@ -368,6 +369,74 @@ def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
 
     assert readiness.ready
     assert requested_horizons == [168]
+
+
+@pytest.fixture
+def task_trainable_with_one_gap(task: TaskDefinition) -> TaskDefinition:
+    """The runner task with a threshold the fixture still meets once one load hour is missing."""
+    policies = task.policies.model_copy(update={"min_training_hours": HOURS - 1})
+    return replace(task, policies=policies)
+
+
+def _runtime_missing_load_hour(
+    repository: TimeSeriesRepository, missing: pd.Timestamp
+) -> TaskRuntime:
+    """Persist the 21-day fixture without the actual load of one ``missing`` hour."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    repository.upsert_taipower_load(load[load["datetime"] != missing])
+    repository.upsert_cwa_observation_batch(
+        canonical_observation_batch(weather.assign(location="Taipei"))
+    )
+    return TaskRuntime(repository=repository)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        # 錨點前一小時：第一步的 lag 2。
+        ANCHOR - pd.Timedelta(hours=1),
+        # lookback 最早的一小時：第一步的 lag 168。
+        ANCHOR - pd.Timedelta(hours=167),
+    ],
+)
+def test_missing_load_hour_in_the_lookback_refuses_prediction_and_readiness(
+    task_trainable_with_one_gap: TaskDefinition,
+    test_repo: TimeSeriesRepository,
+    missing: pd.Timestamp,
+) -> None:
+    """Missing actual load has no substitute, so the recursion never stands in 0 MW for a lag."""
+    runtime = _runtime_missing_load_hour(test_repo, missing)
+    model = train_task(task_trainable_with_one_gap, runtime, as_of=FRESH_AS_OF).model
+
+    with pytest.raises(
+        InsufficientLoadHistoryError, match="167 nationwide load hours in the 168-hour"
+    ):
+        predict_task(
+            task_trainable_with_one_gap,
+            model,
+            runtime,
+            as_of=FRESH_AS_OF,
+            horizon_hours=HORIZON_HOURS,
+        )
+
+    readiness = check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF)
+    assert not readiness.ready
+    assert readiness.mode is None
+    assert "168-hour window" in readiness.reason
+
+
+def test_missing_load_hour_before_the_lookback_still_predicts(
+    task_trainable_with_one_gap: TaskDefinition, test_repo: TimeSeriesRepository
+) -> None:
+    runtime = _runtime_missing_load_hour(test_repo, ANCHOR - pd.Timedelta(hours=168))
+    model = train_task(task_trainable_with_one_gap, runtime, as_of=FRESH_AS_OF).model
+
+    outcome = predict_task(
+        task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
+    )
+
+    assert len(outcome.predictions) == HORIZON_HOURS
+    assert check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF).ready
 
 
 def test_missing_model_is_not_ready(task: TaskDefinition, runtime: TaskRuntime) -> None:

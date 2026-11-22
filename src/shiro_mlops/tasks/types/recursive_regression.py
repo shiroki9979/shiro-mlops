@@ -25,6 +25,7 @@ from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
     HealthStatus,
+    HistoryCoverage,
     InputRequirements,
     PredictionData,
     Trained,
@@ -92,8 +93,13 @@ class RecursiveRegression:
     health_model: ClassVar[type[RecursiveRegressionHealth]] = RecursiveRegressionHealth
 
     def requirements(self, params: RecursiveRegressionParams) -> InputRequirements:
+        # WHY-NOT(lookback): 要求整段 lookback 完整而非只查各步用到的 lag 小時；實際負載無替代來源
+        # （GLOSSARY），滾動窗同樣不得以缺值推演，且與回測起點有效性一致。
+        lookback = params.lookback_hours
         return InputRequirements(
-            weather=WeatherInput.FORECAST, lookback_hours=params.lookback_hours
+            weather=WeatherInput.FORECAST,
+            lookback_hours=lookback,
+            history_coverage=HistoryCoverage.complete(lookback),
         )
 
     def train(self, params: RecursiveRegressionParams, data: TrainingData) -> Trained:

@@ -25,7 +25,11 @@ from shiro_mlops.pipelines.schedules import (
 from shiro_mlops.service.api import app, model_store
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.types.base import TaskModel
-from tests.helpers import insert_legacy_load_row, override_task_policies
+from tests.helpers import (
+    insert_legacy_load_row,
+    override_task_policies,
+    with_dynamic_horizon_lookback,
+)
 
 # taipower_sample.json 的最後一筆實際負載即為遞迴預報起點。
 LOAD_ANCHOR = pd.Timestamp("2026-08-21 23:00")
@@ -124,7 +128,9 @@ def serving_repo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> TimeSeriesRepository:
     """A loaded model reading persisted nationwide load history, with no weather yet."""
-    test_repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
+    test_repo.upsert_taipower_load(
+        with_dynamic_horizon_lookback(taipower_raw_df), default_subject="nationwide"
+    )
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", test_repo)
     return test_repo

@@ -28,6 +28,7 @@ from tests.helpers import (
     canonical_observation_batch,
     hourly_load_with_weather,
     override_task_policies,
+    with_dynamic_horizon_lookback,
 )
 
 HIGH_LOAD_ALERT = "high_load_alert"
@@ -82,7 +83,7 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
         ]
     )
     repository.fetch_latest_load.return_value = latest_load
-    repository.fetch_load_range.return_value = latest_load
+    repository.fetch_load_range.return_value = with_dynamic_horizon_lookback(latest_load)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
     monkeypatch.setattr(
         "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-20 13:00")
@@ -122,7 +123,9 @@ def _serve_fitted_forecaster(
 ) -> MagicMock:
     """Attach a fitted model and a repository holding fresh load and forecast rows."""
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
-    return _serve_fresh_inputs(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
+    return _serve_fresh_inputs(
+        with_dynamic_horizon_lookback(taipower_raw_df), cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
 
 
 def _serve_fresh_inputs(
@@ -336,6 +339,29 @@ def test_task_predict_answers_503_when_serving_inputs_are_unavailable(
     assert task.json()["detail"] == alias.json()["detail"] == str(error)
 
 
+def test_dynamic_horizon_with_a_missing_lookback_hour_answers_503(
+    fitted_task_model: TaskModel,
+    taipower_raw_df: pd.DataFrame,
+    cwa_obs_df: pd.DataFrame,
+    cwa_forecast_df: pd.DataFrame,
+    monkeypatch,
+) -> None:
+    """One missing actual load hour before a fresh anchor makes predict and ready return 503."""
+    load = with_dynamic_horizon_lookback(taipower_raw_df)
+    missing = load["datetime"].max() - pd.Timedelta(hours=24)
+    monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
+    _serve_fresh_inputs(load[load["datetime"] != missing], cwa_obs_df, cwa_forecast_df, monkeypatch)
+    client = TestClient(app)
+
+    predicted = client.post(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/predict", json={"horizon_hours": 6})
+    ready = client.get(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/ready")
+
+    assert predicted.status_code == 503
+    assert "167 nationwide load hours in the 168-hour window" in predicted.json()["detail"]
+    assert ready.status_code == 503
+    assert "168-hour window" in ready.json()["reason"]
+
+
 def test_unexpected_task_errors_are_logged_with_their_traceback(monkeypatch, caplog) -> None:
     """Unexpected errors retain their traceback in logs when returned as not_ready or HTTP 500."""
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
@@ -398,7 +424,9 @@ def test_startup_loads_each_task_model_independently(
     corrupt = model_directory(settings.models_dir, DYNAMIC_HORIZON_FORECAST)
     corrupt.mkdir(parents=True)
     (corrupt / "metadata.json").write_text("not json", encoding="utf-8")
-    _serve_fresh_inputs(taipower_raw_df, cwa_obs_df, cwa_forecast_df, monkeypatch)
+    _serve_fresh_inputs(
+        with_dynamic_horizon_lookback(taipower_raw_df), cwa_obs_df, cwa_forecast_df, monkeypatch
+    )
 
     with TestClient(app) as client:
         health = client.get("/health").json()

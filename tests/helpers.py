@@ -276,6 +276,20 @@ def hourly_load_with_weather(hours: int, last_hour: datetime) -> tuple[pd.DataFr
     return load, weather
 
 
+def with_dynamic_horizon_lookback(load: pd.DataFrame) -> pd.DataFrame:
+    """Extend contiguous hourly load back over the dynamic-horizon lookback ending at its last hour.
+
+    Earlier hours cycle through the given rows so the sequence still ends on the given last row;
+    the given rows keep their values and serving finds every lookback hour present.
+    """
+    hours = deployed_tasks()[DYNAMIC_HORIZON_FORECAST].params.lookback_hours
+    given = load.sort_values("datetime").reset_index(drop=True)
+    times = pd.date_range(end=given["datetime"].max(), periods=max(hours, len(given)), freq="h")
+    offsets_from_last_row = np.arange(-len(times), 0)
+    positions = offsets_from_last_row % len(given)
+    return given.iloc[positions].assign(datetime=times).reset_index(drop=True)
+
+
 def override_task_policies(
     monkeypatch, task_id: str = DYNAMIC_HORIZON_FORECAST, **updates: object
 ) -> TaskDefinition:
