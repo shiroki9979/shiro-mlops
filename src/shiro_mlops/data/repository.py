@@ -390,7 +390,7 @@ class TimeSeriesRepository:
 
         records: list[dict[str, Any]] = [
             {
-                "time": to_storage_time(row["time"]),
+                "time": row["time"].to_pydatetime(),
                 "subject": str(row[SUBJECT_COL]),
                 "load_mw": float(row[LOAD_MW_COL]),
                 "source": source,
