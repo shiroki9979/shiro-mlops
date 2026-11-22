@@ -50,6 +50,7 @@ uv run --package lab python lab/2026-11-17-dhf-weather-calendar/study.py --as-of
 - **研究腳本**：[`study.py`](study.py)（Jupytext `percent` 格式）。
 - **預報視界**：`24` 小時；最低累積沿用 `policies.min_training_hours = 672`，不覆寫。
 - **起點**：取四個候選合格起點的交集，每 6 小時取一個整點；評估起點為最後 7 個日曆日，搜尋起點為更早且目標時段不重疊者。交集不足 7 個日曆日時，腳本改以一半的日曆日作為評估起點，並輸出 `adoption_eligible: false`。
+- **起點有效性**：由預測輸入關卡判定，與 serving 接受的起點相同（[研究空間 §2](../../docs/reference/lab.md#2-滾動起點回測labbacktestpy)）。
 - **MLflow**：experiment `lab/dhf-weather-calendar`，每個候選一個 run，不建立 registered model。
 - **觀測氣象聲明**：回測使用觀測氣象，結果為「氣象已知」條件下的條件式數字，不代表正式 serving 誤差。
 

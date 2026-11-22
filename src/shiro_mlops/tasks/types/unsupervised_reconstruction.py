@@ -133,7 +133,11 @@ class UnsupervisedReconstruction:
 
     def requirements(self, params: UnsupervisedReconstructionParams) -> InputRequirements:
         return InputRequirements(
-            weather=WeatherInput.OBSERVED, lookback_hours=params.lookback_hours
+            weather=WeatherInput.OBSERVED,
+            lookback_hours=params.lookback_hours,
+            # WHY-NOT(history_coverage): 不要求 lookback 完整；任務類型只跳過有缺口的時間窗，
+            # 要求完整會讓負載缺一小時就使整個異常偵測任務不可用。
+            history_coverage=None,
         )
 
     def train(self, params: UnsupervisedReconstructionParams, data: TrainingData) -> Trained:
