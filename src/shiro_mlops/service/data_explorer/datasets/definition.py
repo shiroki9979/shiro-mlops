@@ -185,11 +185,17 @@ class AlwaysComplete:
 
 @dataclass(frozen=True, kw_only=True)
 class AuditHeader:
-    """The newest audit header a dataset's completeness is read from."""
+    """The newest audit header a dataset's completeness is read from.
+
+    `status_column` holds the header's audit status; `incomplete_status` is its value for
+    a header that judged its batch or release incomplete.
+    """
 
     table: str
     order: tuple[str, ...]
     ids_column: str
+    status_column: str
+    incomplete_status: str
     incomplete_placeholder: str
 
 
@@ -233,9 +239,9 @@ class Dataset:
     column holding an instant is in `instant_columns` so cursors carry it at microsecond
     precision. `list_columns` is the list SELECT, which must include every sort column.
     `project` turns one page of rows into response items, and `gaps` declares which slots
-    the list reports missing. `status` and `freshness` declare how `GET /data/status` judges
-    completeness and where it reads the newest row (by default the dataset's own table and
-    time column). `series` declares the chart series endpoint, and `resolve_version`
+    the list reports missing. `status_policy` and `freshness` declare how `GET /data/status`
+    judges completeness and where it reads the newest row (by default the dataset's own
+    table and time column). `series` declares the chart series endpoint, and `resolve_version`
     resolves the forecast version both list and series read. Inconsistent declarations
     raise `ValueError`.
     """
@@ -252,7 +258,7 @@ class Dataset:
     instant_columns: frozenset[str]
     list_columns: tuple[str, ...]
     project: PageProjector
-    status: StatusPolicy
+    status_policy: StatusPolicy
     pinned: tuple[Pinned, ...] = ()
     filters: tuple[Filter, ...] = ()
     gaps: GapPolicy | None = None
@@ -290,6 +296,17 @@ class Dataset:
     def gap_clauses(self, db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
         """Pinned clauses plus the present filters that narrow the gap scope."""
         return self._clauses(db, filters, [item for item in self.filters if item.narrows_gaps])
+
+    def expected_gap_members(self, filters: Mapping[str, Any]) -> tuple[str, ...]:
+        """Gap members each slot expects; a narrowing members filter expects only its value."""
+        if self.gaps is None or self.gaps.members is None:
+            return ()
+        members = self.gaps.members
+        for item in self.filters:
+            value = filters.get(item.name)
+            if item.narrows_gaps and item.name == members.column and value not in (None, ""):
+                return (str(value),)
+        return members.expected()
 
     def _clauses(
         self,

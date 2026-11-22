@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
@@ -160,3 +161,28 @@ def test_observation_list_without_station_expects_every_allowlisted_station_hour
     assert page["missing_slots"] == [
         f"{rfc3339(observed)}:{station_id}" for station_id in allowlisted if station_id != "466920"
     ]
+
+
+def test_observation_status_without_an_audit_header_is_complete(
+    client: TestClient, test_repo: TimeSeriesRepository
+) -> None:
+    """有觀測列但沒有批次審計表頭時，觀測狀態仍為 complete，不列出缺漏 id。"""
+    observed_at = datetime(2026, 9, 20, 12)
+    test_repo.upsert_cwa_observation_batch(
+        CWAObservationBatch(
+            fetched_at=observed_at,
+            status="incomplete",
+            missing_station_ids=("467490",),
+            raw_payload={},
+            observations=(_observation(observed_at),),
+        )
+    )
+    with test_repo.engine.begin() as conn:
+        conn.execute(text("DELETE FROM raw_cwa_observation_batch"))
+
+    observations = _status(client)["cwa_observations"]
+
+    assert observations["availability"] == "available"
+    assert observations["completeness"] == "complete"
+    assert observations["missing_identifiers"] == []
+    assert observations["missing_slot_count"] == 0

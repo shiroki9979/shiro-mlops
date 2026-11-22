@@ -115,7 +115,7 @@ CWA_OBSERVATIONS = Dataset(
         "created_at",
     ),
     project=each(_observation_item),
-    status=LatestAudit(OBSERVATION_BATCH_AUDIT),
+    status_policy=LatestAudit(OBSERVATION_BATCH_AUDIT),
     filters=(Exact(name="station_id", narrows_gaps=True),),
     gaps=GapPolicy(
         members=GapMembers(column="station_id", expected=_allowlisted_station_ids, listed=True)
@@ -339,7 +339,7 @@ CWA_FORECASTS = Dataset(
         "created_at",
     ),
     project=each(_forecast_item),
-    status=LatestAudit(FORECAST_RELEASE_AUDIT, flags_stale_release=True),
+    status_policy=LatestAudit(FORECAST_RELEASE_AUDIT, flags_stale_release=True),
     freshness=FORECAST_RELEASES,
     filters=(
         Exact(name="dataset_id"),
