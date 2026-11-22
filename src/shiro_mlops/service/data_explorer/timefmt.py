@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
-
-TAIWAN = ZoneInfo(TAIWAN_TZ)
+from shiro_mlops.core.storage_time import TAIWAN, to_storage_time
 
 
 def now_taiwan() -> datetime:
@@ -25,6 +22,11 @@ def parse_api_time(value: datetime | str) -> datetime:
     if timestamp.tzinfo is None:
         return timestamp.to_pydatetime()
     return timestamp.tz_convert(TAIWAN).tz_localize(None).to_pydatetime()
+
+
+def parse_api_storage_time(value: datetime | str) -> datetime:
+    """Parse an API timestamp as Taiwan local time and convert it to its stored instant."""
+    return to_storage_time(parse_api_time(value))
 
 
 def format_taiwan_time(value: datetime | str, *, timespec: str = "seconds") -> str:

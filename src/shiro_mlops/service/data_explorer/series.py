@@ -17,14 +17,13 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.storage_time import from_storage_time
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import TimeWindow, resolve_window
 from shiro_mlops.service.data_explorer.schemas import Series, SeriesPoint, SeriesResponse
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
-from shiro_mlops.service.data_explorer.values import to_float
+from shiro_mlops.service.data_explorer.values import format_row_time, row_time, to_float
 
 SERIES_MAX_DAYS = 92
 MAX_POINTS_PER_SERIES = 1_200
@@ -247,7 +246,7 @@ class SeriesReader:
 
     def _group_key(self, row: dict[str, Any], groups: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(
-            format_taiwan_time(from_storage_time(row[column], column=column), timespec="auto")
+            format_row_time(row, column, timespec="auto")
             if column in self.spec.instant_group_columns
             else str(row[column])
             for column in groups
@@ -321,7 +320,7 @@ class SeriesReader:
             for key, key_rows in by_key.items():
                 observed = [
                     (
-                        from_storage_time(row["bucket_at"], column="bucket_at"),
+                        row_time(row, "bucket_at"),
                         to_float(row[f"v{index}"]),
                     )
                     for row in key_rows

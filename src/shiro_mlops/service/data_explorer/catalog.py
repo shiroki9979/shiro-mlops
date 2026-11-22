@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     recent_completed_hours,
@@ -28,7 +27,7 @@ from shiro_mlops.service.data_explorer.schemas import DatasetStatus, StatusRespo
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
-from shiro_mlops.service.data_explorer.values import json_list
+from shiro_mlops.service.data_explorer.values import json_list, row_time
 
 
 def compose_dataset_status(
@@ -55,8 +54,8 @@ def compose_dataset_status(
             overall=derive_overall("empty", freshness.state, "unknown"),
             href=spec["href"],
         )
-    source_at = from_storage_time(latest["source_at"], column="source_at")
-    ingested_at = from_storage_time(latest["ingested_at"], column="ingested_at")
+    source_at = row_time(latest, "source_at")
+    ingested_at = row_time(latest, "ingested_at")
     freshness = evaluate_freshness(
         cadence_seconds=spec["cadence"],
         as_of=as_of,
@@ -125,20 +124,17 @@ class DatasetStatusCatalog:
         )
         missing: list[str] = []
         if latest:
-            latest_source = from_storage_time(latest["source_at"], column="source_at")
+            latest_source = row_time(latest, "source_at")
+            clauses, params = self.db.time_window(
+                "observed_at", TimeWindow(latest_source - timedelta(hours=24), latest_source)
+            )
             earliest = self.db.fetch_one(
                 "SELECT MIN(observed_at) AS source_at "
-                "FROM raw_taipower_supply_demand_snapshot "
-                "WHERE observed_at >= :start_time AND observed_at <= :end_time",
-                {
-                    "start_time": to_storage_time(latest_source - timedelta(hours=24)),
-                    "end_time": to_storage_time(latest_source),
-                },
+                f"FROM raw_taipower_supply_demand_snapshot WHERE {' AND '.join(clauses)}",
+                params,
             )
             if earliest and earliest["source_at"] is not None:
-                window = TimeWindow(
-                    from_storage_time(earliest["source_at"], column="source_at"), latest_source
-                )
+                window = TimeWindow(row_time(earliest, "source_at"), latest_source)
                 missing = ten_minute_gaps(self.db, window)
         return compose_dataset_status("national_supply_demand", as_of, latest, missing)
 
@@ -149,7 +145,7 @@ class DatasetStatusCatalog:
         )
         missing: list[str] = []
         if latest:
-            slot = from_storage_time(latest["source_at"], column="source_at")
+            slot = row_time(latest, "source_at")
             present = regional_slot_map(self.db, TimeWindow(slot, slot)).get(slot, set())
             missing = missing_regional_identifiers(present)
         status = compose_dataset_status("regional_supply_demand", as_of, latest, missing)
@@ -200,7 +196,7 @@ class DatasetStatusCatalog:
         forecasts = compose_dataset_status("cwa_forecasts", as_of, latest, missing)
         audits = compose_dataset_status("cwa_forecast_audits", as_of, latest, missing)
         if latest:
-            source_at = from_storage_time(latest["source_at"], column="source_at")
+            source_at = row_time(latest, "source_at")
             # Dataset-level hint only; per-request degradation is judged per supplied value.
             forecasts.latest_release_stale = forecast_is_stale(source_at, as_of)
         return forecasts, audits
@@ -225,7 +221,7 @@ class DatasetStatusCatalog:
         if row is None:
             return None
         return {
-            "fetched_at": from_storage_time(row["fetched_at"], column="fetched_at"),
+            "fetched_at": row_time(row, "fetched_at"),
             "status": row["status"],
             "missing_station_ids": [str(item) for item in json_list(row["missing_station_ids"])],
         }

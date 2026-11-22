@@ -22,7 +22,7 @@ def to_storage_time(value: datetime | pd.Timestamp) -> datetime:
 
     A naive value is Taiwan local time; an aware value keeps the instant it states.
     """
-    if value is None or pd.isna(value):
+    if _is_null(value):
         raise ValueError("A Taiwan-local instant is required")
     instant = value.to_pydatetime() if isinstance(value, pd.Timestamp) else value
     local = instant if instant.tzinfo is not None else instant.replace(tzinfo=TAIWAN)
@@ -43,14 +43,12 @@ def from_storage_time(value: object, *, column: str) -> datetime:
     """
     if _is_null(value):
         raise ValueError(f"Stored instant {column} is NULL in a NOT NULL time column")
-    stored = pd.Timestamp(value)
-    utc = stored.tz_localize(UTC) if stored.tzinfo is None else stored.tz_convert(UTC)
-    return utc.tz_convert(TAIWAN).tz_localize(None).to_pydatetime()
+    return _taiwan_local(value)
 
 
 def from_storage_time_or_none(value: object) -> datetime | None:
     """Read a nullable column's stored instant as Taiwan-local naive, NULL as ``None``."""
-    return None if _is_null(value) else from_storage_time(value, column="nullable column")
+    return None if _is_null(value) else _taiwan_local(value)
 
 
 def from_storage_time_series(stored: pd.Series) -> pd.Series:
@@ -102,6 +100,12 @@ def register_sqlite_datetime_adapter() -> None:
 
 def _sqlite_datetime_text(value: datetime) -> str:
     return value.isoformat(" ")
+
+
+def _taiwan_local(value: object) -> datetime:
+    stored = pd.Timestamp(value)
+    utc = stored.tz_localize(UTC) if stored.tzinfo is None else stored.tz_convert(UTC)
+    return utc.tz_convert(TAIWAN).tz_localize(None).to_pydatetime()
 
 
 def _is_null(value: object) -> bool:
