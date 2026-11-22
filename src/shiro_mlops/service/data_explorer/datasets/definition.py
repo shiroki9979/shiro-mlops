@@ -297,6 +297,17 @@ class Dataset:
         """Pinned clauses plus the present filters that narrow the gap scope."""
         return self._clauses(db, filters, [item for item in self.filters if item.narrows_gaps])
 
+    def expected_gap_members(self, filters: Mapping[str, Any]) -> tuple[str, ...]:
+        """Gap members each slot expects; a narrowing members filter expects only its value."""
+        if self.gaps is None or self.gaps.members is None:
+            return ()
+        members = self.gaps.members
+        for item in self.filters:
+            value = filters.get(item.name)
+            if item.narrows_gaps and item.name == members.column and value not in (None, ""):
+                return (str(value),)
+        return members.expected()
+
     def _clauses(
         self,
         db: ExplorerDb,

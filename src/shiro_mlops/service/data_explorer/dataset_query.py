@@ -294,15 +294,9 @@ def _present_members(
 def _absent_members(
     dataset: Dataset, gaps: GapPolicy, found: set[str], filters: Mapping[str, Any]
 ) -> list[str]:
-    """Expected members missing from one slot; a narrowing member filter expects only its value."""
-    if gaps.members is None:
-        return []
-    expected = gaps.members.expected()
-    for item in dataset.filters:
-        value = filters.get(item.name)
-        if item.narrows_gaps and item.name == gaps.members.column and value not in (None, ""):
-            expected = (str(value),)
-    return [member for member in expected if member not in found]
+    """Expected members missing from one slot."""
+    del gaps
+    return [member for member in dataset.expected_gap_members(filters) if member not in found]
 
 
 def _latest_row(db: ExplorerDb, source: FreshnessSource) -> Row | None:
