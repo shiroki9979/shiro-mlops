@@ -55,7 +55,6 @@ def test_complete_inputs_are_admitted_with_load_history_cropped_to_the_lookback(
 
     assert data.anchor == ANCHOR
     assert data.horizon_hours == HORIZON_HOURS
-    # (anchor - 6h, anchor]：06:00 與更早的列不交給任務類型。
     assert list(data.load_history["datetime"]) == list(
         pd.date_range("2026-11-20 07:00", "2026-11-20 12:00", freq="h")
     )
@@ -80,8 +79,10 @@ def test_a_missing_load_hour_in_the_lookback_is_refused(missing: pd.Timestamp, g
         InsufficientLoadHistoryError,
         match=r"Only 5 nationwide load hours in the 6-hour window ending at anchor "
         r"2026-11-20T12:00:00; 6 required\.",
-    ):
+    ) as refused:
         _admit(load=load)
+
+    assert refused.value.first_missing == missing
 
 
 def test_missing_load_before_the_lookback_is_admitted() -> None:

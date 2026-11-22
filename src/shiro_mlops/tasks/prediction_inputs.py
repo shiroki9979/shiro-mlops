@@ -16,7 +16,6 @@ import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.tasks.types.base import (
-    HistoryCoverage,
     InputRequirements,
     PredictionData,
     WeatherInput,
@@ -24,11 +23,23 @@ from shiro_mlops.tasks.types.base import (
 
 
 class TaskUnavailableError(RuntimeError):
-    """Serving inputs cannot support a prediction right now; the caller should answer 503."""
+    """The inputs at a load anchor cannot support a prediction.
+
+    Serving answers 503 for the request time; the rolling-origin backtest wraps it
+    as a ``ValueError`` naming the origin (docs/reference/lab.md §2).
+    """
 
 
 class InsufficientLoadHistoryError(TaskUnavailableError):
-    """Too few actual load hours before the anchor for the task type's history window."""
+    """Too few actual load hours before the anchor for the task type's history window.
+
+    ``first_missing`` is the earliest window hour without actual load; it stays out
+    of the message because the message is serving's 503 text.
+    """
+
+    def __init__(self, message: str, *, first_missing: pd.Timestamp | None = None) -> None:
+        super().__init__(message)
+        self.first_missing = first_missing
 
 
 class WeatherUnavailableError(TaskUnavailableError):
@@ -53,40 +64,55 @@ def admit_prediction_inputs(
     ``load`` covers at least ``(anchor - lookback_hours, anchor]`` and may hold NaN
     or earlier rows; ``weather`` holds the target hours for ``FORECAST`` tasks and
     the observations in the lookback for ``OBSERVED`` ones. ``subject`` only
-    names the series in refusal messages.
+    names the series in refusal messages. Every rule applies here, including
+    ``require_load_coverage``, so a caller that checked load earlier loses nothing.
+
+    A ``FORECAST`` task with ``horizon_hours=None`` raises a plain ``ValueError``:
+    that is a caller contract error, not inputs the gate can refuse.
     """
-    history = _lookback(load, anchor, requirements.lookback_hours)
-    if requirements.history_coverage is not None:
-        _require_history_coverage(requirements.history_coverage, history, anchor, subject)
+    require_load_coverage(requirements, anchor=anchor, load=load, subject=subject)
     if requirements.weather is WeatherInput.FORECAST:
         _require_target_weather(weather, weather_fields, anchor, horizon_hours, subject)
     return PredictionData(
         anchor=anchor,
-        load_history=history,
+        load_history=_window(load, anchor, requirements.lookback_hours),
         weather=weather[[DATETIME_COL, *weather_fields]],
         horizon_hours=horizon_hours,
     )
 
 
-def _lookback(load: pd.DataFrame, anchor: pd.Timestamp, hours: int) -> pd.DataFrame:
-    """Rows in ``(anchor - hours, anchor]``: the only load history a task type receives."""
+def require_load_coverage(
+    requirements: InputRequirements,
+    *,
+    anchor: pd.Timestamp,
+    load: pd.DataFrame,
+    subject: str,
+) -> None:
+    """Raise ``InsufficientLoadHistoryError`` when the lookback lacks the declared load hours.
+
+    The load rule alone, so serving can refuse a load shortfall before it spends
+    a weather query; ``history_coverage=None`` checks nothing.
+    """
+    coverage = requirements.history_coverage
+    if coverage is None:
+        return
+    window = _window(load, anchor, coverage.window_hours)
+    valid = pd.DatetimeIndex(pd.to_datetime(window.loc[window[LOAD_MW_COL].notna(), DATETIME_COL]))
+    valid_hours = valid.nunique()
+    if valid_hours < coverage.min_valid_hours:
+        hours = pd.date_range(end=anchor, periods=coverage.window_hours, freq="h")
+        raise InsufficientLoadHistoryError(
+            f"Only {valid_hours} {subject} load hours in the {coverage.window_hours}-hour "
+            f"window ending at anchor {anchor.isoformat()}; {coverage.min_valid_hours} required.",
+            first_missing=hours.difference(valid).min(),
+        )
+
+
+def _window(load: pd.DataFrame, anchor: pd.Timestamp, hours: int) -> pd.DataFrame:
+    """Rows in ``(anchor - hours, anchor]``."""
     times = pd.to_datetime(load[DATETIME_COL])
     inside = (times > anchor - timedelta(hours=hours)) & (times <= anchor)
     return load.loc[inside].reset_index(drop=True)
-
-
-def _require_history_coverage(
-    coverage: HistoryCoverage, history: pd.DataFrame, anchor: pd.Timestamp, subject: str
-) -> None:
-    """Refuse rather than let the task type fail: missing past load has no substitute."""
-    window_start = anchor - timedelta(hours=coverage.window_hours)
-    times = pd.to_datetime(history.loc[history[LOAD_MW_COL].notna(), DATETIME_COL])
-    valid_hours = times[(times > window_start) & (times <= anchor)].nunique()
-    if valid_hours < coverage.min_valid_hours:
-        raise InsufficientLoadHistoryError(
-            f"Only {valid_hours} {subject} load hours in the {coverage.window_hours}-hour "
-            f"window ending at anchor {anchor.isoformat()}; {coverage.min_valid_hours} required."
-        )
 
 
 def _require_target_weather(

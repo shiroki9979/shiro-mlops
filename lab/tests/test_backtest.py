@@ -132,6 +132,7 @@ def test_rolling_origin_backtest_rejects_origin_with_missing_lookback_load(
             horizon_hours=HORIZON_HOURS,
         )
     assert "lookback" in str(exc_info.value).lower()
+    assert f"first missing: {missing_lookback_hour.isoformat()}" in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, InsufficientLoadHistoryError)
 
 
@@ -173,6 +174,7 @@ def test_rolling_origin_backtest_rejects_horizon_weather_gap_beyond_alignment_to
         )
 
     assert "weather" in str(exc_info.value).lower()
+    assert f"target hour {(ORIGIN_2 + pd.Timedelta(hours=3)).isoformat()}" in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, WeatherUnavailableError)
 
 
@@ -429,7 +431,7 @@ def test_training_row_count_grows_with_the_origin_and_drops_rows_without_weather
 def test_eligible_origins_characterize_load_and_weather_gaps(
     fast_task: TaskDefinition,
 ) -> None:
-    """Seam: eligible_origins on a snapshot with load and weather gaps; recorded before #268's refactor.
+    """Seam: eligible_origins on a snapshot with load and weather gaps.
 
     The set is a characterization: the prediction input gate must accept exactly the
     origins the backtest's own checks accepted. Index 60 (missing row) and 270 (NaN load)

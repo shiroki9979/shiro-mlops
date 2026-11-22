@@ -425,6 +425,34 @@ def test_missing_load_hour_in_the_lookback_refuses_prediction_and_readiness(
     assert "168-hour window" in readiness.reason
 
 
+def test_missing_load_hour_in_the_lookback_refuses_before_reading_weather(
+    task_trainable_with_one_gap: TaskDefinition,
+    test_repo: TimeSeriesRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A load shortfall is reported first, so a refused request costs no weather query."""
+    runtime = _runtime_missing_load_hour(test_repo, ANCHOR - pd.Timedelta(hours=1))
+    model = train_task(task_trainable_with_one_gap, runtime, as_of=FRESH_AS_OF).model
+    weather_reads: list[object] = []
+    monkeypatch.setattr(
+        runner, "resolve_weather", lambda *args, **kwargs: weather_reads.append(kwargs)
+    )
+
+    with pytest.raises(InsufficientLoadHistoryError):
+        predict_task(
+            task_trainable_with_one_gap,
+            model,
+            runtime,
+            as_of=FRESH_AS_OF,
+            horizon_hours=HORIZON_HOURS,
+        )
+    assert not check_task_ready(
+        task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF
+    ).ready
+
+    assert weather_reads == []
+
+
 def test_missing_load_hour_before_the_lookback_still_predicts(
     task_trainable_with_one_gap: TaskDefinition, test_repo: TimeSeriesRepository
 ) -> None:

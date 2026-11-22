@@ -52,7 +52,7 @@
 - `requirements(params) -> InputRequirements(weather, lookback_hours, history_coverage)`：預測時使用預報（`FORECAST`）或觀測（`OBSERVED`）天氣，以及 runner 有界讀取歷史所需的小時數。`history_coverage`（必填、無預設值，型別為 `HistoryCoverage(window_hours, min_valid_hours) | None`；漏寫時建構 `InputRequirements` 即拋出 `TypeError`，不會靜默跳過檢查）要求錨點往前 `window_hours`（`(anchor - window_hours, anchor]`）內至少 `min_valid_hours` 個有實際負載的小時（`HistoryCoverage.complete(window_hours)` 表示每小時都要有）；不足時預測輸入關卡拋出 `InsufficientLoadHistoryError`，`/tasks/{task_id}/ready` 與 predict 皆回 503，任務類型不會收到歷史不足的 `PredictionData`（見下方預測輸入關卡）。明寫 `history_coverage=None` 表示刻意不檢查負載 lookback 完整性，任務類型須在旁以註解說明原因（例如容許缺口、自行跳過受影響的時間窗）。
 - `train(params, TrainingData) -> Trained(model, metrics)`：負責特徵、標籤、fit 與評估。`TrainingData` 含 `load`（`datetime`、`subject`、`load_mw`）、`weather`（`datetime` 與 `weather.fields`，一律為觀測天氣）與 `validation_start`；target 時間 `>= validation_start` 者為驗證列，任務類型不得自行切分。
 - `health_model`、`assess_health(thresholds, metrics) -> HealthAssessment(status, reason)`：健康判定規則屬於任務類型，門檻來自任務設定 `[health]`；`status` 為 `HealthStatus.HEALTHY` 或 `WARNING`，`reason` 指出決定判定的指標與門檻。缺少判定所需指標時必須回報 `WARNING`，不得視為健康。
-- `load(directory) -> TaskModel`；`TaskModel.predict(PredictionData) -> DataFrame`、`TaskModel.save(directory)`。`PredictionData` 含 `anchor`、`load_history`、`weather`、`horizon_hours`，一律經預測輸入關卡交付，已保證負載起點新鮮且天氣欄位完整，任務類型不得以常數補值；`load_history` 只含 `(anchor - lookback_hours, anchor]` 的列。`FORECAST` 任務的 `weather` 為錨點之後的預報（或降級來源）；`OBSERVED` 任務的 `weather` 為 `[anchor - lookback_hours, anchor]` 內的測站觀測，`horizon_hours` 表示評分最近幾個結束小時（[REST API §4](rest-api.md#4-通用任務推論)），`None` 表示評分 `load_history` 內所有完整時間窗。
+- `load(directory) -> TaskModel`；`TaskModel.predict(PredictionData) -> DataFrame`、`TaskModel.save(directory)`。`PredictionData` 含 `anchor`、`load_history`、`weather`、`horizon_hours`，一律經預測輸入關卡交付：負載 lookback 完整性（依 `history_coverage`）與 `FORECAST` 任務目標時段的天氣欄位完整由關卡保證；負載起點新鮮則是 serving 的 runner 依請求時刻挑選起點時的規則，不在關卡內（滾動起點回測的起點由研究指定）。任務類型不得以常數補值；`load_history` 只含 `(anchor - lookback_hours, anchor]` 的列。`FORECAST` 任務的 `weather` 為錨點之後的預報（或降級來源）；`OBSERVED` 任務的 `weather` 為 `[anchor - lookback_hours, anchor]` 內的測站觀測，`horizon_hours` 表示評分最近幾個結束小時（[REST API §4](rest-api.md#4-通用任務推論)），`None` 表示評分 `load_history` 內所有完整時間窗。
 
 已註冊任務類型：
 
@@ -67,18 +67,20 @@
 
 ### 預測輸入關卡（`tasks/prediction_inputs.py`）
 
-`admit_prediction_inputs(requirements, *, anchor, load, weather, weather_fields, horizon_hours, subject) -> PredictionData` 是唯一判定「這個負載起點的輸入夠不夠預測」的地方。它是純函式：不讀資料庫，也不知道請求時刻；呼叫端（serving 的 runner 與滾動起點回測，[研究空間 §2](lab.md#2-滾動起點回測labbacktestpy)）先挑選負載起點並取得資料，再把記憶體中的負載與天氣 frame 交給它。`load` 至少涵蓋 `(anchor - lookback_hours, anchor]`，可含 NaN 與更早的列；`FORECAST` 任務的 `weather` 為目標小時的天氣，`OBSERVED` 任務的為 lookback 內的觀測；`subject` 只用於拒絕訊息。
+`admit_prediction_inputs(requirements, *, anchor, load, weather, weather_fields, horizon_hours, subject) -> PredictionData` 是唯一判定「這個負載起點的輸入夠不夠預測」的地方。它是純函式：不讀資料庫，也不知道請求時刻；呼叫端（serving 的 runner 與滾動起點回測，[研究空間 §2](lab.md#2-滾動起點回測labbacktestpy)）先挑選負載起點並取得資料，再把記憶體中的負載與天氣 frame 交給它。`load` 至少涵蓋 `(anchor - lookback_hours, anchor]`，可含 NaN 與更早的列；`FORECAST` 任務的 `weather` 為目標小時的天氣，`OBSERVED` 任務的為 lookback 內的觀測；`subject` 只用於拒絕訊息。`FORECAST` 任務傳入 `horizon_hours=None` 屬於呼叫端違反介面契約，拋一般的 `ValueError`，不是可回報 503 的輸入不足。
+
+負載 lookback 完整性另以 `require_load_coverage(requirements, *, anchor, load, subject)` 單獨公開，讓 serving 能在讀取天氣之前拒絕負載不足的請求；`admit_prediction_inputs` 仍套用所有規則（含這一條）。
 
 關卡內的規則：
 
-- **負載 lookback 完整性**：依 `history_coverage` 判定，`FORECAST` 與 `OBSERVED` 任務都適用；`(anchor - window_hours, anchor]` 內有實際負載（非 NaN）的小時少於 `min_valid_hours` 時拋 `InsufficientLoadHistoryError`（`Only {n} {subject} load hours in the {window_hours}-hour window ending at anchor {anchor}; {min_valid_hours} required.`）。`history_coverage` 為 `None` 時不檢查。lookback 以外的缺值不影響判定。
+- **負載 lookback 完整性**：依 `history_coverage` 判定，`FORECAST` 與 `OBSERVED` 任務都適用；`(anchor - window_hours, anchor]` 內有實際負載（非 NaN）的小時少於 `min_valid_hours` 時拋 `InsufficientLoadHistoryError`（`Only {n} {subject} load hours in the {window_hours}-hour window ending at anchor {anchor}; {min_valid_hours} required.`）。`history_coverage` 為 `None` 時不檢查。lookback 以外的缺值不影響判定。例外另以 `first_missing` 屬性帶出窗內第一個缺實際負載的小時，不放進訊息。
 - **負載歷史裁切**：`load_history` 一律裁切到 `(anchor - lookback_hours, anchor]`。
 - **目標時段天氣**：只有 `FORECAST` 任務檢查；目標小時 `anchor + 1h` 至 `anchor + horizon_hours` 每個小時的 `weather_fields` 皆須有值，否則拋 `WeatherUnavailableError`，訊息指出第一個缺值的目標小時與缺少的欄位。降級來源的天氣有值，視同涵蓋。
 
 不在關卡內的規則：
 
 - **負載起點過舊**：屬於 runner 依請求時刻挑選起點的那一步（`StaleLoadAnchorError`）；沒有任何負載時的 `MissingLoadHistoryError` 亦同。
-- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。取得結果為不可用（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，runner 在關卡判定負載之後以取得步驟的原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`；因此負載與天氣同時不足時回報負載不足。
+- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。runner 的順序為：挑選並檢查負載起點、讀取 lookback 內負載、以 `require_load_coverage` 判定負載（不足時不讀天氣）、取得天氣、交給 `admit_prediction_inputs`。因此負載與天氣同時不足時回報負載不足。天氣取得結果為不可用（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，取得步驟直接以其原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`，不進入關卡。
 - **`OBSERVED` 任務的天氣與時間窗完整性**：由任務類型組窗後判定；runner 的 readiness probe 與 `ObservedInputsIncompleteError` 照舊。
 
 拒絕沿用 `TaskUnavailableError` 子類別；`TaskUnavailableError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError` 定義於關卡模組，`tasks/runner.py` 重新匯出，既有匯入路徑與 API 的 503 對應不變。
