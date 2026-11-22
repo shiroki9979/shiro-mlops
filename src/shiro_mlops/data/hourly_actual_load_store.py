@@ -22,12 +22,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.constants import (
-    DATETIME_COL,
-    LOAD_MW_COL,
-    NATIONWIDE_SUBJECT,
-    STORAGE_TIME_COL,
-)
+from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, NATIONWIDE_SUBJECT
 from shiro_mlops.core.storage_time import (
     from_storage_time,
     from_storage_time_or_none,
@@ -50,6 +45,12 @@ from shiro_mlops.data.taipower_regional_supply_demand_repository import (
 )
 
 REGIONAL_SNAPSHOT_SUM_SOURCE = "regional_snapshot_sum"
+
+_INSERT_DERIVED_HOURS = """
+    INSERT INTO raw_taipower_load (time, subject, load_mw, source)
+    VALUES (:time, :subject, :load_mw, :source)
+    ON CONFLICT (time, subject)
+"""
 
 
 @dataclass(frozen=True)
@@ -150,13 +151,7 @@ class HourlyActualLoadStore:
         caller looked for free hours is never overwritten either.
         """
         records = _derived_load_records(hourly_load, NATIONWIDE_SUBJECT)
-        statement = text(
-            """
-            INSERT INTO raw_taipower_load (time, subject, load_mw, source)
-            VALUES (:time, :subject, :load_mw, :source)
-            ON CONFLICT (time, subject) DO NOTHING
-            """
-        )
+        statement = text(f"{_INSERT_DERIVED_HOURS} DO NOTHING")
         with self._engine.begin() as conn:
             inserted = [conn.execute(statement, record).rowcount == 1 for record in records]
         inserted_rows = pd.Series(inserted, index=hourly_load.index, dtype=bool)
@@ -187,10 +182,8 @@ class HourlyActualLoadStore:
         with self._engine.begin() as conn:
             conn.execute(
                 text(
-                    """
-                    INSERT INTO raw_taipower_load (time, subject, load_mw, source)
-                    VALUES (:time, :subject, :load_mw, :source)
-                    ON CONFLICT (time, subject) DO UPDATE SET
+                    f"""
+                    {_INSERT_DERIVED_HOURS} DO UPDATE SET
                         load_mw = EXCLUDED.load_mw,
                         source = EXCLUDED.source
                     """
@@ -249,7 +242,7 @@ class HourlyActualLoadStore:
             stored = pd.read_sql_query(query, con=conn, params=params)
         return pd.DataFrame(
             {
-                DATETIME_COL: from_storage_time_series(stored[STORAGE_TIME_COL]),
+                DATETIME_COL: from_storage_time_series(stored["time"]),
                 LOAD_MW_COL: stored[LOAD_MW_COL].astype(float),
             }
         )
@@ -291,7 +284,7 @@ def _derived_load_records(hourly_load: pd.DataFrame, subject: str) -> list[dict[
     if DATETIME_COL not in hourly_load.columns:
         raise KeyError(
             f"Hourly load must hold its Taiwan-local hours in {DATETIME_COL!r}, "
-            f"not the storage column {STORAGE_TIME_COL!r}"
+            "not the storage column 'time'"
         )
     return [
         {
