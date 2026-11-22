@@ -4,7 +4,8 @@ from datetime import datetime
 
 from shiro_mlops.data.cwa_client import CWAObservationBatch
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.service.data_explorer.weather import ObservationAuditReader
+from shiro_mlops.service.data_explorer.datasets import CWA_OBSERVATION_AUDITS
+from tests.helpers import DatasetLister
 
 
 def assert_observation_audit_pages(repo: TimeSeriesRepository) -> None:
@@ -20,7 +21,7 @@ def assert_observation_audit_pages(repo: TimeSeriesRepository) -> None:
                 observations=(),
             )
         )
-    reader = ObservationAuditReader(repo.engine)
+    reader = DatasetLister(repo.engine, CWA_OBSERVATION_AUDITS)
     params = {
         "start": "2026-09-27T12:00:00.000100+08:00",
         "end": "2026-09-27T12:00:00.000900+08:00",

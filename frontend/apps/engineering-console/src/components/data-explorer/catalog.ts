@@ -72,9 +72,9 @@ export interface ExplorerDatasetConfig {
   filters: ExplorerFilterField[]
   defaultHours: number
   lookAheadHours?: number
-  // SYNC(src/shiro_mlops/service/data_explorer/specs.py): DATASET_SPECS max_days, the list window limit the API enforces with 422.
+  // SYNC(src/shiro_mlops/service/data_explorer/datasets/power.py, src/shiro_mlops/service/data_explorer/datasets/weather.py, src/shiro_mlops/service/data_explorer/datasets/audits.py): each Dataset's max_days, the list window limit the API enforces with 422.
   maxDays: number
-  // SYNC(src/shiro_mlops/service/data_explorer/specs.py): DATASET_SPECS cadence, the length of a `raw` chart bucket.
+  // SYNC(src/shiro_mlops/service/data_explorer/datasets/power.py, src/shiro_mlops/service/data_explorer/datasets/weather.py, src/shiro_mlops/service/data_explorer/datasets/audits.py): each Dataset's cadence, the length of a `raw` chart bucket.
   cadenceSeconds: number
   quickRanges: readonly QuickRangeId[]
   search?: Record<string, string>
@@ -113,7 +113,7 @@ function auditStatusChart(seriesApiPath: string, countField: ExplorerFieldKey): 
 
 export const POWER_UNIT = 'MW'
 const PERCENT_UNIT = '%'
-// SYNC(src/shiro_mlops/service/data_explorer/supply_demand_series.py): NationalSeriesField and its units.
+// SYNC(src/shiro_mlops/service/data_explorer/datasets/power.py): NationalSeriesField and its units.
 const NATIONAL_FIELD_OPTIONS: ChartFieldOption[] = [
   { field: 'curr_load_mw', unit: POWER_UNIT },
   { field: 'real_hr_maxi_sply_capacity_mw', unit: POWER_UNIT },
@@ -127,7 +127,7 @@ const NATIONAL_FIELD_OPTIONS: ChartFieldOption[] = [
   { field: 'yday_peak_resv_capacity_mw', unit: POWER_UNIT },
   { field: 'yday_peak_resv_rate_pct', unit: PERCENT_UNIT },
 ]
-// SYNC(src/shiro_mlops/service/data_explorer/supply_demand_series.py): RegionalSeriesField and its units.
+// SYNC(src/shiro_mlops/service/data_explorer/datasets/power.py): RegionalSeriesField and its units.
 const REGIONAL_FIELD_OPTIONS: ChartFieldOption[] = [
   { field: 'load_mw', unit: POWER_UNIT },
   { field: 'generation_mw', unit: POWER_UNIT },
@@ -211,7 +211,7 @@ export const EXPLORER_DATASETS: ExplorerDatasetConfig[] = [
       seriesApiPath: '/data/power/units/series',
       fields: ['net_generation_mw'],
       colorBy: { group: 'unit_type', palette: 'unit_type' },
-      // SYNC(src/shiro_mlops/service/data_explorer/power.py): UnitGroupBy, default first.
+      // SYNC(src/shiro_mlops/service/data_explorer/datasets/power.py): UnitGroupBy, default first.
       groupOptions: ['unit_type', 'none'],
     },
     sparkline: { fields: ['net_generation_mw'], groupBy: 'none' },

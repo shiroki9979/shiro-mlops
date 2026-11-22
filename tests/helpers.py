@@ -35,6 +35,9 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
+from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
+from shiro_mlops.service.data_explorer.datasets import Dataset
+from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 
@@ -414,3 +417,14 @@ def unfetched_source_resources() -> dict[str, Any]:
             )
         },
     }
+
+
+class DatasetLister:
+    """Bind `DatasetQuery.list` to one dataset so a test pages it like the HTTP list."""
+
+    def __init__(self, engine: Engine, dataset: Dataset) -> None:
+        self.query = DatasetQuery(engine)
+        self.dataset = dataset
+
+    def list(self, params: dict[str, Any]) -> ListEnvelope:
+        return self.query.list(self.dataset, params)

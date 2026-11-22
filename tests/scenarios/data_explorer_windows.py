@@ -14,20 +14,19 @@ from shiro_mlops.service.data_explorer.completeness import (
     regional_slot_map,
     ten_minute_gaps,
 )
+from shiro_mlops.service.data_explorer.datasets import (
+    CWA_FORECAST_AUDITS,
+    CWA_FORECASTS,
+    CWA_OBSERVATION_AUDITS,
+    CWA_OBSERVATIONS,
+    HOURLY_LOAD,
+    NATIONAL_SUPPLY_DEMAND,
+    REGIONAL_SUPPLY_DEMAND,
+    UNIT_GENERATION,
+)
 from shiro_mlops.service.data_explorer.db import ExplorerDb
-from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
-from shiro_mlops.service.data_explorer.power import (
-    NationalSupplyDemandReader,
-    RegionalSupplyDemandReader,
-    UnitGenerationReader,
-)
 from shiro_mlops.service.data_explorer.query import TimeWindow
-from shiro_mlops.service.data_explorer.weather import (
-    ForecastAuditReader,
-    ForecastReader,
-    ObservationAuditReader,
-    ObservationReader,
-)
+from tests.helpers import DatasetLister
 
 
 class SqlFixture(NamedTuple):
@@ -150,29 +149,29 @@ def _all_dataset_fixtures(start: datetime, times: tuple[datetime, ...]) -> tuple
 
 
 def _assert_dataset_windows(engine: Engine, start: datetime, end: datetime) -> None:
-    readers = (
-        (HourlyLoadReader, "load_mw", [2.0, 1.0]),
-        (NationalSupplyDemandReader, "curr_load_wan_kw", [2.0, 1.0]),
-        (RegionalSupplyDemandReader, "region", ["南部", "中部"]),
-        (UnitGenerationReader, "unit_name", ["edge-2", "edge-1"]),
-        (ObservationReader, "temperature_c", [2.0, 1.0]),
-        (ForecastReader, "temperature_c", [2.0, 1.0]),
-        (ObservationAuditReader, "missing_station_ids", [["edge-2"], ["edge-1"]]),
-        (ForecastAuditReader, "missing_geocodes", [["edge-2"], ["edge-1"]]),
+    datasets = (
+        (HOURLY_LOAD, "load_mw", [2.0, 1.0]),
+        (NATIONAL_SUPPLY_DEMAND, "curr_load_wan_kw", [2.0, 1.0]),
+        (REGIONAL_SUPPLY_DEMAND, "region", ["南部", "中部"]),
+        (UNIT_GENERATION, "unit_name", ["edge-2", "edge-1"]),
+        (CWA_OBSERVATIONS, "temperature_c", [2.0, 1.0]),
+        (CWA_FORECASTS, "temperature_c", [2.0, 1.0]),
+        (CWA_OBSERVATION_AUDITS, "missing_station_ids", [["edge-2"], ["edge-1"]]),
+        (CWA_FORECAST_AUDITS, "missing_geocodes", [["edge-2"], ["edge-1"]]),
     )
     params = {
         "start": start.isoformat(timespec="microseconds"),
         "end": end.isoformat(timespec="microseconds"),
         "limit": 1,
     }
-    for reader_class, field, expected in readers:
-        reader = reader_class(engine)
-        filters = {"all_vintages": "true"} if reader_class is ForecastReader else {}
+    for dataset, field, expected in datasets:
+        reader = DatasetLister(engine, dataset)
+        filters = {"all_vintages": "true"} if dataset is CWA_FORECASTS else {}
         first = reader.list({**params, **filters})
         second = reader.list({**params, **filters, "cursor": first.next_cursor})
         point = reader.list({**params, **filters, "end": params["start"]})
 
-        assert [first.items[0][field], second.items[0][field]] == expected, reader_class
+        assert [first.items[0][field], second.items[0][field]] == expected, dataset
         assert [first.has_more, second.has_more] == [True, False]
         assert first.next_cursor and second.next_cursor is None
         assert first.missing_slots == second.missing_slots

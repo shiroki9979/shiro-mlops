@@ -8,7 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
-from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
+from shiro_mlops.service.data_explorer.datasets import HOURLY_LOAD
+from tests.helpers import DatasetLister
 from tests.scenarios.data_explorer_windows import (
     assert_all_dataset_windows,
     assert_completeness_windows,
@@ -30,7 +31,7 @@ def test_hourly_load_includes_only_exact_closed_window(sqlite_engine: Engine) ->
                 for index, timestamp in enumerate(times)
             ],
         )
-    reader = HourlyLoadReader(sqlite_engine)
+    reader = DatasetLister(sqlite_engine, HOURLY_LOAD)
     params = {
         "start": start.isoformat(timespec="microseconds"),
         "end": end.isoformat(timespec="microseconds"),

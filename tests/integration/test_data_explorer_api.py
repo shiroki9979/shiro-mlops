@@ -17,6 +17,7 @@ from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app
 from shiro_mlops.service.data_explorer.cursor import encode_cursor
+from shiro_mlops.service.data_explorer.datasets import CWA_FORECASTS, HOURLY_LOAD
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from tests.helpers import (
     TAIWAN,
@@ -123,7 +124,7 @@ def test_malformed_v2_cursor_precedes_database_failure(
 ) -> None:
     client, _ = explorer_client
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
-    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    filters = ExplorerQuery.from_params(HOURLY_LOAD, window).filters
     cursor = encode_cursor(
         dataset="hourly_load", filters=filters, key={"time": 123, "subject": "nationwide"}
     )
@@ -145,7 +146,7 @@ def test_forecast_cursor_filter_mismatch_precedes_database_failure(
 ) -> None:
     client, _ = explorer_client
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
-    filters = ExplorerQuery.from_params("cwa_forecasts", {**window, "geocode": "A"}).filters
+    filters = ExplorerQuery.from_params(CWA_FORECASTS, {**window, "geocode": "A"}).filters
     cursor = encode_cursor(
         dataset="cwa_forecasts",
         filters=filters,
@@ -177,7 +178,7 @@ def test_forecast_cursor_filter_mismatch_precedes_database_failure(
 def test_hourly_load_rejects_nonscalar_cursor_key(explorer_client, subject) -> None:
     client, _ = explorer_client
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
-    filters = ExplorerQuery.from_params("hourly_load", window).filters
+    filters = ExplorerQuery.from_params(HOURLY_LOAD, window).filters
     cursor = encode_cursor(
         dataset="hourly_load",
         filters=filters,
