@@ -13,6 +13,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
+from shiro_mlops.service.data_explorer.series import SeriesOptions, series_flag_conflicts
 from shiro_mlops.service.data_explorer.timefmt import parse_api_storage_time
 
 if TYPE_CHECKING:
@@ -102,7 +103,7 @@ class Pinned:
 
 
 class VersionResolver(Protocol):
-    """Resolves which forecast version a list request reads when none is named."""
+    """Resolves which forecast version list and series requests read when none is named."""
 
     def restore(self, params: dict[str, Any], cursor_filters: dict[str, Any]) -> dict[str, Any]:
         """Re-apply the version a cursor was issued for, without touching the database."""
@@ -111,6 +112,11 @@ class VersionResolver(Protocol):
         self, db: ExplorerDb, params: dict[str, Any], cursor_filters: dict[str, Any] | None
     ) -> dict[str, Any]:
         """Return list parameters with the version to read made explicit."""
+
+    def plan_series(
+        self, db: ExplorerDb, options: SeriesOptions, params: dict[str, str]
+    ) -> tuple[SeriesOptions, dict[str, str]]:
+        """Return series options and parameters with the version to chart made explicit."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -121,7 +127,9 @@ class Dataset:
     column holding an instant is in `instant_columns` so cursors carry it at microsecond
     precision. `list_columns` is the list SELECT, which must include every sort column.
     `project` turns one page of rows into response items, and `list_gaps` returns the
-    window's missing slots for the list. Inconsistent declarations raise `ValueError`.
+    window's missing slots for the list. `series` declares the chart series endpoint, and
+    `resolve_version` resolves the forecast version both list and series read.
+    Inconsistent declarations raise `ValueError`.
     """
 
     id: str
@@ -139,6 +147,7 @@ class Dataset:
     pinned: tuple[Pinned, ...] = ()
     filters: tuple[Filter, ...] = ()
     list_gaps: GapFinder | None = None
+    series: SeriesOptions | None = None
     resolve_version: VersionResolver | None = None
 
     def __post_init__(self) -> None:
@@ -209,4 +218,6 @@ def _declaration_problems(dataset: Dataset) -> list[str]:
         problems.append(f"list_columns must select sort columns {', '.join(missing)}")
     if len(set(dataset.filter_names)) != len(dataset.filter_names):
         problems.append("filter names must be unique")
+    if dataset.series is not None:
+        problems.extend(series_flag_conflicts(dataset.series))
     return problems

@@ -5,41 +5,17 @@ from dataclasses import replace
 import pytest
 
 from shiro_mlops.service.data_explorer.datasets import DATASETS, HOURLY_LOAD, Dataset
-from shiro_mlops.service.data_explorer.datasets.audits import (
-    FORECAST_AUDIT_SERIES,
-    OBSERVATION_AUDIT_SERIES,
-)
 from shiro_mlops.service.data_explorer.datasets.definition import (
     Exact,
     Filter,
     InstantEquals,
     OneOf,
 )
-from shiro_mlops.service.data_explorer.datasets.power import (
-    HOURLY_LOAD_SERIES,
-    NATIONAL_SERIES,
-    REGIONAL_SERIES,
-    UNIT_GENERATION_SERIES,
-)
-from shiro_mlops.service.data_explorer.datasets.weather import FORECAST_SERIES, OBSERVATION_SERIES
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import Bucket, SeriesRequest
 
 WINDOW = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
-SERIES_BY_DATASET = {
-    spec.dataset.id: spec
-    for spec in (
-        HOURLY_LOAD_SERIES,
-        NATIONAL_SERIES,
-        REGIONAL_SERIES,
-        UNIT_GENERATION_SERIES,
-        OBSERVATION_SERIES,
-        FORECAST_SERIES,
-        OBSERVATION_AUDIT_SERIES,
-        FORECAST_AUDIT_SERIES,
-    )
-}
 DECLARED_FILTERS = [
     pytest.param(dataset, item, id=f"{dataset.id}-{item.name}")
     for dataset in DATASETS.values()
@@ -66,7 +42,7 @@ def test_registry_lists_the_eight_datasets_in_status_order() -> None:
         "cwa_observation_audits",
         "cwa_forecast_audits",
     ]
-    assert set(SERIES_BY_DATASET) == set(DATASETS)
+    assert all(dataset.series is not None for dataset in DATASETS.values())
 
 
 @pytest.mark.parametrize(("dataset", "item"), DECLARED_FILTERS)
@@ -106,15 +82,17 @@ def test_parameters_another_dataset_declares_are_not_bound(dataset: Dataset) -> 
 def test_series_accepts_exactly_the_filters_declared_for_series(
     dataset: Dataset, item: Filter
 ) -> None:
-    spec = SERIES_BY_DATASET[dataset.id]
+    assert dataset.series is not None
     params = {**WINDOW, item.name: _valid_value(item)}
 
+    def build() -> SeriesRequest:
+        return SeriesRequest.build(dataset, dataset.series, params, fields=None, bucket=Bucket.AUTO)
+
     if item.in_series:
-        request = SeriesRequest.build(spec, params, fields=None, bucket=Bucket.AUTO)
-        assert request.filters[item.name] == params[item.name]
+        assert build().filters[item.name] == params[item.name]
     else:
         with pytest.raises(ExplorerQueryError, match="unsupported series parameters"):
-            SeriesRequest.build(spec, params, fields=None, bucket=Bucket.AUTO)
+            build()
 
 
 @pytest.mark.parametrize(

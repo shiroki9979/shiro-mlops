@@ -32,7 +32,7 @@ from shiro_mlops.service.data_explorer.datasets.definition import (
 )
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
+from shiro_mlops.service.data_explorer.series import SeriesField, SeriesOptions
 from shiro_mlops.service.data_explorer.values import (
     WAN_KW_TO_MW,
     format_row_time,
@@ -46,6 +46,105 @@ POWER_UNIT = "MW"
 PERCENT_UNIT = "%"
 TEN_MINUTES = timedelta(minutes=10)
 COMPLETENESS_VALUES = ("complete", "incomplete")
+
+
+class HourlyLoadSeriesField(StrEnum):
+    """Hourly load fields a series request may name."""
+
+    LOAD_MW = "load_mw"
+
+
+HOURLY_LOAD_SERIES = SeriesOptions(
+    fields={HourlyLoadSeriesField.LOAD_MW.value: SeriesField(sql="load_mw", unit=POWER_UNIT)},
+    group_columns=("subject",),
+    slot_lag=timedelta(hours=1),
+)
+
+
+def _power(wan_kw_column: str) -> SeriesField:
+    return SeriesField(sql=f"{wan_kw_column} * {WAN_KW_TO_MW}", unit=POWER_UNIT)
+
+
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): NATIONAL_FIELD_OPTIONS, fields and units.
+class NationalSeriesField(StrEnum):
+    """National supply-demand power (MW) and percentage fields a series request may name."""
+
+    CURR_LOAD_MW = "curr_load_mw"
+    REAL_HR_MAXI_SPLY_CAPACITY_MW = "real_hr_maxi_sply_capacity_mw"
+    CURR_UTIL_RATE_PCT = "curr_util_rate_pct"
+    FORE_MAXI_SPLY_CAPACITY_MW = "fore_maxi_sply_capacity_mw"
+    FORE_PEAK_DEMA_LOAD_MW = "fore_peak_dema_load_mw"
+    FORE_PEAK_RESV_CAPACITY_MW = "fore_peak_resv_capacity_mw"
+    FORE_PEAK_RESV_RATE_PCT = "fore_peak_resv_rate_pct"
+    YDAY_MAXI_SPLY_CAPACITY_MW = "yday_maxi_sply_capacity_mw"
+    YDAY_PEAK_DEMA_LOAD_MW = "yday_peak_dema_load_mw"
+    YDAY_PEAK_RESV_CAPACITY_MW = "yday_peak_resv_capacity_mw"
+    YDAY_PEAK_RESV_RATE_PCT = "yday_peak_resv_rate_pct"
+
+
+def _national_field(name: NationalSeriesField) -> SeriesField:
+    if name.value.endswith("_pct"):
+        return SeriesField(sql=name.value, unit=PERCENT_UNIT)
+    return _power(name.value.removesuffix("_mw") + "_wan_kw")
+
+
+NATIONAL_SERIES_DEFAULT_FIELDS = (
+    NationalSeriesField.CURR_LOAD_MW,
+    NationalSeriesField.REAL_HR_MAXI_SPLY_CAPACITY_MW,
+)
+
+NATIONAL_SERIES = SeriesOptions(
+    fields={name.value: _national_field(name) for name in NationalSeriesField},
+    default_fields=tuple(name.value for name in NATIONAL_SERIES_DEFAULT_FIELDS),
+    group_columns=(),
+)
+
+
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): REGIONAL_FIELD_OPTIONS, fields and units.
+class RegionalSeriesField(StrEnum):
+    """Regional supply-demand power fields a series request may name."""
+
+    LOAD_MW = "load_mw"
+    GENERATION_MW = "generation_mw"
+
+
+REGIONAL_SERIES = SeriesOptions(
+    fields={
+        RegionalSeriesField.LOAD_MW.value: _power("load_wan_kw"),
+        RegionalSeriesField.GENERATION_MW.value: _power("generation_wan_kw"),
+    },
+    default_fields=(RegionalSeriesField.LOAD_MW.value,),
+    group_columns=("region",),
+)
+
+
+class UnitSeriesField(StrEnum):
+    """Additive unit-generation power fields a series request may name."""
+
+    NET_GENERATION_MW = "net_generation_mw"
+    CAPACITY_MW = "capacity_mw"
+
+
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): unit_generation groupOptions, default first.
+class UnitGroupBy(StrEnum):
+    """Unit-generation series grouping: per unit type, or one total over every member."""
+
+    UNIT_TYPE = "unit_type"
+    NONE = "none"
+
+
+UNIT_GENERATION_SERIES = SeriesOptions(
+    fields={
+        UnitSeriesField.NET_GENERATION_MW.value: SeriesField(
+            sql="net_generation_mw", unit=POWER_UNIT
+        ),
+        UnitSeriesField.CAPACITY_MW.value: SeriesField(sql="capacity_mw", unit=POWER_UNIT),
+    },
+    group_columns=("unit_type",),
+    member_sum=True,
+    default_fields=(UnitSeriesField.NET_GENERATION_MW.value,),
+    group_options={UnitGroupBy.UNIT_TYPE.value: ("unit_type",), UnitGroupBy.NONE.value: ()},
+)
 
 
 def _hourly_load_item(row: Row) -> dict[str, Any]:
@@ -76,6 +175,7 @@ HOURLY_LOAD = Dataset(
     pinned=(Pinned("source = :source", {"source": REGIONAL_SNAPSHOT_SUM_SOURCE}),),
     filters=(Exact(name="subject"),),
     list_gaps=_hourly_load_gaps,
+    series=HOURLY_LOAD_SERIES,
 )
 
 
@@ -148,6 +248,7 @@ NATIONAL_SUPPLY_DEMAND = Dataset(
     ),
     project=each(_national_item),
     list_gaps=_national_gaps,
+    series=NATIONAL_SERIES,
 )
 
 REGIONAL_TABLE = "raw_taipower_regional_supply_demand_snapshot"
@@ -228,6 +329,7 @@ REGIONAL_SUPPLY_DEMAND = Dataset(
         SlotCompleteness(name="completeness", values=COMPLETENESS_VALUES, in_series=False),
     ),
     list_gaps=_regional_gaps,
+    series=REGIONAL_SERIES,
 )
 
 
@@ -268,107 +370,5 @@ UNIT_GENERATION = Dataset(
     ),
     project=each(_unit_item),
     filters=(Exact(name="unit_type"), Exact(name="unit_name")),
-)
-
-
-class HourlyLoadSeriesField(StrEnum):
-    """Hourly load fields a series request may name."""
-
-    LOAD_MW = "load_mw"
-
-
-HOURLY_LOAD_SERIES = SeriesSpec(
-    dataset=HOURLY_LOAD,
-    fields={HourlyLoadSeriesField.LOAD_MW.value: SeriesField(sql="load_mw", unit=POWER_UNIT)},
-    group_columns=("subject",),
-    slot_lag=timedelta(hours=1),
-)
-
-
-def _power(wan_kw_column: str) -> SeriesField:
-    return SeriesField(sql=f"{wan_kw_column} * {WAN_KW_TO_MW}", unit=POWER_UNIT)
-
-
-# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): NATIONAL_FIELD_OPTIONS, fields and units.
-class NationalSeriesField(StrEnum):
-    """National supply-demand power (MW) and percentage fields a series request may name."""
-
-    CURR_LOAD_MW = "curr_load_mw"
-    REAL_HR_MAXI_SPLY_CAPACITY_MW = "real_hr_maxi_sply_capacity_mw"
-    CURR_UTIL_RATE_PCT = "curr_util_rate_pct"
-    FORE_MAXI_SPLY_CAPACITY_MW = "fore_maxi_sply_capacity_mw"
-    FORE_PEAK_DEMA_LOAD_MW = "fore_peak_dema_load_mw"
-    FORE_PEAK_RESV_CAPACITY_MW = "fore_peak_resv_capacity_mw"
-    FORE_PEAK_RESV_RATE_PCT = "fore_peak_resv_rate_pct"
-    YDAY_MAXI_SPLY_CAPACITY_MW = "yday_maxi_sply_capacity_mw"
-    YDAY_PEAK_DEMA_LOAD_MW = "yday_peak_dema_load_mw"
-    YDAY_PEAK_RESV_CAPACITY_MW = "yday_peak_resv_capacity_mw"
-    YDAY_PEAK_RESV_RATE_PCT = "yday_peak_resv_rate_pct"
-
-
-def _national_field(name: NationalSeriesField) -> SeriesField:
-    if name.value.endswith("_pct"):
-        return SeriesField(sql=name.value, unit=PERCENT_UNIT)
-    return _power(name.value.removesuffix("_mw") + "_wan_kw")
-
-
-NATIONAL_SERIES_DEFAULT_FIELDS = (
-    NationalSeriesField.CURR_LOAD_MW,
-    NationalSeriesField.REAL_HR_MAXI_SPLY_CAPACITY_MW,
-)
-
-NATIONAL_SERIES = SeriesSpec(
-    dataset=NATIONAL_SUPPLY_DEMAND,
-    fields={name.value: _national_field(name) for name in NationalSeriesField},
-    default_fields=tuple(name.value for name in NATIONAL_SERIES_DEFAULT_FIELDS),
-    group_columns=(),
-)
-
-
-# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): REGIONAL_FIELD_OPTIONS, fields and units.
-class RegionalSeriesField(StrEnum):
-    """Regional supply-demand power fields a series request may name."""
-
-    LOAD_MW = "load_mw"
-    GENERATION_MW = "generation_mw"
-
-
-REGIONAL_SERIES = SeriesSpec(
-    dataset=REGIONAL_SUPPLY_DEMAND,
-    fields={
-        RegionalSeriesField.LOAD_MW.value: _power("load_wan_kw"),
-        RegionalSeriesField.GENERATION_MW.value: _power("generation_wan_kw"),
-    },
-    default_fields=(RegionalSeriesField.LOAD_MW.value,),
-    group_columns=("region",),
-)
-
-
-class UnitSeriesField(StrEnum):
-    """Additive unit-generation power fields a series request may name."""
-
-    NET_GENERATION_MW = "net_generation_mw"
-    CAPACITY_MW = "capacity_mw"
-
-
-# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): unit_generation groupOptions, default first.
-class UnitGroupBy(StrEnum):
-    """Unit-generation series grouping: per unit type, or one total over every member."""
-
-    UNIT_TYPE = "unit_type"
-    NONE = "none"
-
-
-UNIT_GENERATION_SERIES = SeriesSpec(
-    dataset=UNIT_GENERATION,
-    fields={
-        UnitSeriesField.NET_GENERATION_MW.value: SeriesField(
-            sql="net_generation_mw", unit=POWER_UNIT
-        ),
-        UnitSeriesField.CAPACITY_MW.value: SeriesField(sql="capacity_mw", unit=POWER_UNIT),
-    },
-    group_columns=("unit_type",),
-    member_sum=True,
-    default_fields=(UnitSeriesField.NET_GENERATION_MW.value,),
-    group_options={UnitGroupBy.UNIT_TYPE.value: ("unit_type",), UnitGroupBy.NONE.value: ()},
+    series=UNIT_GENERATION_SERIES,
 )

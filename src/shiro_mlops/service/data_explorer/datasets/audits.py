@@ -13,12 +13,27 @@ from shiro_mlops.service.data_explorer.datasets.definition import (
     Row,
     each,
 )
-from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
+from shiro_mlops.service.data_explorer.series import SeriesField, SeriesOptions
 from shiro_mlops.service.data_explorer.values import format_row_time, json_list
 
 AUDIT_STATUSES = ("complete", "incomplete")
 AUDIT_COUNT_UNIT = "count"
 HOURLY = timedelta(hours=1)
+
+
+OBSERVATION_AUDIT_SERIES = SeriesOptions(
+    fields={"batch_count": SeriesField(sql="1", unit=AUDIT_COUNT_UNIT)},
+    group_columns=("status",),
+    gap_fill=False,
+    count_rows=True,
+)
+
+FORECAST_AUDIT_SERIES = SeriesOptions(
+    fields={"version_count": SeriesField(sql="1", unit=AUDIT_COUNT_UNIT)},
+    group_columns=("status",),
+    gap_fill=False,
+    count_rows=True,
+)
 
 
 def _observation_audit_item(row: Row) -> dict[str, Any]:
@@ -46,6 +61,7 @@ CWA_OBSERVATION_AUDITS = Dataset(
         OneOf(name="status", values=AUDIT_STATUSES),
         JsonContains(name="missing_station_id", column="missing_station_ids"),
     ),
+    series=OBSERVATION_AUDIT_SERIES,
 )
 
 
@@ -86,20 +102,5 @@ CWA_FORECAST_AUDITS = Dataset(
         OneOf(name="status", values=AUDIT_STATUSES),
         JsonContains(name="missing_geocode", column="missing_geocodes"),
     ),
-)
-
-OBSERVATION_AUDIT_SERIES = SeriesSpec(
-    dataset=CWA_OBSERVATION_AUDITS,
-    fields={"batch_count": SeriesField(sql="1", unit=AUDIT_COUNT_UNIT)},
-    group_columns=("status",),
-    gap_fill=False,
-    count_rows=True,
-)
-
-FORECAST_AUDIT_SERIES = SeriesSpec(
-    dataset=CWA_FORECAST_AUDITS,
-    fields={"version_count": SeriesField(sql="1", unit=AUDIT_COUNT_UNIT)},
-    group_columns=("status",),
-    gap_fill=False,
-    count_rows=True,
+    series=FORECAST_AUDIT_SERIES,
 )
