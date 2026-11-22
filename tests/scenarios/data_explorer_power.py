@@ -10,6 +10,7 @@ from shiro_mlops.service.data_explorer.power import (
     UnitGenerationReader,
 )
 from tests.helpers import (
+    explorer_pages,
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
@@ -18,21 +19,10 @@ from tests.helpers import (
 
 
 def _all_pages(reader, params: dict, identity) -> tuple[list, list]:
-    items = []
-    gaps = []
-    cursor = None
-    seen_cursors = set()
-    while True:
-        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
-        items.extend(identity(item) for item in page.items)
-        gaps.append(page.missing_slots)
-        assert page.has_more is (page.next_cursor is not None)
-        if not page.has_more:
-            break
-        cursor = page.next_cursor
-        assert cursor not in seen_cursors
-        seen_cursors.add(cursor)
-    return items, gaps
+    pages = explorer_pages(reader, params)
+    return [identity(item) for page in pages for item in page.items], [
+        page.missing_slots for page in pages
+    ]
 
 
 def assert_national_reader_pages(

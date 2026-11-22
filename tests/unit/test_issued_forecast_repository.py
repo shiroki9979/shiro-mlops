@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
@@ -52,6 +53,25 @@ def test_issued_forecast_keeps_steps_at_or_before_the_issue_time(
     assert fetched is not None
     assert fetched.steps[0].target_hour == datetime(2026, 11, 20, 10, 0)
     assert len(fetched.steps) == 168
+
+
+def test_issued_forecast_stores_its_instants_as_utc_with_an_offset(
+    sqlite_engine: Engine,
+) -> None:
+    """Issued at 10:15 Taiwan time, stored as 02:15 UTC in the same form as hourly load rows."""
+    IssuedForecastRepository(engine=sqlite_engine).insert(_issued_forecast())
+
+    with sqlite_engine.connect() as conn:
+        header = conn.execute(text("SELECT issued_at, load_anchor FROM issued_forecast")).one()
+        first_step = conn.execute(
+            text(
+                "SELECT issued_at, target_hour FROM issued_forecast_step "
+                "ORDER BY target_hour LIMIT 1"
+            )
+        ).one()
+
+    assert tuple(header) == ("2026-11-20 02:15:00+00:00", "2026-11-20 01:00:00+00:00")
+    assert tuple(first_step) == ("2026-11-20 02:15:00+00:00", "2026-11-20 02:00:00+00:00")
 
 
 def test_issuing_the_same_issue_time_again_leaves_the_record_unchanged(

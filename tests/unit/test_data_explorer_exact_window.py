@@ -44,19 +44,8 @@ def test_hourly_load_includes_only_exact_closed_window(sqlite_engine: Engine) ->
     assert page.has_more is False and page.next_cursor is None
 
 
-# SQLite text storage may hold naive or aware UTC; split tables so both forms are covered.
-SQLITE_NAIVE_UTC_TABLES = frozenset(
-    {
-        "raw_taipower_load",
-        "raw_taipower_supply_demand_snapshot",
-        "raw_taipower_regional_supply_demand_snapshot",
-        "raw_taipower_unit_generation_snapshot",
-    }
-)
-
-
 def test_all_dataset_windows_on_sqlite(sqlite_engine: Engine) -> None:
-    assert_all_dataset_windows(sqlite_engine, SQLITE_NAIVE_UTC_TABLES)
+    assert_all_dataset_windows(sqlite_engine)
 
 
 def test_completeness_windows_on_sqlite(sqlite_engine: Engine) -> None:

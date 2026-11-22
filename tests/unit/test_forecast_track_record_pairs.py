@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
+from sqlalchemy import text
 
 from shiro_mlops.data.forecast_track_record import TrackRecordWindow
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
@@ -78,6 +79,26 @@ def test_lead_time_rounds_up_from_the_issue_time_and_skips_hours_not_after_it(
         (issued_at, datetime(2026, 11, 19, 11, 0), 1),
         (issued_at, datetime(2026, 11, 20, 10, 0), 24),
     ]
+
+
+def test_issued_steps_join_hourly_load_on_the_target_hour_in_sql(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """Both tables store one UTC form, so a plain SQL equality join pairs them."""
+    target = datetime(2026, 11, 19, 11, 0)
+    _issue(test_repo, datetime(2026, 11, 19, 10, 15), [target])
+    _observe(test_repo, [target])
+
+    with test_repo.engine.connect() as conn:
+        joined = conn.execute(
+            text(
+                "SELECT step.predicted_load_mw, actual.load_mw "
+                "FROM issued_forecast_step AS step "
+                "JOIN raw_taipower_load AS actual ON actual.time = step.target_hour"
+            )
+        ).all()
+
+    assert [tuple(row) for row in joined] == [(30000.0, 25000.0)]
 
 
 @pytest.mark.parametrize(

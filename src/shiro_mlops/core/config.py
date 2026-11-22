@@ -126,11 +126,13 @@ class Settings(BaseSettings):
             raise ValueError("CWA_LOCATION_ALLOWLIST cannot be empty")
         return locations
 
+    # WHY-NOT(timescale_uri): SQLAlchemy 2.1 起裸 postgresql:// 改用 psycopg（v3），
+    # 專案只裝 psycopg2-binary，不指名 driver 則升級後連 TimescaleDB 會 ModuleNotFoundError
     @property
     def timescale_uri(self) -> str:
         """Return the PostgreSQL/TimescaleDB connection URI."""
         return (
-            f"postgresql://{self.TIMESCALE_USER}:{self.TIMESCALE_PASSWORD}@"
+            f"postgresql+psycopg2://{self.TIMESCALE_USER}:{self.TIMESCALE_PASSWORD}@"
             f"{self.TIMESCALE_HOST}:{self.TIMESCALE_PORT}/{self.TIMESCALE_DB}"
         )
 

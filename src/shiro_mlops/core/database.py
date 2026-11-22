@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import NATIONWIDE_SUBJECT, SUBJECT_COL
+from shiro_mlops.core.storage_time import register_sqlite_datetime_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
         Configured SQLAlchemy Engine instance.
     """
     db_uri = uri or settings.timescale_uri
+    if make_url(db_uri).get_backend_name() == "sqlite":
+        register_sqlite_datetime_adapter()
     engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
     engine_kwargs.update(kwargs)
     return create_engine(db_uri, **engine_kwargs)

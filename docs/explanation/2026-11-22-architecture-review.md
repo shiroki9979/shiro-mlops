@@ -4,7 +4,7 @@
 - 建立日期：2026-11-22
 - 最後更新：2026-11-22
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 6 已處理，其餘 7 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
+- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；其餘 6 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
 - 檢視基準：`45f4b8e9d004e5e316c96d79086b71a9dd0dbebd`
 - 前次檢視：[2026-09-27 架構檢視](2026-09-27-architecture-review.md)
 
@@ -18,11 +18,11 @@
 | 候選 | 建議強度 | 主要收益 | 建議時機 |
 | :--- | :--- | :--- | :--- |
 | 1. 收斂預測輸入關卡 | Strong | serving 與滾動起點回測拒絕同一批起點 | 修正 [#226](https://github.com/shiroki9979/shiro-mlops/issues/226) 時（[#227](https://github.com/shiroki9979/shiro-mlops/issues/227)） |
-| 2. 集中儲存時刻轉換 | Strong | 單一儲存形式，跨表 SQL join 可用 | 併入 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) |
+| 2. 集中儲存時刻轉換 | Strong | 單一儲存形式，跨表 SQL join 可用 | 併入 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160)；已實作（2026-11-22，子 issue [#237](https://github.com/shiroki9979/shiro-mlops/issues/237)–[#242](https://github.com/shiroki9979/shiro-mlops/issues/242)） |
 | 3. 由單一 module 擁有全台逐時實際負載的存取 | Strong | ADR-0008 的口徑規則只在一處成立 | 下次修改全台逐時實際負載的推算或讀取時（[#228](https://github.com/shiroki9979/shiro-mlops/issues/228)） |
 | 4. 以資料集定義推導營運資料檢視器的查詢 | Strong | series 端點一次實作，8 個資料集共用 | M9 series 端點開工前（[#229](https://github.com/shiroki9979/shiro-mlops/issues/229)） |
 | 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)） |
-| 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 已處理（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)） |
+| 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 下次新增擷取來源或修改 asset 的 fetch 時（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)）；已實作（2026-11-22） |
 | 7. 已發布預報擁有預報步與提前時數 | Worth exploring | 提前時數只有一份定義 | 下次修改提前時數或已發布預報的欄位契約時（[#232](https://github.com/shiroki9979/shiro-mlops/issues/232)） |
 | 8. TimeSeriesRepository 收斂為 composition root | Worth exploring | 刪除 12 個 pass-through 方法 | 候選 2、3 完成後（[#233](https://github.com/shiroki9979/shiro-mlops/issues/233)） |
 
@@ -70,6 +70,9 @@ After ：runner 的 frame／回測快照 frame → 預測輸入關卡〔起點�
 lab 起點檢查的規則層測試移到 src，lab 只保留回測彙整的測試。
 
 ## 候選 2：集中儲存時刻轉換
+
+> **狀態（2026-11-22）**：已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160)（子 issue [#237](https://github.com/shiroki9979/shiro-mlops/issues/237)–[#242](https://github.com/shiroki9979/shiro-mlops/issues/242)）實作。
+> 本節指向的程式位置（`_taiwan_instant_to_utc`、`taiwan_instant_to_utc`、`timefmt.to_sql_utc`、`sqlite_time_key`、`SQLITE_NAIVE_UTC_TABLES`、`TODO(#160)` 等）記錄檢視基準當時的狀態，僅供歷史參考；現行契約見 [data-contracts.md](../reference/data-contracts.md)。
 
 ### 現況與證據
 
@@ -197,7 +200,7 @@ API 測試只驗 HTTP 對映（200／503／500 的形狀），module 全域的 m
 
 ## 候選 6：擷取來源 fetch 改為注入的 adapter
 
-> 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 處理：台電 port 回傳原始 payload、由 asset parse；CWA port 維持 `CWAClient` 的 typed 層級，因既有測試以 typed batch 建構資料。
+> **狀態（2026-11-22）**：已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作。台電 port 回傳原始 payload、由 asset parse；CWA port 維持 `CWAClient` 的 typed 層級，因既有測試以 typed batch 建構資料。
 
 ### 現況與證據
 

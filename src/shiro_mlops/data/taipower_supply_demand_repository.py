@@ -9,15 +9,18 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
-from shiro_mlops.data.repository_utils import (
-    deserialize_raw_payload,
-    serialize_raw_payload,
-    taiwan_instant_to_utc,
-    utc_instant_to_taiwan,
+from shiro_mlops.core.storage_time import (
+    from_storage_time,
+    from_storage_time_or_none,
+    to_storage_time,
+    to_storage_time_or_none,
 )
+from shiro_mlops.data.repository_utils import deserialize_raw_payload, serialize_raw_payload
 from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
 
 logger = logging.getLogger(__name__)
+
+_TABLE = "raw_taipower_supply_demand_snapshot"
 
 
 class TaipowerSupplyDemandRepository:
@@ -61,8 +64,8 @@ class TaipowerSupplyDemandRepository:
             )
 
         record = {
-            "observed_at": taiwan_instant_to_utc(snapshot.observed_at),
-            "source_publish_time": taiwan_instant_to_utc(snapshot.source_publish_time),
+            "observed_at": to_storage_time(snapshot.observed_at),
+            "source_publish_time": to_storage_time_or_none(snapshot.source_publish_time),
             "curr_load_wan_kw": float(snapshot.curr_load_wan_kw),
             "curr_util_rate_pct": float(snapshot.curr_util_rate_pct),
             "fore_maxi_sply_capacity_wan_kw": snapshot.fore_maxi_sply_capacity_wan_kw,
@@ -78,7 +81,7 @@ class TaipowerSupplyDemandRepository:
             "yday_peak_resv_rate_pct": snapshot.yday_peak_resv_rate_pct,
             "yday_peak_resv_indicator": snapshot.yday_peak_resv_indicator,
             "real_hr_maxi_sply_capacity_wan_kw": snapshot.real_hr_maxi_sply_capacity_wan_kw,
-            "real_hr_peak_time": taiwan_instant_to_utc(snapshot.real_hr_peak_time),
+            "real_hr_peak_time": to_storage_time_or_none(snapshot.real_hr_peak_time),
             "raw_payload": serialize_raw_payload(snapshot.raw_payload),
         }
 
@@ -157,7 +160,11 @@ class TaipowerSupplyDemandRepository:
         return 1
 
     def fetch(self, observed_at: datetime) -> TaipowerSupplyDemandSnapshot | None:
-        """Fetch a supply-demand snapshot by Taiwan-local observation slot."""
+        """Fetch a supply-demand snapshot by Taiwan-local observation slot.
+
+        A NULL ``observed_at`` means corrupted storage and raises; the nullable publish and
+        peak times read back as ``None``.
+        """
         query = text(
             """
             SELECT
@@ -184,7 +191,7 @@ class TaipowerSupplyDemandRepository:
             WHERE observed_at = :observed_at
             """
         )
-        params = {"observed_at": taiwan_instant_to_utc(observed_at)}
+        params = {"observed_at": to_storage_time(observed_at)}
 
         with self.engine.connect() as conn:
             row = conn.execute(query, params).mappings().first()
@@ -204,10 +211,10 @@ class TaipowerSupplyDemandRepository:
             yday_date = pd.Timestamp(yday_value).date()
 
         return TaipowerSupplyDemandSnapshot(
-            observed_at=utc_instant_to_taiwan(row["observed_at"]) or observed_at,
+            observed_at=from_storage_time(row["observed_at"], column=f"{_TABLE}.observed_at"),
             curr_load_wan_kw=float(row["curr_load_wan_kw"]),
             curr_util_rate_pct=float(row["curr_util_rate_pct"]),
-            source_publish_time=utc_instant_to_taiwan(row["source_publish_time"]),
+            source_publish_time=from_storage_time_or_none(row["source_publish_time"]),
             fore_maxi_sply_capacity_wan_kw=row["fore_maxi_sply_capacity_wan_kw"],
             fore_peak_dema_load_wan_kw=row["fore_peak_dema_load_wan_kw"],
             fore_peak_resv_capacity_wan_kw=row["fore_peak_resv_capacity_wan_kw"],
@@ -221,6 +228,6 @@ class TaipowerSupplyDemandRepository:
             yday_peak_resv_rate_pct=row["yday_peak_resv_rate_pct"],
             yday_peak_resv_indicator=row["yday_peak_resv_indicator"],
             real_hr_maxi_sply_capacity_wan_kw=row["real_hr_maxi_sply_capacity_wan_kw"],
-            real_hr_peak_time=utc_instant_to_taiwan(row["real_hr_peak_time"]),
+            real_hr_peak_time=from_storage_time_or_none(row["real_hr_peak_time"]),
             raw_payload=raw_payload,
         )
