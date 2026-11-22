@@ -12,7 +12,7 @@ from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from sqlalchemy.engine import Engine
@@ -21,9 +21,11 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import TimeWindow, resolve_window
 from shiro_mlops.service.data_explorer.schemas import Series, SeriesPoint, SeriesResponse
-from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
 from shiro_mlops.service.data_explorer.values import format_row_time, row_time, to_float
+
+if TYPE_CHECKING:
+    from shiro_mlops.service.data_explorer.datasets.definition import Dataset
 
 SERIES_MAX_DAYS = 92
 MAX_POINTS_PER_SERIES = 1_200
@@ -55,7 +57,7 @@ COMMON_SERIES_PARAMS = frozenset({"start", "end", "fields", "bucket", "agg"})
 COUNT_SERIES_PARAMS = COMMON_SERIES_PARAMS - {"fields", "agg"}
 GROUP_BY_PARAM = "group_by"
 
-SeriesFilters = Callable[[Mapping[str, str]], tuple[list[str], dict[str, Any]]]
+SeriesFilters = Callable[[ExplorerDb, Mapping[str, str]], tuple[list[str], dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -70,8 +72,10 @@ class SeriesField:
 class SeriesSpec:
     """Everything a dataset supplies to expose a chart series endpoint.
 
-    `filters` turns the dataset's own validated filter values into extra WHERE clauses;
-    the time window, bucketing, limits and gap-fill come from this module. `slot_lag` is
+    Table, time column, cadence and the accepted filters come from `dataset`; `filters`
+    replaces the dataset's own filter clauses only where a request plan needs a different
+    reading (the forecast version). The time window, bucketing, limits and gap-fill come
+    from this module. `slot_lag` is
     how long after its timestamp a slot is expected to exist (an hourly load row labels
     the hour it summarises, so it is due only once that hour has ended).
 
@@ -93,13 +97,10 @@ class SeriesSpec:
     `raw` then keeps each field's value. Contradictory flags raise `ValueError` on declaration.
     """
 
-    dataset: str
-    table: str
-    time_column: str
+    dataset: Dataset
     fields: Mapping[str, SeriesField]
     group_columns: tuple[str, ...]
-    filter_keys: frozenset[str]
-    filters: SeriesFilters
+    filters: SeriesFilters | None = None
     gap_fill: bool = True
     slot_lag: timedelta = timedelta(0)
     count_rows: bool = False
@@ -116,7 +117,7 @@ class SeriesSpec:
     def __post_init__(self) -> None:
         conflicts = _flag_conflicts(self)
         if conflicts:
-            raise ValueError(f"series spec {self.dataset}: {'; '.join(conflicts)}")
+            raise ValueError(f"series spec {self.dataset.id}: {'; '.join(conflicts)}")
 
     @property
     def request_params(self) -> frozenset[str]:
@@ -125,8 +126,26 @@ class SeriesSpec:
         return common | self.filter_keys | grouping
 
     @property
+    def table(self) -> str:
+        return self.dataset.table
+
+    @property
+    def time_column(self) -> str:
+        return self.dataset.time_column
+
+    @property
     def cadence(self) -> timedelta:
-        return timedelta(seconds=DATASET_SPECS[self.dataset]["cadence"])
+        return self.dataset.cadence
+
+    @property
+    def filter_keys(self) -> frozenset[str]:
+        return self.dataset.series_filter_keys
+
+    def where(self, db: ExplorerDb, filters: Mapping[str, str]) -> tuple[list[str], dict[str, Any]]:
+        """Extra WHERE clauses for the dataset's filters; `filters` overrides the derived ones."""
+        if self.filters is not None:
+            return self.filters(db, filters)
+        return self.dataset.series_clauses(db, filters)
 
 
 def _flag_conflicts(spec: SeriesSpec) -> list[str]:
@@ -228,7 +247,7 @@ class SeriesReader:
 
     def _where(self, request: SeriesRequest) -> tuple[str, dict[str, Any]]:
         clauses, params = self.db.time_window(self.spec.time_column, request.window)
-        extra_clauses, extra_params = self.spec.filters(request.filters)
+        extra_clauses, extra_params = self.spec.where(self.db, request.filters)
         return " AND ".join([*clauses, *extra_clauses]), {**params, **extra_params}
 
     def _series_keys(

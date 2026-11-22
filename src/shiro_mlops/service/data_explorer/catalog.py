@@ -20,11 +20,11 @@ from shiro_mlops.service.data_explorer.completeness import (
     regional_slot_map,
     ten_minute_gaps,
 )
+from shiro_mlops.service.data_explorer.datasets import DATASETS
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
 from shiro_mlops.service.data_explorer.query import TimeWindow
 from shiro_mlops.service.data_explorer.schemas import DatasetStatus, StatusResponse
-from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
 from shiro_mlops.service.data_explorer.values import json_list, row_time
@@ -37,27 +37,27 @@ def compose_dataset_status(
     missing: list[str],
 ) -> DatasetStatus:
     """Compose independent status dimensions for one dataset without changing the contract."""
-    spec = DATASET_SPECS[dataset_id]
+    dataset = DATASETS[dataset_id]
     if latest is None:
         freshness = evaluate_freshness(
-            cadence_seconds=spec["cadence"],
+            cadence_seconds=int(dataset.cadence.total_seconds()),
             as_of=as_of,
             latest_source_at=None,
             latest_ingested_at=None,
         )
         return DatasetStatus(
             id=dataset_id,
-            label=spec["label"],
+            label=dataset.label,
             availability="empty",
             freshness=freshness.state,
             completeness="unknown",
             overall=derive_overall("empty", freshness.state, "unknown"),
-            href=spec["href"],
+            href=dataset.href,
         )
     source_at = row_time(latest, "source_at")
     ingested_at = row_time(latest, "ingested_at")
     freshness = evaluate_freshness(
-        cadence_seconds=spec["cadence"],
+        cadence_seconds=int(dataset.cadence.total_seconds()),
         as_of=as_of,
         latest_source_at=source_at,
         latest_ingested_at=ingested_at,
@@ -65,7 +65,7 @@ def compose_dataset_status(
     completeness = "incomplete" if missing else "complete"
     return DatasetStatus(
         id=dataset_id,
-        label=spec["label"],
+        label=dataset.label,
         availability="available",
         freshness=freshness.state,
         completeness=completeness,
@@ -76,7 +76,7 @@ def compose_dataset_status(
         source_age_seconds=freshness.source_age_seconds,
         missing_identifiers=missing,
         missing_slot_count=len(missing),
-        href=spec["href"],
+        href=dataset.href,
     )
 
 

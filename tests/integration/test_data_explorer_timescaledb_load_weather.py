@@ -6,9 +6,8 @@ from uuid import uuid4
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
-from shiro_mlops.service.data_explorer.weather import ObservationReader
-from tests.helpers import explorer_pages
+from shiro_mlops.service.data_explorer.datasets import CWA_OBSERVATIONS, HOURLY_LOAD
+from tests.helpers import DatasetLister, explorer_pages
 
 
 def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
@@ -62,9 +61,11 @@ def test_load_and_observation_pages_preserve_microseconds_on_timescaledb(
             "end": "2040-09-20T12:00:01+08:00",
             "limit": 1,
         }
-        load_pages = explorer_pages(HourlyLoadReader(data_explorer_timescaledb_engine), params)
+        load_pages = explorer_pages(
+            DatasetLister(data_explorer_timescaledb_engine, HOURLY_LOAD), params
+        )
         observation_pages = explorer_pages(
-            ObservationReader(data_explorer_timescaledb_engine), params
+            DatasetLister(data_explorer_timescaledb_engine, CWA_OBSERVATIONS), params
         )
 
         assert [page.items[0]["load_mw"] for page in load_pages] == [4.0, 3.0, 2.0, 1.0]

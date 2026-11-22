@@ -4,12 +4,13 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.service.data_explorer.power import (
-    NationalSupplyDemandReader,
-    RegionalSupplyDemandReader,
-    UnitGenerationReader,
+from shiro_mlops.service.data_explorer.datasets import (
+    NATIONAL_SUPPLY_DEMAND,
+    REGIONAL_SUPPLY_DEMAND,
+    UNIT_GENERATION,
 )
 from tests.helpers import (
+    DatasetLister,
     explorer_pages,
     regional_supply_demand_snapshots,
     rfc3339,
@@ -45,7 +46,9 @@ def assert_national_reader_pages(
     }
 
     loads, gaps = _all_pages(
-        NationalSupplyDemandReader(test_repo.engine), params, lambda item: item["curr_load_wan_kw"]
+        DatasetLister(test_repo.engine, NATIONAL_SUPPLY_DEMAND),
+        params,
+        lambda item: item["curr_load_wan_kw"],
     )
 
     assert loads == [1000.0, 1001.0, 1002.0]
@@ -63,7 +66,7 @@ def assert_regional_reader_pages(
     rows += [replace(row, observed_at=newer, load_wan_kw=900.0) for row in rows[:1]]
     rows += [replace(row, observed_at=older, load_wan_kw=800.0) for row in rows[:1]]
     test_repo.upsert_regional_supply_demand_snapshots(rows)
-    reader = RegionalSupplyDemandReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, REGIONAL_SUPPLY_DEMAND)
     params = {"start": rfc3339(older), "end": rfc3339(observed + timedelta(seconds=1)), "limit": 1}
 
     regions, gaps = _all_pages(reader, params, lambda item: (item["region"], item["slot_complete"]))
@@ -117,7 +120,7 @@ def assert_unit_reader_pages(
         replace(seed, unit_type="燃氣", unit_name="A", net_generation_mw=1.0),
     ]
     test_repo.upsert_unit_generation_snapshots(rows)
-    reader = UnitGenerationReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, UNIT_GENERATION)
     params = {
         "start": rfc3339(observed),
         "end": rfc3339(observed + timedelta(seconds=1)),

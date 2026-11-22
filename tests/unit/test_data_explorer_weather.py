@@ -15,14 +15,15 @@ from shiro_mlops.data.cwa_client import (
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.cursor import CursorError
-from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.weather import (
-    ForecastAuditReader,
-    ForecastReader,
-    ObservationAuditReader,
-    ObservationReader,
+from shiro_mlops.service.data_explorer.datasets import (
+    CWA_FORECAST_AUDITS,
+    CWA_FORECASTS,
+    CWA_OBSERVATION_AUDITS,
+    CWA_OBSERVATIONS,
+    Dataset,
 )
-from tests.helpers import TAIWAN, explorer_pages, rfc3339
+from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
+from tests.helpers import TAIWAN, DatasetLister, explorer_pages, rfc3339
 
 
 def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
@@ -46,7 +47,7 @@ def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
                 for observed, station, temperature in rows
             ],
         )
-    reader = ObservationReader(sqlite_engine)
+    reader = DatasetLister(sqlite_engine, CWA_OBSERVATIONS)
     params = {
         "start": "2026-09-20T10:00:00+08:00",
         "end": "2026-09-20T12:00:01+08:00",
@@ -72,12 +73,12 @@ def test_observation_pages_keep_microseconds_station_key_and_window_gaps(
     )
 
 
-@pytest.mark.parametrize("reader_type", [ObservationReader, ForecastReader])
+@pytest.mark.parametrize("dataset", [CWA_OBSERVATIONS, CWA_FORECASTS])
 def test_weather_readers_answer_an_empty_last_page_without_matching_rows(
-    sqlite_engine: Engine, reader_type: type
+    sqlite_engine: Engine, dataset: Dataset
 ) -> None:
     """No matching data returns an empty last page so absence differs from a query failure."""
-    reader = reader_type(sqlite_engine)
+    reader = DatasetLister(sqlite_engine, dataset)
 
     page = reader.list({"start": "2026-09-20T10:00:00+08:00", "end": "2026-09-20T12:00:00+08:00"})
 
@@ -118,19 +119,21 @@ def test_observation_and_audit_readers_keep_station_and_missing_id_filters(
         "end": rfc3339(observed),
     }
 
-    observations = ObservationReader(test_repo.engine).list({**window, "station_id": "466920"})
+    observations = DatasetLister(test_repo.engine, CWA_OBSERVATIONS).list(
+        {**window, "station_id": "466920"}
+    )
     assert observations.items[0]["temperature_c"] is None
     assert observations.items[0]["precipitation_mm"] == 0.0
     assert "raw_payload" not in observations.items[0]
 
-    audits = ObservationAuditReader(test_repo.engine).list(
+    audits = DatasetLister(test_repo.engine, CWA_OBSERVATION_AUDITS).list(
         {**window, "status": "incomplete", "missing_station_id": "467490"}
     )
     assert audits.items[0]["missing_station_ids"] == ["467490"]
     assert "raw_payload" not in audits.items[0]
 
     with pytest.raises(ExplorerQueryError, match="status"):
-        ObservationAuditReader(test_repo.engine).list({**window, "status": "bogus"})
+        DatasetLister(test_repo.engine, CWA_OBSERVATION_AUDITS).list({**window, "status": "bogus"})
 
 
 def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
@@ -175,7 +178,7 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
         "start": rfc3339(valid - timedelta(hours=1)),
         "end": rfc3339(valid),
     }
-    reader = ForecastReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, CWA_FORECASTS)
 
     latest = reader.list(window)
     assert [item["temperature_c"] for item in latest.items] == [31.0]
@@ -191,7 +194,7 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
     by_issued = reader.list({**window, "issued_at": rfc3339(older)})
     assert [item["temperature_c"] for item in by_issued.items] == [28.0]
 
-    audits = ForecastAuditReader(test_repo.engine).list(
+    audits = DatasetLister(test_repo.engine, CWA_FORECAST_AUDITS).list(
         {"start": rfc3339(older - timedelta(hours=1)), "end": rfc3339(newer)}
     )
     assert {item["issued_at"] for item in audits.items} == {rfc3339(older), rfc3339(newer)}

@@ -9,8 +9,8 @@ import pytest
 from shiro_mlops.data.cwa_client import CWAForecastRelease
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.cursor import CursorError
-from shiro_mlops.service.data_explorer.weather import ForecastAuditReader, ForecastReader
-from tests.helpers import township_forecast
+from shiro_mlops.service.data_explorer.datasets import CWA_FORECAST_AUDITS, CWA_FORECASTS
+from tests.helpers import DatasetLister, township_forecast
 
 
 def _release(
@@ -58,7 +58,7 @@ def assert_forecast_pages_pin_microsecond_vintage(repo: TimeSeriesRepository) ->
         source.replace(microsecond=101),
         forecasts=(township_forecast(valid, 50.0),),
     )
-    reader = ForecastReader(repo.engine)
+    reader = DatasetLister(repo.engine, CWA_FORECASTS)
     params = {
         "start": "2026-09-27T13:59:59+08:00",
         "end": "2026-09-27T14:00:01+08:00",
@@ -113,7 +113,7 @@ def assert_forecast_audit_pages_keep_complete_sort_key(repo: TimeSeriesRepositor
     repo.upsert_cwa_forecast_release(
         _release("F", high, low, status="incomplete", missing_geocodes=("other",))
     )
-    reader = ForecastAuditReader(repo.engine)
+    reader = DatasetLister(repo.engine, CWA_FORECAST_AUDITS)
     params = {
         "start": "2026-09-27T11:59:59+08:00",
         "end": "2026-09-27T12:00:01+08:00",

@@ -2,18 +2,15 @@
 
 import pytest
 
+from shiro_mlops.service.data_explorer.datasets import CWA_FORECAST_AUDITS
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 
 
 def _spec(**flags: bool) -> SeriesSpec:
     return SeriesSpec(
-        dataset="cwa_forecast_audits",
-        table="raw_cwa_forecast_release",
-        time_column="issued_at",
+        dataset=CWA_FORECAST_AUDITS,
         fields={"version_count": SeriesField(sql="1", unit="count")},
         group_columns=("status",),
-        filter_keys=frozenset(),
-        filters=lambda filters: ([], {}),
         **flags,
     )
 
@@ -36,4 +33,6 @@ def test_contradictory_series_flags_are_rejected_at_declaration(flags: dict[str,
 def test_count_series_without_gap_fill_is_accepted() -> None:
     spec = _spec(count_rows=True, gap_fill=False)
 
-    assert spec.request_params == frozenset({"start", "end", "bucket"})
+    assert spec.request_params == frozenset(
+        {"start", "end", "bucket", "dataset_id", "status", "missing_geocode"}
+    )
