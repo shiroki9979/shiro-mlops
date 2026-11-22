@@ -44,7 +44,6 @@ FORECAST_RELEASES = FreshnessSource(
     ingested_column="fetched_at",
     order=FORECAST_RELEASE_ORDER,
 )
-"""A release's source time is its issue and its ingestion time is when it was fetched."""
 
 
 OBSERVATION_AUDIT_SERIES = SeriesOptions(
