@@ -19,7 +19,8 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
   - [forecast-view-hosting.md](docs/reference/forecast-view-hosting.md): S3 + CloudFront hosting of the Forecast View.
   - [terraform-state-and-deployment.md](docs/reference/terraform-state-and-deployment.md): the two Terraform layers, S3 remote state and locking, and the GitHub OIDC roles' trust and permissions.
   - [github-rulesets.md](docs/reference/github-rulesets.md): GitHub Rulesets for branches and release tags, required status checks, bypass actors; the exported JSON lives in `.github/rulesets/`.
-- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)), and the static, precomputed Forecast View as the only cloud surface ([ADR-0015](docs/adr/0015-publish-forecast-view-as-static-precomputed-output.md), superseding ADR-0001).
+  - [github-repository-settings.md](docs/reference/github-repository-settings.md): GitHub settings outside the rulesets: visibility, fork PR approval for Actions, security features, maintainer email privacy.
+- **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)), the static, precomputed Forecast View as the only cloud surface ([ADR-0015](docs/adr/0015-publish-forecast-view-as-static-precomputed-output.md), superseding ADR-0001), and the public repository ([ADR-0016](docs/adr/0016-make-repository-public.md)): read it before changing workflows, since Actions logs are public, fork PRs must be assumed, and self-hosted runners and push rulesets are out.
 - **Research Workspace (`lab/`)**: `lab/` is a `uv` workspace member that depends unidirectionally on `shiro_mlops` (`src/` must NEVER import `lab`). Use it to freeze point-in-time training table snapshots, run rolling-origin backtests (滾動起點回測), and record hyperparameter studies under `lab/<YYYY-MM-DD>-<topic>/`.
 - **Roadmap & Work Tickets**: [docs/ROADMAP.md](docs/ROADMAP.md) indexes milestones (goals, acceptance criteria, priority). Work tickets, their Definition of Done and status live in GitHub issues; operational acceptance has its own `ops-acceptance` issues. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 - **Code Review Standards**: When reviewing a change, apply [CODING_STANDARDS.md](CODING_STANDARDS.md) for repo-specific judgement rules; mechanical rules run in CI.
@@ -52,7 +53,7 @@ uv run ruff check .
 uv run ruff format --check .
 
 # Repository convention & Markdown checks (also run in CI)
-uv run python scripts/check_conventions.py python-uv docker-pins terms debt-markers comment-refs doc-dates comment-kinds --base origin/dev
+uv run python scripts/check_conventions.py python-uv docker-pins terms debt-markers comment-refs doc-dates comment-kinds blob-limits --base origin/dev
 npx markdownlint-cli2 "**/*.md"
 
 # Local API dev server

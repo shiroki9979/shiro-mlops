@@ -1,7 +1,7 @@
 # Terraform state 與部署權責
 
 - 建立日期：2026-11-21
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 ---
@@ -46,7 +46,7 @@
 | apply 角色（bootstrap 層） | `shiro-mlops-terraform-apply`（`terraform_apply_role_arn`） | `repo:shiroki9979/shiro-mlops:ref:refs/heads/main` | 見下方 |
 | 網站上傳角色（主設定） | `shiro-mlops-site-deploy`（`site_deploy_role_arn`） | 同 apply 角色 | 只能列出、寫入與刪除預報檢視 bucket 的 `site/*`（[預報檢視的雲端託管 §1](forecast-view-hosting.md#1-s3-配置與寫入權限)） |
 
-- **plan 角色**：任何 PR 都能 assume，因此不得有寫入權限；PR 上的 plan 以 `-lock=false` 執行，不需要寫 lockfile。`ReadOnlyAccess` 目前已涵蓋 state 的讀取，inline policy 讓 AWS 日後縮減託管 policy 的 S3 讀取時 plan 仍可運作。
+- **plan 角色**：本儲存庫分支開的任何 PR 都能 assume，因此不得有寫入權限。fork 開的 PR 拿不到 `id-token: write`，無法 assume（[GitHub 儲存庫設定 §2](github-repository-settings.md#2-actions)）；PR 上的 plan 以 `-lock=false` 執行，不需要寫 lockfile。`ReadOnlyAccess` 目前已涵蓋 state 的讀取，inline policy 讓 AWS 日後縮減託管 policy 的 S3 讀取時 plan 仍可運作。
 - **apply 角色**：只有合併進 `main` 的程式碼能 assume。inline policy `shiro-mlops-terraform-apply` 的 statement：
 
   | Sid | 效果 | 內容 |
@@ -140,6 +140,8 @@ CI 用到的值都放在 GitHub 的 **Settings > Secrets and variables > Actions
 | `BUDGET_ALERT_EMAIL` | secret | 接收 AWS Budgets 成本警示的 email；以 `TF_VAR_budget_alert_email` 傳入 | `terraform-plan`、`deploy` |
 
 job 所需的角色 ARN variable 未設定時，該 job 寫 notice 後略過並成功結束。
+
+儲存庫是 public（[ADR-0016](../adr/0016-make-repository-public.md)），Actions log 與 job summary 人人可讀。repository variables 的值不會被遮蔽，會出現在步驟標頭與 `terraform plan` 的輸出中，因此角色 ARN、state bucket 名稱與其中的 AWS 帳號 ID 都視為公開資訊，這是 ADR-0016 接受的結果。機密值只能放 Actions secrets，例如 `BUDGET_ALERT_EMAIL`；它同時以 `sensitive` 變數傳入 Terraform，在 log 與 plan 輸出中都會被遮蔽。
 
 ## 9. CD 部署 (main)
 
