@@ -49,8 +49,9 @@ class InputRequirements:
 
     weather: WeatherInput
     lookback_hours: int
-    # 歷史不足時由 runner 拒絕並回報不可用，任務類型不必在預測時自行失敗；None 表示不檢查。
-    history_coverage: HistoryCoverage | None = None
+    # 必填且無預設值：漏寫時在建構時失敗，而非靜默跳過檢查。歷史不足時由 runner 拒絕並回報不可用，
+    # 任務類型不必在預測時自行失敗；明寫 None 表示刻意不檢查，旁邊須註明原因。
+    history_coverage: HistoryCoverage | None
 
 
 @dataclass(frozen=True)

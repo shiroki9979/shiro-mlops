@@ -133,7 +133,10 @@ class UnsupervisedReconstruction:
 
     def requirements(self, params: UnsupervisedReconstructionParams) -> InputRequirements:
         return InputRequirements(
-            weather=WeatherInput.OBSERVED, lookback_hours=params.lookback_hours
+            weather=WeatherInput.OBSERVED,
+            lookback_hours=params.lookback_hours,
+            # 容許負載缺小時：只跳過有缺口的時間窗，不讓整個任務變成不可用。
+            history_coverage=None,
         )
 
     def train(self, params: UnsupervisedReconstructionParams, data: TrainingData) -> Trained:
