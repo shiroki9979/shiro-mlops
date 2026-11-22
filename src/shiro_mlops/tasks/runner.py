@@ -2,14 +2,15 @@
 
 The runner owns I/O and the shared components (ADR-0009): the minimum
 accumulation gate, bounded data retrieval, the stale load anchor rule, and
-weather resolution with degradation. Task types only ever receive in-memory
-frames. Every time-dependent decision takes an explicit ``as_of`` in
+weather resolution with degradation. The prediction input gate
+(``tasks/prediction_inputs.py``) judges the frames it reads before any task type
+sees them; task types only ever receive in-memory frames. Every time-dependent decision takes an explicit ``as_of`` in
 Taiwan-local naive time.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
@@ -28,6 +29,17 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_weather
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
 from shiro_mlops.tasks.definition import TaskDefinition
+
+# WHY-NOT(InsufficientLoadHistoryError): 看似未用的匯入是重新匯出；例外定義於預測輸入關卡，
+# 服務層與測試沿用 runner 的匯入路徑。
+from shiro_mlops.tasks.prediction_inputs import (
+    InsufficientLoadHistoryError as InsufficientLoadHistoryError,
+)
+from shiro_mlops.tasks.prediction_inputs import (
+    TaskUnavailableError,
+    WeatherUnavailableError,
+    admit_prediction_inputs,
+)
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
@@ -68,27 +80,12 @@ class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interfac
         self.readiness = readiness
 
 
-class TaskUnavailableError(RuntimeError):
-    """Serving inputs cannot support a prediction right now; the caller should answer 503."""
-
-
 class MissingLoadHistoryError(TaskUnavailableError):
     """No persisted target history exists to anchor a prediction."""
 
 
 class StaleLoadAnchorError(TaskUnavailableError):
     """The latest actual load is too old to anchor a recursive forecast."""
-
-
-class InsufficientLoadHistoryError(TaskUnavailableError):
-    """Too few actual load hours before the anchor for the task type's history window."""
-
-
-class WeatherUnavailableError(TaskUnavailableError):
-    """Neither forecasts nor degraded fallbacks cover the requested horizon.
-
-    For observed-weather tasks: no station observation exists in the lookback.
-    """
 
 
 class ObservedInputsIncompleteError(TaskUnavailableError):
@@ -356,15 +353,39 @@ def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, Weigh
     anchor = _fresh_load_anchor(task, request.repository, request.as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
     history = _fetch_target(task, request.repository, start=history_start, end=anchor)
-    _require_history_coverage(request, history, anchor)
     weather = request.weather_path.read(request, history_start, anchor)
-    data = PredictionData(
-        anchor=anchor,
-        load_history=history,
-        weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],
-        horizon_hours=request.horizon_hours,
-    )
+    try:
+        data = admit_prediction_inputs(
+            requirements,
+            anchor=anchor,
+            load=history,
+            weather=weather.dataframe,
+            weather_fields=task.weather.fields,
+            horizon_hours=request.horizon_hours,
+            subject=task.subject,
+        )
+    except WeatherUnavailableError as uncovered:
+        _refuse_unavailable_weather(weather, cause=uncovered)
+        raise
+    _refuse_unavailable_weather(weather)
     return data, weather
+
+
+def _refuse_unavailable_weather(
+    weather: WeightedWeather, *, cause: Exception | None = None
+) -> None:
+    """Report weather the read could not acquire only after the gate judged the load.
+
+    The read's reason names the reference point or the observation span that
+    lacked weather, which the gate's first uncovered target hour cannot.
+    """
+    if weather.mode == "unavailable":
+        raise WeatherUnavailableError(weather.reason) from cause
+
+
+def _no_weather(fields: Sequence[str], reason: str) -> WeightedWeather:
+    columns = [DATETIME_COL, *fields]
+    return WeightedWeather(pd.DataFrame(columns=columns), (), "unavailable", reason)
 
 
 def _fresh_load_anchor(
@@ -379,23 +400,6 @@ def _fresh_load_anchor(
             f"{pd.Timestamp(as_of).isoformat()} by more than {max_lag_hours} hours."
         )
     return anchor
-
-
-def _require_history_coverage(
-    request: _ServingRequest, history: pd.DataFrame, anchor: pd.Timestamp
-) -> None:
-    """Refuse rather than let the task type fail: missing past load has no substitute."""
-    coverage = request.requirements.history_coverage
-    if coverage is None:
-        return
-    window_start = anchor - timedelta(hours=coverage.window_hours)
-    times = pd.to_datetime(history.loc[history[LOAD_MW_COL].notna(), DATETIME_COL])
-    valid_hours = times[(times > window_start) & (times <= anchor)].nunique()
-    if valid_hours < coverage.min_valid_hours:
-        raise InsufficientLoadHistoryError(
-            f"Only {valid_hours} {request.task.subject} load hours in the {coverage.window_hours}-hour "
-            f"window ending at anchor {anchor.isoformat()}; {coverage.min_valid_hours} required."
-        )
 
 
 def _resolve_future_weather(
@@ -422,7 +426,7 @@ def _resolve_future_weather(
     ]
     weather = weighted_resolution(resolutions, fields)
     if weather.mode == "unavailable" or weather.dataframe.empty:
-        raise WeatherUnavailableError(weather.reason or "Weather coverage is unavailable.")
+        return _no_weather(fields, weather.reason or "Weather coverage is unavailable.")
     return weather
 
 
@@ -438,9 +442,10 @@ def _observed_weather_until(
     observed = load_observed_weather(task, request.runtime, start=start, end=anchor)
     observed = observed.dropna(subset=list(task.weather.fields), how="all")
     if observed.empty:
-        raise WeatherUnavailableError(
+        return _no_weather(
+            task.weather.fields,
             f"No observed weather at {', '.join(task.weather.aliases)} between "
-            f"{start.isoformat()} and {anchor.isoformat()}."
+            f"{start.isoformat()} and {anchor.isoformat()}.",
         )
     observed = observed.assign(
         **{DATETIME_COL: pd.to_datetime(observed[DATETIME_COL]).astype("datetime64[ns]")}
