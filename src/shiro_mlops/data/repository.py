@@ -30,8 +30,10 @@ from shiro_mlops.data.cwa_client import (
     resolve_cwa_location,
 )
 from shiro_mlops.data.forecast_track_record import TrackRecordPair, TrackRecordWindow
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
-from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
+from shiro_mlops.data.hourly_actual_load_store import (
+    REGIONAL_SNAPSHOT_SUM_SOURCE,
+    HourlyActualLoadStore,
+)
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload

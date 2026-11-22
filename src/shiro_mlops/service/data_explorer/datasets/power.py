@@ -11,7 +11,7 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import Any
 
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
+from shiro_mlops.data.hourly_actual_load_store import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
 from shiro_mlops.service.data_explorer.datasets.definition import (
     AlwaysComplete,

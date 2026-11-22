@@ -2,7 +2,8 @@
 
 Outside this module only schema init and migration, the Data Explorer's declarative
 hourly load dataset and the forecast track-record join in
-``TimeSeriesRepository.fetch_track_record_pairs`` touch the table.
+``TimeSeriesRepository.fetch_track_record_pairs`` touch the table; the last two select
+the derived rows by binding ``REGIONAL_SNAPSHOT_SUM_SOURCE`` from this module.
 Every row this store writes carries the derived source, and every derived hour it reads
 selects only that source, so d015046-era rows (NULL source) and other sources never
 mix into the derived series. Two reads look past the source: the accumulation counts
@@ -37,7 +38,6 @@ from shiro_mlops.core.storage_time import (
 )
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
-    REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyLoadAccumulation,
     HourWindow,
     catch_up_window,
@@ -48,6 +48,8 @@ from shiro_mlops.data.hourly_actual_load import (
 from shiro_mlops.data.taipower_regional_supply_demand_repository import (
     TaipowerRegionalSupplyDemandRepository,
 )
+
+REGIONAL_SNAPSHOT_SUM_SOURCE = "regional_snapshot_sum"
 
 
 @dataclass(frozen=True)
