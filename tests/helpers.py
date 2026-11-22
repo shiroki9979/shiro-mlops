@@ -69,13 +69,18 @@ def rfc3339(value: datetime) -> str:
 def explorer_pages(reader, params: dict[str, Any], *, max_pages: int = 20) -> list:
     """Follow a Data Explorer reader's cursors from the first page to the last.
 
-    A cursor that never reaches the last page fails at ``max_pages`` instead of hanging.
+    A cursor handed out twice fails at once; paging that never reaches the last page fails
+    at ``max_pages`` instead of hanging.
     """
     pages = [reader.list(params)]
+    seen_cursors: set[str] = set()
     while pages[-1].has_more:
         assert len(pages) < max_pages, f"cursor paging did not end within {max_pages} pages"
-        assert pages[-1].next_cursor is not None
-        pages.append(reader.list({**params, "cursor": pages[-1].next_cursor}))
+        cursor = pages[-1].next_cursor
+        assert cursor is not None
+        assert cursor not in seen_cursors, f"repeated cursor {cursor!r} after {len(pages)} pages"
+        seen_cursors.add(cursor)
+        pages.append(reader.list({**params, "cursor": cursor}))
     assert pages[-1].next_cursor is None
     return pages
 
