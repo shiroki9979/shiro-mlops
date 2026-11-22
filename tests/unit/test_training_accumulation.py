@@ -14,6 +14,7 @@ from tests.helpers import (
     derived_hourly_load,
     insert_legacy_load_row,
     override_task_policies,
+    write_derived_load,
 )
 
 LAST_HOUR = datetime(2026, 9, 26, 13, 0)
@@ -46,7 +47,7 @@ def test_empty_load_table_is_not_ready_and_discloses_the_gap(
 
 
 def test_one_hour_short_of_the_threshold_is_not_ready(test_repo: TimeSeriesRepository) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(671, LAST_HOUR))
 
     readiness = _readiness(test_repo)
 
@@ -59,7 +60,7 @@ def test_one_hour_short_of_the_threshold_is_not_ready(test_repo: TimeSeriesRepos
 def test_threshold_reached_is_ready_and_reports_latest_hour(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(672, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(672, LAST_HOUR))
 
     readiness = _readiness(test_repo)
 
@@ -75,7 +76,7 @@ def test_legacy_rows_block_training_even_when_threshold_is_met(tmp_path, monkeyp
         create_legacy_load_table(engine)
         ensure_timescale_hypertables(engine)
         repository = TimeSeriesRepository(engine=engine, auto_init=False)
-        repository.upsert_taipower_load(derived_hourly_load(3, LAST_HOUR))
+        write_derived_load(repository.engine, derived_hourly_load(3, LAST_HOUR))
 
         override_task_policies(monkeypatch, min_training_hours=3)
         readiness = _readiness(repository)
@@ -100,14 +101,10 @@ def test_legacy_rows_after_as_of_still_block_training(
         with engine.begin() as connection:
             connection.execute(text("DELETE FROM raw_taipower_load"))
         repository = TimeSeriesRepository(engine=engine, auto_init=False)
-        repository.upsert_taipower_load(derived_hourly_load(3, LAST_HOUR))
-        insert_legacy_load_row(engine, LAST_HOUR + timedelta(hours=1), 26000.0)
-        if legacy_subject != "nationwide":
-            with engine.begin() as connection:
-                connection.execute(
-                    text("UPDATE raw_taipower_load SET subject = :subject WHERE source IS NULL"),
-                    {"subject": legacy_subject},
-                )
+        write_derived_load(repository.engine, derived_hourly_load(3, LAST_HOUR))
+        insert_legacy_load_row(
+            engine, LAST_HOUR + timedelta(hours=1), 26000.0, subject=legacy_subject
+        )
 
         override_task_policies(monkeypatch, min_training_hours=3)
         readiness = _readiness(repository, as_of=LAST_HOUR)

@@ -19,7 +19,12 @@ from shiro_mlops.core.database import (
     get_timescale_init_ddl,
     init_db,
 )
-from tests.helpers import create_legacy_load_table, create_location_keyed_load_table
+from tests.helpers import (
+    create_legacy_load_table,
+    create_location_keyed_load_table,
+    derived_load_series,
+    write_derived_load,
+)
 
 
 def test_settings_timescaledb_defaults():
@@ -440,11 +445,11 @@ def test_repository_auto_init_on_existing_volume(tmp_path):
         # Launch repo against fresh volume
         repo1 = TimeSeriesRepository(engine=engine, auto_init=True)
         sample_df = pd.DataFrame([{"datetime": "2026-08-20 00:00:00", "load_mw": 30000.0}])
-        repo1.upsert_taipower_load(sample_df)
+        write_derived_load(repo1.engine, sample_df)
 
         # Launch new repo instance against existing volume (service reboot)
         repo2 = TimeSeriesRepository(engine=engine, auto_init=True)
-        persisted = repo2.fetch_load_range(subject="nationwide")
+        persisted = derived_load_series(repo2.engine)
         assert len(persisted) == 1
         assert persisted.iloc[0]["load_mw"] == 30000.0
     finally:

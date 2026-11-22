@@ -13,7 +13,7 @@ from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.datasets import HOURLY_LOAD
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from tests.helpers import TAIWAN, DatasetLister, explorer_pages, rfc3339
+from tests.helpers import TAIWAN, DatasetLister, explorer_pages, rfc3339, write_derived_load
 
 
 def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
@@ -114,13 +114,9 @@ def _upsert_hours(
     repo: TimeSeriesRepository, hours: list[datetime], subject: str = "nationwide"
 ) -> None:
     frame = pd.DataFrame(
-        {
-            DATETIME_COL: hours,
-            LOAD_MW_COL: [30000.0 + index for index in range(len(hours))],
-            "subject": subject,
-        }
+        {DATETIME_COL: hours, LOAD_MW_COL: [30000.0 + index for index in range(len(hours))]}
     )
-    repo.upsert_taipower_load(frame, default_subject=subject)
+    write_derived_load(repo.engine, frame, subject=subject)
 
 
 @pytest.mark.parametrize("hours, missing", [([10, 11], []), ([11], ["2026-09-20T10:00:00+08:00"])])

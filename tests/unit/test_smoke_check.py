@@ -33,7 +33,7 @@ from shiro_mlops.pipelines.smoke_check import (
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipelines
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from tests.conftest import TEST_MIN_LOAD_HOURS
-from tests.helpers import derived_hourly_load, override_task_policies
+from tests.helpers import derived_hourly_load, override_task_policies, write_derived_load
 
 NOW = datetime(2026, 9, 27, 0, 30)
 ISSUED_SCHEDULE = "issued_forecast_schedule"
@@ -136,7 +136,7 @@ def test_training_job_selecting_snapshot_or_derivation_assets_fails() -> None:
 def test_cold_start_reports_waiting_readiness_without_failing(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(10, datetime(2026, 9, 26, 23, 0)))
+    write_derived_load(test_repo.engine, derived_hourly_load(10, datetime(2026, 9, 26, 23, 0)))
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
@@ -162,7 +162,9 @@ def test_cold_start_reports_waiting_readiness_without_failing(
 def test_recovered_stack_reports_both_ticks_triggering(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 23, 0)))
+    write_derived_load(
+        test_repo.engine, derived_hourly_load(min_hours, datetime(2026, 9, 26, 23, 0))
+    )
     for task_id in deployed_tasks():
         dagster_instance.report_runless_asset_event(
             AssetMaterialization(TaskPipelineNames(task_id).model)
@@ -187,7 +189,9 @@ def test_stalled_accumulation_fails(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
     """A derived-load anchor older than the configured lag signals stalled ingestion or derivation."""
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, datetime(2026, 9, 26, 20, 0)))
+    write_derived_load(
+        test_repo.engine, derived_hourly_load(min_hours, datetime(2026, 9, 26, 20, 0))
+    )
 
     results = check_downstream_readiness(Deployment(defs, test_repo, dagster_instance, NOW))
 
@@ -254,8 +258,8 @@ def test_task_scope_is_ready_while_another_task_still_accumulates(
     override_task_policies(
         monkeypatch, DYNAMIC_HORIZON_FORECAST, min_training_hours=TEST_MIN_LOAD_HOURS
     )
-    test_repo.upsert_taipower_load(
-        derived_hourly_load(TEST_MIN_LOAD_HOURS, datetime(2026, 9, 26, 23, 0))
+    write_derived_load(
+        test_repo.engine, derived_hourly_load(TEST_MIN_LOAD_HOURS, datetime(2026, 9, 26, 23, 0))
     )
     dagster_instance.report_runless_asset_event(
         AssetMaterialization(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).model)

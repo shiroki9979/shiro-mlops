@@ -30,7 +30,7 @@ from shiro_mlops.tasks.runner import (
     training_table,
 )
 from shiro_mlops.tasks.types.base import HealthStatus, TaskModel
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather
+from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 ANCHOR = pd.Timestamp(LAST_HOUR)
@@ -54,7 +54,7 @@ def task() -> TaskDefinition:
 @pytest.fixture
 def runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
@@ -192,7 +192,7 @@ def test_training_table_round_trip_preserves_weather_on_load_missing_hours(
     hour_n_plus_1 = pd.Timestamp(load["datetime"].iloc[201])
     gapped_load = load[load["datetime"] != hour_n].reset_index(drop=True)
     gapped_weather = weather[weather["datetime"] != hour_n_plus_1].reset_index(drop=True)
-    test_repo.upsert_taipower_load(gapped_load)
+    write_derived_load(test_repo.engine, gapped_load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(gapped_weather.assign(location="Taipei"))
     )
@@ -386,7 +386,7 @@ def _runtime_missing_load_hour(
 ) -> TaskRuntime:
     """Persist the 21-day fixture without the actual load of one ``missing`` hour."""
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
-    repository.upsert_taipower_load(load[load["datetime"] != missing])
+    write_derived_load(repository.engine, load[load["datetime"] != missing])
     repository.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )

@@ -33,6 +33,7 @@ from tests.helpers import (
     hourly_load_with_weather,
     override_task_policies,
     with_dynamic_horizon_lookback,
+    write_derived_load,
 )
 
 HIGH_LOAD_ALERT = "high_load_alert"
@@ -98,7 +99,7 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(
     """Readiness exposes a usable full-horizon weather mode from persisted sources."""
     last_hour = datetime(2026, 9, 20, 23, 0)
     load, weather = hourly_load_with_weather(24 * 21, last_hour)
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     # 沒有鄉鎮預報，只能以測站前日觀測補足視界，故為降級。
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
@@ -579,7 +580,7 @@ def serve_anomaly_task(test_repo, monkeypatch) -> Callable[..., TestClient]:
     """A trained anomaly model over a SQLite store holding 21 days of load and observations."""
     hours = 24 * 21
     load, weather = hourly_load_with_weather(hours, ANOMALY_ANCHOR.to_pydatetime())
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )

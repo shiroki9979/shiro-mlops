@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy import text
 
 from shiro_mlops.data.forecast_track_record import TrackRecordWindow
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 from shiro_mlops.data.repository import TimeSeriesRepository
+from tests.helpers import insert_other_source_load_row, write_derived_load
 
 WINDOW_START = datetime(2026, 11, 18, 0, 0)
 WINDOW_END = datetime(2026, 11, 21, 0, 0)
@@ -40,17 +40,13 @@ def _issue(
 
 
 def _observe(
-    repo: TimeSeriesRepository,
-    hours: list[datetime],
-    *,
-    subject: str = "nationwide",
-    source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
+    repo: TimeSeriesRepository, hours: list[datetime], *, subject: str = "nationwide"
 ) -> None:
-    """Persist hourly load of 25000 MW for each hour."""
-    repo.upsert_taipower_load(
+    """Persist derived hourly load of 25000 MW for each hour."""
+    write_derived_load(
+        repo.engine,
         pd.DataFrame({"datetime": hours, "load_mw": [25000.0] * len(hours)}),
-        default_subject=subject,
-        source=source,
+        subject=subject,
     )
 
 
@@ -106,7 +102,7 @@ def test_issued_steps_join_hourly_load_on_the_target_hour_in_sql(
     [
         pytest.param(lambda _repo, _hour: None, id="no-load-row"),
         pytest.param(
-            lambda repo, hour: _observe(repo, [hour], source="legacy_api"),
+            lambda repo, hour: insert_other_source_load_row(repo.engine, hour, 25000.0),
             id="not-regional-snapshot-sum",
         ),
         pytest.param(

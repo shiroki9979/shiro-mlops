@@ -14,6 +14,7 @@ from shiro_mlops.pipelines.forecast_track_record import (
     FORECAST_TRACK_RECORD_ASSET,
     forecast_track_record,
 )
+from tests.helpers import write_derived_load
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # 排程 tick 為 10:25，統計截至時刻取整點 10:00。
@@ -44,7 +45,9 @@ def _issue_45_minutes_ahead(repo: TimeSeriesRepository, target_hours: list[datet
 
 
 def _observe(repo: TimeSeriesRepository, hours: list[datetime]) -> None:
-    repo.upsert_taipower_load(pd.DataFrame({"datetime": hours, "load_mw": [25000.0] * len(hours)}))
+    write_derived_load(
+        repo.engine, pd.DataFrame({"datetime": hours, "load_mw": [25000.0] * len(hours)})
+    )
 
 
 def _compile(repo: TimeSeriesRepository, tmp_path, instance, *, tick: str | None = TICK):
