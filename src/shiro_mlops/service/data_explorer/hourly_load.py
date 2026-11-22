@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import timedelta
+from enum import StrEnum
 from typing import Any
 
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.service.data_explorer.completeness import hourly_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import to_taiwan
 
@@ -25,14 +29,9 @@ class HourlyLoadReader(DatasetReader):
     """
 
     def filters(self, query: ExplorerQuery) -> tuple[list[str], dict[str, Any]]:
-        subject = query.filters.get("subject")
         clauses, sql_params = self.db.time_window("time", query.window)
-        clauses.append("source = :source")
-        sql_params["source"] = REGIONAL_SNAPSHOT_SUM_SOURCE
-        if subject:
-            clauses.append("subject = :subject")
-            sql_params["subject"] = subject
-        return clauses, sql_params
+        load_clauses, load_params = hourly_load_filters(query.filters)
+        return [*clauses, *load_clauses], {**sql_params, **load_params}
 
     def project_page(
         self, query: ExplorerQuery, rows: list[dict[str, Any]]
@@ -50,3 +49,32 @@ class HourlyLoadReader(DatasetReader):
                 }
             )
         return items, hourly_gaps(self.db, query.window, query.filters.get("subject"))
+
+
+def hourly_load_filters(filters: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Pin the derived regional-sum source and apply the optional subject filter."""
+    clauses = ["source = :source"]
+    params: dict[str, Any] = {"source": REGIONAL_SNAPSHOT_SUM_SOURCE}
+    subject = filters.get("subject")
+    if subject:
+        clauses.append("subject = :subject")
+        params["subject"] = subject
+    return clauses, params
+
+
+class HourlyLoadSeriesField(StrEnum):
+    """Hourly load fields a series request may name."""
+
+    LOAD_MW = "load_mw"
+
+
+HOURLY_LOAD_SERIES = SeriesSpec(
+    dataset="hourly_load",
+    table="raw_taipower_load",
+    time_column="time",
+    fields={HourlyLoadSeriesField.LOAD_MW.value: SeriesField(sql="load_mw", unit="MW")},
+    group_columns=("subject",),
+    filter_keys=frozenset({"subject"}),
+    filters=hourly_load_filters,
+    slot_lag=timedelta(hours=1),
+)

@@ -45,6 +45,7 @@ def resolve_cwa_location(catalog: Mapping[str, CWALocation], alias: str) -> CWAL
     return catalog[alias]
 
 
+# SYNC(frontend/apps/engineering-console/src/lib/chart-palette.ts): STATION_COLORS station ids.
 DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
     "Taipei": CWALocation("Taipei", "466920", "63000000"),
     "Taichung": CWALocation("Taichung", "467490", "66000000"),

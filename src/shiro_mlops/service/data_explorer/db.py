@@ -13,6 +13,11 @@ from shiro_mlops.service.data_explorer.query import TimeWindow
 
 __all__ = ["DatabaseUnavailableError", "ExplorerDb"]
 
+TIMESCALE_BUCKET_INTERVALS = {"1h": "1 hour", "1d": "1 day"}
+# WHY-NOT(SQLITE_TAIPEI_OFFSET): SQLite has no time zone database; a fixed +8 hours is exact
+# because Asia/Taipei has observed no daylight saving time since 1979.
+SQLITE_TAIPEI_OFFSET = "8 hours"
+
 
 class ExplorerDb:
     """Run parameterized reads against the operational TimescaleDB engine."""
@@ -34,6 +39,16 @@ class ExplorerDb:
             f"{operand} >= {self.time_operand(':start_time')}",
             f"{operand} <= {self.time_operand(':end_time')}",
         ], {"start_time": start, "end_time": end}
+
+    def bucket_start(self, column: str, bucket: str) -> str:
+        """SQL for the UTC start of the Taipei-aligned `1h` or `1d` bucket holding `column`."""
+        if self.dialect_name != "sqlite":
+            interval = TIMESCALE_BUCKET_INTERVALS[bucket]
+            return f"time_bucket(INTERVAL '{interval}', {column}, 'Asia/Taipei')"
+        if bucket == "1h":
+            return f"strftime('%Y-%m-%d %H:00:00', {column})"
+        offset = SQLITE_TAIPEI_OFFSET
+        return f"datetime(date({column}, '+{offset}'), '-{offset}')"
 
     def time_equals(self, column: str, parameter: str) -> str:
         return f"{self.time_operand(column)} = {self.time_operand(':' + parameter)}"

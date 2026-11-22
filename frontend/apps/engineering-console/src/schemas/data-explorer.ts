@@ -36,3 +36,35 @@ export const ListEnvelopeSchema = z.object({
 })
 
 export type ListEnvelope = z.infer<typeof ListEnvelopeSchema>
+
+export const SeriesPointSchema = z.object({
+  t: z.string(),
+  v: z.number().nullable(),
+})
+
+export const SeriesSchema = z.object({
+  field: z.string(),
+  unit: z.string(),
+  group: z.record(z.string(), z.string()).default({}),
+  points: z.array(SeriesPointSchema),
+})
+
+export type Series = z.infer<typeof SeriesSchema>
+
+// SYNC(src/shiro_mlops/service/data_explorer/series.py): Bucket and Agg; the first value of each is the API default.
+export const BucketSchema = z.enum(['auto', 'raw', '1h', '1d'])
+export const ResolvedBucketSchema = BucketSchema.exclude(['auto'])
+export const AggSchema = z.enum(['avg', 'min', 'max'])
+
+export type Bucket = z.infer<typeof BucketSchema>
+export type ResolvedBucket = z.infer<typeof ResolvedBucketSchema>
+export type Agg = z.infer<typeof AggSchema>
+
+export const SeriesResponseSchema = z.object({
+  bucket: ResolvedBucketSchema,
+  agg: AggSchema.nullable(),
+  series: z.array(SeriesSchema),
+  timezone: z.literal('Asia/Taipei').optional(),
+})
+
+export type SeriesResponse = z.infer<typeof SeriesResponseSchema>

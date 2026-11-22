@@ -23,7 +23,8 @@ DEFAULT_REGIONAL_SUPPLY_DEMAND_URL = (
     "https://service.taipower.com.tw/data/opendata/apply/file/d006019/001.csv"
 )
 
-# 北中南東為台電區域慣用順序，同時作為合法區域集合。
+# SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): REGIONS，
+# 同為台電慣用的北中南東順序；此 tuple 同時作為合法區域集合。
 REGIONAL_SUPPLY_DEMAND_REGIONS: tuple[str, ...] = ("北部", "中部", "南部", "東部")
 _KNOWN_REGIONS = frozenset(REGIONAL_SUPPLY_DEMAND_REGIONS)
 _SOURCE_TIME_FORMAT = "%Y%m%dT%H%M%S"

@@ -3,8 +3,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui
 import { exportCsv, fromRfc3339, toRfc3339 } from '@/lib/data-explorer'
 import { Database, Download, RefreshCw } from 'lucide-react'
 import { useMessages } from '@/i18n/messages'
+import type { ExplorerWindow } from '@/lib/explorer-window'
 import type { ExplorerDatasetConfig } from './catalog'
-import { explorerFieldLabel } from './field-format'
+import { ExplorerFilterField } from './explorer-filter-field'
+import { ExplorerWindowNav } from './explorer-window-nav'
 
 interface ExplorerFiltersProps {
   dataset: ExplorerDatasetConfig
@@ -13,9 +15,11 @@ interface ExplorerFiltersProps {
   filterValues: Record<string, string | undefined>
   fetchedAt: string
   items: Record<string, unknown>[]
+  csvDisabled: boolean
   onRefresh: () => void
   onStartChange: (value: string) => void
   onEndChange: (value: string) => void
+  onWindowChange: (window: ExplorerWindow) => void
   onFilterChange: (key: string, value: string) => void
 }
 
@@ -26,9 +30,11 @@ export function ExplorerFilters({
   filterValues,
   fetchedAt,
   items,
+  csvDisabled,
   onRefresh,
   onStartChange,
   onEndChange,
+  onWindowChange,
   onFilterChange,
 }: ExplorerFiltersProps) {
   const m = useMessages()
@@ -45,13 +51,14 @@ export function ExplorerFilters({
             <RefreshCw className="h-3.5 w-3.5" />
             {m.common.refresh}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => exportCsv(`${dataset.id}.csv`, items)}>
+          <Button variant="outline" size="sm" disabled={csvDisabled} onClick={() => exportCsv(`${dataset.id}.csv`, items)}>
             <Download className="h-3.5 w-3.5" />
             {m.common.exportCsv}
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        <ExplorerWindowNav dataset={dataset} window={{ start, end }} onWindowChange={onWindowChange} />
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           <label className="text-xs text-slate-400 space-y-1">
             <span>{filtersText.start}</span>
@@ -72,15 +79,12 @@ export function ExplorerFilters({
             />
           </label>
           {dataset.filters.map((field) => (
-            <label key={field.key} className="text-xs text-slate-400 space-y-1">
-              <span>{explorerFieldLabel(field.key, m)}</span>
-              <input
-                className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200"
-                placeholder={field.placeholder}
-                value={filterValues[field.key] ?? ''}
-                onChange={(event) => onFilterChange(field.key, event.target.value)}
-              />
-            </label>
+            <ExplorerFilterField
+              key={field.key}
+              field={field}
+              value={filterValues[field.key] ?? ''}
+              onChange={(value) => onFilterChange(field.key, value)}
+            />
           ))}
         </div>
         <p className="text-xs text-slate-500">{filtersText.lastFetched(fetchedAt)}</p>

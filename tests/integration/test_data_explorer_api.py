@@ -29,6 +29,9 @@ from tests.helpers import (
     township_forecast,
     unit_generation_snapshots,
 )
+from tests.scenarios.data_explorer_gaps import (
+    assert_regional_gaps_list_zero_region_slots_on_every_page,
+)
 
 
 def _now() -> datetime:
@@ -504,6 +507,38 @@ def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
     )
     assert status["completeness"] == "incomplete"
     assert "completeness=incomplete" in status["href"]
+
+
+def test_regional_missing_slots_list_zero_region_slots_on_every_page(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """四區全缺的時段也是缺口；缺口以整個窗口計算，第 1 頁與第 2 頁相同。"""
+    assert_regional_gaps_list_zero_region_slots_on_every_page(test_repo)
+
+
+def test_missing_slots_exclude_slots_after_now(explorer_client, monkeypatch) -> None:
+    """窗口延伸到未來時，尚未發生的時段不是缺口。"""
+    client, _ = explorer_client
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        lambda: datetime(2026, 9, 6, 8, 25),
+    )
+    window = {"start": "2026-09-06T08:00:00+08:00", "end": "2026-09-06T09:00:00+08:00"}
+    elapsed_ten_minute_slots = [
+        "2026-09-06T08:00:00+08:00",
+        "2026-09-06T08:10:00+08:00",
+        "2026-09-06T08:20:00+08:00",
+    ]
+
+    national = client.get("/data/power/supply-demand", params=window).json()
+    regional = client.get("/data/power/regional", params=window).json()
+    observations = client.get(
+        "/data/weather/observations", params={**window, "station_id": "466920"}
+    ).json()
+
+    assert national["missing_slots"] == elapsed_ten_minute_slots
+    assert regional["missing_slots"] == elapsed_ten_minute_slots
+    assert observations["missing_slots"] == ["2026-09-06T08:00:00+08:00:466920"]
 
 
 def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> None:

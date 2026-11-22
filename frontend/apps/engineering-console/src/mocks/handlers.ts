@@ -182,6 +182,54 @@ export const handlers = [
     return HttpResponse.json(loadEnvelope)
   }),
 
+  http.get('*/data/power/load/series', () =>
+    HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      bucket: 'raw',
+      agg: null,
+      series: [
+        {
+          field: 'load_mw',
+          unit: 'MW',
+          group: { subject: 'nationwide' },
+          points: [
+            { t: '2026-09-09T18:00:00+08:00', v: 30100.0 },
+            { t: '2026-09-09T19:00:00+08:00', v: null },
+            { t: '2026-09-09T20:00:00+08:00', v: 32100.5 },
+          ],
+        },
+      ],
+    }),
+  ),
+
+  http.get('*/data/power/units/series', () =>
+    HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      bucket: 'raw',
+      agg: null,
+      series: [
+        {
+          field: 'net_generation_mw',
+          unit: 'MW',
+          group: { unit_type: '燃氣' },
+          points: [
+            { t: '2026-09-09T12:00:00+08:00', v: 9000.0 },
+            { t: '2026-09-09T12:10:00+08:00', v: 9100.0 },
+          ],
+        },
+        {
+          field: 'net_generation_mw',
+          unit: 'MW',
+          group: { unit_type: '儲能負載(Energy Storage System Load)' },
+          points: [
+            { t: '2026-09-09T12:00:00+08:00', v: -2000.0 },
+            { t: '2026-09-09T12:10:00+08:00', v: -2100.0 },
+          ],
+        },
+      ],
+    }),
+  ),
+
   http.get('*/data/power/supply-demand', () =>
     HttpResponse.json({
       timezone: 'Asia/Taipei',
@@ -199,6 +247,27 @@ export const handlers = [
     }),
   ),
 
+  http.get('*/data/power/supply-demand/series', () =>
+    HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      bucket: 'raw',
+      agg: null,
+      series: ['curr_load_mw', 'real_hr_maxi_sply_capacity_mw'].map((field, index) => ({
+        field,
+        unit: 'MW',
+        group: {},
+        points: [
+          { t: '2026-09-09T19:50:00+08:00', v: 32000 + index * 4000 },
+          { t: '2026-09-09T20:00:00+08:00', v: 32421 + index * 4000 },
+        ],
+      })),
+    }),
+  ),
+
+  http.get('*/data/power/regional/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: 'raw', agg: null, series: [] }),
+  ),
+
   http.get('*/data/power/regional', () =>
     HttpResponse.json({ timezone: 'Asia/Taipei', items: [], next_cursor: null, has_more: false, missing_slots: [] }),
   ),
@@ -210,6 +279,18 @@ export const handlers = [
   ),
   http.get('*/data/weather/forecasts', () =>
     HttpResponse.json({ timezone: 'Asia/Taipei', items: [], next_cursor: null, has_more: false, missing_slots: [] }),
+  ),
+  http.get('*/data/audits/cwa-observations/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: '1h', agg: null, series: [] }),
+  ),
+  http.get('*/data/audits/cwa-forecasts/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: '1h', agg: null, series: [] }),
+  ),
+  http.get('*/data/weather/observations/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: 'raw', agg: null, series: [] }),
+  ),
+  http.get('*/data/weather/forecasts/series', () =>
+    HttpResponse.json({ timezone: 'Asia/Taipei', bucket: 'raw', agg: null, series: [] }),
   ),
   http.get('*/data/audits/cwa-observations', () =>
     HttpResponse.json({ timezone: 'Asia/Taipei', items: [], next_cursor: null, has_more: false, missing_slots: [] }),

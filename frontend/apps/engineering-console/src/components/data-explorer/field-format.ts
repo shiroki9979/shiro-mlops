@@ -5,7 +5,7 @@ import type { ExplorerFieldKey } from './catalog'
 import { translateCompleteness } from './status-text'
 
 // 'text' covers identifiers and data values (station IDs, geocodes, regions, unit names): shown verbatim.
-type FieldKind = 'timestamp' | 'date' | 'measurement' | 'flag' | 'auditStatus' | 'text'
+export type FieldKind = 'timestamp' | 'date' | 'measurement' | 'flag' | 'auditStatus' | 'text'
 
 // Classified by field meaning rather than by value shape: station IDs and geocodes are numeric-looking
 // strings that must never be grouped like measurements. The Record type forces every dictionary key here.
@@ -57,6 +57,8 @@ const FIELD_KINDS: Record<ExplorerFieldKey, FieldKind> = {
   precipitation_mm: 'measurement',
   wind_speed_m_s: 'measurement',
   wind_direction_deg: 'measurement',
+  batch_count: 'measurement',
+  version_count: 'measurement',
   slot_complete: 'flag',
   status: 'auditStatus',
   subject: 'text',
@@ -92,14 +94,17 @@ function isKnownField(key: string): key is ExplorerFieldKey {
   return Object.hasOwn(FIELD_KINDS, key)
 }
 
+export function explorerFieldKind(key: string): FieldKind {
+  return isKnownField(key) ? FIELD_KINDS[key] : 'text'
+}
+
 export function explorerFieldLabel(key: string, m: Messages): string {
   return isKnownField(key) ? m.explorer.fields[key] : key
 }
 
 export function formatExplorerField(key: string, value: unknown, context: FieldFormatContext): string {
   if (value === null || value === undefined || value === '') return EMPTY_VALUE
-  const kind = isKnownField(key) ? FIELD_KINDS[key] : 'text'
-  return formatByKind(kind, value, context)
+  return formatByKind(explorerFieldKind(key), value, context)
 }
 
 function formatByKind(kind: FieldKind, value: unknown, { locale, m }: FieldFormatContext): string {

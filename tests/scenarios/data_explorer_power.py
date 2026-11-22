@@ -96,7 +96,7 @@ def assert_regional_reader_pages(
         ("中部", True),
         ("北部", False),
     ]
-    assert gaps == [[rfc3339(newer), rfc3339(older)]] * 6
+    assert gaps == [[rfc3339(older), rfc3339(observed)]] * 6
     assert complete_north == [("北部", True, [])]
     assert incomplete == [900.0, 800.0]
 
