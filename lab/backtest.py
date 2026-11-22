@@ -258,6 +258,15 @@ class _BacktestContext:
     def weather_fields(self) -> list[str]:
         return list(self.task.weather.fields)
 
+    def aligned_horizon_weather(self, horizon_times: pd.DatetimeIndex) -> pd.DataFrame:
+        """Observed weather on the target hours, each matched within two hours backward."""
+        horizon_grid = pd.DataFrame({DATETIME_COL: horizon_times})
+        weather = self.weather[self.weather[DATETIME_COL] <= horizon_times[-1]]
+        aligned = merge_weather_features(horizon_grid, weather)
+        return aligned[[DATETIME_COL, *self.weather_fields]].sort_values(
+            DATETIME_COL, ignore_index=True
+        )
+
 
 def _build_context(
     task: TaskDefinition,
@@ -325,7 +334,7 @@ def _evaluate_single_origin(
 
 @dataclass(frozen=True)
 class _AdmittedOrigin:
-    """An origin that passed every check: its training load, target actuals and gated inputs."""
+    """An origin that passed every check (docs/reference/lab.md §2)."""
 
     train_load: pd.DataFrame
     horizon_load: pd.DataFrame
@@ -378,32 +387,22 @@ def _admit_origin_inputs(
             context.requirements,
             anchor=origin,
             load=train_load,
-            weather=_align_horizon_weather(context, horizon_times),
+            weather=context.aligned_horizon_weather(horizon_times),
             weather_fields=context.weather_fields,
             horizon_hours=context.horizon_hours,
             subject=context.task.subject,
         )
-    except TaskUnavailableError as error:
-        condition = (
-            "lookback load completeness"
-            if isinstance(error, InsufficientLoadHistoryError)
-            else "horizon weather completeness"
-        )
+    except InsufficientLoadHistoryError as error:
         raise ValueError(
-            f"Origin {origin.isoformat()} failed {condition} check (prediction input gate): {error}"
+            f"Origin {origin.isoformat()} failed lookback load completeness check "
+            f"(prediction input gate): {error} "
+            f"(first missing: {pd.Timestamp(error.first_missing).isoformat()})"
         ) from error
-
-
-def _align_horizon_weather(
-    context: _BacktestContext, horizon_times: pd.DatetimeIndex
-) -> pd.DataFrame:
-    """Observed weather on the target hours, each matched within two hours backward."""
-    horizon_grid = pd.DataFrame({DATETIME_COL: horizon_times})
-    weather = context.weather[context.weather[DATETIME_COL] <= horizon_times[-1]]
-    aligned = merge_weather_features(horizon_grid, weather)
-    return aligned[[DATETIME_COL, *context.weather_fields]].sort_values(
-        DATETIME_COL, ignore_index=True
-    )
+    except TaskUnavailableError as error:
+        raise ValueError(
+            f"Origin {origin.isoformat()} failed horizon weather completeness check "
+            f"(prediction input gate): {error}"
+        ) from error
 
 
 def _slice_and_validate_horizon_load(

@@ -39,7 +39,7 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 - **起點語意**：起點為最後一筆已知實際負載的整點，預報目標為 `origin + 1h .. origin + horizon_hours`（`target_hours(origin, horizon_hours)`）。
 - **訓練**：負載與氣象皆截斷為 `datetime <= origin`，`validation_start = origin + 1h`（驗證集為空）。
 - **預報**：`PredictionData` 由預測輸入關卡（`admit_prediction_inputs`，[ML 任務設定 §2](ml-tasks.md#2-任務類型介面taskstypes)）建構，與 serving 相同：`anchor = origin`，`load_history` 只含 `(origin - lookback_hours, origin]` 的負載（含起點當小時）；`weather` 為目標時段的完整逐時軸，由回測以正式的觀測氣象對齊規則（2 小時內向後對齊）填入後交給關卡。
-- **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `ValueError` 並指出起點與條件；關卡的拒絕以 `raise ValueError(...) from error` 包裝，原例外保留於 `__cause__`：
+- **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `ValueError` 並指出起點與條件；關卡的拒絕以 `raise ValueError(...) from error` 包裝，原例外保留於 `__cause__`；訊息含關卡的拒絕訊息，第 2 項另附 lookback 內第一個缺負載的小時（`first missing: ...`），第 3 項的天氣部分由關卡訊息指出第一個缺值的目標小時：
   1. `datetime <= origin` 的有效負載小時數達 `min_history_hours`（預設取任務設定 `policies.min_training_hours`）。由回測判定。
   2. 任務類型 `history_coverage` 要求的 lookback 負載完整；遞迴回歸即 `(origin - lookback_hours, origin]` 的逐時負載完整（含起點當小時）。由預測輸入關卡判定，回測與 serving 接受的起點一致。
   3. 目標時段的實際負載有值（由回測判定），且對齊後觀測氣象的 `weather.fields` 皆有值（由預測輸入關卡判定）。
