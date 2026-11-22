@@ -5,10 +5,13 @@ from uuid import uuid4
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.core.database import get_timescale_engine
+from shiro_mlops.data.cwa_client import parse_forecast_release
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.repository_utils import deserialize_raw_payload
 from shiro_mlops.features.transformers import merge_weather_features
 
 TIMESCALE_INTEGRATION_URI_ENV = "TIMESCALE_INTEGRATION_URI"
@@ -21,7 +24,7 @@ def timescaledb_engine() -> Engine:
     if uri is None:
         pytest.skip(f"Set {TIMESCALE_INTEGRATION_URI_ENV} to run TimescaleDB integration tests.")
 
-    engine = create_engine(uri)
+    engine = get_timescale_engine(uri)
     with engine.connect() as connection:
         extension_version = connection.execute(
             text("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
@@ -101,3 +104,43 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
                 text("DELETE FROM raw_taipower_load WHERE location = :location"),
                 {"location": location},
             )
+
+
+def test_string_raw_payload_round_trips_through_timescaledb_jsonb(
+    timescaledb_engine: Engine,
+) -> None:
+    """XML 預報原始檔寫入 JSONB 後讀回，反序列化得到原字串而非再解碼一次。"""
+    source_xml = f"<cwaopendata><Dataset>{uuid4().hex}</Dataset></cwaopendata>"
+    release = parse_forecast_release(
+        {
+            "records": {
+                "IssueTime": "2026-08-20T11:00:00+08:00",
+                "Update": "2026-08-20T11:20:00+08:00",
+                "Locations": [],
+            }
+        },
+        dataset_id="F-D0047-089",
+        raw_payload=source_xml,
+    )
+    repository = TimeSeriesRepository(engine=timescaledb_engine, auto_init=False)
+    delete_release = text(
+        "DELETE FROM raw_cwa_forecast_release "
+        "WHERE dataset_id = :dataset_id AND issued_at = :issued_at"
+    )
+    release_key = {"dataset_id": "F-D0047-089", "issued_at": pd.Timestamp("2026-08-20T03:00:00Z")}
+
+    try:
+        repository.upsert_cwa_forecast_release(release)
+        with timescaledb_engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    "SELECT raw_payload FROM raw_cwa_forecast_release "
+                    "WHERE dataset_id = :dataset_id AND issued_at = :issued_at"
+                ),
+                release_key,
+            ).scalar_one()
+
+        assert deserialize_raw_payload(stored) == source_xml
+    finally:
+        with timescaledb_engine.begin() as connection:
+            connection.execute(delete_release, release_key)

@@ -44,8 +44,17 @@ def get_timescale_init_ddl(sql_path: Path | None = None) -> str:
     return target_path.read_text(encoding="utf-8")
 
 
+def _keep_json_text(value: str) -> str:
+    """Return JSON column values as JSON text instead of parsed Python objects."""
+    return value
+
+
 def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
     """Create and return a SQLAlchemy Engine for TimescaleDB.
+
+    JSON and JSONB columns read back as JSON text, as SQLite TEXT columns do,
+    so ``deserialize_raw_payload`` decodes every stored payload exactly once
+    whichever database holds it.
 
     Parameters
     ----------
@@ -60,7 +69,7 @@ def get_timescale_engine(uri: str | None = None, **kwargs: Any) -> Engine:
         Configured SQLAlchemy Engine instance.
     """
     db_uri = uri or settings.timescale_uri
-    engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    engine_kwargs: dict[str, Any] = {"pool_pre_ping": True, "json_deserializer": _keep_json_text}
     engine_kwargs.update(kwargs)
     return create_engine(db_uri, **engine_kwargs)
 

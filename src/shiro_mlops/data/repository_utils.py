@@ -42,7 +42,11 @@ def serialize_raw_payload(payload: Any) -> str:
 
 
 def deserialize_raw_payload(payload: Any) -> Any:
-    """Deserialize raw API payload from JSON text or pass through parsed objects."""
+    """Decode a stored payload from JSON text, passing already-parsed values through.
+
+    Engines from ``get_timescale_engine`` return JSONB as JSON text, so a string
+    here is always JSON text; a stored string payload decodes back to that string.
+    """
     if isinstance(payload, str):
         try:
             return json.loads(payload)
