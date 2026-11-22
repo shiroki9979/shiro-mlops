@@ -285,8 +285,8 @@ def with_dynamic_horizon_lookback(load: pd.DataFrame) -> pd.DataFrame:
     hours = deployed_tasks()[DYNAMIC_HORIZON_FORECAST].params.lookback_hours
     given = load.sort_values("datetime").reset_index(drop=True)
     times = pd.date_range(end=given["datetime"].max(), periods=max(hours, len(given)), freq="h")
-    # Negative offsets count back from the last row: -1 is the last given row, -2 the one before.
-    positions = np.arange(-len(times), 0) % len(given)
+    offsets_from_last_row = np.arange(-len(times), 0)
+    positions = offsets_from_last_row % len(given)
     return given.iloc[positions].assign(datetime=times).reset_index(drop=True)
 
 
