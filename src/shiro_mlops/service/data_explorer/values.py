@@ -55,6 +55,6 @@ def json_list(value: object) -> list[Any]:
     return parsed
 
 
-# SYNC(frontend/apps/engineering-console/src/components/data-explorer/explorer-filter-field.tsx): TRUTHY_VALUES.
+# SYNC(frontend/apps/engineering-console/src/lib/data-explorer.ts): TRUTHY_VALUES.
 def is_truthy(value: object) -> bool:
     return str(value).lower() in {"1", "true", "yes"}
