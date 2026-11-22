@@ -12,14 +12,15 @@
 
 | Ruleset | 對象 | 保護的 ref | JSON |
 | :--- | :--- | :--- | :--- |
-| `protect-dev` | 分支 | `dev`、`main` | [`.github/rulesets/protect-dev.json`](../../.github/rulesets/protect-dev.json) |
+| `protect-dev` | 分支 | `dev` | [`.github/rulesets/protect-dev.json`](../../.github/rulesets/protect-dev.json) |
+| `protect-main` | 分支 | `main` | [`.github/rulesets/protect-main.json`](../../.github/rulesets/protect-main.json) |
 | `protect-release-tags` | 標籤 | `v*` | [`.github/rulesets/protect-release-tags.json`](../../.github/rulesets/protect-release-tags.json) |
 
 尚未建立限制檔案大小與副檔名的 Push Ruleset（#145 範圍第 3 項）。
 
-## 2. `protect-dev`：整合分支與發布分支
+## 2. `protect-dev` 與 `protect-main`：整合分支與發布分支
 
-`dev` 是預設分支與整合分支，`main` 只接收 `dev` 的 release PR（分支流程見 [issue-tracker.md](../agents/issue-tracker.md#branches)）。兩者套用同一組規則：
+`dev` 是預設分支與整合分支，`main` 只接收 `dev` 的 release PR（分支流程見 [issue-tracker.md](../agents/issue-tracker.md#branches)）。兩份 ruleset 的規則、必要檢查與 bypass 角色相同，只有允許的合併方式不同：
 
 | 規則 | 設定 | 效果 |
 | :--- | :--- | :--- |
@@ -27,7 +28,7 @@
 | `non_fast_forward` | — | 不能強制推送 |
 | `pull_request` | 核准數 `0` | 必須透過 PR 合併；不要求審查者核准，因為單人儲存庫無法核准自己的 PR |
 | `pull_request` | `required_review_thread_resolution: true` | 所有審查對話都標為已解決後才能合併 |
-| `pull_request` | `allowed_merge_methods: merge, squash, rebase` | 三種合併方式都允許；`dev` → `main` 的 release PR 應使用 merge commit，否則兩個分支的歷史會分岔 |
+| `pull_request` | `allowed_merge_methods` | `dev` 允許 merge、squash、rebase；`main` 只允許 merge，讓 release PR 以 merge commit 合併，`main` 與 `dev` 的歷史才不會分岔 |
 | `required_status_checks` | `strict_required_status_checks_policy: false` | 合併前必須通過下表的檢查，但不要求 PR 分支先與目標分支同步 |
 
 ### 2.1 必要檢查
@@ -39,6 +40,8 @@
 | `lint-and-test` | `.github/workflows/ci.yml` | Ruff lint 與 format、儲存庫慣例檢查、`tests/` 與 `lab/tests` 的 pytest |
 | `frontend` | `.github/workflows/ci.yml` | 前端 lint、測試、建置，以及預報檢視 bundle 檢查 |
 | `nginx` | `.github/workflows/ci.yml` | 建置 nginx 映像檔，smoke test 兩個前端應用與 API gateway |
+| `backend` | `.github/workflows/ci.yml` | 建置後端映像檔，smoke test API 資料狀態、API readiness 與 MLflow health |
+| `infra` | `.github/workflows/ci.yml` | 測試 CloudFront Functions，檢查 Terraform 格式與有效性，執行 Terraform tests |
 | `docs` | `.github/workflows/ci.yml` | Markdown lint、離線檢查相對連結與錨點、用詞與文件日期檢查、註解種類檢查 |
 | `pr-base-branch` | `.github/workflows/branch-flow.yml` | 進入 `main` 的 PR 的 head 必須是 `dev` |
 
@@ -46,8 +49,6 @@
 
 | Job | 執行時機 | 不通過時 |
 | :--- | :--- | :--- |
-| `backend` | 每個 PR 與推送 | 不阻擋合併；推送到 `main` 時 `deploy` 需要它，失敗即不部署 |
-| `infra` | 每個 PR 與推送 | 不阻擋合併；推送到 `main` 時 `deploy` 需要它，失敗即不部署 |
 | `terraform-plan` | 只在進入 `main` 的 PR | 不阻擋合併；只供審查雲端變更 |
 | `deploy` | 只在推送到 `main` | 合併後才執行，不屬於合併門禁 |
 
@@ -67,7 +68,7 @@
 
 | Ruleset | 角色 | `actor_id` | 模式 | 可以做什麼 |
 | :--- | :--- | :--- | :--- | :--- |
-| `protect-dev` | Repository role：Admin | `5` | `pull_request` | 在 PR 上繞過規則（例如檢查未通過仍合併）；直接推送仍受規則限制 |
+| `protect-dev`、`protect-main` | Repository role：Admin | `5` | `pull_request` | 在 PR 上繞過規則（例如檢查未通過仍合併）；直接推送仍受規則限制 |
 | `protect-release-tags` | 無 | — | — | — |
 
 ## 5. 維護方式

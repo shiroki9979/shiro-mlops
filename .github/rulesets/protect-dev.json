@@ -9,8 +9,7 @@
     "ref_name": {
       "exclude": [],
       "include": [
-        "refs/heads/dev",
-        "refs/heads/main"
+        "refs/heads/dev"
       ]
     }
   },
@@ -53,6 +52,14 @@
           },
           {
             "context": "nginx",
+            "integration_id": 15368
+          },
+          {
+            "context": "backend",
+            "integration_id": 15368
+          },
+          {
+            "context": "infra",
             "integration_id": 15368
           },
           {
