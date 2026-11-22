@@ -16,7 +16,7 @@
 | `protect-main` | 分支 | `main` | [`.github/rulesets/protect-main.json`](../../.github/rulesets/protect-main.json) |
 | `protect-release-tags` | 標籤 | `v*` | [`.github/rulesets/protect-release-tags.json`](../../.github/rulesets/protect-release-tags.json) |
 
-尚未建立限制檔案大小與副檔名的 Push Ruleset（#145 範圍第 3 項）。
+尚未建立限制檔案大小與副檔名的 Push Ruleset：目前方案只提供 branch 與 tag ruleset，追蹤於 [GitHub #261](https://github.com/shiroki9979/shiro-mlops/issues/261)。
 
 ## 2. `protect-dev` 與 `protect-main`：整合分支與發布分支
 
