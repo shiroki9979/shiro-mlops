@@ -1,7 +1,7 @@
 """The owner of ``raw_taipower_load``: nationwide hourly actual load (ADR-0008).
 
-Outside this module only schema init and migration, the Data Explorer's declarative
-hourly load dataset and the forecast track-record join in
+Elsewhere in ``src/``, ``scripts/`` and ``lab/`` only schema init and migration, the Data
+Explorer's declarative hourly load dataset and the forecast track-record join in
 ``TimeSeriesRepository.fetch_track_record_pairs`` touch the table; the last two select
 the derived rows by binding ``REGIONAL_SNAPSHOT_SUM_SOURCE`` from this module.
 Every row this store writes carries the derived source, and every derived hour it reads
@@ -22,19 +22,14 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.constants import (
-    DATETIME_COL,
-    LOAD_MW_COL,
-    NATIONWIDE_SUBJECT,
-    STORAGE_TIME_COL,
-)
+from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, NATIONWIDE_SUBJECT
 from shiro_mlops.core.storage_time import (
-    WindowCondition,
     from_storage_time,
     from_storage_time_or_none,
     from_storage_time_series,
     half_open_window,
     to_storage_time,
+    window_before,
 )
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
@@ -50,6 +45,12 @@ from shiro_mlops.data.taipower_regional_supply_demand_repository import (
 )
 
 REGIONAL_SNAPSHOT_SUM_SOURCE = "regional_snapshot_sum"
+
+_INSERT_DERIVED_HOURS = """
+    INSERT INTO raw_taipower_load (time, subject, load_mw, source)
+    VALUES (:time, :subject, :load_mw, :source)
+    ON CONFLICT (time, subject)
+"""
 
 
 @dataclass(frozen=True)
@@ -141,22 +142,16 @@ class HourlyActualLoadStore:
         unoccupied = derived[~occupied].reset_index(drop=True)
         if dry_run:
             return unoccupied
-        return self.write_unoccupied(unoccupied)
+        return self._write_unoccupied(unoccupied)
 
-    def write_unoccupied(self, hourly_load: pd.DataFrame) -> pd.DataFrame:
+    def _write_unoccupied(self, hourly_load: pd.DataFrame) -> pd.DataFrame:
         """Insert derived nationwide hours that hold no row yet; return the hours inserted.
 
-        The insert itself skips an occupied hour, so a row another writer stores after the
-        caller looked for free hours is never overwritten either.
+        The insert itself skips an occupied hour, so a row another writer stores after
+        ``rederive`` looked for free hours is never overwritten either.
         """
         records = _derived_load_records(hourly_load, NATIONWIDE_SUBJECT)
-        statement = text(
-            """
-            INSERT INTO raw_taipower_load (time, subject, load_mw, source)
-            VALUES (:time, :subject, :load_mw, :source)
-            ON CONFLICT (time, subject) DO NOTHING
-            """
-        )
+        statement = text(f"{_INSERT_DERIVED_HOURS} DO NOTHING")
         with self._engine.begin() as conn:
             inserted = [conn.execute(statement, record).rowcount == 1 for record in records]
         inserted_rows = pd.Series(inserted, index=hourly_load.index, dtype=bool)
@@ -187,10 +182,8 @@ class HourlyActualLoadStore:
         with self._engine.begin() as conn:
             conn.execute(
                 text(
-                    """
-                    INSERT INTO raw_taipower_load (time, subject, load_mw, source)
-                    VALUES (:time, :subject, :load_mw, :source)
-                    ON CONFLICT (time, subject) DO UPDATE SET
+                    f"""
+                    {_INSERT_DERIVED_HOURS} DO UPDATE SET
                         load_mw = EXCLUDED.load_mw,
                         source = EXCLUDED.source
                     """
@@ -233,7 +226,9 @@ class HourlyActualLoadStore:
         Without ``start`` the series begins at the earliest derived hour. The frame
         holds ``datetime`` and ``load_mw``, the columns ``write`` takes.
         """
-        window = _window_ending(end, start)
+        window = (
+            window_before("time", end) if start is None else half_open_window("time", start, end)
+        )
         query = text(
             f"""
             SELECT time, load_mw
@@ -247,7 +242,7 @@ class HourlyActualLoadStore:
             stored = pd.read_sql_query(query, con=conn, params=params)
         return pd.DataFrame(
             {
-                DATETIME_COL: from_storage_time_series(stored[STORAGE_TIME_COL]),
+                DATETIME_COL: from_storage_time_series(stored["time"]),
                 LOAD_MW_COL: stored[LOAD_MW_COL].astype(float),
             }
         )
@@ -289,7 +284,7 @@ def _derived_load_records(hourly_load: pd.DataFrame, subject: str) -> list[dict[
     if DATETIME_COL not in hourly_load.columns:
         raise KeyError(
             f"Hourly load must hold its Taiwan-local hours in {DATETIME_COL!r}, "
-            f"not the storage column {STORAGE_TIME_COL!r}"
+            "not the storage column 'time'"
         )
     return [
         {
@@ -300,11 +295,3 @@ def _derived_load_records(hourly_load: pd.DataFrame, subject: str) -> list[dict[
         }
         for hour, load_mw in zip(hourly_load[DATETIME_COL], hourly_load[LOAD_MW_COL], strict=True)
     ]
-
-
-def _window_ending(end: datetime, start: datetime | None) -> WindowCondition:
-    if start is not None:
-        return half_open_window(STORAGE_TIME_COL, start, end)
-    return WindowCondition(
-        sql=f"{STORAGE_TIME_COL} < :time_end", params={"time_end": to_storage_time(end)}
-    )

@@ -38,7 +38,7 @@ def store(sqlite_engine: Engine) -> HourlyActualLoadStore:
 def test_latest_observation_is_the_newest_written_hour_at_or_before_the_cutoff(
     store: HourlyActualLoadStore,
 ) -> None:
-    store.write(derived_hourly_load(3, datetime(2026, 9, 5, 16)))  # 14:00、15:00、16:00
+    store.write(derived_hourly_load(3, datetime(2026, 9, 5, 16)))
 
     assert store.latest_observation(datetime(2026, 9, 5, 15)) == HourlyLoadObservation(
         hour=datetime(2026, 9, 5, 15), load_mw=30001.0
@@ -85,7 +85,7 @@ def test_series_holds_only_derived_hours_in_a_datetime_column(
     legacy_upgraded_engine: Engine,
 ) -> None:
     store = HourlyActualLoadStore(legacy_upgraded_engine)
-    store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))  # 15:00、16:00
+    store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 17), 26500.0)
     insert_other_source_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 18), 31000.0)
 
@@ -105,7 +105,7 @@ def test_series_holds_only_derived_hours_in_a_datetime_column(
 def test_series_window_includes_its_start_and_excludes_its_end(
     store: HourlyActualLoadStore,
 ) -> None:
-    store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))  # 14:00 至 17:00
+    store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))
 
     series = store.series(start=datetime(2026, 9, 5, 15), end=datetime(2026, 9, 5, 17))
 
@@ -120,7 +120,7 @@ def test_series_without_a_start_begins_at_the_earliest_derived_hour(
 ) -> None:
     store = HourlyActualLoadStore(legacy_upgraded_engine)
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 1), 26500.0)
-    store.write(derived_hourly_load(3, datetime(2026, 9, 5, 16)))  # 14:00、15:00、16:00
+    store.write(derived_hourly_load(3, datetime(2026, 9, 5, 16)))
 
     series = store.series(end=datetime(2026, 9, 5, 16))
 
@@ -179,7 +179,7 @@ def test_an_empty_series_keeps_its_datetime_and_load_columns(
 def test_accumulation_counts_derived_hours_through_the_cutoff(
     store: HourlyActualLoadStore, sqlite_engine: Engine
 ) -> None:
-    store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))  # 14:00 至 17:00
+    store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))
     store.write(derived_hourly_load(2, datetime(2026, 9, 5, 17)), subject="north")
     insert_other_source_load_row(sqlite_engine, datetime(2026, 9, 5, 13), 31000.0)
 

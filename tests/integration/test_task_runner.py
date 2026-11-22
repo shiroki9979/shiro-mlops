@@ -332,7 +332,7 @@ def test_serving_reads_load_history_bounded_by_the_task_lookback(
 
     predict_task(task, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS)
 
-    assert reads == [(ANCHOR - pd.Timedelta(hours=168), ANCHOR)]
+    assert reads == [(ANCHOR - pd.Timedelta(hours=168), ANCHOR + pd.Timedelta(hours=1))]
 
 
 def test_rows_persisted_after_as_of_never_anchor_the_forecast(
@@ -539,9 +539,11 @@ def test_observed_prediction_reads_history_for_the_window_and_the_longest_horizo
 
     predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
-    window = (ANCHOR - pd.Timedelta(hours=24 + 168), ANCHOR)
-    assert load_reads == [window]
-    assert [(call["start_time"], call["end_time"]) for call in weather_calls] == [window]
+    history_start = ANCHOR - pd.Timedelta(hours=24 + 168)
+    assert load_reads == [(history_start, ANCHOR + pd.Timedelta(hours=1))]
+    assert [(call["start_time"], call["end_time"]) for call in weather_calls] == [
+        (history_start, ANCHOR)
+    ]
 
 
 def test_observed_prediction_still_refuses_a_stale_load_anchor(
@@ -770,16 +772,15 @@ def test_observed_prediction_weights_every_point_and_reports_each_observation(
 
 def _record_load_reads(
     runtime: TaskRuntime, monkeypatch: pytest.MonkeyPatch
-) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    """Record the first and last hour of every target series the runner reads."""
+) -> list[tuple[datetime | None, datetime]]:
+    """Record the half-open window ``[start, end)`` of every target series the runner requests."""
     store = runtime.hourly_actual_load
     series = store.series
-    reads: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    reads: list[tuple[datetime | None, datetime]] = []
 
     def record(**kwargs):
-        load = series(**kwargs)
-        reads.append((load["datetime"].min(), load["datetime"].max()))
-        return load
+        reads.append((kwargs.get("start"), kwargs["end"]))
+        return series(**kwargs)
 
     monkeypatch.setattr(store, "series", record)
     return reads

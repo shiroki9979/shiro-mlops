@@ -357,10 +357,10 @@ def _readiness_request(
 
 def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeightedWeather]:
     task, requirements = request.task, request.requirements
-    target = request.runtime.hourly_actual_load
-    anchor = _fresh_load_anchor(task, target, request.as_of)
+    hourly_actual_load = request.runtime.hourly_actual_load
+    anchor = _fresh_load_anchor(task, hourly_actual_load, request.as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
-    history = _fetch_target(task, target, start=history_start, through=anchor)
+    history = _fetch_target(task, hourly_actual_load, start=history_start, through=anchor)
     require_load_coverage(requirements, anchor=anchor, load=history, subject=task.subject)
     weather = request.weather_path.read(request, history_start, anchor)
     data = admit_prediction_inputs(
@@ -376,10 +376,10 @@ def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, Weigh
 
 
 def _fresh_load_anchor(
-    task: TaskDefinition, target: HourlyActualLoadStore, as_of: datetime
+    task: TaskDefinition, hourly_actual_load: HourlyActualLoadStore, as_of: datetime
 ) -> pd.Timestamp:
     """Refuse rather than degrade: actual load has no substitute as the recursion origin."""
-    anchor = pd.Timestamp(_latest_target(task, target, as_of).hour)
+    anchor = pd.Timestamp(_latest_target(task, hourly_actual_load, as_of).hour)
     max_lag_hours = task.policies.stale_anchor_max_lag_hours
     if is_stale_load_anchor(anchor, pd.Timestamp(as_of), max_lag_hours):
         raise StaleLoadAnchorError(
@@ -517,10 +517,10 @@ def _observation_source(task: TaskDefinition, observed_at: pd.Timestamp) -> Poin
 
 
 def _latest_target(
-    task: TaskDefinition, target: HourlyActualLoadStore, as_of: datetime
+    task: TaskDefinition, hourly_actual_load: HourlyActualLoadStore, as_of: datetime
 ) -> HourlyLoadObservation:
     """The newest derived target hour known at ``as_of``; its absence has no substitute."""
-    latest = target.latest_observation(as_of, subject=task.subject)
+    latest = hourly_actual_load.latest_observation(as_of, subject=task.subject)
     if latest is None:
         raise MissingLoadHistoryError(
             f"No persisted {task.subject} load history at or before "
@@ -531,7 +531,7 @@ def _latest_target(
 
 def _fetch_target(
     task: TaskDefinition,
-    target: HourlyActualLoadStore,
+    hourly_actual_load: HourlyActualLoadStore,
     *,
     start: datetime | None,
     through: datetime,
@@ -542,7 +542,8 @@ def _fetch_target(
     end hour; this is the one place that turns that into the store's half-open window,
     ending at the next hour. Flooring first keeps out the hour after a mid-hour ``as_of``.
     """
-    load = target.series(start=start, end=floor_to_hour(through) + ONE_HOUR, subject=task.subject)
+    end = floor_to_hour(through) + ONE_HOUR
+    load = hourly_actual_load.series(start=start, end=end, subject=task.subject)
     return load.assign(**{SUBJECT_COL: task.subject})[TARGET_COLUMNS]
 
 

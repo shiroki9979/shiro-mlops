@@ -13,7 +13,14 @@ from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
 from shiro_mlops.service.data_explorer.datasets import HOURLY_LOAD
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from tests.helpers import TAIWAN, DatasetLister, explorer_pages, rfc3339, write_derived_load
+from tests.helpers import (
+    TAIWAN,
+    DatasetLister,
+    explorer_pages,
+    insert_legacy_load_row,
+    rfc3339,
+    write_derived_load,
+)
 
 
 def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
@@ -90,15 +97,16 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
         "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 13, 15),
     )
-    with legacy_upgraded_engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) VALUES "
-                "('2026-09-20 02:00:00+00:00', 'Taipei', 10, 'regional_snapshot_sum'), "
-                "('2026-09-20 03:00:00+00:00', 'Taipei', 11, NULL), "
-                "('2026-09-20 04:00:00+00:00', 'Taipei', 12, 'regional_snapshot_sum')"
-            )
-        )
+    derived = pd.DataFrame(
+        {
+            DATETIME_COL: [datetime(2026, 9, 20, 10), datetime(2026, 9, 20, 12)],
+            LOAD_MW_COL: [10, 12],
+        }
+    )
+    write_derived_load(legacy_upgraded_engine, derived, subject="Taipei")
+    insert_legacy_load_row(
+        legacy_upgraded_engine, datetime(2026, 9, 20, 11), 11.0, subject="Taipei"
+    )
     page = DatasetLister(legacy_upgraded_engine, HOURLY_LOAD).list(
         {
             "start": "2026-09-20T10:00:00+08:00",

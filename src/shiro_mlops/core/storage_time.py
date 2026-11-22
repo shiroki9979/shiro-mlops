@@ -81,11 +81,26 @@ def half_open_window(
     stored_start, stored_end = to_storage_time(start), to_storage_time(end)
     if stored_end < stored_start:
         raise ValueError(f"Window end {end} is before its start {start}")
-    name = param or column.rsplit(".", 1)[-1]
+    name = _param_name(column, param)
     return WindowCondition(
         sql=f"{column} >= :{name}_start AND {column} < :{name}_end",
         params={f"{name}_start": stored_start, f"{name}_end": stored_end},
     )
+
+
+def window_before(column: str, end: datetime, *, param: str | None = None) -> WindowCondition:
+    """Select stored instants before the Taiwan-local ``end``: ``[start, end)`` with no start.
+
+    The end parameter is named as in :func:`half_open_window`.
+    """
+    name = _param_name(column, param)
+    return WindowCondition(
+        sql=f"{column} < :{name}_end", params={f"{name}_end": to_storage_time(end)}
+    )
+
+
+def _param_name(column: str, param: str | None) -> str:
+    return param or column.rsplit(".", 1)[-1]
 
 
 def register_sqlite_datetime_adapter() -> None:
