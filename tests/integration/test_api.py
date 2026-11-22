@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 from shiro_mlops.data.weather_resolution import WeatherResolution
 from shiro_mlops.service.api import app, model_store
 from shiro_mlops.tasks.definition import TaskDefinition
@@ -89,20 +90,19 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
         "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-20 13:00")
     )
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, MagicMock())
+    # readiness 須證明完整 168 小時視界的每個目標小時都有天氣（預測輸入關卡）。
+    horizon = pd.date_range("2026-08-20 13:00", periods=MAX_HORIZON_HOURS, freq="h")
     weather = WeatherResolution(
         dataframe=pd.DataFrame(
-            {
-                "datetime": [pd.Timestamp("2026-08-20 13:00")],
-                "temperature": [30.0],
-                "relative_humidity": [70.0],
-            }
+            {"datetime": horizon, "temperature": 30.0, "relative_humidity": 70.0}
         ),
         sources=(
             {
                 "temperature": {"source": "previous_day_observation"},
                 "relative_humidity": {"source": "climatology"},
             },
-        ),
+        )
+        * MAX_HORIZON_HOURS,
         mode="degraded",
     )
     monkeypatch.setattr("shiro_mlops.tasks.runner.resolve_weather", lambda *args, **kwargs: weather)
