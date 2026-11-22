@@ -11,7 +11,7 @@ from shiro_mlops.pipelines.definitions import defs
 from shiro_mlops.pipelines.schedules import CWA_INGESTION_ASSETS, TAIPOWER_REALTIME_SNAPSHOT_ASSETS
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
-from tests.helpers import derived_hourly_load, selected_asset_names, task_jobs
+from tests.helpers import derived_hourly_load, selected_asset_names, task_jobs, write_derived_load
 
 TICK = datetime(2026, 9, 27, 0, 0, tzinfo=ZoneInfo("Asia/Taipei"))
 LAST_HOUR = datetime(2026, 9, 26, 23, 0)
@@ -65,7 +65,7 @@ def test_deployed_definitions_provide_the_store_that_readiness_schedules_query()
 def test_training_skips_with_accumulation_reason_during_cold_start(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours - 1, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours - 1, LAST_HOUR))
 
     execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
 
@@ -77,7 +77,7 @@ def test_training_skips_with_accumulation_reason_during_cold_start(
 def test_training_triggers_once_accumulation_is_sufficient(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
 
     execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
 
@@ -89,7 +89,7 @@ def test_training_without_tick_time_requests_an_undeduplicated_run(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
     """Manual schedule evaluation has no tick for run-key deduplication and must still succeed."""
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
     context = build_schedule_context(
         instance=dagster_instance, resources={"time_series_repo": test_repo}
     )
@@ -102,7 +102,7 @@ def test_training_without_tick_time_requests_an_undeduplicated_run(
 def test_monitoring_skips_until_a_model_has_been_trained(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
 
     execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)
 
@@ -122,7 +122,7 @@ def test_monitoring_skips_with_accumulation_reason_during_cold_start(
 def test_monitoring_triggers_after_training_materialized_a_model(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
     dagster_instance.report_runless_asset_event(AssetMaterialization(NAMES.model))
 
     execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)
@@ -135,7 +135,7 @@ def test_a_materialization_under_the_pre_factory_key_does_not_count(
     test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
 ) -> None:
     """Materialization under the old asset key cannot unblock monitoring before the renamed model is trained."""
-    test_repo.upsert_taipower_load(derived_hourly_load(min_hours, LAST_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
     dagster_instance.report_runless_asset_event(AssetMaterialization("trained_forecaster_model"))
 
     execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)

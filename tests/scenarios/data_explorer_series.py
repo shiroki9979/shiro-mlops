@@ -14,7 +14,7 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import create_app
-from tests.helpers import rfc3339
+from tests.helpers import rfc3339, write_derived_load
 
 LOAD_SERIES_PATH = "/data/power/load/series"
 
@@ -33,10 +33,8 @@ def _seeded_load(
 ) -> Iterator[tuple[TestClient, str]]:
     """Seed hourly load rows under a unique subject and remove them afterwards."""
     subject = f"series-{uuid4().hex[:8]}"
-    frame = pd.DataFrame(
-        {DATETIME_COL: list(loads), LOAD_MW_COL: list(loads.values()), "subject": subject}
-    )
-    repo.upsert_taipower_load(frame, default_subject=subject)
+    frame = pd.DataFrame({DATETIME_COL: list(loads), LOAD_MW_COL: list(loads.values())})
+    write_derived_load(repo.engine, frame, subject=subject)
     try:
         with series_client(repo) as client:
             yield client, subject
