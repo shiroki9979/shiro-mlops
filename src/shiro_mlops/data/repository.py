@@ -3,7 +3,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 
 import pandas as pd
@@ -15,6 +15,7 @@ from shiro_mlops.core.constants import (
     DATETIME_COL,
     LOAD_MW_COL,
     LOCATION_COL,
+    MAX_HORIZON_HOURS,
     NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
     SUBJECT_COL,
@@ -24,6 +25,7 @@ from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescal
 from shiro_mlops.core.storage_time import (
     from_storage_time,
     from_storage_time_series,
+    half_open_window,
     to_storage_time,
     to_storage_time_or_none,
 )
@@ -55,6 +57,8 @@ from shiro_mlops.data.taipower_unit_generation_repository import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TRACK_RECORD_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
 
 
 def _serialize_raw_payload(payload: Any) -> str:
@@ -864,39 +868,50 @@ class TimeSeriesRepository:
         """Pair issued steps targeting the window with valid hourly observations.
 
         Only steps whose target hour is after their issue time count, and only
-        target hours with a nationwide ``regional_snapshot_sum`` load row. Both
-        reads are bounded by the window. Pairs are ordered by target hour, then
+        target hours with a nationwide ``regional_snapshot_sum`` load row. One SQL
+        join returns only the paired rows. Pairs are ordered by target hour, then
         issue time.
+
+        Both hypertables are bounded on their partition column: a step lands at
+        most 168 hours after its load anchor, which precedes its issue time, so a
+        step targeting the window was issued after the window start minus 168 hours.
         """
-        # TODO(#160): 兩表在 SQLite 以不同字串形式保存 UTC（負載帶 +00:00、已發布預報不帶），
-        # SQL join 只在 TimescaleDB 成立，因此各自有界讀取後以台灣本地小時配對。
-        issued_steps = self.issued_forecast_repo.fetch_steps_after_issue(window)
-        actual_load = self._valid_hourly_load(window)
+        target_hour = half_open_window("step.target_hour", window.start, window.end)
+        load_time = half_open_window("actual.time", window.start, window.end, param="load_time")
+        params = {
+            **target_hour.params,
+            **load_time.params,
+            "earliest_issued_at": to_storage_time(window.start - _TRACK_RECORD_HORIZON),
+            "latest_issued_at": to_storage_time(window.end),
+            "subject": NATIONWIDE_SUBJECT,
+            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+        }
+        query = text(
+            f"""
+            SELECT step.issued_at, step.target_hour, step.predicted_load_mw, actual.load_mw
+            FROM issued_forecast_step AS step
+            JOIN raw_taipower_load AS actual ON actual.time = step.target_hour
+            WHERE step.issued_at > :earliest_issued_at
+              AND step.issued_at < :latest_issued_at
+              AND {target_hour.sql}
+              AND step.target_hour > step.issued_at
+              AND {load_time.sql}
+              AND actual.subject = :subject
+              AND actual.source = :source
+            ORDER BY step.target_hour, step.issued_at
+            """
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
         return tuple(
             TrackRecordPair(
-                issued_at=issued.issued_at,
-                target_hour=issued.step.target_hour,
-                predicted_load_mw=issued.step.predicted_load_mw,
-                actual_load_mw=actual_load[issued.step.target_hour],
+                issued_at=from_storage_time(row["issued_at"], column="issued_at"),
+                target_hour=from_storage_time(row["target_hour"], column="target_hour"),
+                predicted_load_mw=float(row["predicted_load_mw"]),
+                actual_load_mw=float(row["load_mw"]),
             )
-            for issued in issued_steps
-            if issued.step.target_hour in actual_load
+            for row in rows
         )
-
-    def _valid_hourly_load(self, window: TrackRecordWindow) -> dict[datetime, float]:
-        """Nationwide derived load in the window keyed by Taiwan-local hour."""
-        frame = self.fetch_load_range(
-            window.start,
-            window.end,
-            subject=NATIONWIDE_SUBJECT,
-            source=REGIONAL_SNAPSHOT_SUM_SOURCE,
-        )
-        # fetch_load_range 的終點含端點；窗為半開，排除恰在窗終點的那一小時。
-        in_window = frame[frame["time"] < window.end]
-        return {
-            hour.to_pydatetime(): float(load_mw)
-            for hour, load_mw in zip(in_window["time"], in_window["load_mw"], strict=True)
-        }
 
 
 __all__ = [
