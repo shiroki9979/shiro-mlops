@@ -196,9 +196,12 @@ def test_stalled_accumulation_fails(
 
 
 def test_unreachable_store_fails_instead_of_raising(dagster_instance) -> None:
-    class UnreachableRepository:
-        def summarize_hourly_load_accumulation(self, subject: str, at_or_before=None):
+    class UnreachableStore:
+        def accumulation(self, at_or_before=None, *, subject: str):
             raise ConnectionError("TimescaleDB unreachable")
+
+    class UnreachableRepository:
+        hourly_actual_load_store = UnreachableStore()
 
     results = check_downstream_readiness(
         Deployment(defs, UnreachableRepository(), dagster_instance, NOW)

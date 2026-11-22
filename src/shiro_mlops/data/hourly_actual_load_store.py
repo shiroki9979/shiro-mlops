@@ -1,9 +1,10 @@
 """Nationwide hourly actual load persisted in ``raw_taipower_load`` (ADR-0008).
 
-Every row this store writes carries the derived source, and every read it offers
+Every row this store writes carries the derived source, and every derived hour it reads
 selects only that source, so d015046-era rows (NULL source) and other sources never
-mix into the derived series. The one read that ignores the source is rederivation's
-check for occupied hours, so that it never overwrites a row of any source.
+mix into the derived series. Two reads look past the source: the accumulation counts
+legacy rows only to report them, and rederivation's check for occupied hours sees rows
+of any source so that it never overwrites one.
 Callers pass and receive Taiwan-local hours in a ``datetime`` column;
 the stored column name ``time`` stays inside this module.
 """
@@ -24,13 +25,17 @@ from shiro_mlops.core.constants import (
     STORAGE_TIME_COL,
 )
 from shiro_mlops.core.storage_time import (
+    WindowCondition,
     from_storage_time,
+    from_storage_time_or_none,
+    from_storage_time_series,
     half_open_window,
     to_storage_time,
 )
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
     REGIONAL_SNAPSHOT_SUM_SOURCE,
+    HourlyLoadAccumulation,
     HourWindow,
     catch_up_window,
     derive_hourly_actual_load,
@@ -215,6 +220,64 @@ class HourlyActualLoadStore:
             hour=from_storage_time(row.time, column="time"), load_mw=float(row.load_mw)
         )
 
+    def series(
+        self, *, start: datetime | None = None, end: datetime, subject: str = NATIONWIDE_SUBJECT
+    ) -> pd.DataFrame:
+        """Derived hours in the Taiwan-local window ``[start, end)``, oldest first.
+
+        Without ``start`` the series begins at the earliest derived hour. The frame
+        holds ``datetime`` and ``load_mw``, the columns ``write`` takes.
+        """
+        window = _window_ending(end, start)
+        query = text(
+            f"""
+            SELECT time, load_mw
+            FROM raw_taipower_load
+            WHERE subject = :subject AND source = :source AND {window.sql}
+            ORDER BY time
+            """
+        )
+        params = {"subject": subject, "source": REGIONAL_SNAPSHOT_SUM_SOURCE, **window.params}
+        with self._engine.connect() as conn:
+            stored = pd.read_sql_query(query, con=conn, params=params)
+        return pd.DataFrame(
+            {
+                DATETIME_COL: from_storage_time_series(stored[STORAGE_TIME_COL]),
+                LOAD_MW_COL: stored[LOAD_MW_COL].astype(float),
+            }
+        )
+
+    def accumulation(
+        self, at_or_before: datetime | None = None, *, subject: str = NATIONWIDE_SUBJECT
+    ) -> HourlyLoadAccumulation:
+        """Derived hours starting at or before ``at_or_before`` beside every legacy row.
+
+        Without ``at_or_before`` every derived hour counts. Legacy rows count whatever
+        their hour or subject, since any one of them blocks training (ADR-0008).
+        """
+        derived = "subject = :subject AND source = :source"
+        params: dict[str, object] = {"subject": subject, "source": REGIONAL_SNAPSHOT_SUM_SOURCE}
+        if at_or_before is not None:
+            derived += " AND time <= :at_or_before"
+            params["at_or_before"] = to_storage_time(at_or_before)
+        query = text(
+            f"""
+            SELECT
+                COUNT(*) AS valid_hours,
+                MAX(time) AS latest_time,
+                (SELECT COUNT(*) FROM raw_taipower_load WHERE source IS NULL) AS legacy_rows
+            FROM raw_taipower_load
+            WHERE {derived}
+            """
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(query, params).one()
+        return HourlyLoadAccumulation(
+            valid_hours=int(row.valid_hours),
+            legacy_rows=int(row.legacy_rows),
+            latest_hour=from_storage_time_or_none(row.latest_time),
+        )
+
 
 def _derived_load_records(hourly_load: pd.DataFrame, subject: str) -> list[dict[str, object]]:
     """Storage-form rows for derived hours, each carrying the derived source."""
@@ -232,3 +295,11 @@ def _derived_load_records(hourly_load: pd.DataFrame, subject: str) -> list[dict[
         }
         for hour, load_mw in zip(hourly_load[DATETIME_COL], hourly_load[LOAD_MW_COL], strict=True)
     ]
+
+
+def _window_ending(end: datetime, start: datetime | None) -> WindowCondition:
+    if start is not None:
+        return half_open_window(STORAGE_TIME_COL, start, end)
+    return WindowCondition(
+        sql=f"{STORAGE_TIME_COL} < :time_end", params={"time_end": to_storage_time(end)}
+    )

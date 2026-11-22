@@ -24,7 +24,8 @@ from shiro_mlops.core.constants import (
     SUBJECT_COL,
 )
 from shiro_mlops.core.datetime_utils import with_datetime_column
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE, is_stale_load_anchor
+from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stale_load_anchor
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_weather
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
@@ -70,6 +71,11 @@ class TaskRuntime:
     """Process resources the runner reads task data through."""
 
     repository: TimeSeriesRepository
+
+    @property
+    def hourly_actual_load(self) -> HourlyActualLoadStore:
+        """The store of the hourly actual load every task targets."""
+        return self.repository.hourly_actual_load_store
 
 
 class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interface design
@@ -133,7 +139,10 @@ def check_training_readiness(
 ) -> TrainingLoadReadiness:
     """Summarize target history through ``as_of`` against the minimum accumulation."""
     return check_training_load_readiness(
-        runtime.repository, task.policies.min_training_hours, subject=task.subject, as_of=as_of
+        runtime.hourly_actual_load,
+        task.policies.min_training_hours,
+        subject=task.subject,
+        as_of=as_of,
     )
 
 
@@ -147,7 +156,7 @@ def load_training_data(
     readiness = check_training_readiness(task, runtime, as_of=as_of)
     if not readiness.ready:
         raise TaskNotReady(readiness)
-    load = _fetch_target(task, runtime.repository, start=None, end=as_of)
+    load = _fetch_target(task, runtime.hourly_actual_load, start=None, through=as_of)
     if load.empty:
         raise ValueError(f"No {task.subject} target rows at or before {as_of.isoformat()}")
     first, last = load[DATETIME_COL].min(), load[DATETIME_COL].max()
@@ -235,14 +244,14 @@ def monitor_task(
     readiness = check_training_readiness(task, runtime, as_of=as_of)
     if not readiness.ready:
         raise TaskNotReady(readiness)
-    newest = _latest_target_row(task, runtime.repository, as_of)
+    newest = _latest_target(task, runtime.hourly_actual_load, as_of)
     return MonitoringReport(
         task_id=task.task_id,
         health=get_task_type(task.task_type).assess_health(task.health, metrics),
         metrics=dict(metrics),
         target_hours=readiness.valid_hours,
-        latest_target_time=pd.Timestamp(newest[DATETIME_COL]),
-        latest_target_value=float(newest[LOAD_MW_COL]),
+        latest_target_time=pd.Timestamp(newest.hour),
+        latest_target_value=newest.load_mw,
     )
 
 
@@ -348,9 +357,10 @@ def _readiness_request(
 
 def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, WeightedWeather]:
     task, requirements = request.task, request.requirements
-    anchor = _fresh_load_anchor(task, request.repository, request.as_of)
+    target = request.runtime.hourly_actual_load
+    anchor = _fresh_load_anchor(task, target, request.as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
-    history = _fetch_target(task, request.repository, start=history_start, end=anchor)
+    history = _fetch_target(task, target, start=history_start, through=anchor)
     require_load_coverage(requirements, anchor=anchor, load=history, subject=task.subject)
     weather = request.weather_path.read(request, history_start, anchor)
     data = admit_prediction_inputs(
@@ -366,10 +376,10 @@ def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, Weigh
 
 
 def _fresh_load_anchor(
-    task: TaskDefinition, repository: TimeSeriesRepository, as_of: datetime
+    task: TaskDefinition, target: HourlyActualLoadStore, as_of: datetime
 ) -> pd.Timestamp:
     """Refuse rather than degrade: actual load has no substitute as the recursion origin."""
-    anchor = pd.Timestamp(_latest_target_row(task, repository, as_of)[DATETIME_COL])
+    anchor = pd.Timestamp(_latest_target(task, target, as_of).hour)
     max_lag_hours = task.policies.stale_anchor_max_lag_hours
     if is_stale_load_anchor(anchor, pd.Timestamp(as_of), max_lag_hours):
         raise StaleLoadAnchorError(
@@ -506,42 +516,34 @@ def _observation_source(task: TaskDefinition, observed_at: pd.Timestamp) -> Poin
 # --- Shared I/O ----------------------------------------------------------------------------
 
 
-def _latest_target_row(
-    task: TaskDefinition, repository: TimeSeriesRepository, as_of: datetime
-) -> pd.Series:
-    """The newest derived target row known at ``as_of``; its absence has no substitute."""
-    latest = with_datetime_column(
-        repository.fetch_latest_load(
-            subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE, at_or_before=as_of
-        )
-    )
-    if latest.empty:
+def _latest_target(
+    task: TaskDefinition, target: HourlyActualLoadStore, as_of: datetime
+) -> HourlyLoadObservation:
+    """The newest derived target hour known at ``as_of``; its absence has no substitute."""
+    latest = target.latest_observation(as_of, subject=task.subject)
+    if latest is None:
         raise MissingLoadHistoryError(
             f"No persisted {task.subject} load history at or before "
             f"{pd.Timestamp(as_of).isoformat()}."
         )
-    return latest.sort_values(DATETIME_COL).iloc[-1]
+    return latest
 
 
 def _fetch_target(
     task: TaskDefinition,
-    repository: TimeSeriesRepository,
+    target: HourlyActualLoadStore,
     *,
     start: datetime | None,
-    end: datetime | None,
+    through: datetime,
 ) -> pd.DataFrame:
-    """Read the task's target series.
+    """Read the task's target series from ``start`` through the hour holding ``through``.
 
-    Only derived rows are read: d015046-era rows (NULL source) use a different
-    measurement basis and must never train, anchor, or feed a forecast (ADR-0008).
+    Training (through ``as_of``) and serving (through the anchor) both include their
+    end hour; this is the one place that turns that into the store's half-open window,
+    ending at the next hour. Flooring first keeps out the hour after a mid-hour ``as_of``.
     """
-    load = repository.fetch_load_range(
-        start_time=start, end_time=end, subject=task.subject, source=REGIONAL_SNAPSHOT_SUM_SOURCE
-    )
-    load = with_datetime_column(load)
-    if SUBJECT_COL not in load.columns:
-        load = load.assign(**{SUBJECT_COL: task.subject})
-    return load[TARGET_COLUMNS].reset_index(drop=True)
+    load = target.series(start=start, end=floor_to_hour(through) + ONE_HOUR, subject=task.subject)
+    return load.assign(**{SUBJECT_COL: task.subject})[TARGET_COLUMNS]
 
 
 def _validation_start(times: pd.Series, validation_fraction: float) -> pd.Timestamp:

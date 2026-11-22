@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.data.hourly_actual_load_store import HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import app, create_app
 from shiro_mlops.service.served_tasks import MODEL_NOT_LOADED_REASON, Loaded, ServedTasks
@@ -134,8 +135,11 @@ def _fresh_inputs(
 ) -> MagicMock:
     """A repository holding fresh load and forecast rows as of ``FRESH_REQUEST_TIME``."""
     repository = MagicMock()
-    repository.fetch_latest_load.return_value = taipower_raw_df.tail(1)
-    repository.fetch_load_range.return_value = taipower_raw_df
+    anchor = taipower_raw_df.iloc[-1]
+    repository.hourly_actual_load_store.latest_observation.return_value = HourlyLoadObservation(
+        hour=anchor["datetime"].to_pydatetime(), load_mw=float(anchor["load_mw"])
+    )
+    repository.hourly_actual_load_store.series.return_value = taipower_raw_df
     repository.fetch_cwa_station_observations.return_value = cwa_obs_df.rename(
         columns={
             "datetime": "observed_at",
@@ -192,7 +196,7 @@ def test_api_predict_ignores_legacy_location_and_reads_nationwide_subject(
 
     assert response.status_code == 200
     assert response.json()["subject"] == "nationwide"
-    assert repository.fetch_load_range.call_args.kwargs["subject"] == "nationwide"
+    assert repository.hourly_actual_load_store.series.call_args.kwargs["subject"] == "nationwide"
 
 
 def test_api_predict_reads_weather_from_the_weather_reference_point(
@@ -232,8 +236,8 @@ def test_api_predict_on_demand_does_not_issue_a_forecast(
     assert response.status_code == 200, response.text
     repository.insert_issued_forecast.assert_not_called()
     assert {name for name, _args, _kwargs in repository.method_calls} <= {
-        "fetch_latest_load",
-        "fetch_load_range",
+        "hourly_actual_load_store.latest_observation",
+        "hourly_actual_load_store.series",
         "fetch_cwa_station_observations",
         "fetch_cwa_forecast_rows",
     }
@@ -305,7 +309,7 @@ def test_task_predict_answers_503_when_the_task_model_is_not_loaded() -> None:
 def test_task_predict_answers_503_when_serving_inputs_are_unavailable(error: Exception) -> None:
     """The task endpoint and alias both return 503 when load history, anchor freshness, or weather is unavailable."""
     repository = MagicMock()
-    repository.fetch_latest_load.side_effect = error
+    repository.hourly_actual_load_store.latest_observation.side_effect = error
     client = _client({DYNAMIC_HORIZON_FORECAST: MagicMock()}, repository)
 
     task = client.post(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/predict", json={"horizon_hours": 1})
@@ -341,7 +345,9 @@ def test_dynamic_horizon_with_a_missing_lookback_hour_answers_503(
 def test_unexpected_task_errors_answer_not_ready_and_500() -> None:
     """Unexpected errors make readiness not_ready and prediction an HTTP 500 with the cause."""
     repository = MagicMock()
-    repository.fetch_latest_load.side_effect = RuntimeError("feature column mismatch")
+    repository.hourly_actual_load_store.latest_observation.side_effect = RuntimeError(
+        "feature column mismatch"
+    )
     client = _client({DYNAMIC_HORIZON_FORECAST: MagicMock()}, repository)
 
     ready = client.get(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/ready")
