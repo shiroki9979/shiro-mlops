@@ -20,7 +20,7 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
 from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import paginate_raw_list
-from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.query import ExplorerQuery, reject_undeclared_list_params
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
@@ -30,8 +30,10 @@ from shiro_mlops.service.data_explorer.series import Agg, Bucket, SeriesReader, 
 from shiro_mlops.service.data_explorer.timefmt import now_taiwan
 
 
-def validate_cursor(dataset: Dataset, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Validate the whole cursor before any database read; return the filters it binds."""
+def validate_list_request(dataset: Dataset, params: dict[str, Any]) -> dict[str, Any] | None:
+    """Reject undeclared parameters, then validate the whole cursor, before any database read;
+    return the filters the cursor binds."""
+    reject_undeclared_list_params(dataset, params)
     cursor = params.get("cursor")
     if not cursor:
         return None
@@ -53,7 +55,7 @@ class DatasetQuery:
         self.db = ExplorerDb(engine)
 
     def list(self, dataset: Dataset, params: dict[str, Any]) -> ListEnvelope:
-        cursor_filters = validate_cursor(dataset, params)
+        cursor_filters = validate_list_request(dataset, params)
         try:
             query_params = (
                 dataset.resolve_version.pin(self.db, params, cursor_filters)

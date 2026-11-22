@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
+COMMON_LIST_PARAMS = frozenset({"start", "end", "limit", "cursor"})
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,17 @@ def resolve_limit(limit: int | str | None) -> int:
     if parsed < 1 or parsed > MAX_LIMIT:
         raise ExplorerQueryError(f"limit must be between 1 and {MAX_LIMIT}")
     return parsed
+
+
+def list_request_params(dataset: Dataset) -> frozenset[str]:
+    """Every query parameter the dataset's list endpoint accepts."""
+    return COMMON_LIST_PARAMS | frozenset(dataset.filter_names)
+
+
+def reject_undeclared_list_params(dataset: Dataset, params: Mapping[str, Any]) -> None:
+    unknown = sorted(set(params) - list_request_params(dataset))
+    if unknown:
+        raise ExplorerQueryError(f"unsupported list parameters: {', '.join(unknown)}")
 
 
 def bound_filters(dataset: Dataset, params: dict[str, Any], window: TimeWindow) -> dict[str, Any]:

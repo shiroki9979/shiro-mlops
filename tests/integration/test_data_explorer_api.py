@@ -86,19 +86,19 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     assert client.get("/features/latest").status_code == 404
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/data/power/load",
-        "/data/power/supply-demand",
-        "/data/power/regional",
-        "/data/power/units",
-        "/data/weather/observations",
-        "/data/weather/forecasts",
-        "/data/audits/cwa-observations",
-        "/data/audits/cwa-forecasts",
-    ],
-)
+LIST_PATHS = [
+    "/data/power/load",
+    "/data/power/supply-demand",
+    "/data/power/regional",
+    "/data/power/units",
+    "/data/weather/observations",
+    "/data/weather/forecasts",
+    "/data/audits/cwa-observations",
+    "/data/audits/cwa-forecasts",
+]
+
+
+@pytest.mark.parametrize("path", LIST_PATHS)
 def test_all_lists_reject_v1_cursor_before_database_access(
     explorer_client, monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
@@ -115,6 +115,37 @@ def test_all_lists_reject_v1_cursor_before_database_access(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Incompatible cursor version"
+
+
+@pytest.mark.parametrize("path", LIST_PATHS)
+def test_all_lists_reject_undeclared_parameters_before_database_access(
+    explorer_client, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """打錯的篩選名稱回 422，而不是回傳未篩選的結果。"""
+    client, _ = explorer_client
+    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
+    monkeypatch.setattr(
+        router_module,
+        "_engine",
+        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
+    )
+
+    response = client.get(path, params={"regoin": "北部", "bucket": "1h"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported list parameters: bucket, regoin"
+
+
+def test_undeclared_list_parameter_precedes_invalid_cursor(explorer_client) -> None:
+    """打錯的參數先回 422：否則使用者回到第一頁後才會看到第二個錯誤。"""
+    client, _ = explorer_client
+
+    response = client.get(
+        "/data/power/regional", params={"regoin": "北部", "cursor": "not-a-cursor"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported list parameters: regoin"
 
 
 def test_malformed_v2_cursor_precedes_database_failure(

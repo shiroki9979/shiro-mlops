@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from shiro_mlops.service.data_explorer.dataset_query import validate_list_request
 from shiro_mlops.service.data_explorer.datasets import DATASETS, HOURLY_LOAD, Dataset
 from shiro_mlops.service.data_explorer.datasets.definition import (
     Exact,
@@ -64,18 +65,41 @@ def test_a_newly_declared_filter_is_bound_without_any_other_change() -> None:
 
 
 @pytest.mark.parametrize("dataset", DATASETS.values(), ids=lambda dataset: dataset.id)
-def test_parameters_another_dataset_declares_are_not_bound(dataset: Dataset) -> None:
-    foreign = {
-        item.name
-        for other in DATASETS.values()
-        for item in other.filters
-        if item.name not in dataset.filter_names
+def test_list_accepts_the_shared_parameters_and_every_declared_filter(dataset: Dataset) -> None:
+    params = {
+        **WINDOW,
+        "limit": "10",
+        **{item.name: _valid_value(item) for item in dataset.filters},
     }
+
+    assert validate_list_request(dataset, params) is None
+
+
+@pytest.mark.parametrize("dataset", DATASETS.values(), ids=lambda dataset: dataset.id)
+def test_list_rejects_filters_only_another_dataset_declares(dataset: Dataset) -> None:
+    foreign = sorted(
+        {
+            item.name
+            for other in DATASETS.values()
+            for item in other.filters
+            if item.name not in dataset.filter_names
+        }
+    )
     params = {**WINDOW, **{name: "value" for name in foreign}}
 
-    query = ExplorerQuery.from_params(dataset, params)
+    with pytest.raises(ExplorerQueryError, match="unsupported list parameters: ") as excinfo:
+        validate_list_request(dataset, params)
 
-    assert set(query.filters) == {"start", "end", "dataset"}
+    assert str(excinfo.value) == f"unsupported list parameters: {', '.join(foreign)}"
+
+
+def test_a_newly_declared_filter_is_accepted_by_the_list_without_any_other_change() -> None:
+    """新增篩選只需宣告在資料集定義上，list 就接受它；沒有另一份白名單要同步。"""
+    extended = replace(HOURLY_LOAD, filters=(*HOURLY_LOAD.filters, Exact(name="new_filter")))
+
+    assert validate_list_request(extended, {**WINDOW, "new_filter": "x"}) is None
+    with pytest.raises(ExplorerQueryError):
+        validate_list_request(HOURLY_LOAD, {**WINDOW, "new_filter": "x"})
 
 
 @pytest.mark.parametrize(("dataset", "item"), DECLARED_FILTERS)
