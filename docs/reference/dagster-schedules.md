@@ -52,6 +52,7 @@
    - **排程**：`5 * * * *`（`Asia/Taipei`）。
    - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 [資料契約 §1](data-contracts.md#1-台電用電負載實體-taipower-load-schema) 推算已結束小時，以 `(time, subject)` upsert 至 `raw_taipower_load`，`subject` 為 `nationwide`；不呼叫任何台電外部 API。
    - **推算窗口**：最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，並向前延伸至 tick 時已存在的最後一個推算小時（`source = regional_snapshot_sum`）之後，使擷取中斷前已入庫、尚未推算的小時在排程恢復後補上；最多回溯 `HOURLY_LOAD_CATCHUP_MAX_HOURS`（預設 `168`）個小時，尚無推算小時時即回溯此上限。超出上限而未涵蓋的區間以 warning 記錄於 run log，改由 `scripts/rederive_hourly_actual_load.py` 補算。
+   - **組合**：決定推算窗口、讀取窗內區域快照、推算與寫入由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore.derive_scheduled`）負責，寫入列的 `source` 由 store 固定為 `regional_snapshot_sum`。資產只解析評估時刻，以 `HOURLY_LOAD_RECOMPUTE_HOURS`、`HOURLY_LOAD_CATCHUP_MAX_HOURS` 與 `HOURLY_LOAD_MIN_SAMPLES` 呼叫 store，再依回傳的推算窗口、未涵蓋區間、快照數與寫入小時數記錄 log 與 warning。
    - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
 6. **`issued_forecast_job`（已發布預報，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
    - **定義**：固定資產 `issued_forecast`、job `issued_forecast_job`、排程 `issued_forecast_schedule`，位於 `pipelines/issued_forecast.py`，不進任務資產工廠；只發布動態視界預報。排程預設停用，於首次訓練成功後開啟。

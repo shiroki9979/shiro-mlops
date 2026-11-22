@@ -1,5 +1,10 @@
-"""Integration tests for the hourly actual-load derivation Dagster job."""
+"""Wiring of the hourly actual-load job: schedule tick, asset config, then the store.
 
+Which hours a tick derives is specified on the store itself in
+tests/unit/test_hourly_actual_load_store.py.
+"""
+
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -7,13 +12,13 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
-from dagster import Definitions, build_schedule_context
+from dagster import DagsterInstance, Definitions, ExecuteInProcessResult, build_schedule_context
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.assets import raw_taipower_load
 from shiro_mlops.pipelines.schedules import hourly_actual_load_job, hourly_actual_load_schedule
-from tests.helpers import regional_supply_demand_snapshots
+from tests.helpers import derived_hourly_load, regional_supply_demand_snapshots
 
 TICK = datetime(2026, 9, 5, 18, 5, tzinfo=ZoneInfo(TAIWAN_TZ))
 # 區域 fixture 四區用電加總 3254.0 萬瓩，即 32540 MW。
@@ -31,9 +36,11 @@ def _store_samples(repo: TimeSeriesRepository, start: datetime, count: int) -> N
         repo.upsert_regional_supply_demand_snapshots(snapshots)
 
 
-def _run_scheduled_tick(repo: TimeSeriesRepository, tick: datetime = TICK):
+def _run_scheduled_tick(
+    repo: TimeSeriesRepository, instance: DagsterInstance
+) -> ExecuteInProcessResult:
     evaluation = hourly_actual_load_schedule.evaluate_tick(
-        build_schedule_context(scheduled_execution_time=tick)
+        build_schedule_context(scheduled_execution_time=TICK)
     )
     assert evaluation.run_requests is not None
     # 推算只讀資料庫：只綁定 repository，若 asset 需要任何來源 port，job 便無法解析；
@@ -45,9 +52,19 @@ def _run_scheduled_tick(repo: TimeSeriesRepository, tick: datetime = TICK):
     ).resolve_job_def("hourly_actual_load_job")
 
     with patch("httpx.Client", side_effect=AssertionError("external API must not be called")):
-        result = job_def.execute_in_process(run_config=evaluation.run_requests[0].run_config)
+        result = job_def.execute_in_process(
+            run_config=evaluation.run_requests[0].run_config, instance=instance
+        )
     assert result.success
     return result
+
+
+def _run_log(instance: DagsterInstance, result: ExecuteInProcessResult, level: int) -> list[str]:
+    return [
+        entry.user_message
+        for entry in instance.all_logs(result.run_id)
+        if entry.dagster_event is None and entry.level == level
+    ]
 
 
 def _persisted_load(repo: TimeSeriesRepository) -> dict[pd.Timestamp, float]:
@@ -55,65 +72,39 @@ def _persisted_load(repo: TimeSeriesRepository) -> dict[pd.Timestamp, float]:
     return dict(zip(loads["time"], loads["load_mw"], strict=True))
 
 
-def test_job_derives_completed_hours_idempotently(
-    test_repo: TimeSeriesRepository,
+def test_scheduled_tick_derives_the_completed_hours_its_window_covers(
+    test_repo: TimeSeriesRepository, dagster_instance: DagsterInstance
 ) -> None:
-    _store_samples(test_repo, datetime(2026, 9, 5, 14, 0), 6)  # 尚無推算紀錄，由補算窗口涵蓋
-    _store_samples(test_repo, datetime(2026, 9, 5, 15, 0), 6)
-    _store_samples(test_repo, datetime(2026, 9, 5, 16, 0), 4)
+    _store_samples(test_repo, datetime(2026, 9, 5, 16, 0), 6)
     _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 3)  # 低於門檻
-    _store_samples(test_repo, datetime(2026, 9, 5, 18, 0), 1)  # 尚未結束
 
-    _run_scheduled_tick(test_repo)
-    first = _persisted_load(test_repo)
-    _run_scheduled_tick(test_repo)
+    result = _run_scheduled_tick(test_repo, dagster_instance)
 
-    assert first == {
-        pd.Timestamp("2026-09-05 14:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
-        pd.Timestamp("2026-09-05 15:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
-        pd.Timestamp("2026-09-05 16:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
+    output = result.output_for_node("raw_taipower_load")
+    assert output.to_dict("list") == {
+        "datetime": [pd.Timestamp("2026-09-05 16:00:00")],
+        "load_mw": [pytest.approx(FIXTURE_TOTAL_MW)],
+        "sample_count": [6],
     }
-    assert _persisted_load(test_repo) == first
-
-
-def test_late_sample_fills_previously_missing_hour(test_repo: TimeSeriesRepository) -> None:
-    _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 3)
-    _run_scheduled_tick(test_repo)
-    assert _persisted_load(test_repo) == {}
-
-    _store_samples(test_repo, datetime(2026, 9, 5, 17, 30), 1)
-    _run_scheduled_tick(test_repo)
-
     assert _persisted_load(test_repo) == {
-        pd.Timestamp("2026-09-05 17:00:00"): pytest.approx(FIXTURE_TOTAL_MW)
+        pd.Timestamp("2026-09-05 16:00:00"): pytest.approx(FIXTURE_TOTAL_MW)
     }
+    assert _run_log(dagster_instance, result, logging.INFO) == [
+        "Derived 1 of 168 hours in [2026-08-29T18:00:00, 2026-09-05T18:00:00) "
+        "from 36 regional snapshots"
+    ]
+    assert _run_log(dagster_instance, result, logging.WARNING) == []
 
 
-def test_resumed_job_derives_boundary_hour_left_by_an_outage(
-    test_repo: TimeSeriesRepository,
+def test_scheduled_tick_warns_to_rederive_hours_beyond_the_catchup_limit(
+    test_repo: TimeSeriesRepository, dagster_instance: DagsterInstance
 ) -> None:
-    """An hour stored just before an outage is derived once the schedule resumes (#113)."""
-    _store_samples(test_repo, datetime(2026, 9, 5, 10, 0), 6)
-    _run_scheduled_tick(test_repo, tick=TICK.replace(hour=11))
-    _store_samples(test_repo, datetime(2026, 9, 5, 11, 0), 6)  # 中斷前最後一個完整小時
-    _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 6)  # 排程恢復後的小時
+    test_repo.hourly_actual_load_store.write(derived_hourly_load(1, datetime(2026, 8, 1, 0, 0)))
 
-    _run_scheduled_tick(test_repo)
+    result = _run_scheduled_tick(test_repo, dagster_instance)
 
-    assert _persisted_load(test_repo) == {
-        pd.Timestamp("2026-09-05 10:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
-        pd.Timestamp("2026-09-05 11:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
-        pd.Timestamp("2026-09-05 17:00:00"): pytest.approx(FIXTURE_TOTAL_MW),
-    }
-
-
-def test_job_ignores_derived_hours_newer_than_its_tick(test_repo: TimeSeriesRepository) -> None:
-    """A re-run of an old tick anchors on what was derived by then, not on later rows."""
-    _store_samples(test_repo, datetime(2026, 9, 5, 11, 0), 6)
-    _store_samples(test_repo, datetime(2026, 9, 5, 17, 0), 6)
-    _run_scheduled_tick(test_repo)
-
-    _store_samples(test_repo, datetime(2026, 9, 5, 12, 0), 6)
-    _run_scheduled_tick(test_repo, tick=TICK.replace(hour=16))
-
-    assert pd.Timestamp("2026-09-05 12:00:00") in _persisted_load(test_repo)
+    assert _run_log(dagster_instance, result, logging.WARNING) == [
+        "Hours in [2026-08-01T01:00:00, 2026-08-29T18:00:00) exceed "
+        "HOURLY_LOAD_CATCHUP_MAX_HOURS=168 and are not derived; "
+        "run scripts/rederive_hourly_actual_load.py for that range"
+    ]
