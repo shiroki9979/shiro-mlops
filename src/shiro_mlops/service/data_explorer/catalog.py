@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.hourly_actual_load import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     recent_completed_hours,
@@ -26,7 +27,7 @@ from shiro_mlops.service.data_explorer.query import TimeWindow
 from shiro_mlops.service.data_explorer.schemas import DatasetStatus, StatusResponse
 from shiro_mlops.service.data_explorer.specs import DATASET_SPECS
 from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
-from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan, to_sql_utc
+from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
 from shiro_mlops.service.data_explorer.values import json_list, to_taiwan
 
 
@@ -130,8 +131,8 @@ class DatasetStatusCatalog:
                 "FROM raw_taipower_supply_demand_snapshot "
                 "WHERE observed_at >= :start_time AND observed_at <= :end_time",
                 {
-                    "start_time": to_sql_utc(latest_source - timedelta(hours=24)),
-                    "end_time": to_sql_utc(latest_source),
+                    "start_time": to_storage_time(latest_source - timedelta(hours=24)),
+                    "end_time": to_storage_time(latest_source),
                 },
             )
             if earliest and earliest["source_at"] is not None:

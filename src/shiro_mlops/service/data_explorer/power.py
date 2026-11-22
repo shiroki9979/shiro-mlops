@@ -88,7 +88,7 @@ def _validate_completeness(value: Any) -> str | None:
     return value
 
 
-def _completeness_clause(db: ExplorerDb, completeness: str, sql_params: dict[str, Any]) -> str:
+def _completeness_clause(completeness: str, sql_params: dict[str, Any]) -> str:
     placeholders = []
     for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS):
         name = f"expected_region_{index}"
@@ -97,8 +97,7 @@ def _completeness_clause(db: ExplorerDb, completeness: str, sql_params: dict[str
     sql_params["expected_region_count"] = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
     comparison = "=" if completeness == "complete" else "<"
     same_slot = (
-        f"{db.time_operand('completeness_row.observed_at')} = "
-        f"{db.time_operand('raw_taipower_regional_supply_demand_snapshot.observed_at')}"
+        "completeness_row.observed_at = raw_taipower_regional_supply_demand_snapshot.observed_at"
     )
     return (
         "(SELECT COUNT(DISTINCT completeness_row.region) "
@@ -116,7 +115,7 @@ def _regional_filters(db: ExplorerDb, query: ExplorerQuery) -> tuple[list[str], 
     sql_params.update(region_params)
     completeness = _validate_completeness(query.filters.get("completeness"))
     if completeness:
-        clauses.append(_completeness_clause(db, completeness, sql_params))
+        clauses.append(_completeness_clause(completeness, sql_params))
     return clauses, sql_params
 
 

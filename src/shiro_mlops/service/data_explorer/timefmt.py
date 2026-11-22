@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_local_to_utc
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository_utils import utc_instant_to_taiwan
 
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -40,9 +40,3 @@ def format_utc_as_taiwan(value: object) -> str:
     if taiwan is None:
         raise ValueError("Timestamp is required")
     return format_taiwan_time(taiwan)
-
-
-def to_sql_utc(value: datetime | str) -> datetime:
-    """Convert a Taiwan-local timestamp to the UTC instant used in SQL filters."""
-    converted = taiwan_local_to_utc(pd.Series([parse_api_time(value)])).iloc[0]
-    return pd.Timestamp(converted).to_pydatetime()

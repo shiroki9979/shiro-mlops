@@ -9,13 +9,14 @@ from enum import StrEnum
 from functools import partial
 from typing import Any, NamedTuple
 
+from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.service.data_explorer.completeness import gaps_until_now, observation_gaps
 from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
-from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, to_sql_utc
+from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, parse_api_time
 from shiro_mlops.service.data_explorer.values import is_truthy, json_list, to_float, to_taiwan
 
 
@@ -46,9 +47,9 @@ def latest_forecast_version(
         SELECT dataset_id, issued_at, source_updated_at
         FROM raw_cwa_forecast_release
         {where}
-        ORDER BY {db.time_operand("issued_at")} DESC,
+        ORDER BY issued_at DESC,
                  CASE WHEN dataset_id = :preferred_dataset_id THEN 0 ELSE 1 END,
-                 {db.time_operand("source_updated_at")} DESC
+                 source_updated_at DESC
         LIMIT 1
         """,
         params,
@@ -170,9 +171,9 @@ def _forecast_version_filters(
             params[name] = filters[name]
     for name in ("issued_at", "source_updated_at"):
         if filters.get(name):
-            clauses.append(db.time_equals(name, name))
+            clauses.append(f"{name} = :{name}")
             try:
-                params[name] = to_sql_utc(filters[name])
+                params[name] = to_storage_time(parse_api_time(filters[name]))
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ExplorerQueryError(f"{name} must be a valid RFC 3339 timestamp") from exc
     return clauses, params
