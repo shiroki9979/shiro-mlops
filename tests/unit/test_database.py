@@ -32,7 +32,7 @@ def test_settings_timescaledb_defaults():
     assert settings.TIMESCALE_PASSWORD == "postgrespassword"
     assert (
         settings.timescale_uri
-        == "postgresql://postgres:postgrespassword@localhost:5432/shiro_timeseries"
+        == "postgresql+psycopg2://postgres:postgrespassword@localhost:5432/shiro_timeseries"
     )
 
 
@@ -77,7 +77,7 @@ def test_settings_timescaledb_env_override(monkeypatch):
     assert settings.TIMESCALE_PASSWORD == "secret123"
     assert (
         settings.timescale_uri
-        == "postgresql://shiro_user:secret123@timescale.internal:5433/shiro_timeseries"
+        == "postgresql+psycopg2://shiro_user:secret123@timescale.internal:5433/shiro_timeseries"
     )
 
 
