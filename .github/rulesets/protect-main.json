@@ -1,6 +1,9 @@
 {
+  "id": 27830549,
   "name": "protect-main",
   "target": "branch",
+  "source_type": "Repository",
+  "source": "shiroki9979/shiro-mlops",
   "enforcement": "active",
   "conditions": {
     "ref_name": {

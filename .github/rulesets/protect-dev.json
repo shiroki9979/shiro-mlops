@@ -55,19 +55,19 @@
             "integration_id": 15368
           },
           {
-            "context": "backend",
-            "integration_id": 15368
-          },
-          {
-            "context": "infra",
-            "integration_id": 15368
-          },
-          {
             "context": "docs",
             "integration_id": 15368
           },
           {
             "context": "pr-base-branch",
+            "integration_id": 15368
+          },
+          {
+            "context": "backend",
+            "integration_id": 15368
+          },
+          {
+            "context": "infra",
             "integration_id": 15368
           }
         ]
