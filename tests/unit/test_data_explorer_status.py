@@ -7,7 +7,7 @@ import pytest
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import FORECAST_STALE_AFTER
-from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
+from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
 from shiro_mlops.service.data_explorer.status import (
     DatasetFreshness,
     derive_overall,
@@ -19,7 +19,7 @@ from tests.helpers import derived_hourly_load, forecast_release, supply_demand_s
 def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    catalog = DatasetStatusCatalog(test_repo.engine)
+    catalog = DatasetQuery(test_repo.engine)
     for hour, missing, completeness in ((10, ("63000000",), "incomplete"), (11, (), "complete")):
         test_repo.upsert_cwa_forecast_release(
             replace(
@@ -50,7 +50,7 @@ def test_latest_release_stale_shares_the_resolver_seven_hour_threshold(
     issued_at = datetime(2026, 9, 20, 5)
     test_repo.upsert_cwa_forecast_release(forecast_release(issued_at, ()))
 
-    statuses = DatasetStatusCatalog(test_repo.engine).status(issued_at + age).datasets
+    statuses = DatasetQuery(test_repo.engine).status(issued_at + age).datasets
     forecasts = next(item for item in statuses if item.id == "cwa_forecasts")
 
     assert forecasts.latest_release_stale is expected
@@ -62,7 +62,7 @@ def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
 ) -> None:
     test_repo.upsert_taipower_load(derived_hourly_load(24, datetime(2026, 9, 20, 11)))
 
-    status = DatasetStatusCatalog(test_repo.engine).status(datetime(2026, 9, 20, 12, minute))
+    status = DatasetQuery(test_repo.engine).status(datetime(2026, 9, 20, 12, minute))
     load = next(dataset for dataset in status.datasets if dataset.id == "hourly_load")
 
     assert load.completeness == "complete"
@@ -77,7 +77,7 @@ def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_la
     for observed_at in (datetime(2026, 9, 4, 17, 30), datetime(2026, 9, 5, 17, 30)):
         test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed_at))
 
-    status = DatasetStatusCatalog(test_repo.engine).status(datetime(2026, 9, 5, 17, 35))
+    status = DatasetQuery(test_repo.engine).status(datetime(2026, 9, 5, 17, 35))
     national = next(item for item in status.datasets if item.id == "national_supply_demand")
 
     assert national.completeness == "incomplete"

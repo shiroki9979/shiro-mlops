@@ -1,15 +1,16 @@
 """Declarative Data Explorer dataset definitions: one `Dataset` value per 資料集.
 
-A dataset states its table, time column, keyset sort, filters and projection once; the
-list, cursor and series seams derive their SQL, bound filters and accepted parameters
-from it, so a filter declared here cannot be silently dropped by one of them.
+A dataset states its table, time column, keyset sort, filters, projection, gap and status
+policies once; the list, cursor, series and status seams derive their SQL, bound filters,
+accepted parameters and missing slots from it, so a filter declared here cannot be
+silently dropped by one of them.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
@@ -18,12 +19,19 @@ from shiro_mlops.service.data_explorer.timefmt import parse_api_storage_time
 
 if TYPE_CHECKING:
     from shiro_mlops.service.data_explorer.db import ExplorerDb
-    from shiro_mlops.service.data_explorer.query import ExplorerQuery
 
 Clauses = tuple[list[str], dict[str, Any]]
 Row = dict[str, Any]
-PageProjector = Callable[["ExplorerDb", "ExplorerQuery", list[Row]], list[dict[str, Any]]]
-GapFinder = Callable[["ExplorerDb", "ExplorerQuery"], list[str]]
+
+
+class Page(Protocol):
+    """What a page projection may read beyond its own rows."""
+
+    def missing_members(self, slot: datetime) -> list[str]:
+        """The gap members the request window holds no row for at `slot`."""
+
+
+PageProjector = Callable[[Page, list[Row]], list[dict[str, Any]]]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -31,10 +39,13 @@ class Filter:
     """A request filter: `name` is the query parameter, the cursor key and the SQL bind name.
 
     `in_series` is whether the dataset's series endpoint accepts it as well as the list.
+    `narrows_gaps` is whether it also narrows the list's missing slots: only rows it keeps
+    fill a slot, and on the gap members column the expected members become its value.
     """
 
     name: str
     in_series: bool = True
+    narrows_gaps: bool = False
 
     def clause(self, db: ExplorerDb, value: str) -> Clauses:
         """Validate `value` and return the WHERE clauses that apply it."""
@@ -102,6 +113,101 @@ class Pinned:
     params: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class GapMembers:
+    """Members every slot expects, such as the four regions or the allowlisted stations.
+
+    `expected` is called per request, so a settings-backed allowlist stays current. With
+    `listed`, each absent member is its own gap `<slot>:<member>`; otherwise a slot lacking
+    any expected member is one gap.
+    """
+
+    column: str
+    expected: Callable[[], tuple[str, ...]]
+    listed: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class GapPolicy:
+    """Which slots of a list window are missing: each due `cadence` slot no row fills.
+
+    A slot is due once it has happened and `slot_lag` has passed since it started. A row
+    fills the slot it falls in, or with `exact_instant` only the slot it is stamped at.
+    """
+
+    exact_instant: bool = False
+    members: GapMembers | None = None
+    slot_lag: timedelta = timedelta(0)
+
+
+@dataclass(frozen=True, kw_only=True)
+class FreshnessSource:
+    """Where status reads a dataset's newest source and ingestion instants.
+
+    `order` is the newest-first ordering that picks the row, `source_column` alone if empty.
+    """
+
+    table: str
+    source_column: str
+    ingested_column: str = "created_at"
+    order: tuple[str, ...] = ()
+    pinned: tuple[Pinned, ...] = ()
+
+
+@dataclass(frozen=True)
+class LastCompletedHours:
+    """Status completeness: the dataset's gaps over the last `hours` completed hours."""
+
+    hours: int
+
+
+@dataclass(frozen=True)
+class TrailingWindow:
+    """Status completeness: gaps over `span` back from the newest row, from the oldest row in it."""
+
+    span: timedelta
+
+
+@dataclass(frozen=True)
+class LatestSlot:
+    """Status completeness: the gap members the newest slot lacks; `incomplete_href` lists them."""
+
+    incomplete_href: str
+
+
+@dataclass(frozen=True)
+class AlwaysComplete:
+    """Status completeness: complete whenever rows exist, since the member count varies.
+
+    Status also reports how many rows share the newest instant.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class AuditHeader:
+    """The newest audit header a dataset's completeness is read from."""
+
+    table: str
+    order: tuple[str, ...]
+    ids_column: str
+    incomplete_placeholder: str
+
+
+@dataclass(frozen=True)
+class LatestAudit:
+    """Status completeness: the newest audit header's missing identifiers.
+
+    A header marked incomplete without naming any reports `incomplete_placeholder`.
+    `flags_stale_release` adds the serving hint that the newest release is stale.
+    """
+
+    header: AuditHeader
+    flags_stale_release: bool = False
+
+
+StatusPolicy = LastCompletedHours | TrailingWindow | LatestSlot | AlwaysComplete | LatestAudit
+
+
 class VersionResolver(Protocol):
     """Resolves which forecast version list and series requests read when none is named."""
 
@@ -126,10 +232,12 @@ class Dataset:
     `sort` is the newest-first keyset; its first column is `time_column`, and every sort
     column holding an instant is in `instant_columns` so cursors carry it at microsecond
     precision. `list_columns` is the list SELECT, which must include every sort column.
-    `project` turns one page of rows into response items, and `list_gaps` returns the
-    window's missing slots for the list. `series` declares the chart series endpoint, and
-    `resolve_version` resolves the forecast version both list and series read.
-    Inconsistent declarations raise `ValueError`.
+    `project` turns one page of rows into response items, and `gaps` declares which slots
+    the list reports missing. `status` and `freshness` declare how `GET /data/status` judges
+    completeness and where it reads the newest row (by default the dataset's own table and
+    time column). `series` declares the chart series endpoint, and `resolve_version`
+    resolves the forecast version both list and series read. Inconsistent declarations
+    raise `ValueError`.
     """
 
     id: str
@@ -144,9 +252,11 @@ class Dataset:
     instant_columns: frozenset[str]
     list_columns: tuple[str, ...]
     project: PageProjector
+    status: StatusPolicy
     pinned: tuple[Pinned, ...] = ()
     filters: tuple[Filter, ...] = ()
-    list_gaps: GapFinder | None = None
+    gaps: GapPolicy | None = None
+    freshness: FreshnessSource | None = None
     series: SeriesOptions | None = None
     resolve_version: VersionResolver | None = None
 
@@ -167,9 +277,19 @@ class Dataset:
         """Pinned clauses plus every declared filter present in `filters`."""
         return self._clauses(db, filters, self.filters)
 
+    @property
+    def freshness_source(self) -> FreshnessSource:
+        if self.freshness is not None:
+            return self.freshness
+        return FreshnessSource(table=self.table, source_column=self.time_column, pinned=self.pinned)
+
     def series_clauses(self, db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
         """Pinned clauses plus the present filters the series endpoint accepts."""
         return self._clauses(db, filters, [item for item in self.filters if item.in_series])
+
+    def gap_clauses(self, db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
+        """Pinned clauses plus the present filters that narrow the gap scope."""
+        return self._clauses(db, filters, [item for item in self.filters if item.narrows_gaps])
 
     def _clauses(
         self,
@@ -194,8 +314,8 @@ class Dataset:
 def each(project_row: Callable[[Row], dict[str, Any]]) -> PageProjector:
     """Lift a per-row projection into a page projector."""
 
-    def project(db: ExplorerDb, query: ExplorerQuery, rows: list[Row]) -> list[dict[str, Any]]:
-        del db, query
+    def project(page: Page, rows: list[Row]) -> list[dict[str, Any]]:
+        del page
         return [project_row(row) for row in rows]
 
     return project
@@ -218,6 +338,18 @@ def _declaration_problems(dataset: Dataset) -> list[str]:
         problems.append(f"list_columns must select sort columns {', '.join(missing)}")
     if len(set(dataset.filter_names)) != len(dataset.filter_names):
         problems.append("filter names must be unique")
+    if dataset.gaps is None:
+        problems.extend(
+            f"{item.name} narrows gaps but the dataset declares no gap policy"
+            for item in dataset.filters
+            if item.narrows_gaps
+        )
     if dataset.series is not None:
         problems.extend(series_flag_conflicts(dataset.series))
+        if (
+            dataset.gaps is not None
+            and dataset.series.gap_fill
+            and dataset.gaps.slot_lag != dataset.series.slot_lag
+        ):
+            problems.append("gaps and series must share slot_lag")
     return problems
