@@ -21,13 +21,17 @@ from shiro_mlops.features.definitions import (
     location_entity,
 )
 from shiro_mlops.features.feast_export import build_feast_feature_frames
-from shiro_mlops.pipelines.assets import feast_feature_export, raw_cwa_station_observation
+from shiro_mlops.pipelines.assets import (
+    CWA_SOURCE,
+    feast_feature_export,
+    raw_cwa_station_observation,
+)
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, load_training_data
 from shiro_mlops.tasks.types.base import TrainingData
-from tests.helpers import canonical_observation_batch, override_task_policies
+from tests.helpers import FixtureCWASource, canonical_observation_batch, override_task_policies
 
 # 夾具最後一筆負載為 2026-08-21 23:00；以明確 as_of 使訓練資料時間點可重現。
 FIXTURE_AS_OF = pd.Timestamp("2026-08-22 00:00").to_pydatetime()
@@ -327,11 +331,14 @@ def test_full_dagster_mlops_pipeline_materialization(
         raw_payload={},
     )
     repository = TimeSeriesRepository(engine=sqlite_engine)
-    with patch(
-        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-        return_value=observation_batch,
-    ):
-        raw_cwa_station_observation(build_asset_context(resources={"time_series_repo": repository}))
+    raw_cwa_station_observation(
+        build_asset_context(
+            resources={
+                "time_series_repo": repository,
+                CWA_SOURCE: FixtureCWASource(observation_batch),
+            }
+        )
+    )
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     # fixture 只有 48 小時；降低訓練最低累積門檻以驗證完整鏈路。
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
@@ -340,15 +347,9 @@ def test_full_dagster_mlops_pipeline_materialization(
 
     repo.upsert_taipower_load(taipower_raw_df)
 
-    with (
-        patch(
-            "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-            return_value=observation_batch,
-        ),
-        patch(
-            "shiro_mlops.pipelines.task_pipelines.log_training_run",
-            return_value=TrackedRun(run_id="test_run_123", model_version="1"),
-        ),
+    with patch(
+        "shiro_mlops.pipelines.task_pipelines.log_training_run",
+        return_value=TrackedRun(run_id="test_run_123", model_version="1"),
     ):
         res = materialize(
             assets=[*_dynamic_horizon_forecast_assets(), feast_feature_export],

@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 from datetime import datetime, timedelta
-from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -36,15 +35,14 @@ def _run_scheduled_tick(repo: TimeSeriesRepository, tick: datetime = TICK):
         build_schedule_context(scheduled_execution_time=tick)
     )
     assert evaluation.run_requests is not None
+    # 推算只讀資料庫：只綁定 repository，若 asset 需要任何來源 port，job 便無法解析。
     job_def = Definitions(
         assets=[raw_taipower_load],
         jobs=[hourly_actual_load_job],
         resources={"time_series_repo": repo},
     ).resolve_job_def("hourly_actual_load_job")
 
-    # 推算只讀資料庫；任何台電 HTTP 呼叫都代表越過邊界。
-    with patch("httpx.Client", side_effect=AssertionError("external API must not be called")):
-        result = job_def.execute_in_process(run_config=evaluation.run_requests[0].run_config)
+    result = job_def.execute_in_process(run_config=evaluation.run_requests[0].run_config)
     assert result.success
     return result
 

@@ -8,14 +8,9 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
-
-from shiro_mlops.data.taipower_supply_demand import (
-    floor_to_ten_minutes,
-    resolve_manual_observed_at,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -175,26 +170,29 @@ def parse_regional_supply_demand_csv(
     return snapshots
 
 
+class RegionalSupplyDemandSource(Protocol):
+    """Port that fetches the raw regional supply-demand CSV; parsing stays in this module."""
+
+    def fetch_payload(self) -> str:
+        """Return the CSV body exactly as the source published it."""
+        ...
+
+
 class TaipowerRegionalSupplyDemandClient:
-    """HTTP client for the Taipower regional supply-demand open-data CSV."""
+    """HTTP adapter for the Taipower regional supply-demand open-data CSV."""
 
-    def __init__(self, base_url: str = DEFAULT_REGIONAL_SUPPLY_DEMAND_URL) -> None:
+    def __init__(
+        self,
+        base_url: str = DEFAULT_REGIONAL_SUPPLY_DEMAND_URL,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.base_url = base_url
+        self._transport = transport
 
-    def fetch_csv_text(self) -> str:
+    def fetch_payload(self) -> str:
         """Fetch the raw CSV body from Taipower."""
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, transport=self._transport) as client:
             response = client.get(self.base_url)
             response.raise_for_status()
             return response.text
-
-    def fetch_snapshots(
-        self, observed_at: datetime | None = None
-    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
-        """Fetch, validate, and return typed regional snapshots for the observation slot."""
-        slot = (
-            floor_to_ten_minutes(observed_at)
-            if observed_at is not None
-            else resolve_manual_observed_at()
-        )
-        return parse_regional_supply_demand_csv(self.fetch_csv_text(), observed_at=slot)

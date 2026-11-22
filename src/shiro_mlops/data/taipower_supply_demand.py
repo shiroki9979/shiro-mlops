@@ -7,7 +7,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -274,15 +274,29 @@ def parse_supply_demand_payload(
     )
 
 
-class TaipowerSupplyDemandClient:
-    """HTTP client for the Taipower current supply-demand open-data endpoint."""
+class SupplyDemandSource(Protocol):
+    """Port that fetches the raw supply-demand payload; parsing stays in this module."""
 
-    def __init__(self, base_url: str = DEFAULT_SUPPLY_DEMAND_URL) -> None:
+    def fetch_payload(self) -> dict[str, Any]:
+        """Return the decoded JSON object exactly as the source published it."""
+        ...
+
+
+class TaipowerSupplyDemandClient:
+    """HTTP adapter for the Taipower current supply-demand open-data endpoint."""
+
+    def __init__(
+        self,
+        base_url: str = DEFAULT_SUPPLY_DEMAND_URL,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.base_url = base_url
+        self._transport = transport
 
     def fetch_payload(self) -> dict[str, Any]:
         """Fetch and decode the raw JSON payload from Taipower."""
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, transport=self._transport) as client:
             response = client.get(self.base_url)
             response.raise_for_status()
             try:
@@ -292,12 +306,3 @@ class TaipowerSupplyDemandClient:
         if not isinstance(payload, dict):
             raise SupplyDemandParseError("Response JSON must be an object")
         return payload
-
-    def fetch_snapshot(self, observed_at: datetime | None = None) -> TaipowerSupplyDemandSnapshot:
-        """Fetch, validate, and return a typed snapshot for the given observation slot."""
-        slot = (
-            floor_to_ten_minutes(observed_at)
-            if observed_at is not None
-            else resolve_manual_observed_at()
-        )
-        return parse_supply_demand_payload(self.fetch_payload(), observed_at=slot)

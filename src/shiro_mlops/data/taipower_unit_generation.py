@@ -9,14 +9,9 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
-
-from shiro_mlops.data.taipower_supply_demand import (
-    floor_to_ten_minutes,
-    resolve_manual_observed_at,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -239,15 +234,29 @@ def parse_unit_generation_payload(
     return snapshots
 
 
-class TaipowerUnitGenerationClient:
-    """HTTP client for the Taipower unit net-generation open-data endpoint."""
+class UnitGenerationSource(Protocol):
+    """Port that fetches the raw unit-generation payload; parsing stays in this module."""
 
-    def __init__(self, base_url: str = DEFAULT_UNIT_GENERATION_URL) -> None:
+    def fetch_payload(self) -> dict[str, Any]:
+        """Return the decoded JSON object exactly as the source published it."""
+        ...
+
+
+class TaipowerUnitGenerationClient:
+    """HTTP adapter for the Taipower unit net-generation open-data endpoint."""
+
+    def __init__(
+        self,
+        base_url: str = DEFAULT_UNIT_GENERATION_URL,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.base_url = base_url
+        self._transport = transport
 
     def fetch_payload(self) -> dict[str, Any]:
         """Fetch and decode the raw JSON payload from Taipower."""
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, transport=self._transport) as client:
             response = client.get(self.base_url)
             response.raise_for_status()
             try:
@@ -257,14 +266,3 @@ class TaipowerUnitGenerationClient:
         if not isinstance(payload, dict):
             raise UnitGenerationParseError("Response JSON must be an object")
         return payload
-
-    def fetch_snapshots(
-        self, observed_at: datetime | None = None
-    ) -> list[TaipowerUnitGenerationSnapshot]:
-        """Fetch, validate, and return typed unit snapshots for the observation slot."""
-        slot = (
-            floor_to_ten_minutes(observed_at)
-            if observed_at is not None
-            else resolve_manual_observed_at()
-        )
-        return parse_unit_generation_payload(self.fetch_payload(), observed_at=slot)
