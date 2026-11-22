@@ -13,7 +13,7 @@ from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import TaskRuntime
 from sqlalchemy import create_engine
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather
+from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 HOURS = 24 * 21
@@ -33,7 +33,7 @@ def snapshots_dir(task: TaskDefinition, tmp_path: Path) -> Path:
     ensure_timescale_hypertables(engine)
     repository = TimeSeriesRepository(engine=engine)
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
-    repository.upsert_taipower_load(load)
+    write_derived_load(repository.engine, load)
     repository.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
