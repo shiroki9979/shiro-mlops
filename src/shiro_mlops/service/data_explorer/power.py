@@ -20,8 +20,13 @@ from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
 from shiro_mlops.service.data_explorer.supply_demand_series import regional_series_filters
-from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
-from shiro_mlops.service.data_explorer.values import optional_time, to_float, to_mw, to_taiwan
+from shiro_mlops.service.data_explorer.values import (
+    format_row_time,
+    optional_time,
+    row_time,
+    to_float,
+    to_mw,
+)
 
 NATIONAL_SUPPLY_DEMAND_SQL = """
     SELECT observed_at, source_publish_time, curr_load_wan_kw, curr_util_rate_pct,
@@ -48,9 +53,8 @@ REGIONAL_SUPPLY_DEMAND_SQL = """
 
 
 def _national_item(row: dict[str, Any]) -> dict[str, Any]:
-    observed = to_taiwan(row["observed_at"])
     return {
-        "observed_at": format_taiwan_time(observed),
+        "observed_at": format_row_time(row, "observed_at"),
         "source_publish_time": optional_time(row["source_publish_time"]),
         "curr_load_mw": to_mw(row["curr_load_wan_kw"]),
         "curr_load_wan_kw": to_float(row["curr_load_wan_kw"]),
@@ -76,7 +80,7 @@ def _national_item(row: dict[str, Any]) -> dict[str, Any]:
         "real_hr_maxi_sply_capacity_mw": to_mw(row["real_hr_maxi_sply_capacity_wan_kw"]),
         "real_hr_maxi_sply_capacity_wan_kw": to_float(row["real_hr_maxi_sply_capacity_wan_kw"]),
         "real_hr_peak_time": optional_time(row["real_hr_peak_time"]),
-        "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+        "ingested_at": format_row_time(row, "created_at"),
     }
 
 
@@ -88,7 +92,7 @@ def _validate_completeness(value: Any) -> str | None:
     return value
 
 
-def _completeness_clause(db: ExplorerDb, completeness: str, sql_params: dict[str, Any]) -> str:
+def _completeness_clause(completeness: str, sql_params: dict[str, Any]) -> str:
     placeholders = []
     for index, region in enumerate(REGIONAL_SUPPLY_DEMAND_REGIONS):
         name = f"expected_region_{index}"
@@ -97,8 +101,7 @@ def _completeness_clause(db: ExplorerDb, completeness: str, sql_params: dict[str
     sql_params["expected_region_count"] = len(REGIONAL_SUPPLY_DEMAND_REGIONS)
     comparison = "=" if completeness == "complete" else "<"
     same_slot = (
-        f"{db.time_operand('completeness_row.observed_at')} = "
-        f"{db.time_operand('raw_taipower_regional_supply_demand_snapshot.observed_at')}"
+        "completeness_row.observed_at = raw_taipower_regional_supply_demand_snapshot.observed_at"
     )
     return (
         "(SELECT COUNT(DISTINCT completeness_row.region) "
@@ -116,23 +119,23 @@ def _regional_filters(db: ExplorerDb, query: ExplorerQuery) -> tuple[list[str], 
     sql_params.update(region_params)
     completeness = _validate_completeness(query.filters.get("completeness"))
     if completeness:
-        clauses.append(_completeness_clause(db, completeness, sql_params))
+        clauses.append(_completeness_clause(completeness, sql_params))
     return clauses, sql_params
 
 
 def _regional_item(row: dict[str, Any], present: set[str]) -> dict[str, Any]:
     missing_regions = missing_regional_identifiers(present)
     return {
-        "observed_at": format_taiwan_time(to_taiwan(row["observed_at"])),
+        "observed_at": format_row_time(row, "observed_at"),
         "region": row["region"],
-        "source_time": format_taiwan_time(to_taiwan(row["source_time"])),
+        "source_time": format_row_time(row, "source_time"),
         "generation_mw": to_mw(row["generation_wan_kw"]),
         "generation_wan_kw": to_float(row["generation_wan_kw"]),
         "load_mw": to_mw(row["load_wan_kw"]),
         "load_wan_kw": to_float(row["load_wan_kw"]),
         "slot_complete": not missing_regions,
         "missing_regions": missing_regions,
-        "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+        "ingested_at": format_row_time(row, "created_at"),
     }
 
 
@@ -166,7 +169,10 @@ class RegionalSupplyDemandReader(DatasetReader):
     ) -> tuple[list[dict[str, Any]], list[str]]:
         slot_regions = regional_slot_map(self.db, query.window)
         items = [
-            _regional_item(row, slot_regions.get(to_taiwan(row["observed_at"]), set()))
+            _regional_item(
+                row,
+                slot_regions.get(row_time(row, "observed_at"), set()),
+            )
             for row in rows
         ]
         return items, gaps_until_now(query.window, lambda window: regional_gaps(self.db, window))
@@ -197,15 +203,15 @@ class UnitGenerationReader(DatasetReader):
         for row in rows:
             items.append(
                 {
-                    "observed_at": format_taiwan_time(to_taiwan(row["observed_at"])),
+                    "observed_at": format_row_time(row, "observed_at"),
                     "unit_type": row["unit_type"],
                     "unit_name": row["unit_name"],
-                    "source_time": format_taiwan_time(to_taiwan(row["source_time"])),
+                    "source_time": format_row_time(row, "source_time"),
                     "capacity_mw": to_float(row["capacity_mw"]),
                     "net_generation_mw": to_float(row["net_generation_mw"]),
                     "capacity_ratio_pct": to_float(row["capacity_ratio_pct"]),
                     "remark": row["remark"],
-                    "ingested_at": format_taiwan_time(to_taiwan(row["created_at"])),
+                    "ingested_at": format_row_time(row, "created_at"),
                 }
             )
         return items, []

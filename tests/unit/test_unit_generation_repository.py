@@ -3,6 +3,8 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.engine import Engine
@@ -163,3 +165,49 @@ def test_standalone_taipower_unit_generation_repository_lifecycle(
     object.__setattr__(invalid_snapshot, "unit_name", "None")
     with pytest.raises(ValueError, match="unit_name"):
         repo.upsert([invalid_snapshot])
+
+
+def test_unit_generation_snapshots_store_every_instant_as_aware_utc(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """機組快照的觀測時刻與來源時刻皆存為帶 +00:00 的 UTC 字串。"""
+    test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots())
+
+    with test_repo.engine.connect() as conn:
+        stored = conn.exec_driver_sql(
+            "SELECT DISTINCT observed_at, source_time FROM raw_taipower_unit_generation_snapshot"
+        ).all()
+
+    assert [tuple(row) for row in stored] == [
+        ("2026-09-05 09:30:00+00:00", "2026-09-05 09:30:00+00:00")
+    ]
+
+
+def _unit_generation_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "observed_at": "2026-09-05 09:30:00+00:00",
+        "unit_type": "燃氣",
+        "unit_name": "大潭CC#1",
+        "source_time": "2026-09-05 09:30:00+00:00",
+        "capacity_mw": 742.7,
+        "net_generation_mw": 670.4,
+        "capacity_ratio_pct": 90.265,
+        "remark": None,
+        "raw_payload": "{}",
+    }
+    row.update(overrides)
+    return row
+
+
+@pytest.mark.parametrize("column", ["observed_at", "source_time"])
+def test_fetch_unit_generation_snapshots_rejects_rows_without_an_instant(column: str) -> None:
+    """NOT NULL 的觀測或來源時刻讀到 NULL 代表儲存毀損，不可拿查詢條件或觀測時刻代填。"""
+    engine = MagicMock(spec=Engine)
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value.mappings.return_value.all.return_value = [
+        _unit_generation_row(**{column: None})
+    ]
+    repository = TaipowerUnitGenerationRepository(engine=engine, auto_init=False)
+
+    with pytest.raises(ValueError, match=f"{column} is NULL"):
+        repository.fetch(datetime(2026, 9, 5, 17, 30))

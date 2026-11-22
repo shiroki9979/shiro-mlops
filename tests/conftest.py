@@ -1,7 +1,9 @@
 """Pytest shared fixtures."""
 
 import json
+import sqlite3
 from collections.abc import Generator
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -9,8 +11,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.core import database
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.database import SQLITE_DEFAULT_SCHEMA, ensure_timescale_hypertables
+from shiro_mlops.core.storage_time import register_sqlite_datetime_adapter
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
@@ -23,6 +27,44 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 SQLITE_TEST_SCHEMA = SQLITE_DEFAULT_SCHEMA
 # 以一日門檻取代 672 小時預設，讓排程與 smoke check 測試不需建立 28 日資料。
 TEST_MIN_LOAD_HOURS = 24
+
+
+SQLITE_DATETIME_ADAPTER_KEY = (datetime, sqlite3.PrepareProtocol)
+
+
+def _aware_utc_only_adapter() -> object:
+    register_sqlite_datetime_adapter()
+    storage_form = sqlite3.adapters[SQLITE_DATETIME_ADAPTER_KEY]
+
+    def bind_aware_utc_only(value: datetime) -> object:
+        if value.utcoffset() != timedelta(0):
+            raise TypeError(
+                f"SQLite bind {value!r} is not aware UTC; convert stored instants with "
+                "shiro_mlops.core.storage_time (to_storage_time, half_open_window)"
+            )
+        return storage_form(value)
+
+    return bind_aware_utc_only
+
+
+@pytest.fixture(autouse=True, scope="session")
+def reject_sqlite_binds_bypassing_storage_time() -> Generator[None, None, None]:
+    """Fail any SQLite bind of a naive or non-UTC datetime for the whole session.
+
+    Engines from ``get_timescale_engine`` re-register the production adapter, so the
+    registration it calls is swapped for the guard's; bare ``create_engine`` engines see
+    the session-wide adapter. MLflow and Dagster bind through typed SQLAlchemy columns,
+    which hand SQLite strings, so the guard never sees their datetimes.
+    """
+    guard = _aware_utc_only_adapter()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(sqlite3.adapters, SQLITE_DATETIME_ADAPTER_KEY, guard)
+        patch.setattr(
+            database,
+            "register_sqlite_datetime_adapter",
+            lambda: sqlite3.register_adapter(datetime, guard),
+        )
+        yield
 
 
 @pytest.fixture(autouse=True)

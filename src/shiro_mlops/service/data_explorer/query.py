@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.service.data_explorer.cursor import (
     CursorError,
     decode_cursor,
@@ -18,7 +19,6 @@ from shiro_mlops.service.data_explorer.timefmt import (
     format_taiwan_time,
     now_taiwan,
     parse_api_time,
-    to_sql_utc,
 )
 
 
@@ -30,7 +30,7 @@ class TimeWindow:
     end: datetime
 
     def as_utc(self) -> tuple[datetime, datetime]:
-        return to_sql_utc(self.start), to_sql_utc(self.end)
+        return to_storage_time(self.start), to_storage_time(self.end)
 
 
 @dataclass(frozen=True)

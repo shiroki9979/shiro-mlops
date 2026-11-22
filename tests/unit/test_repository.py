@@ -6,20 +6,27 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import (
+    FORECAST_ROW_COLUMNS,
     TaipowerRegionalSupplyDemandRepository,
     TaipowerSupplyDemandRepository,
     TaipowerUnitGenerationRepository,
     TimeSeriesRepository,
 )
 from shiro_mlops.features.transformers import merge_weather_features
-from tests.helpers import canonical_observation_batch, derived_hourly_load, insert_legacy_load_row
+from tests.helpers import (
+    canonical_observation_batch,
+    derived_hourly_load,
+    forecast_release,
+    insert_legacy_load_row,
+    township_forecast,
+)
 
 
 @pytest.fixture
@@ -136,6 +143,164 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
         persisted_weather.rename(columns={"time": "datetime"}),
     )
     assert merged.iloc[0]["temperature"] == pytest.approx(35.5)
+
+
+def _stored_text(engine: Engine, table: str, columns: str) -> list[tuple[str, ...]]:
+    with engine.connect() as conn:
+        return [
+            tuple(row)
+            for row in conn.execute(text(f"SELECT {columns} FROM {table} ORDER BY {columns}"))
+        ]
+
+
+def test_load_and_cwa_writes_store_one_aware_utc_text_form(
+    repository: TimeSeriesRepository,
+) -> None:
+    """Load and CWA instants persist as aware UTC text whatever form the Taiwan-local input took."""
+    repository.upsert_taipower_load(
+        pd.DataFrame(
+            {
+                "datetime": [
+                    pd.Timestamp("2026-08-20 14:00:00"),
+                    "2026-08-20T07:00:00Z",
+                    pd.Timestamp("2026-08-20 16:00:00.250000"),
+                ],
+                "load_mw": [38000.0, 38100.0, 38200.0],
+            }
+        )
+    )
+    repository.upsert_cwa_observation_batch(
+        replace(
+            canonical_observation_batch(
+                pd.DataFrame(
+                    [
+                        {
+                            "datetime": "2026-08-20 14:00:00",
+                            "temperature": 35.5,
+                            "relative_humidity": 55.0,
+                            "location": "Taipei",
+                        },
+                        {
+                            "datetime": "2026-08-20T07:00:00+00:00",
+                            "temperature": 35.0,
+                            "relative_humidity": 56.0,
+                            "location": "Taipei",
+                        },
+                    ]
+                )
+            ),
+            fetched_at=datetime(2026, 8, 20, 15, 5, 30, 123456),
+        )
+    )
+    repository.upsert_cwa_forecast_release(
+        replace(
+            forecast_release(
+                datetime(2026, 8, 20, 11, 0),
+                (
+                    township_forecast(
+                        datetime(2026, 8, 20, 12, 0),
+                        31.0,
+                        valid_to=datetime(2026, 8, 20, 15, 0),
+                    ),
+                ),
+            ),
+            source_updated_at=pd.Timestamp("2026-08-20T11:20:00+08:00"),
+            fetched_at=datetime(2026, 8, 20, 11, 25),
+        )
+    )
+
+    assert _stored_text(repository.engine, "raw_taipower_load", "time") == [
+        ("2026-08-20 06:00:00+00:00",),
+        ("2026-08-20 07:00:00+00:00",),
+        ("2026-08-20 08:00:00.250000+00:00",),
+    ]
+    assert _stored_text(repository.engine, "raw_cwa_observation_batch", "fetched_at") == [
+        ("2026-08-20 07:05:30.123456+00:00",)
+    ]
+    assert _stored_text(repository.engine, "raw_cwa_station_observation", "observed_at") == [
+        ("2026-08-20 06:00:00+00:00",),
+        ("2026-08-20 07:00:00+00:00",),
+    ]
+    assert _stored_text(
+        repository.engine, "raw_cwa_forecast_release", "issued_at, source_updated_at, fetched_at"
+    ) == [("2026-08-20 03:00:00+00:00", "2026-08-20 03:20:00+00:00", "2026-08-20 03:25:00+00:00")]
+    assert _stored_text(
+        repository.engine,
+        "raw_cwa_township_forecast",
+        "issued_at, source_updated_at, valid_from, valid_to",
+    ) == [
+        (
+            "2026-08-20 03:00:00+00:00",
+            "2026-08-20 03:20:00+00:00",
+            "2026-08-20 04:00:00+00:00",
+            "2026-08-20 07:00:00+00:00",
+        )
+    ]
+
+
+def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
+    repository: TimeSeriesRepository,
+) -> None:
+    """Every load and CWA read hands back Taiwan-local naive instants, bounds included."""
+    repository.upsert_taipower_load(derived_hourly_load(3, datetime(2026, 8, 20, 16, 0)))
+    repository.upsert_cwa_forecast_release(
+        replace(
+            forecast_release(
+                datetime(2026, 8, 20, 11, 0),
+                (
+                    township_forecast(
+                        datetime(2026, 8, 20, 12, 0),
+                        31.0,
+                        valid_to=datetime(2026, 8, 20, 15, 0),
+                    ),
+                ),
+            ),
+            source_updated_at=pd.Timestamp("2026-08-20 11:20"),
+        )
+    )
+
+    loads = repository.fetch_load_range(
+        start_time="2026-08-20T06:00:00Z", end_time=datetime(2026, 8, 20, 15, 0)
+    )
+    latest = repository.fetch_latest_load(at_or_before=datetime(2026, 8, 20, 15, 30))
+    accumulation = repository.summarize_hourly_load_accumulation(
+        at_or_before=datetime(2026, 8, 20, 15, 0)
+    )
+    forecasts = repository.fetch_cwa_forecast_rows(
+        geocode="63000050",
+        issued_before="2026-08-20T03:00:00Z",
+        source_updated_before=datetime(2026, 8, 20, 11, 20),
+        valid_start=datetime(2026, 8, 20, 15, 0),
+        valid_end="2026-08-20 12:00",
+    )
+
+    assert list(loads["time"]) == [
+        pd.Timestamp("2026-08-20 14:00"),
+        pd.Timestamp("2026-08-20 15:00"),
+    ]
+    assert list(latest["time"]) == [pd.Timestamp("2026-08-20 15:00")]
+    assert accumulation.valid_hours == 2
+    assert accumulation.latest_hour == datetime(2026, 8, 20, 15, 0)
+    assert forecasts[["issued_at", "source_updated_at", "valid_from", "valid_to"]].to_dict(
+        "records"
+    ) == [
+        {
+            "issued_at": pd.Timestamp("2026-08-20 11:00"),
+            "source_updated_at": pd.Timestamp("2026-08-20 11:20"),
+            "valid_from": pd.Timestamp("2026-08-20 12:00"),
+            "valid_to": pd.Timestamp("2026-08-20 15:00"),
+        }
+    ]
+
+
+def test_point_in_time_forecast_read_without_rows_returns_empty_frame(
+    repository: TimeSeriesRepository,
+) -> None:
+    """A cutoff read before any vintage exists is an empty result, not an error."""
+    rows = repository.fetch_cwa_forecast_rows(geocode="63000050", issued_before="2026-08-20 12:00")
+
+    assert rows.empty
+    assert list(rows.columns) == FORECAST_ROW_COLUMNS
 
 
 def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepository):

@@ -174,7 +174,24 @@ def test_fetch_by_source_time_rejects_rows_without_observed_at() -> None:
     ]
     repository = TaipowerRegionalSupplyDemandRepository(engine=engine, auto_init=False)
 
-    with pytest.raises(ValueError, match="region '北部' has no observed_at"):
+    with pytest.raises(ValueError, match="observed_at for region '北部' is NULL"):
         repository.fetch_by_source_time(
             start_time=datetime(2026, 9, 5, 17, 0), end_time=datetime(2026, 9, 5, 18, 0)
         )
+
+
+def test_regional_snapshots_store_every_instant_as_aware_utc(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """區域快照的觀測時刻與來源時刻皆存為帶 +00:00 的 UTC 字串。"""
+    test_repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots())
+
+    with test_repo.engine.connect() as conn:
+        stored = conn.exec_driver_sql(
+            "SELECT DISTINCT observed_at, source_time "
+            "FROM raw_taipower_regional_supply_demand_snapshot"
+        ).all()
+
+    assert [tuple(row) for row in stored] == [
+        ("2026-09-05 09:30:00+00:00", "2026-09-05 09:30:00+00:00")
+    ]

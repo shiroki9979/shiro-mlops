@@ -3,8 +3,6 @@
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
@@ -146,33 +144,3 @@ def test_unit_reader_paginates_full_composite_key_and_preserves_nulls(
     test_repo: TimeSeriesRepository,
 ) -> None:
     assert_unit_reader_pages(test_repo)
-
-
-def test_regional_completeness_filter_matches_mixed_sqlite_time_storage(
-    sqlite_engine: Engine,
-) -> None:
-    """Aware and naive UTC rows for one slot count as the same instant for four-region completeness."""
-    stored = {
-        "北部": "2026-09-20 04:00:00",
-        "中部": "2026-09-20 04:00:00",
-        "南部": "2026-09-20 04:00:00.000000",
-        "東部": "2026-09-20 04:00:00+00:00",
-    }
-    with sqlite_engine.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO raw_taipower_regional_supply_demand_snapshot "
-                "(observed_at, region, source_time, load_wan_kw, raw_payload) "
-                "VALUES (:time, :region, :time, 1, '{}')"
-            ),
-            [{"time": time, "region": region} for region, time in stored.items()],
-        )
-    params = {
-        "start": "2026-09-20T12:00:00+08:00",
-        "end": "2026-09-20T12:00:00+08:00",
-        "completeness": "complete",
-    }
-
-    page = RegionalSupplyDemandReader(sqlite_engine).list(params)
-
-    assert sorted(item["region"] for item in page.items) == ["中部", "北部", "南部", "東部"]
