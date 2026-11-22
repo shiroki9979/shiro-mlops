@@ -1,7 +1,7 @@
 """The owner of ``raw_taipower_load``: nationwide hourly actual load (ADR-0008).
 
-Outside this module only schema init and migration, the Data Explorer's declarative
-hourly load dataset and the forecast track-record join in
+Elsewhere in ``src/``, ``scripts/`` and ``lab/`` only schema init and migration, the Data
+Explorer's declarative hourly load dataset and the forecast track-record join in
 ``TimeSeriesRepository.fetch_track_record_pairs`` touch the table; the last two select
 the derived rows by binding ``REGIONAL_SNAPSHOT_SUM_SOURCE`` from this module.
 Every row this store writes carries the derived source, and every derived hour it reads
