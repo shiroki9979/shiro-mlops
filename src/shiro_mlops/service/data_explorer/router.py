@@ -70,9 +70,7 @@ SeriesPlan = Callable[[ExplorerDb, dict[str, str]], tuple[SeriesSpec, dict[str, 
 
 
 def _repository(request: Request) -> TimeSeriesRepository:
-    from shiro_mlops.service import api as service_api
-
-    return service_api.repository_store or TimeSeriesRepository()
+    return request.app.state.repository
 
 
 def _engine(request: Request) -> Engine:

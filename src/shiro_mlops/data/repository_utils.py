@@ -5,14 +5,21 @@ from typing import Any
 
 
 def serialize_raw_payload(payload: Any) -> str:
-    """Serialize raw API payload to JSON text for database column storage."""
-    if isinstance(payload, str):
-        return payload
+    """Serialize a source payload to JSON text for JSONB or SQLite TEXT storage.
+
+    String payloads such as XML responses become JSON string literals, so the
+    stored text is always valid JSON and round-trips through
+    ``deserialize_raw_payload``.
+    """
     return json.dumps(payload, ensure_ascii=False)
 
 
 def deserialize_raw_payload(payload: Any) -> Any:
-    """Deserialize raw API payload from JSON text or pass through parsed objects."""
+    """Decode a stored payload from JSON text, passing already-parsed values through.
+
+    Engines from ``get_timescale_engine`` return JSONB as JSON text, so a string
+    here is always JSON text; a stored string payload decodes back to that string.
+    """
     if isinstance(payload, str):
         try:
             return json.loads(payload)

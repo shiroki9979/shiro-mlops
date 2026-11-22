@@ -65,6 +65,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   - 綁定參數一律為帶時區的 UTC，寫入 `TIMESTAMPTZ` 因此不依賴 session `TimeZone`。此規則只適用於應用程式寫入的時刻欄位；DDL 預設值（如 `created_at`）與 `legacy_cwa_weather` 不在此列，讀回時無時區的儲存值視為 UTC。
   - NOT NULL 時刻欄位讀到 `NULL` 視為儲存損毀並失敗，不以查詢條件代填；nullable 時刻欄位讀回 `None`。
   - SQLite 只用於測試，時刻以文字保存為單一形式 `YYYY-MM-DD HH:MM:SS[.ffffff]+00:00`（小數秒僅在非零時出現），字串比較、排序與跨表等值 join 因此與 TimescaleDB 的時刻比較一致。測試環境註冊的 SQLite adapter 拒絕無時區或非 UTC 的 datetime 綁定，繞過 `shiro_mlops.core.storage_time` 的寫入或查詢會直接失敗。
+- **Payload 契約**：`raw_payload` 與 `missing_*` 等 `JSONB` 欄位一律以同一份序列化寫入合法 JSON 文字：物件與陣列保存為 JSON 物件與陣列（保留非 ASCII 字元），字串 payload（如氣象署預報原始 XML）保存為 JSON 字串字面值，不得原樣寫入。讀回時 TimescaleDB 的 `JSONB` 與 SQLite 的 `TEXT` 一律以 JSON 文字交給 repository，由對應的反序列化解碼一次還原為原值；engine 不得讓驅動預先解析 `JSONB`，否則字串 payload 會被解碼兩次。
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)

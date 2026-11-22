@@ -1,6 +1,5 @@
 """Time-series database repository for persisting and querying raw load and weather data."""
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -41,6 +40,7 @@ from shiro_mlops.data.hourly_actual_load import (
 )
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
+from shiro_mlops.data.repository_utils import serialize_raw_payload
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
@@ -59,11 +59,6 @@ from shiro_mlops.data.taipower_unit_generation_repository import (
 logger = logging.getLogger(__name__)
 
 _TRACK_RECORD_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
-
-
-def _serialize_raw_payload(payload: Any) -> str:
-    """Serialize a source payload for JSONB or SQLite TEXT storage."""
-    return json.dumps(payload, ensure_ascii=False)
 
 
 def _prepare_load_df(df: pd.DataFrame, default_subject: str) -> pd.DataFrame:
@@ -430,8 +425,8 @@ class TimeSeriesRepository:
         header = {
             "fetched_at": to_storage_time(batch.fetched_at),
             "status": batch.status,
-            "missing_station_ids": _serialize_raw_payload(list(batch.missing_station_ids)),
-            "raw_payload": _serialize_raw_payload(batch.raw_payload),
+            "missing_station_ids": serialize_raw_payload(list(batch.missing_station_ids)),
+            "raw_payload": serialize_raw_payload(batch.raw_payload),
         }
         observation_records = [
             {
@@ -550,8 +545,8 @@ class TimeSeriesRepository:
             "source_updated_at": to_storage_time(release.source_updated_at),
             "fetched_at": to_storage_time(release.fetched_at),
             "status": release.status,
-            "missing_geocodes": _serialize_raw_payload(list(release.missing_geocodes)),
-            "raw_payload": _serialize_raw_payload(release.raw_payload),
+            "missing_geocodes": serialize_raw_payload(list(release.missing_geocodes)),
+            "raw_payload": serialize_raw_payload(release.raw_payload),
         }
         child_records = [
             {
