@@ -172,7 +172,6 @@ class DatasetQuery:
             case AlwaysComplete():
                 status.record_count = self._newest_instant_count(dataset) if latest else 0
             case LatestAudit(flags_stale_release=True) if latest is not None:
-                # Dataset-level hint only; per-request degradation is judged per supplied value.
                 status.latest_release_stale = forecast_is_stale(
                     row_time(latest, "source_at"), as_of
                 )
