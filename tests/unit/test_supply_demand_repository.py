@@ -3,6 +3,8 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.engine import Engine
@@ -72,7 +74,7 @@ def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
     with test_repo.engine.begin() as conn:
         conn.exec_driver_sql(
             "UPDATE raw_taipower_supply_demand_snapshot "
-            "SET raw_payload = 'not-json' WHERE observed_at = '2026-09-05 09:30:00'"
+            "SET raw_payload = 'not-json' WHERE observed_at = '2026-09-05 09:30:00+00:00'"
         )
 
     with pytest.raises(ValueError, match="raw_payload"):
@@ -142,3 +144,81 @@ def test_standalone_taipower_supply_demand_repository_lifecycle(
     object.__setattr__(invalid_snapshot, "curr_load_wan_kw", float("nan"))
     with pytest.raises(ValueError, match="curr_load_wan_kw"):
         repo.upsert(invalid_snapshot)
+
+
+def test_supply_demand_snapshot_stores_every_instant_as_aware_utc(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """快照的所有應用程式寫入時刻皆存為帶 +00:00 的 UTC 字串。"""
+    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot())
+
+    with test_repo.engine.connect() as conn:
+        stored = conn.exec_driver_sql(
+            "SELECT observed_at, source_publish_time, real_hr_peak_time "
+            "FROM raw_taipower_supply_demand_snapshot"
+        ).one()
+
+    assert tuple(stored) == (
+        "2026-09-05 09:30:00+00:00",
+        "2026-09-05 09:30:00+00:00",
+        "2026-09-05 08:47:00+00:00",
+    )
+
+
+def _supply_demand_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = dict.fromkeys(
+        (
+            "fore_maxi_sply_capacity_wan_kw",
+            "fore_peak_dema_load_wan_kw",
+            "fore_peak_resv_capacity_wan_kw",
+            "fore_peak_resv_rate_pct",
+            "fore_peak_resv_indicator",
+            "fore_peak_hour_range",
+            "yday_date",
+            "yday_maxi_sply_capacity_wan_kw",
+            "yday_peak_dema_load_wan_kw",
+            "yday_peak_resv_capacity_wan_kw",
+            "yday_peak_resv_rate_pct",
+            "yday_peak_resv_indicator",
+            "real_hr_maxi_sply_capacity_wan_kw",
+        )
+    )
+    row.update(
+        observed_at="2026-09-05 09:30:00+00:00",
+        source_publish_time="2026-09-05 09:30:00+00:00",
+        real_hr_peak_time="2026-09-05 08:47:00+00:00",
+        curr_load_wan_kw=3242.1,
+        curr_util_rate_pct=78.0,
+        raw_payload="{}",
+    )
+    row.update(overrides)
+    return row
+
+
+def _repository_returning(row: dict[str, Any]) -> TaipowerSupplyDemandRepository:
+    engine = MagicMock(spec=Engine)
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value.mappings.return_value.first.return_value = row
+    return TaipowerSupplyDemandRepository(engine=engine, auto_init=False)
+
+
+def test_fetch_supply_demand_snapshot_rejects_a_row_without_observed_at() -> None:
+    """NOT NULL 的觀測時刻讀到 NULL 代表儲存毀損，不可拿查詢條件代填。"""
+    repository = _repository_returning(_supply_demand_row(observed_at=None))
+
+    with pytest.raises(ValueError, match="observed_at is NULL"):
+        repository.fetch(datetime(2026, 9, 5, 17, 30))
+
+
+def test_fetch_supply_demand_snapshot_reads_null_optional_instants_as_none() -> None:
+    """nullable 的來源發布時間與實際尖峰時間讀到 NULL 時回傳 None。"""
+    repository = _repository_returning(
+        _supply_demand_row(source_publish_time=None, real_hr_peak_time=None)
+    )
+
+    fetched = repository.fetch(datetime(2026, 9, 5, 17, 30))
+
+    assert fetched is not None
+    assert fetched.observed_at == datetime(2026, 9, 5, 17, 30)
+    assert fetched.source_publish_time is None
+    assert fetched.real_hr_peak_time is None

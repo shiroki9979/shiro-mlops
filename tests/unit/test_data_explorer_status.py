@@ -13,7 +13,7 @@ from shiro_mlops.service.data_explorer.status import (
     derive_overall,
     evaluate_freshness,
 )
-from tests.helpers import derived_hourly_load, forecast_release
+from tests.helpers import derived_hourly_load, forecast_release, supply_demand_snapshot
 
 
 def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
@@ -68,6 +68,22 @@ def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
     assert load.completeness == "complete"
     assert load.missing_slot_count == 0
     assert load.missing_identifiers == []
+
+
+def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_latest(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """全國供需目錄的 24 小時窗含起點：恰好早一天的快照撐開窗，中間的 10 分鐘 slot 皆列為缺漏。"""
+    for observed_at in (datetime(2026, 9, 4, 17, 30), datetime(2026, 9, 5, 17, 30)):
+        test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed_at))
+
+    status = DatasetStatusCatalog(test_repo.engine).status(datetime(2026, 9, 5, 17, 35))
+    national = next(item for item in status.datasets if item.id == "national_supply_demand")
+
+    assert national.completeness == "incomplete"
+    assert national.missing_slot_count == 143
+    assert national.missing_identifiers[0] == "2026-09-04T17:40:00+08:00"
+    assert national.missing_identifiers[-1] == "2026-09-05T17:20:00+08:00"
 
 
 def test_freshness_uses_dataset_cadence_and_two_missed_cycles() -> None:

@@ -57,18 +57,9 @@ def _seeded_rows(engine: Engine, fixtures: tuple[SqlFixture, ...]) -> Iterator[N
                 )
 
 
-def _all_dataset_fixtures(
-    start: datetime, times: tuple[datetime, ...], naive_utc_tables: frozenset[str]
-) -> tuple[SqlFixture, ...]:
-    def rows(
-        table: str, make_row: Callable[[datetime, int], dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        stored_times = (
-            tuple(timestamp.replace(tzinfo=None) for timestamp in times)
-            if table in naive_utc_tables
-            else times
-        )
-        return [make_row(timestamp, index) for index, timestamp in enumerate(stored_times)]
+def _all_dataset_fixtures(start: datetime, times: tuple[datetime, ...]) -> tuple[SqlFixture, ...]:
+    def rows(make_row: Callable[[datetime, int], dict[str, Any]]) -> list[dict[str, Any]]:
+        return [make_row(timestamp, index) for index, timestamp in enumerate(times)]
 
     return (
         SqlFixture(
@@ -77,7 +68,6 @@ def _all_dataset_fixtures(
             ":time, :subject, :value, 'regional_snapshot_sum'",
             "time = :time AND subject = :subject",
             rows(
-                "raw_taipower_load",
                 lambda t, i: {"time": t, "subject": f"edge-{i}", "value": float(i)},
             ),
         ),
@@ -87,7 +77,6 @@ def _all_dataset_fixtures(
             ":time, :value, 50, '{}'",
             "observed_at = :time",
             rows(
-                "raw_taipower_supply_demand_snapshot",
                 lambda t, i: {"time": t, "value": float(i)},
             ),
         ),
@@ -97,7 +86,6 @@ def _all_dataset_fixtures(
             ":time, :region, :time, :value, '{}'",
             "observed_at = :time AND region = :region",
             rows(
-                "raw_taipower_regional_supply_demand_snapshot",
                 lambda t, i: {
                     "time": t,
                     "region": ("北部", "中部", "南部", "東部")[i],
@@ -111,7 +99,6 @@ def _all_dataset_fixtures(
             ":time, 'thermal', :name, :time, '{}'",
             "observed_at = :time AND unit_type = 'thermal' AND unit_name = :name",
             rows(
-                "raw_taipower_unit_generation_snapshot",
                 lambda t, i: {"time": t, "name": f"edge-{i}"},
             ),
         ),
@@ -121,7 +108,6 @@ def _all_dataset_fixtures(
             ":time, :station, :value",
             "observed_at = :time AND station_id = :station",
             rows(
-                "raw_cwa_station_observation",
                 lambda t, i: {"time": t, "station": f"edge-{i}", "value": float(i)},
             ),
         ),
@@ -133,7 +119,6 @@ def _all_dataset_fixtures(
             "AND source_updated_at = :version AND valid_from = :time "
             "AND valid_to = :valid_to AND geocode = :geocode",
             rows(
-                "raw_cwa_township_forecast",
                 lambda t, i: {
                     "version": start,
                     "time": t,
@@ -149,7 +134,6 @@ def _all_dataset_fixtures(
             ":time, 'incomplete', :missing, '{}'",
             "fetched_at = :time",
             rows(
-                "raw_cwa_observation_batch",
                 lambda t, i: {"time": t, "missing": f'["edge-{i}"]'},
             ),
         ),
@@ -159,7 +143,6 @@ def _all_dataset_fixtures(
             "'F-EDGE', :time, :time, :time, 'incomplete', :missing, '{}'",
             "dataset_id = 'F-EDGE' AND issued_at = :time AND source_updated_at = :time",
             rows(
-                "raw_cwa_forecast_release",
                 lambda t, i: {"time": t, "missing": f'["edge-{i}"]'},
             ),
         ),
@@ -196,14 +179,12 @@ def _assert_dataset_windows(engine: Engine, start: datetime, end: datetime) -> N
         assert [item[field] for item in point.items] == [expected[1]]
 
 
-def assert_all_dataset_windows(
-    engine: Engine, naive_utc_tables: frozenset[str] = frozenset()
-) -> None:
+def assert_all_dataset_windows(engine: Engine) -> None:
     """Run the same four-edge fixture through every public reader on either database."""
     start = datetime(2045, 9, 21, 4, 0, 0, 123456, UTC)
     end = start + timedelta(seconds=1)
     times = (start - timedelta(microseconds=1), start, end, end + timedelta(microseconds=1))
-    fixtures = _all_dataset_fixtures(start, times, naive_utc_tables)
+    fixtures = _all_dataset_fixtures(start, times)
     with _seeded_rows(engine, fixtures):
         _assert_dataset_windows(engine, start, end)
 

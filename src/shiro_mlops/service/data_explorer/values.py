@@ -2,29 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-from shiro_mlops.data.repository_utils import deserialize_raw_payload, utc_instant_to_taiwan
+from shiro_mlops.core.storage_time import from_storage_time, from_storage_time_or_none
+from shiro_mlops.data.repository_utils import deserialize_raw_payload
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 
 # SYNC(frontend/apps/engineering-console/src/components/data-explorer/plot-series.ts): MW_PER_WAN_KW.
 WAN_KW_TO_MW = 10.0
 
 
-def to_taiwan(value: object) -> datetime:
-    converted = utc_instant_to_taiwan(value)
-    if converted is None:
-        raise ValueError("Timestamp is required")
-    return converted
+def row_time(row: Mapping[str, Any], column: str) -> datetime:
+    """Read a row's NOT NULL stored instant in ``column`` as Taiwan-local naive."""
+    return from_storage_time(row[column], column=column)
+
+
+def format_row_time(row: Mapping[str, Any], column: str, *, timespec: str = "seconds") -> str:
+    """Format a row's NOT NULL stored instant in ``column`` as RFC 3339 with +08:00."""
+    return format_taiwan_time(row_time(row, column), timespec=timespec)
 
 
 def optional_time(value: object) -> str | None:
-    if value is None or pd.isna(value):
-        return None
-    return format_taiwan_time(to_taiwan(value))
+    taiwan = from_storage_time_or_none(value)
+    return None if taiwan is None else format_taiwan_time(taiwan)
 
 
 def to_float(value: object) -> float | None:
