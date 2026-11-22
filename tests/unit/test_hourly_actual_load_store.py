@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.storage_time import to_storage_time
-from shiro_mlops.data.hourly_actual_load import HourWindow
+from shiro_mlops.data.hourly_actual_load import HourlyLoadAccumulation, HourWindow
 from shiro_mlops.data.hourly_actual_load_store import (
     HourlyActualLoadStore,
     HourlyLoadObservation,
@@ -153,6 +153,52 @@ def test_an_empty_series_keeps_its_datetime_and_load_columns(
     assert series.empty
     assert list(series.columns) == ["datetime", "load_mw"]
     assert pd.api.types.is_datetime64_any_dtype(series["datetime"])
+
+
+def test_accumulation_counts_derived_hours_through_the_cutoff(
+    store: HourlyActualLoadStore, sqlite_engine: Engine
+) -> None:
+    store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))  # 14:00 至 17:00
+    store.write(derived_hourly_load(2, datetime(2026, 9, 5, 17)), subject="north")
+    _insert_other_source_row(sqlite_engine, datetime(2026, 9, 5, 13), 31000.0)
+
+    assert store.accumulation(datetime(2026, 9, 5, 16)) == HourlyLoadAccumulation(
+        valid_hours=3, legacy_rows=0, latest_hour=datetime(2026, 9, 5, 16)
+    )
+    assert store.accumulation() == HourlyLoadAccumulation(
+        valid_hours=4, legacy_rows=0, latest_hour=datetime(2026, 9, 5, 17)
+    )
+
+
+def test_accumulation_without_derived_hours_has_no_latest_hour(
+    store: HourlyActualLoadStore,
+) -> None:
+    store.write(derived_hourly_load(1, datetime(2026, 9, 5, 16)))
+
+    assert store.accumulation(datetime(2026, 9, 5, 15)) == HourlyLoadAccumulation(
+        valid_hours=0, legacy_rows=0, latest_hour=None
+    )
+
+
+def test_accumulation_counts_legacy_rows_at_any_time_and_subject(
+    legacy_upgraded_engine: Engine,
+) -> None:
+    """The fixture's legacy row is one; two more lie after the cutoff or under another subject."""
+    store = HourlyActualLoadStore(legacy_upgraded_engine)
+    store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 20), 26500.0)
+    with legacy_upgraded_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, subject, load_mw) "
+                "VALUES (:time, 'north', 8000.0)"
+            ),
+            {"time": to_storage_time(datetime(2026, 9, 5, 12))},
+        )
+
+    assert store.accumulation(datetime(2026, 9, 5, 16)) == HourlyLoadAccumulation(
+        valid_hours=2, legacy_rows=3, latest_hour=datetime(2026, 9, 5, 16)
+    )
 
 
 def test_write_replaces_another_source_with_the_derived_source(

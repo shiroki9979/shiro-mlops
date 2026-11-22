@@ -1,8 +1,9 @@
 """Nationwide hourly actual load persisted in ``raw_taipower_load`` (ADR-0008).
 
-Every row this store writes carries the derived source, and every read it offers
+Every row this store writes carries the derived source, and every derived hour it reads
 selects only that source, so d015046-era rows (NULL source) and other sources never
-mix into the derived series. Callers pass and receive Taiwan-local hours in a ``datetime`` column;
+mix into the derived series; the accumulation counts legacy rows only to report them.
+Callers pass and receive Taiwan-local hours in a ``datetime`` column;
 the stored column name ``time`` stays inside this module.
 """
 
@@ -24,6 +25,7 @@ from shiro_mlops.core.constants import (
 from shiro_mlops.core.storage_time import (
     WindowCondition,
     from_storage_time,
+    from_storage_time_or_none,
     from_storage_time_series,
     half_open_window,
     to_storage_time,
@@ -31,6 +33,7 @@ from shiro_mlops.core.storage_time import (
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
     REGIONAL_SNAPSHOT_SUM_SOURCE,
+    HourlyLoadAccumulation,
     HourWindow,
     catch_up_window,
     derive_hourly_actual_load,
@@ -203,6 +206,37 @@ class HourlyActualLoadStore:
                 DATETIME_COL: from_storage_time_series(stored[STORAGE_TIME_COL]),
                 LOAD_MW_COL: stored[LOAD_MW_COL].astype(float),
             }
+        )
+
+    def accumulation(
+        self, at_or_before: datetime | None = None, *, subject: str = NATIONWIDE_SUBJECT
+    ) -> HourlyLoadAccumulation:
+        """Derived hours starting at or before ``at_or_before`` beside every legacy row.
+
+        Without ``at_or_before`` every derived hour counts. Legacy rows count whatever
+        their hour or subject, since any one of them blocks training (ADR-0008).
+        """
+        derived = "subject = :subject AND source = :source"
+        params: dict[str, object] = {"subject": subject, "source": REGIONAL_SNAPSHOT_SUM_SOURCE}
+        if at_or_before is not None:
+            derived += " AND time <= :at_or_before"
+            params["at_or_before"] = to_storage_time(at_or_before)
+        query = text(
+            f"""
+            SELECT
+                COUNT(*) AS valid_hours,
+                MAX(time) AS latest_time,
+                (SELECT COUNT(*) FROM raw_taipower_load WHERE source IS NULL) AS legacy_rows
+            FROM raw_taipower_load
+            WHERE {derived}
+            """
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(query, params).one()
+        return HourlyLoadAccumulation(
+            valid_hours=int(row.valid_hours),
+            legacy_rows=int(row.legacy_rows),
+            latest_hour=from_storage_time_or_none(row.latest_time),
         )
 
 
