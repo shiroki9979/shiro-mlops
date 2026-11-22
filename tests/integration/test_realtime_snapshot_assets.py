@@ -67,6 +67,7 @@ class SnapshotSource:
     revised_value: Callable[[list], float]
     unparseable_payload: Any
     parse_error: type[Exception]
+    parse_error_match: str
 
 
 SOURCES = [
@@ -80,6 +81,7 @@ SOURCES = [
         revised_value=lambda rows: rows[0].curr_load_wan_kw,
         unparseable_payload={"records": [{"curr_load": "3000"}]},
         parse_error=SupplyDemandParseError,
+        parse_error_match="curr_util_rate",
     ),
     SnapshotSource(
         asset=raw_taipower_regional_supply_demand_snapshot,
@@ -93,6 +95,7 @@ SOURCES = [
         revised_value=lambda rows: next(row for row in rows if row.region == "北部").load_wan_kw,
         unparseable_payload="時間,區域,發電(萬瓩),用電(萬瓩)\n,,,\n",
         parse_error=RegionalSupplyDemandParseError,
+        parse_error_match="No valid regional rows",
     ),
     SnapshotSource(
         asset=raw_taipower_unit_generation_snapshot,
@@ -106,6 +109,7 @@ SOURCES = [
         ),
         unparseable_payload={"DateTime": "2026-09-05T17:30:00", "aaData": []},
         parse_error=UnitGenerationParseError,
+        parse_error_match="No valid unit rows",
     ),
 ]
 REVISED_VALUES = [3400.5, 1100.0, 680.0]
@@ -161,14 +165,16 @@ def test_a_failed_fetch_writes_nothing(
     if failure == "http_500":
         adapter = FixtureSource(source.payload(), fail_first=math.inf)
         expected_error: type[Exception] = httpx.HTTPStatusError
+        match = "HTTP 500"
     else:
         adapter = FixtureSource(source.unparseable_payload)
         expected_error = source.parse_error
+        match = source.parse_error_match
 
     resources = {"time_series_repo": test_repo, source.source_key: adapter}
     config = SnapshotObservationConfig(observed_at=OBSERVED_SLOT.isoformat())
     with build_asset_context(resources=resources) as context:
-        with pytest.raises(expected_error):
+        with pytest.raises(expected_error, match=match):
             source.asset(context, config)
 
     assert source.rows(test_repo, OBSERVED_SLOT) == []

@@ -4,7 +4,7 @@
 - 建立日期：2026-11-22
 - 最後更新：2026-11-22
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：8 個候選皆待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
+- 狀態：候選 6 已處理，其餘 7 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
 - 檢視基準：`45f4b8e9d004e5e316c96d79086b71a9dd0dbebd`
 - 前次檢視：[2026-09-27 架構檢視](2026-09-27-architecture-review.md)
 
@@ -22,7 +22,7 @@
 | 3. 由單一 module 擁有全台逐時實際負載的存取 | Strong | ADR-0008 的口徑規則只在一處成立 | 下次修改全台逐時實際負載的推算或讀取時（[#228](https://github.com/shiroki9979/shiro-mlops/issues/228)） |
 | 4. 以資料集定義推導營運資料檢視器的查詢 | Strong | series 端點一次實作，8 個資料集共用 | M9 series 端點開工前（[#229](https://github.com/shiroki9979/shiro-mlops/issues/229)） |
 | 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)） |
-| 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 下次新增擷取來源或修改 asset 的 fetch 時（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)） |
+| 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 已處理（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)） |
 | 7. 已發布預報擁有預報步與提前時數 | Worth exploring | 提前時數只有一份定義 | 下次修改提前時數或已發布預報的欄位契約時（[#232](https://github.com/shiroki9979/shiro-mlops/issues/232)） |
 | 8. TimeSeriesRepository 收斂為 composition root | Worth exploring | 刪除 12 個 pass-through 方法 | 候選 2、3 完成後（[#233](https://github.com/shiroki9979/shiro-mlops/issues/233)） |
 
@@ -196,6 +196,8 @@ After ：api.py〔HTTP 對映〕→ 已部署任務 module〔模型狀態含 sha
 API 測試只驗 HTTP 對映（200／503／500 的形狀），module 全域的 monkeypatch 大多可移除。
 
 ## 候選 6：擷取來源 fetch 改為注入的 adapter
+
+> 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 處理：台電 port 回傳原始 payload、由 asset parse；CWA port 維持 `CWAClient` 的 typed 層級，因既有測試以 typed batch 建構資料。
 
 ### 現況與證據
 

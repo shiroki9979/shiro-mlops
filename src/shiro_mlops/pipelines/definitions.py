@@ -61,22 +61,21 @@ def time_series_repo_resource(_context):
     return TimeSeriesRepository()
 
 
-# 來源 HTTP adapter 在 run 需要時才建立，讀取當下的 settings。
 @resource
 def cwa_source_resource(_context):
-    """CWA OpenData HTTP adapter authorized with the configured API key."""
+    """Build the CWA HTTP adapter when a run needs it, authorized with the configured API key."""
     return CWAClient(api_key=settings.CWA_API_KEY)
 
 
 @resource
 def taipower_supply_demand_source_resource(_context):
-    """Taipower nationwide supply-demand HTTP adapter."""
+    """Build the Taipower nationwide supply-demand HTTP adapter when a run needs it."""
     return TaipowerSupplyDemandClient(base_url=settings.TAIPOWER_SUPPLY_DEMAND_API_URL)
 
 
 @resource
 def taipower_regional_supply_demand_source_resource(_context):
-    """Taipower regional supply-demand HTTP adapter."""
+    """Build the Taipower regional supply-demand HTTP adapter when a run needs it."""
     return TaipowerRegionalSupplyDemandClient(
         base_url=settings.TAIPOWER_REGIONAL_SUPPLY_DEMAND_API_URL
     )
@@ -84,7 +83,7 @@ def taipower_regional_supply_demand_source_resource(_context):
 
 @resource
 def taipower_unit_generation_source_resource(_context):
-    """Taipower unit net-generation HTTP adapter."""
+    """Build the Taipower unit net-generation HTTP adapter when a run needs it."""
     return TaipowerUnitGenerationClient(base_url=settings.TAIPOWER_UNIT_GENERATION_API_URL)
 
 

@@ -1,4 +1,4 @@
-"""Parse and fetch Taipower unit net-generation snapshots."""
+"""Parse Taipower unit net-generation payloads into snapshots; the HTTP adapter fetches them."""
 
 from __future__ import annotations
 

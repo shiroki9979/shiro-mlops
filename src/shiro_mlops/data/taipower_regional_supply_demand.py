@@ -1,4 +1,4 @@
-"""Parse and fetch Taipower regional supply-demand snapshots."""
+"""Parse Taipower regional supply-demand CSV into snapshots; the HTTP adapter fetches it."""
 
 from __future__ import annotations
 
