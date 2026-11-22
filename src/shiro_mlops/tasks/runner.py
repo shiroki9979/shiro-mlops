@@ -30,7 +30,8 @@ from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_w
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
 from shiro_mlops.tasks.definition import TaskDefinition
 
-# 拒絕例外定義於預測輸入關卡；此處重新匯出，服務層與測試沿用 runner 的匯入路徑。
+# WHY-NOT(InsufficientLoadHistoryError): 看似未用的匯入是重新匯出；例外定義於預測輸入關卡，
+# 服務層與測試沿用 runner 的匯入路徑。
 from shiro_mlops.tasks.prediction_inputs import (
     InsufficientLoadHistoryError as InsufficientLoadHistoryError,
 )
