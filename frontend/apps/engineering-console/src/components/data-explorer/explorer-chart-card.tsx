@@ -7,6 +7,7 @@ import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
+import { isFlagOn } from '@/lib/data-explorer'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
 import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
@@ -237,7 +238,7 @@ function optionOr<T extends string>(value: unknown, options: readonly T[], fallb
 
 function missingFilterPrompt(chart: ExplorerChartConfig, query: Record<string, string | undefined>, m: Messages): string | undefined {
   const required = chart.requiredFilter
-  if (!required || query[required.when] !== 'true' || query[required.filter]) return undefined
+  if (!required || !isFlagOn(query[required.when]) || query[required.filter]) return undefined
   return m.explorer.chart.requiresFilter(explorerFieldLabel(required.filter, m), explorerFieldLabel(required.when, m))
 }
 
