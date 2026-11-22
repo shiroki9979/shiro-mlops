@@ -6,7 +6,7 @@ from pathlib import Path
 
 import check_conventions
 import pytest
-from check_conventions import GitRange, check_doc_dates, main
+from check_conventions import BLOB_SIZE_LIMIT, GitRange, check_blob_limits, check_doc_dates, main
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def _git(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> str
     return result.stdout
 
 
-def _commit(repo: Path, files: dict[str, str | None], authored_on: str) -> str:
+def _commit(repo: Path, files: dict[str, str | bytes | None], authored_on: str) -> str:
     """Write (or delete, when None) files and commit them with the given author date.
 
     Committer dates stay at the real clock, as after a rebase, so log order follows ancestry
@@ -38,7 +38,10 @@ def _commit(repo: Path, files: dict[str, str | None], authored_on: str) -> str:
             target.unlink()
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        if isinstance(text, bytes):
+            target.write_bytes(text)
+        else:
+            target.write_text(text, encoding="utf-8")
     _git(repo, "add", "-A")
     author_date = {"GIT_AUTHOR_DATE": f"{authored_on}T12:00:00+08:00"}
     _git(repo, "commit", "-q", "-m", f"change on {authored_on}", extra_env=author_date)
@@ -771,3 +774,84 @@ def test_comment_refs_passes_on_sync_paths_that_are_tracked_files(
     _commit(repo, files, "2026-11-21")
 
     assert main(["comment-refs"]) == 0
+
+
+def test_blob_limits_flags_an_oversized_file_that_a_later_commit_deletes(repo: Path) -> None:
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    added = _commit(repo, {"data/dump.bin": b"0" * (BLOB_SIZE_LIMIT + 1)}, "2026-11-22")
+    head = _commit(repo, {"data/dump.bin": None}, "2026-11-22")
+
+    violations = check_blob_limits(GitRange(repo, base, head))
+
+    assert _locations(violations) == [("data/dump.bin", 1)]
+    assert added[:7] in violations[0].message
+
+
+def test_blob_limits_passes_a_file_at_the_size_limit(repo: Path) -> None:
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    head = _commit(repo, {"uv.lock": b"0" * BLOB_SIZE_LIMIT}, "2026-11-22")
+
+    assert check_blob_limits(GitRange(repo, base, head)) == []
+
+
+def test_blob_limits_ignores_oversized_files_already_on_the_base(repo: Path) -> None:
+    base = _commit(repo, {"data/dump.bin": b"0" * (BLOB_SIZE_LIMIT + 1)}, "2026-11-22")
+    head = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+
+    assert check_blob_limits(GitRange(repo, base, head)) == []
+
+
+def test_blob_limits_flags_blocked_extensions_in_any_letter_case(repo: Path) -> None:
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    head = _commit(
+        repo,
+        {
+            "models/model.PKL": b"\x80\x04",
+            "infra/terraform/terraform.tfstate": "{}\n",
+            "tests/fixtures/sample.csv": "a,b\n1,2\n",
+        },
+        "2026-11-22",
+    )
+
+    violations = check_blob_limits(GitRange(repo, base, head))
+
+    assert sorted(_locations(violations)) == [
+        ("infra/terraform/terraform.tfstate", 1),
+        ("models/model.PKL", 1),
+    ]
+
+
+def test_blob_limits_flags_a_file_renamed_to_a_blocked_extension(repo: Path) -> None:
+    base = _commit(repo, {"lab/study.py": "x = 1\n"}, "2026-11-22")
+    head = _commit(repo, {"lab/study.py": None, "lab/study.ipynb": "x = 1\n"}, "2026-11-22")
+
+    violations = check_blob_limits(GitRange(repo, base, head))
+
+    assert _locations(violations) == [("lab/study.ipynb", 1)]
+
+
+def test_main_exits_1_when_a_commit_adds_a_blocked_file(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    head = _commit(repo, {"keys/deploy.pem": "-----BEGIN-----\n"}, "2026-11-22")
+
+    assert main(["blob-limits", "--base", base, "--head", head]) == 1
+
+
+def test_main_exits_0_when_commits_add_only_allowed_files(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    head = _commit(repo, {"src/pkg/load.py": "x = 1\n"}, "2026-11-22")
+
+    assert main(["blob-limits", "--base", base, "--head", head]) == 0
+
+
+def test_blob_limits_without_base_exits_2() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["blob-limits"])
+
+    assert exit_info.value.code == 2
