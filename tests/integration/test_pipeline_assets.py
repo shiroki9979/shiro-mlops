@@ -25,6 +25,7 @@ from shiro_mlops.data.cwa_client import (
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.assets import (
+    CWA_SOURCE,
     feast_feature_export,
     raw_cwa_station_observation,
     raw_cwa_township_forecast,
@@ -37,7 +38,12 @@ from shiro_mlops.pipelines.task_pipelines import (
 from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 from shiro_mlops.tasks.model_store import model_directory_sha256
-from tests.helpers import derived_hourly_load, override_task_policies
+from tests.helpers import (
+    FixtureCWASource,
+    derived_hourly_load,
+    override_task_policies,
+    unfetched_source_resources,
+)
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
@@ -50,37 +56,30 @@ def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
         return features_asset(context).value
 
 
-def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete():
     batch = MagicMock(spec=CWAObservationBatch)
     batch.status = "complete"
     batch.missing_station_ids = ()
-    monkeypatch.setattr(
-        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-        lambda *args, **kwargs: batch,
-    )
     repository = MagicMock(spec=TimeSeriesRepository)
-    with build_asset_context(resources={"time_series_repo": repository}) as context:
+    resources = {"time_series_repo": repository, CWA_SOURCE: FixtureCWASource(batch)}
+    with build_asset_context(resources=resources) as context:
         result = raw_cwa_station_observation(context)
 
     assert result is batch
     repository.upsert_cwa_observation_batch.assert_called_once_with(batch)
 
 
-def test_canonical_cwa_forecast_asset_persists_both_products(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_canonical_cwa_forecast_asset_persists_both_products():
     releases = [
         MagicMock(spec=CWAForecastRelease, status="complete"),
         MagicMock(spec=CWAForecastRelease, status="complete"),
     ]
-    monkeypatch.setattr(
-        "shiro_mlops.pipelines.assets.CWAClient.fetch_forecast_release",
-        lambda self, dataset_id, locations: releases[0 if dataset_id.endswith("089") else 1],
+    source = FixtureCWASource(
+        forecast_releases={"F-D0047-089": releases[0], "F-D0047-091": releases[1]}
     )
     repository = MagicMock(spec=TimeSeriesRepository)
-    with build_asset_context(resources={"time_series_repo": repository}) as context:
+    resources = {"time_series_repo": repository, CWA_SOURCE: source}
+    with build_asset_context(resources=resources) as context:
         result = raw_cwa_township_forecast(context)
 
     assert result == releases
@@ -210,27 +209,18 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         raw_payload={},
     )
     test_repo.upsert_taipower_load(taipower_raw_df)
-    with (
-        patch(
-            "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-            return_value=observation_batch,
-        ),
-        build_asset_context(resources={"time_series_repo": test_repo}) as context,
-    ):
+    resources = {"time_series_repo": test_repo, CWA_SOURCE: FixtureCWASource(observation_batch)}
+    with build_asset_context(resources=resources) as context:
         raw_cwa_station_observation(context)
-    with patch(
-        "shiro_mlops.pipelines.assets.CWAClient.fetch_observation_batch",
-        return_value=observation_batch,
-    ):
-        features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
-        res = materialize(
-            assets=[features_asset, feast_feature_export],
-            resources={
-                "time_series_repo": test_repo,
-                "feast_io_manager": get_feast_parquet_io_manager(data_dir=settings.DATA_DIR),
-            },
-            instance=dagster_instance,
-        )
+    features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
+    res = materialize(
+        assets=[features_asset, feast_feature_export],
+        resources={
+            "time_series_repo": test_repo,
+            "feast_io_manager": get_feast_parquet_io_manager(data_dir=settings.DATA_DIR),
+        },
+        instance=dagster_instance,
+    )
 
     assert res.success
     training_table = res.output_for_node(NAMES.features)
@@ -272,6 +262,7 @@ def _trainable_task_definitions(
             "time_series_repo": test_repo,
             "io_manager": get_parquet_io_manager(data_dir=tmp_path),
             "feast_io_manager": get_feast_parquet_io_manager(data_dir=tmp_path),
+            **unfetched_source_resources(),
         },
     )
 

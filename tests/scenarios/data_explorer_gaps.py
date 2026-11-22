@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.service.api import app
+from shiro_mlops.service.api import create_app
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
 from tests.helpers import regional_supply_demand_snapshots, rfc3339
@@ -21,8 +21,7 @@ def explorer_http_client(repo: TimeSeriesRepository) -> Iterator[TestClient]:
     """Serve the Data Explorer routes from the given repository on either dialect."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
-        patch.setattr("shiro_mlops.service.api.repository_store", repo)
-        yield TestClient(app)
+        yield TestClient(create_app(repository=repo))
 
 
 @contextmanager

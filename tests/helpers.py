@@ -1,12 +1,14 @@
 """集中共用測試資料，避免測試模組互相依賴私有 builder。"""
 
 import json
+import math
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
@@ -318,3 +320,97 @@ def override_task_policies(
     updated = replace(task, policies=task.policies.model_copy(update=updates))
     monkeypatch.setitem(tasks, task_id, updated)
     return updated
+
+
+def upstream_http_500(url: str = "https://example.invalid/source") -> httpx.HTTPStatusError:
+    """The error an HTTP adapter raises when the upstream source answers HTTP 500."""
+    request = httpx.Request("GET", url)
+    return httpx.HTTPStatusError(
+        "upstream returned HTTP 500", request=request, response=httpx.Response(500, request=request)
+    )
+
+
+class FixtureSource:
+    """Fixture adapter for a Taipower source port: serves one payload, optionally failing first.
+
+    ``fail_first`` counts the fetches that raise ``error`` before the payload is served;
+    ``math.inf`` makes every fetch fail.
+    """
+
+    def __init__(
+        self,
+        payload: Any = None,
+        *,
+        fail_first: float = 0,
+        error: Exception | None = None,
+    ) -> None:
+        self.payload = payload
+        self.fail_first = fail_first
+        self.error = error or upstream_http_500()
+        self.calls = 0
+
+    def fetch_payload(self) -> Any:
+        self.calls += 1
+        if self.calls <= self.fail_first:
+            raise self.error
+        return self.payload
+
+
+class FixtureCWASource:
+    """Fixture adapter for the CWA source port; an exception value is raised instead of served."""
+
+    def __init__(
+        self,
+        observation_batch: CWAObservationBatch | Exception | None = None,
+        forecast_releases: dict[str, CWAForecastRelease | Exception] | None = None,
+    ) -> None:
+        self.observation_batch = observation_batch
+        self.forecast_releases = forecast_releases or {}
+        self.calls: list[str] = []
+
+    def fetch_observation_batch(self, locations: object = None) -> CWAObservationBatch:
+        self.calls.append("observation")
+        return _served(self.observation_batch)
+
+    def fetch_forecast_release(
+        self, dataset_id: str, locations: object = None
+    ) -> CWAForecastRelease:
+        self.calls.append(dataset_id)
+        return _served(self.forecast_releases[dataset_id])
+
+
+def _served(value: Any) -> Any:
+    if isinstance(value, Exception):
+        raise value
+    if value is None:
+        raise AssertionError("FixtureCWASource was asked for a payload it was not given")
+    return value
+
+
+def unfetched_source_resources() -> dict[str, Any]:
+    """Every ingestion source port bound to an adapter that fails if a run ever fetches it.
+
+    Definitions that load the ingestion assets without running them still have to bind
+    their source resources.
+    """
+    from shiro_mlops.pipelines.assets import (
+        CWA_SOURCE,
+        TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE,
+        TAIPOWER_SUPPLY_DEMAND_SOURCE,
+        TAIPOWER_UNIT_GENERATION_SOURCE,
+    )
+
+    def unfetched(key: str) -> FixtureSource:
+        return FixtureSource(fail_first=math.inf, error=AssertionError(f"{key} was fetched"))
+
+    return {
+        CWA_SOURCE: FixtureCWASource(),
+        **{
+            key: unfetched(key)
+            for key in (
+                TAIPOWER_SUPPLY_DEMAND_SOURCE,
+                TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE,
+                TAIPOWER_UNIT_GENERATION_SOURCE,
+            )
+        },
+    }

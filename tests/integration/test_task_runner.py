@@ -439,13 +439,6 @@ def test_missing_load_hour_before_the_lookback_still_predicts(
     assert check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF).ready
 
 
-def test_missing_model_is_not_ready(task: TaskDefinition, runtime: TaskRuntime) -> None:
-    readiness = check_task_ready(task, None, runtime, as_of=FRESH_AS_OF)
-
-    assert not readiness.ready
-    assert readiness.reason == "Model is not loaded or trained yet."
-
-
 def test_subject_without_history_raises_missing_load_history(
     task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
 ) -> None:

@@ -5,7 +5,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 from xml.etree.ElementTree import Element
 from zoneinfo import ZoneInfo
@@ -623,8 +623,26 @@ def _parse_cwa_observations_payload(data: Any, fallback_location: str = "Taipei"
     return pd.DataFrame(rows)
 
 
+class CWASource(Protocol):
+    """Port that fetches CWA products and parses them with this module's parsers."""
+
+    def fetch_observation_batch(
+        self, locations: dict[str, CWALocation] | None = None
+    ) -> CWAObservationBatch:
+        """Return one canonical batch of the configured stations' latest observations."""
+        ...
+
+    def fetch_forecast_release(
+        self,
+        dataset_id: str,
+        locations: dict[str, CWALocation] | None = None,
+    ) -> CWAForecastRelease:
+        """Return one versioned township forecast release of the given dataset."""
+        ...
+
+
 class CWAClient:
-    """Client for querying Central Weather Administration (CWA) OpenData API."""
+    """HTTP adapter for the Central Weather Administration (CWA) OpenData API."""
 
     def __init__(self, api_key: str = "") -> None:
         self.api_key = api_key
