@@ -109,7 +109,7 @@ class ServedTasks:
         repository: TimeSeriesRepository,
         clock: Callable[[], pd.Timestamp],
     ) -> Self:
-        """Load every task's model from ``model_root``."""
+        """Load each task's model with its sha256; a failed load leaves only that task unserved."""
         models = {task_id: _load_state(model_root, task) for task_id, task in tasks.items()}
         return cls(tasks, models, repository=repository, clock=clock)
 

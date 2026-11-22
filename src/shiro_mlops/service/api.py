@@ -310,8 +310,9 @@ def create_app(
 ) -> FastAPI:
     """Build the API; whatever is not injected is set up at startup from settings.
 
-    Startup ensures the DB schema once, then builds one repository for every request,
-    and fails fast on invalid task definitions before loading every task model.
+    Inject ``repository`` together with ``served_tasks``: injected alone,
+    ``served_tasks`` reads through its own repository while the Data Explorer
+    gets the one startup builds. Invalid task definitions fail startup.
     """
 
     @asynccontextmanager
@@ -330,7 +331,9 @@ def create_app(
         version=__version__,
         lifespan=lifespan,
     )
-    # WHY-NOT(repository): 注入的依賴建構時即放入 app.state，不等 lifespan；未進入 lifespan 的 TestClient 也能使用。
+    # WHY-NOT(repository): 注入的 repository 與 served_tasks 都在建構時放入 app.state，不等 lifespan。
+    # 未進入 lifespan 的 TestClient 也會呼叫端點；改等 lifespan 時，get_served_tasks
+    # 與營運資料檢視器的 _repository 讀 app.state 會拋 AttributeError。
     if repository is not None:
         app.state.repository = repository
     if served_tasks is not None:

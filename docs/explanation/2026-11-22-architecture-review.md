@@ -21,7 +21,7 @@
 | 2. 集中儲存時刻轉換 | Strong | 單一儲存形式，跨表 SQL join 可用 | 併入 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) |
 | 3. 由單一 module 擁有全台逐時實際負載的存取 | Strong | ADR-0008 的口徑規則只在一處成立 | 下次修改全台逐時實際負載的推算或讀取時（[#228](https://github.com/shiroki9979/shiro-mlops/issues/228)） |
 | 4. 以資料集定義推導營運資料檢視器的查詢 | Strong | series 端點一次實作，8 個資料集共用 | M9 series 端點開工前（[#229](https://github.com/shiroki9979/shiro-mlops/issues/229)） |
-| 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)） |
+| 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 已處理（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)，見[處理結果](#處理結果)） |
 | 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 下次新增擷取來源或修改 asset 的 fetch 時（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)） |
 | 7. 已發布預報擁有預報步與提前時數 | Worth exploring | 提前時數只有一份定義 | 下次修改提前時數或已發布預報的欄位契約時（[#232](https://github.com/shiroki9979/shiro-mlops/issues/232)） |
 | 8. TimeSeriesRepository 收斂為 composition root | Worth exploring | 刪除 12 個 pass-through 方法 | 候選 2、3 完成後（[#233](https://github.com/shiroki9979/shiro-mlops/issues/233)） |
@@ -194,6 +194,13 @@ After ：api.py〔HTTP 對映〕→ 已部署任務 module〔模型狀態含 sha
 
 以暫存 model root、SQLite 與固定 clock 測 module 的各種回應：未訓練、載入失敗、負載起點過舊、正常預報、降級預報。
 API 測試只驗 HTTP 對映（200／503／500 的形狀），module 全域的 monkeypatch 大多可移除。
+
+### 處理結果
+
+已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 處理：[served_tasks.py](../../src/shiro_mlops/service/served_tasks.py) 的 `ServedTasks` 擁有模型狀態（含 sha256）、就緒判定、預測與錯誤分類，API 以 `create_app` 注入，module 全域的 monkeypatch 與 `runner.resolve_weather` 的 patch 全數移除，`/health` 逐任務回報 `model_sha256` 與 `reason`。
+處理時順帶讓 repository 只在啟動時建立一次：原本每個 request 都新建 engine 並重跑 DDL。
+
+上方現況以處理前為準，對照 dev `4e2a7d4` 有三處校正：完整的「查 key 再問原因」只在 `_readiness`、`_predict`，`health_check` 只查 key；monkeypatch 為 33 處（含 `tests/scenarios/` 2 處）；#204 改到 `api.py` 的是 `c725139`、`7062546` 兩次，`9e2bb45` 只改 `model_store.py` 的文件。
 
 ## 候選 6：擷取來源 fetch 改為注入的 adapter
 

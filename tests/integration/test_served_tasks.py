@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from shiro_mlops.core.constants import MAX_HORIZON_HOURS
+from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.served_tasks import (
     Loaded,
@@ -119,6 +121,51 @@ def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
         served.predict(broken.task_id, horizon_hours=3)
     assert (status[other.task_id].model_loaded, status[other.task_id].reason) == (True, None)
     assert status[other.task_id].model_sha256 == saved.sha256
+
+
+def _fresh_forecast_release() -> CWAForecastRelease:
+    """A Taipei release issued an hour before the anchor, covering the whole horizon."""
+    anchor = pd.Timestamp(LAST_HOUR)
+    issued_at = anchor - pd.Timedelta(hours=1)
+    return CWAForecastRelease(
+        dataset_id="F-D0047-089",
+        issued_at=issued_at,
+        source_updated_at=issued_at,
+        fetched_at=issued_at.to_pydatetime(),
+        status="complete",
+        missing_geocodes=(),
+        raw_payload={"fixture": "served_tasks"},
+        forecasts=tuple(
+            CWATownshipForecast(
+                valid_from=anchor + pd.Timedelta(hours=hour),
+                valid_to=anchor + pd.Timedelta(hours=hour),
+                geocode="63000000",
+                location_name="臺北市",
+                temperature_c=30.0,
+                dew_point_c=None,
+                apparent_temperature_c=None,
+                relative_humidity_pct=70.0,
+                probability_of_precipitation_pct=None,
+                wind_speed_m_s=None,
+                wind_direction=None,
+            )
+            for hour in range(1, MAX_HORIZON_HOURS + 1)
+        ),
+    )
+
+
+def test_a_fresh_forecast_keeps_the_task_ready_and_predicting_in_normal_mode(
+    serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel
+) -> None:
+    serving_repo.upsert_cwa_forecast_release(_fresh_forecast_release())
+    served = _serving(fitted_task_model, serving_repo)
+
+    readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
+    outcome = served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
+
+    assert (readiness.ready, readiness.mode) == (True, "normal")
+    assert outcome.mode == "normal"
+    assert outcome.weather["temperature"].tolist() == [30.0] * 3
 
 
 def test_a_stale_load_anchor_makes_the_task_unavailable(
