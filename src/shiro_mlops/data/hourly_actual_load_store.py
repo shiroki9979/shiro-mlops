@@ -21,7 +21,13 @@ from shiro_mlops.core.constants import (
     NATIONWIDE_SUBJECT,
     STORAGE_TIME_COL,
 )
-from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
+from shiro_mlops.core.storage_time import (
+    WindowCondition,
+    from_storage_time,
+    from_storage_time_series,
+    half_open_window,
+    to_storage_time,
+)
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
     REGIONAL_SNAPSHOT_SUM_SOURCE,
@@ -171,3 +177,38 @@ class HourlyActualLoadStore:
         return HourlyLoadObservation(
             hour=from_storage_time(row.time, column="time"), load_mw=float(row.load_mw)
         )
+
+    def series(
+        self, *, start: datetime | None = None, end: datetime, subject: str = NATIONWIDE_SUBJECT
+    ) -> pd.DataFrame:
+        """Derived hours in the Taiwan-local window ``[start, end)``, oldest first.
+
+        Without ``start`` the series begins at the earliest derived hour. The frame
+        holds ``datetime`` and ``load_mw``, the columns ``write`` takes.
+        """
+        window = _window_ending(end, start)
+        query = text(
+            f"""
+            SELECT time, load_mw
+            FROM raw_taipower_load
+            WHERE subject = :subject AND source = :source AND {window.sql}
+            ORDER BY time
+            """
+        )
+        params = {"subject": subject, "source": REGIONAL_SNAPSHOT_SUM_SOURCE, **window.params}
+        with self._engine.connect() as conn:
+            stored = pd.read_sql_query(query, con=conn, params=params)
+        return pd.DataFrame(
+            {
+                DATETIME_COL: from_storage_time_series(stored[STORAGE_TIME_COL]),
+                LOAD_MW_COL: stored[LOAD_MW_COL].astype(float),
+            }
+        )
+
+
+def _window_ending(end: datetime, start: datetime | None) -> WindowCondition:
+    if start is not None:
+        return half_open_window(STORAGE_TIME_COL, start, end)
+    return WindowCondition(
+        sql=f"{STORAGE_TIME_COL} < :time_end", params={"time_end": to_storage_time(end)}
+    )

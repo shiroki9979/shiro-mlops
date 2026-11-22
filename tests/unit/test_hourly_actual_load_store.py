@@ -82,6 +82,79 @@ def test_latest_observation_reads_one_prediction_subject(store: HourlyActualLoad
     )
 
 
+def test_series_holds_only_derived_hours_in_a_datetime_column(
+    legacy_upgraded_engine: Engine,
+) -> None:
+    store = HourlyActualLoadStore(legacy_upgraded_engine)
+    store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))  # 15:00、16:00
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 17), 26500.0)
+    _insert_other_source_row(legacy_upgraded_engine, datetime(2026, 9, 5, 18), 31000.0)
+
+    series = store.series(start=datetime(2026, 9, 5), end=datetime(2026, 9, 6))
+
+    pd.testing.assert_frame_equal(
+        series,
+        pd.DataFrame(
+            {
+                "datetime": pd.to_datetime(["2026-09-05 15:00", "2026-09-05 16:00"]),
+                "load_mw": [30000.0, 30001.0],
+            }
+        ),
+    )
+
+
+def test_series_window_includes_its_start_and_excludes_its_end(
+    store: HourlyActualLoadStore,
+) -> None:
+    store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))  # 14:00 至 17:00
+
+    series = store.series(start=datetime(2026, 9, 5, 15), end=datetime(2026, 9, 5, 17))
+
+    assert series["datetime"].tolist() == [
+        pd.Timestamp("2026-09-05 15:00"),
+        pd.Timestamp("2026-09-05 16:00"),
+    ]
+
+
+def test_series_without_a_start_begins_at_the_earliest_derived_hour(
+    legacy_upgraded_engine: Engine,
+) -> None:
+    store = HourlyActualLoadStore(legacy_upgraded_engine)
+    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 1), 26500.0)
+    store.write(derived_hourly_load(3, datetime(2026, 9, 5, 16)))  # 14:00、15:00、16:00
+
+    series = store.series(end=datetime(2026, 9, 5, 16))
+
+    assert series["datetime"].tolist() == [
+        pd.Timestamp("2026-09-05 14:00"),
+        pd.Timestamp("2026-09-05 15:00"),
+    ]
+
+
+def test_series_reads_one_prediction_subject(store: HourlyActualLoadStore) -> None:
+    store.write(derived_hourly_load(1, datetime(2026, 9, 5, 16)), subject="north")
+    store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))
+
+    north = store.series(end=datetime(2026, 9, 6), subject="north")
+    nationwide = store.series(end=datetime(2026, 9, 6))
+
+    assert north["datetime"].tolist() == [pd.Timestamp("2026-09-05 16:00")]
+    assert nationwide["datetime"].tolist() == [
+        pd.Timestamp("2026-09-05 15:00"),
+        pd.Timestamp("2026-09-05 16:00"),
+    ]
+
+
+def test_an_empty_series_keeps_its_datetime_and_load_columns(
+    store: HourlyActualLoadStore,
+) -> None:
+    series = store.series(end=datetime(2026, 9, 6))
+
+    assert series.empty
+    assert list(series.columns) == ["datetime", "load_mw"]
+    assert pd.api.types.is_datetime64_any_dtype(series["datetime"])
+
+
 def test_write_replaces_another_source_with_the_derived_source(
     store: HourlyActualLoadStore, sqlite_engine: Engine
 ) -> None:
