@@ -5,10 +5,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
-from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.hourly_actual_load import HourlyLoadAccumulation, HourWindow
 from shiro_mlops.data.hourly_actual_load_store import (
     HourlyActualLoadStore,
@@ -210,14 +208,9 @@ def test_accumulation_counts_legacy_rows_at_any_time_and_subject(
     store = HourlyActualLoadStore(legacy_upgraded_engine)
     store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 20), 26500.0)
-    with legacy_upgraded_engine.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO raw_taipower_load (time, subject, load_mw) "
-                "VALUES (:time, 'north', 8000.0)"
-            ),
-            {"time": to_storage_time(datetime(2026, 9, 5, 12))},
-        )
+    insert_legacy_load_row(
+        legacy_upgraded_engine, datetime(2026, 9, 5, 12), 8000.0, subject="north"
+    )
 
     assert store.accumulation(datetime(2026, 9, 5, 16)) == HourlyLoadAccumulation(
         valid_hours=2, legacy_rows=3, latest_hour=datetime(2026, 9, 5, 16)

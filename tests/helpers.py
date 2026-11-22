@@ -270,15 +270,17 @@ def create_location_keyed_load_table(engine: Engine) -> None:
         )
 
 
-def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
+def insert_legacy_load_row(
+    engine: Engine, taiwan_time: datetime, load_mw: float, *, subject: str = NATIONWIDE_SUBJECT
+) -> None:
     """Insert a d015046-era row without source after migrating the schema to allow NULL source."""
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO raw_taipower_load (time, subject, load_mw) "
-                "VALUES (:time, 'nationwide', :load_mw)"
+                "VALUES (:time, :subject, :load_mw)"
             ),
-            {"time": to_storage_time(taiwan_time), "load_mw": load_mw},
+            {"time": to_storage_time(taiwan_time), "subject": subject, "load_mw": load_mw},
         )
 
 
