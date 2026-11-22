@@ -1,6 +1,5 @@
-"""Time-series database repository for persisting and querying raw load and weather data."""
+"""Time-series database repository for CWA weather, issued forecasts and Taipower snapshots."""
 
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
@@ -11,13 +10,10 @@ from sqlalchemy.engine import Connection, Engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
-    DATETIME_COL,
-    LOAD_MW_COL,
     LOCATION_COL,
     MAX_HORIZON_HOURS,
     NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
-    SUBJECT_COL,
     TEMPERATURE_COL,
 )
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
@@ -34,11 +30,10 @@ from shiro_mlops.data.cwa_client import (
     resolve_cwa_location,
 )
 from shiro_mlops.data.forecast_track_record import TrackRecordPair, TrackRecordWindow
-from shiro_mlops.data.hourly_actual_load import (
+from shiro_mlops.data.hourly_actual_load_store import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
-    HourlyLoadAccumulation,
+    HourlyActualLoadStore,
 )
-from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload
@@ -57,49 +52,7 @@ from shiro_mlops.data.taipower_unit_generation_repository import (
     TaipowerUnitGenerationRepository,
 )
 
-logger = logging.getLogger(__name__)
-
 _TRACK_RECORD_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
-
-
-def _prepare_load_df(df: pd.DataFrame, default_subject: str) -> pd.DataFrame:
-    """Normalize timestamp, assign the default prediction subject, and deduplicate records."""
-    if df.empty:
-        return df
-
-    work_df = df.copy()
-    if DATETIME_COL in work_df.columns and "time" not in work_df.columns:
-        work_df = work_df.rename(columns={DATETIME_COL: "time"})
-
-    if "time" not in work_df.columns:
-        raise KeyError("DataFrame must contain 'time' or 'datetime' column.")
-
-    if SUBJECT_COL not in work_df.columns:
-        work_df[SUBJECT_COL] = default_subject
-    else:
-        work_df[SUBJECT_COL] = work_df[SUBJECT_COL].fillna(default_subject)
-
-    work_df["time"] = work_df["time"].map(lambda value: to_storage_time(pd.Timestamp(value)))
-    return work_df.drop_duplicates(subset=["time", SUBJECT_COL], keep="last")
-
-
-def _build_time_filter(
-    start_time: datetime | str | None = None,
-    end_time: datetime | str | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Construct SQL WHERE clause conditions and parameter mappings."""
-    clauses: list[str] = ["1=1"]
-    params: dict[str, Any] = {}
-
-    if start_time is not None:
-        clauses.append("time >= :start_time")
-        params["start_time"] = to_storage_time(pd.Timestamp(start_time))
-
-    if end_time is not None:
-        clauses.append("time <= :end_time")
-        params["end_time"] = to_storage_time(pd.Timestamp(end_time))
-
-    return " AND ".join(clauses), params
 
 
 FORECAST_ROW_COLUMNS = [
@@ -353,64 +306,6 @@ class TimeSeriesRepository:
         self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
         self.hourly_actual_load_store = HourlyActualLoadStore(self.engine)
 
-    def upsert_taipower_load(
-        self,
-        df: pd.DataFrame,
-        default_subject: str = NATIONWIDE_SUBJECT,
-        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
-    ) -> int:
-        """Upsert Taipower electricity load records into raw_taipower_load table.
-
-        Handles composite primary key conflict on (time, subject) by updating load_mw
-        and source, so a recomputed hour always carries its current provenance.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            DataFrame containing 'datetime' (or 'time') and 'load_mw' columns.
-        default_subject : str
-            Prediction subject used when the 'subject' column is missing or null.
-        source : str
-            Derivation provenance stored on every row.
-
-        Returns
-        -------
-        int
-            Number of records upserted.
-        """
-        if df.empty:
-            return 0
-
-        work_df = _prepare_load_df(df, default_subject=default_subject)
-        if LOAD_MW_COL not in work_df.columns:
-            raise KeyError(f"DataFrame must contain '{LOAD_MW_COL}' column.")
-
-        records: list[dict[str, Any]] = [
-            {
-                "time": row["time"].to_pydatetime(),
-                "subject": str(row[SUBJECT_COL]),
-                "load_mw": float(row[LOAD_MW_COL]),
-                "source": source,
-            }
-            for _, row in work_df.iterrows()
-        ]
-
-        upsert_stmt = text(
-            """
-            INSERT INTO raw_taipower_load (time, subject, load_mw, source)
-            VALUES (:time, :subject, :load_mw, :source)
-            ON CONFLICT (time, subject) DO UPDATE SET
-                load_mw = EXCLUDED.load_mw,
-                source = EXCLUDED.source
-            """
-        )
-
-        with self.engine.begin() as conn:
-            conn.execute(upsert_stmt, records)
-
-        logger.info(f"Upserted {len(records)} Taipower load records into raw_taipower_load.")
-        return len(records)
-
     def upsert_cwa_weather(
         self,
         df: pd.DataFrame,
@@ -646,111 +541,6 @@ class TimeSeriesRepository:
             if filters.selects_versions:
                 frame = _in_versions(frame, _read_selected_versions(conn, filters))
         return _forecast_rows_in_taiwan_time(frame)
-
-    def fetch_load_range(
-        self,
-        start_time: datetime | str | None = None,
-        end_time: datetime | str | None = None,
-        subject: str | None = None,
-        source: str | None = None,
-    ) -> pd.DataFrame:
-        """Fetch historical Taipower load records filtered by time range and prediction subject.
-
-        Parameters
-        ----------
-        start_time : datetime | str | None
-            Start of time filter range (inclusive).
-        end_time : datetime | str | None
-            End of time filter range (inclusive).
-        subject : str | None
-            Optional prediction subject filter.
-        source : str | None
-            Optional derivation provenance filter. Rows with NULL source never match,
-            so consumers that must not mix load bases pass the derived source.
-
-        Returns
-        -------
-        pd.DataFrame
-            Sorted DataFrame of power load records.
-        """
-        where_clause, params = _build_time_filter(start_time, end_time)
-        if subject is not None:
-            where_clause += " AND subject = :subject"
-            params["subject"] = subject
-        if source is not None:
-            where_clause += " AND source = :source"
-            params["source"] = source
-        query = f"""
-            SELECT time, subject, load_mw, created_at
-            FROM raw_taipower_load
-            WHERE {where_clause}
-            ORDER BY time ASC, subject ASC
-        """
-        return self._read_load_frame(query, params)
-
-    def fetch_latest_load(
-        self,
-        subject: str = NATIONWIDE_SUBJECT,
-        source: str = REGIONAL_SNAPSHOT_SUM_SOURCE,
-        at_or_before: datetime | None = None,
-    ) -> pd.DataFrame:
-        """Fetch only the newest load row of one source, or an empty frame.
-
-        Hourly consumers need the latest actual value, not the series, so the
-        query stays bounded as the accumulated history grows. ``at_or_before``
-        (Taiwan-local) ignores rows persisted after a point-in-time decision.
-        """
-        where_clause, params = _build_time_filter(None, at_or_before)
-        query = f"""
-            SELECT time, subject, load_mw, created_at
-            FROM raw_taipower_load
-            WHERE {where_clause} AND subject = :subject AND source = :source
-            ORDER BY time DESC
-            LIMIT 1
-        """
-        return self._read_load_frame(query, {**params, "subject": subject, "source": source})
-
-    def _read_load_frame(self, query: str, params: dict[str, Any]) -> pd.DataFrame:
-        with self.engine.connect() as conn:
-            df = pd.read_sql_query(text(query), con=conn, params=params)
-
-        if df.empty:
-            empty_df = pd.DataFrame(columns=["time", SUBJECT_COL, "load_mw", "created_at"])
-            empty_df["time"] = pd.to_datetime(empty_df["time"])
-            return empty_df
-
-        df["time"] = from_storage_time_series(df["time"])
-        return df
-
-    def summarize_hourly_load_accumulation(
-        self, subject: str = NATIONWIDE_SUBJECT, at_or_before: datetime | None = None
-    ) -> HourlyLoadAccumulation:
-        """Count derived rows through ``at_or_before`` and all legacy rows."""
-        time_filter, time_params = _build_time_filter(None, at_or_before)
-        # Legacy rows block every task, regardless of subject or timestamp.
-        query = text(
-            f"""
-            SELECT
-                COALESCE(SUM(CASE WHEN source = :derived AND {time_filter} THEN 1 ELSE 0 END), 0)
-                    AS valid_hours,
-                (SELECT COUNT(*) FROM raw_taipower_load WHERE source IS NULL) AS legacy_rows,
-                MAX(CASE WHEN source = :derived AND {time_filter} THEN time END) AS latest_time
-            FROM raw_taipower_load
-            WHERE subject = :subject
-            """
-        )
-        params = {"derived": REGIONAL_SNAPSHOT_SUM_SOURCE, "subject": subject, **time_params}
-        with self.engine.connect() as conn:
-            row = conn.execute(query, params).one()
-
-        latest_hour = (
-            None if row.latest_time is None else from_storage_time(row.latest_time, column="time")
-        )
-        return HourlyLoadAccumulation(
-            valid_hours=int(row.valid_hours),
-            legacy_rows=int(row.legacy_rows),
-            latest_hour=latest_hour,
-        )
 
     def fetch_weather_range(
         self,
