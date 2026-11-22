@@ -26,6 +26,7 @@ from shiro_mlops.pipelines.forecast_view_export import (
     FORECAST_VIEW_EXPORT_ASSET,
     forecast_view_export,
 )
+from tests.helpers import write_derived_load
 
 # 預報實績在 10:25 彙整（統計截至 10:00），匯出排在其後。
 TRACK_RECORD_TICK = "2026-11-20T10:25:00"
@@ -292,8 +293,8 @@ def test_track_record_publishes_its_public_fields_and_cutoff(
         )
     cutoff = datetime(2026, 11, 20, 10, 0)
     hours = [cutoff - timedelta(hours=offset) for offset in range(1, 200)]
-    test_repo.upsert_taipower_load(
-        pd.DataFrame({"datetime": hours, "load_mw": [25000.0] * len(hours)})
+    write_derived_load(
+        test_repo.engine, pd.DataFrame({"datetime": hours, "load_mw": [25000.0] * len(hours)})
     )
 
     _export(test_repo, tmp_path, dagster_instance)

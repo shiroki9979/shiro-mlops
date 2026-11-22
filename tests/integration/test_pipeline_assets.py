@@ -41,8 +41,11 @@ from shiro_mlops.tasks.model_store import model_directory_sha256
 from tests.helpers import (
     FixtureCWASource,
     derived_hourly_load,
+    derived_load_series,
+    insert_other_source_load_row,
     override_task_policies,
     unfetched_source_resources,
+    write_derived_load,
 )
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
@@ -102,7 +105,7 @@ def test_task_features_read_weather_from_configured_reference_station(
         '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
     )
     override_task_policies(monkeypatch, min_training_hours=2)
-    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(2, LAST_LOAD_HOUR))
     test_repo.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=LAST_LOAD_HOUR,
@@ -142,7 +145,7 @@ def test_task_features_refuse_training_below_minimum_accumulation(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """With min_training_hours=672, even one missing hour blocks training and reports the gap."""
-    test_repo.upsert_taipower_load(derived_hourly_load(671, LAST_LOAD_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(671, LAST_LOAD_HOUR))
     with pytest.raises(Failure, match="671 valid hourly observations; 672 required") as error:
         _features(test_repo)
 
@@ -153,7 +156,7 @@ def test_task_features_refuse_training_below_minimum_accumulation(
 def test_task_features_return_target_rows_once_minimum_accumulation_is_met(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(672, LAST_LOAD_HOUR))
+    write_derived_load(test_repo.engine, derived_hourly_load(672, LAST_LOAD_HOUR))
 
     table = _features(test_repo)
 
@@ -165,11 +168,8 @@ def test_training_load_source_excludes_other_provenance(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     override_task_policies(monkeypatch, min_training_hours=2)
-    test_repo.upsert_taipower_load(derived_hourly_load(2, LAST_LOAD_HOUR))
-    test_repo.upsert_taipower_load(
-        pd.DataFrame([{"datetime": "2026-09-26 11:00", "load_mw": 99999.0}]),
-        source="other_source",
-    )
+    write_derived_load(test_repo.engine, derived_hourly_load(2, LAST_LOAD_HOUR))
+    insert_other_source_load_row(test_repo.engine, datetime(2026, 9, 26, 11, 0), 99999.0)
 
     table = _features(test_repo)
 
@@ -208,7 +208,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         missing_station_ids=(),
         raw_payload={},
     )
-    test_repo.upsert_taipower_load(taipower_raw_df)
+    write_derived_load(test_repo.engine, taipower_raw_df)
     resources = {"time_series_repo": test_repo, CWA_SOURCE: FixtureCWASource(observation_batch)}
     with build_asset_context(resources=resources) as context:
         raw_cwa_station_observation(context)
@@ -232,7 +232,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
         "relative_humidity",
     ]
 
-    persisted_load = test_repo.fetch_load_range(subject="nationwide")
+    persisted_load = derived_load_series(test_repo.engine)
     assert len(persisted_load) == len(taipower_raw_df)
 
     persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
@@ -249,7 +249,7 @@ def _trainable_task_definitions(
     """Task jobs over a repository holding exactly enough history to train."""
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
-    test_repo.upsert_taipower_load(taipower_raw_df)
+    write_derived_load(test_repo.engine, taipower_raw_df)
     test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
     pipelines = build_task_pipelines(deployed_tasks())
     return Definitions(
@@ -348,7 +348,7 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
             instance=dagster_instance
         )
     next_hour = taipower_raw_df["datetime"].max() + pd.Timedelta(hours=1)
-    test_repo.upsert_taipower_load(derived_hourly_load(1, next_hour.to_pydatetime()))
+    write_derived_load(test_repo.engine, derived_hourly_load(1, next_hour.to_pydatetime()))
 
     def refuse_full_history(*_: object, **__: object) -> None:
         raise AssertionError("Hourly monitoring must not read the full load history")

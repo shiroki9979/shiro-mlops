@@ -61,12 +61,9 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
         json.dumps({reference_point: {"station_id": station_id, "geocode": "63000000"}}),
     )
     repository = TimeSeriesRepository(engine=timescaledb_engine, auto_init=False)
-    load_df = pd.DataFrame(
-        [{"datetime": "2026-08-20T14:00:00", "load_mw": 38000.0, "subject": subject}]
-    )
-    revised_load_df = pd.DataFrame(
-        [{"datetime": "2026-08-20T06:00:00Z", "load_mw": 39000.0, "subject": subject}]
-    )
+    load_store = repository.hourly_actual_load_store
+    load_df = pd.DataFrame([{"datetime": "2026-08-20T14:00:00", "load_mw": 38000.0}])
+    revised_load_df = pd.DataFrame([{"datetime": "2026-08-20T06:00:00Z", "load_mw": 39000.0}])
     observation_batch = CWAObservationBatch(
         fetched_at=fetched_at,
         status="complete",
@@ -89,8 +86,8 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
     )
 
     try:
-        assert repository.upsert_taipower_load(load_df) == 1
-        assert repository.upsert_taipower_load(revised_load_df) == 1
+        assert load_store.write(load_df, subject=subject) == 1
+        assert load_store.write(revised_load_df, subject=subject) == 1
         assert repository.upsert_cwa_observation_batch(observation_batch) == 1
 
         with timescaledb_engine.connect() as connection:
@@ -108,10 +105,8 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
         assert pd.Timestamp(stored_load_time) == pd.Timestamp("2026-08-20T06:00:00Z")
         assert pd.Timestamp(stored_observed_at) == pd.Timestamp("2026-08-20T06:00:00Z")
 
-        persisted_load = repository.fetch_load_range(
-            start_time="2026-08-20T14:00:00",
-            end_time="2026-08-20T14:00:00",
-            subject=subject,
+        persisted_load = load_store.series(
+            start=datetime(2026, 8, 20, 14, 0), end=datetime(2026, 8, 20, 15, 0), subject=subject
         )
         persisted_weather = repository.fetch_weather_range(
             start_time="2026-08-20T06:00:00Z",
@@ -120,15 +115,14 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
         )
 
         assert len(persisted_load) == 1
-        assert persisted_load.iloc[0]["time"] == pd.Timestamp("2026-08-20T14:00:00")
+        assert persisted_load.iloc[0]["datetime"] == pd.Timestamp("2026-08-20T14:00:00")
         assert persisted_load.iloc[0]["load_mw"] == pytest.approx(39000.0)
         assert len(persisted_weather) == 1
         assert persisted_weather.iloc[0]["time"] == pd.Timestamp("2026-08-20T14:00:00")
         assert persisted_weather.iloc[0]["location"] == reference_point
 
         merged = merge_weather_features(
-            persisted_load.rename(columns={"time": "datetime"}),
-            persisted_weather.rename(columns={"time": "datetime"}),
+            persisted_load, persisted_weather.rename(columns={"time": "datetime"})
         )
         assert len(merged) == 1
         assert merged.iloc[0]["temperature"] == pytest.approx(35.5)

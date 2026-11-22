@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
-from tests.helpers import rfc3339
+from tests.helpers import rfc3339, write_derived_load
 from tests.scenarios.data_explorer_audit_series import AUDIT_SERIES_SCENARIOS
 from tests.scenarios.data_explorer_series import (
     LOAD_SERIES_PATH,
@@ -103,9 +103,7 @@ def test_repeated_fields_parameter_is_read_as_a_list(series_client_for) -> None:
     """fields 可重複出現，重複的欄位只產生一條 series。"""
     client, repo = series_client_for
     hour = datetime(2026, 11, 18, 10, 0)
-    repo.upsert_taipower_load(
-        pd.DataFrame({DATETIME_COL: [hour], LOAD_MW_COL: [30000.0]}), default_subject="nationwide"
-    )
+    write_derived_load(repo.engine, pd.DataFrame({DATETIME_COL: [hour], LOAD_MW_COL: [30000.0]}))
 
     response = client.get(
         f"{LOAD_SERIES_PATH}?fields=load_mw&fields=load_mw",
@@ -122,9 +120,7 @@ def test_hours_not_yet_derived_are_not_gap_filled(
     """尚未結束的小時與現在之後的 bucket 不算缺口，也不補 null，與列表缺口口徑一致。"""
     client, repo = series_client_for
     hour = datetime(2026, 11, 18, 10, 0)
-    repo.upsert_taipower_load(
-        pd.DataFrame({DATETIME_COL: [hour], LOAD_MW_COL: [30000.0]}), default_subject="nationwide"
-    )
+    write_derived_load(repo.engine, pd.DataFrame({DATETIME_COL: [hour], LOAD_MW_COL: [30000.0]}))
     monkeypatch.setattr(
         "shiro_mlops.service.data_explorer.series.now_taiwan",
         lambda: hour + timedelta(hours=2, minutes=30),

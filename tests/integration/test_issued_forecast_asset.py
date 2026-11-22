@@ -25,7 +25,7 @@ from shiro_mlops.pipelines.task_pipelines import (
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import SavedModel, save_model
 from shiro_mlops.tasks.runner import TaskRuntime, train_task
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather
+from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 LOAD_ANCHOR = datetime(2026, 11, 20, 9, 0)
@@ -43,7 +43,7 @@ MLFLOW_VERSION = "7"
 @pytest.fixture
 def repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     load, weather = hourly_load_with_weather(HOURS, LOAD_ANCHOR)
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
@@ -109,7 +109,7 @@ def _load_only_repo(tmp_path) -> TimeSeriesRepository:
     """Load accumulated but CWA never ingested: no forecast and no observation to fall back on."""
     load_only = TimeSeriesRepository(engine=create_engine(f"sqlite:///{tmp_path / 'load.db'}"))
     load, _weather = hourly_load_with_weather(HOURS, LOAD_ANCHOR)
-    load_only.upsert_taipower_load(load)
+    write_derived_load(load_only.engine, load)
     return load_only
 
 

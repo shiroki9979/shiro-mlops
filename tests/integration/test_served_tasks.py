@@ -22,7 +22,7 @@ from shiro_mlops.service.served_tasks import (
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, UnknownTaskError, deployed_task
 from shiro_mlops.tasks.model_store import model_directory, save_model
 from shiro_mlops.tasks.types.base import TaskModel
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather
+from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 FRESH_AS_OF = pd.Timestamp(LAST_HOUR) + pd.Timedelta(minutes=30)
@@ -33,7 +33,7 @@ UNTRAINED_REASON = "Model is not loaded or trained yet."
 def serving_repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     """Three weeks of fresh nationwide load and Taipei observations, without forecasts."""
     load, weather = hourly_load_with_weather(24 * 21, LAST_HOUR)
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )

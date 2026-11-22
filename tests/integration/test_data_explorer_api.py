@@ -28,6 +28,7 @@ from tests.helpers import (
     supply_demand_snapshot,
     township_forecast,
     unit_generation_snapshots,
+    write_derived_load,
 )
 from tests.scenarios.data_explorer_gaps import (
     assert_regional_gaps_list_zero_region_slots_on_every_page,
@@ -58,13 +59,9 @@ def _upsert_hours(
     repo: TimeSeriesRepository, hours: list[datetime], subject: str = "nationwide"
 ) -> None:
     frame = pd.DataFrame(
-        {
-            DATETIME_COL: hours,
-            LOAD_MW_COL: [30000.0 + index for index in range(len(hours))],
-            "subject": subject,
-        }
+        {DATETIME_COL: hours, LOAD_MW_COL: [30000.0 + index for index in range(len(hours))]}
     )
-    repo.upsert_taipower_load(frame, default_subject=subject)
+    write_derived_load(repo.engine, frame, subject=subject)
 
 
 class _UnreachableEngine:

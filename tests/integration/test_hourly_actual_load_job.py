@@ -18,7 +18,12 @@ from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.assets import raw_taipower_load
 from shiro_mlops.pipelines.schedules import hourly_actual_load_job, hourly_actual_load_schedule
-from tests.helpers import derived_hourly_load, regional_supply_demand_snapshots
+from tests.helpers import (
+    derived_hourly_load,
+    derived_load_series,
+    regional_supply_demand_snapshots,
+    write_derived_load,
+)
 
 TICK = datetime(2026, 9, 5, 18, 5, tzinfo=ZoneInfo(TAIWAN_TZ))
 # 區域 fixture 四區用電加總 3254.0 萬瓩，即 32540 MW。
@@ -68,8 +73,8 @@ def _run_log(instance: DagsterInstance, result: ExecuteInProcessResult, level: i
 
 
 def _persisted_load(repo: TimeSeriesRepository) -> dict[pd.Timestamp, float]:
-    loads = repo.fetch_load_range(subject="nationwide")
-    return dict(zip(loads["time"], loads["load_mw"], strict=True))
+    loads = derived_load_series(repo.engine)
+    return dict(zip(loads["datetime"], loads["load_mw"], strict=True))
 
 
 def test_scheduled_tick_derives_the_completed_hours_its_window_covers(
@@ -99,7 +104,7 @@ def test_scheduled_tick_derives_the_completed_hours_its_window_covers(
 def test_scheduled_tick_warns_to_rederive_hours_beyond_the_catchup_limit(
     test_repo: TimeSeriesRepository, dagster_instance: DagsterInstance
 ) -> None:
-    test_repo.hourly_actual_load_store.write(derived_hourly_load(1, datetime(2026, 8, 1, 0, 0)))
+    write_derived_load(test_repo.engine, derived_hourly_load(1, datetime(2026, 8, 1, 0, 0)))
 
     result = _run_scheduled_tick(test_repo, dagster_instance)
 
