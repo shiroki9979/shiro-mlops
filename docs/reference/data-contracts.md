@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 1 節拆出。
@@ -60,6 +60,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 - **資料庫**：`shiro_timeseries` (TimescaleDB / PostgreSQL 15+)
 - **時間契約**：擷取與特徵工程邊界的無時區時間均表示台灣本地時間（`Asia/Taipei`）；帶時區的來源時間保留其原始瞬間。寫入 `TIMESTAMPTZ` 前，repository 一律轉為 UTC；範圍查詢條件同樣轉為 UTC。讀回資料在交給特徵工程前轉回無時區的台灣本地時間。
+- **Payload 契約**：`raw_payload` 與 `missing_*` 等 `JSONB` 欄位一律以同一份序列化寫入合法 JSON 文字：物件與陣列保存為 JSON 物件與陣列（保留非 ASCII 字元），字串 payload（如氣象署預報原始 XML）保存為 JSON 字串字面值，不得原樣寫入。讀回時以對應的反序列化還原為原值。
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)
