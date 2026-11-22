@@ -1,6 +1,6 @@
 """Hourly-load reader exercises the typed query seam."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -25,7 +25,7 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
     )
     rows = [
         ("2026-09-20 04:00:00.900002+00:00", "Taipei", 4.0),
-        ("2026-09-20 04:00:00.900002", "Taichung", 3.0),
+        ("2026-09-20 04:00:00.900002+00:00", "Taichung", 3.0),
         ("2026-09-20 04:00:00.900001+00:00", "Taipei", 2.0),
         ("2026-09-20 02:00:00.100000+00:00", "Taipei", 1.0),
     ]
@@ -64,6 +64,40 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
     ]
 
 
+def test_hourly_load_cursor_orders_whole_second_before_fractional_rows(
+    sqlite_engine: Engine,
+) -> None:
+    """A whole-second row and its microsecond neighbours page newest-first, one by one."""
+    second = datetime(2026, 9, 20, 4, tzinfo=UTC)
+    stored = (
+        (second - timedelta(microseconds=1), 0.0),
+        (second, 1.0),
+        (second + timedelta(microseconds=1), 2.0),
+        (second + timedelta(seconds=1), 3.0),
+    )
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                "VALUES (:time, 'Taipei', :load_mw, 'regional_snapshot_sum')"
+            ),
+            [{"time": time, "load_mw": load} for time, load in stored],
+        )
+    reader = HourlyLoadReader(sqlite_engine)
+    params = {"start": "2026-09-20T12:00:00+08:00", "end": "2026-09-20T12:00:01+08:00", "limit": 1}
+
+    loads = []
+    cursor = None
+    while True:
+        page = reader.list({**params, **({"cursor": cursor} if cursor else {})})
+        loads.extend(item["load_mw"] for item in page.items)
+        if not page.has_more:
+            break
+        cursor = page.next_cursor
+
+    assert loads == [3.0, 2.0, 1.0]
+
+
 def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
     legacy_upgraded_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -75,9 +109,9 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
         conn.execute(
             text(
                 "INSERT INTO raw_taipower_load (time, subject, load_mw, source) VALUES "
-                "('2026-09-20 02:00:00', 'Taipei', 10, 'regional_snapshot_sum'), "
-                "('2026-09-20 03:00:00', 'Taipei', 11, NULL), "
-                "('2026-09-20 04:00:00', 'Taipei', 12, 'regional_snapshot_sum')"
+                "('2026-09-20 02:00:00+00:00', 'Taipei', 10, 'regional_snapshot_sum'), "
+                "('2026-09-20 03:00:00+00:00', 'Taipei', 11, NULL), "
+                "('2026-09-20 04:00:00+00:00', 'Taipei', 12, 'regional_snapshot_sum')"
             )
         )
     page = HourlyLoadReader(legacy_upgraded_engine).list(
