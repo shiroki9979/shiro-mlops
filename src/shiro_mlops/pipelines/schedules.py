@@ -128,8 +128,14 @@ def _taiwan_tick_iso(scheduled_execution_time: datetime) -> str:
 def taipower_supply_demand_snapshot_schedule(
     context: ScheduleEvaluationContext,
 ) -> RunRequest:
-    """每十分鐘 materialize 全部即時快照，並共用同一個 observed_at。"""
-    observed_at = _taiwan_tick_iso(context.scheduled_execution_time)
+    """每十分鐘 materialize 全部即時快照，並共用同一個 observed_at。
+
+    無 tick 的手動評估不帶 run key 與 observed_at；各快照資產以自己的抓取起始時間決定 slot。
+    """
+    tick = _scheduled_tick(context)
+    if tick is None:
+        return RunRequest()
+    observed_at = _taiwan_tick_iso(tick)
     ops_config = {
         asset_name: {"config": {"observed_at": observed_at}}
         for asset_name in TAIPOWER_REALTIME_SNAPSHOT_ASSETS
