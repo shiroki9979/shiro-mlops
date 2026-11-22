@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
+from rederive_hourly_actual_load import main
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -25,6 +26,7 @@ DERIVED_SOURCE = "regional_snapshot_sum"
 HOUR_A = datetime(2026, 9, 6, 18)
 HOUR_B = datetime(2026, 9, 6, 19)
 WINDOW = HourWindow(start=datetime(2026, 9, 6), end=datetime(2026, 9, 7))
+WINDOW_ARGS = ["--start", "2026-09-06T00:00:00", "--end", "2026-09-07T00:00:00"]
 
 
 @pytest.fixture
@@ -99,6 +101,46 @@ def test_a_row_written_after_the_free_hours_were_found_is_not_overwritten(
         HOUR_A: (pytest.approx(NATIONWIDE_MW), DERIVED_SOURCE),
         HOUR_B: (31234.0, DERIVED_SOURCE),
     }
+
+
+def test_cli_dry_run_prints_the_hours_it_would_write_and_writes_none(
+    sqlite_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _store_snapshots(sqlite_engine, [HOUR_A])
+
+    exit_code = main([*WINDOW_ARGS, "--dry-run"], engine=sqlite_engine)
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "           datetime  load_mw  sample_count",
+        "2026-09-06 18:00:00  30000.0             6",
+        "Would write 1 hours in [2026-09-06T00:00:00, 2026-09-07T00:00:00).",
+    ]
+    assert _stored_rows(sqlite_engine) == {}
+
+
+def test_cli_prints_the_hours_it_wrote(
+    sqlite_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _store_snapshots(sqlite_engine, [HOUR_A])
+
+    exit_code = main([*WINDOW_ARGS, "--min-samples", "6"], engine=sqlite_engine)
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "Wrote 1 hours in [2026-09-06T00:00:00, 2026-09-07T00:00:00)."
+    )
+    assert _stored_rows(sqlite_engine) == {HOUR_A: (NATIONWIDE_MW, DERIVED_SOURCE)}
+
+
+def test_cli_rejects_a_window_ending_after_the_latest_completed_hour() -> None:
+    with pytest.raises(SystemExit, match="unfinished hours must not be derived"):
+        main(["--start", "2026-09-06T00:00:00", "--end", "2999-01-01T00:00:00"])
+
+
+def test_cli_rejects_a_window_that_does_not_start_before_its_end() -> None:
+    with pytest.raises(SystemExit, match="must be earlier than --end"):
+        main(["--start", "2026-09-07T00:00:00", "--end", "2026-09-06T00:00:00"])
 
 
 def _store_snapshots(engine: Engine, hours: list[datetime]) -> None:
