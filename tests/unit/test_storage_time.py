@@ -8,12 +8,14 @@ import pandas as pd
 import pytest
 from sqlalchemy import text
 
+from shiro_mlops.core import database
 from shiro_mlops.core.database import get_timescale_engine
 from shiro_mlops.core.storage_time import (
     from_storage_time,
     from_storage_time_or_none,
     from_storage_time_series,
     half_open_window,
+    register_sqlite_datetime_adapter,
     to_storage_time,
     to_storage_time_or_none,
 )
@@ -245,6 +247,11 @@ def test_self_join_names_each_window_parameter_explicitly():
 def test_sqlite_engine_binds_datetimes_explicitly_in_the_existing_text_form(
     tmp_path, monkeypatch, bound, stored_text
 ):
+    # WHY-NOT(register_sqlite_datetime_adapter): this checks the production adapter, so it
+    # lifts the session guard in tests/conftest.py that rejects the naive binds below.
+    monkeypatch.setattr(
+        database, "register_sqlite_datetime_adapter", register_sqlite_datetime_adapter
+    )
     monkeypatch.delitem(sqlite3.adapters, (datetime, sqlite3.PrepareProtocol), raising=False)
     engine = get_timescale_engine(uri=f"sqlite:///{tmp_path / 'adapter.db'}")
 
