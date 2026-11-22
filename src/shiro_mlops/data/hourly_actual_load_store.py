@@ -1,0 +1,105 @@
+"""The single owner of ``raw_taipower_load``: nationwide hourly actual load (ADR-0008).
+
+Every row this store writes carries the derived source, and every read selects only
+that source, so d015046-era rows (NULL source) and other sources never mix into the
+derived series. Callers pass and receive Taiwan-local hours in a ``datetime`` column;
+the stored column name ``time`` stays inside this module.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+import pandas as pd
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
+from shiro_mlops.core.constants import (
+    DATETIME_COL,
+    LOAD_MW_COL,
+    NATIONWIDE_SUBJECT,
+    STORAGE_TIME_COL,
+)
+from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
+from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
+
+
+@dataclass(frozen=True)
+class HourlyLoadObservation:
+    """One derived hour: its Taiwan-local start and the hour's mean load in MW."""
+
+    hour: datetime
+    load_mw: float
+
+
+class HourlyActualLoadStore:
+    """Derived nationwide hourly actual load persisted in ``raw_taipower_load``."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def write(self, hourly_load: pd.DataFrame, *, subject: str = NATIONWIDE_SUBJECT) -> int:
+        """Upsert derived hours from ``datetime`` and ``load_mw`` columns; return the row count.
+
+        A rewritten hour takes the new value and the derived source, so recomputing an
+        hour after late samples arrive updates it in place.
+        """
+        if DATETIME_COL not in hourly_load.columns:
+            raise KeyError(
+                f"Hourly load must hold its Taiwan-local hours in {DATETIME_COL!r}, "
+                f"not the storage column {STORAGE_TIME_COL!r}"
+            )
+        records = [
+            {
+                "time": to_storage_time(pd.Timestamp(hour)),
+                "subject": subject,
+                "load_mw": float(load_mw),
+                "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+            }
+            for hour, load_mw in zip(
+                hourly_load[DATETIME_COL], hourly_load[LOAD_MW_COL], strict=True
+            )
+        ]
+        if not records:
+            return 0
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO raw_taipower_load (time, subject, load_mw, source)
+                    VALUES (:time, :subject, :load_mw, :source)
+                    ON CONFLICT (time, subject) DO UPDATE SET
+                        load_mw = EXCLUDED.load_mw,
+                        source = EXCLUDED.source
+                    """
+                ),
+                records,
+            )
+        return len(records)
+
+    def latest_observation(
+        self, at_or_before: datetime, *, subject: str = NATIONWIDE_SUBJECT
+    ) -> HourlyLoadObservation | None:
+        """The newest derived hour starting at or before ``at_or_before``, or ``None``."""
+        query = text(
+            """
+            SELECT time, load_mw
+            FROM raw_taipower_load
+            WHERE subject = :subject AND source = :source AND time <= :at_or_before
+            ORDER BY time DESC
+            LIMIT 1
+            """
+        )
+        params = {
+            "subject": subject,
+            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+            "at_or_before": to_storage_time(at_or_before),
+        }
+        with self._engine.connect() as conn:
+            row = conn.execute(query, params).one_or_none()
+        if row is None:
+            return None
+        return HourlyLoadObservation(
+            hour=from_storage_time(row.time, column="time"), load_mw=float(row.load_mw)
+        )
