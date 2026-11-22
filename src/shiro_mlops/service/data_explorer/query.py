@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
+WINDOW_PARAMS = frozenset({"start", "end"})
+COMMON_LIST_PARAMS = WINDOW_PARAMS | {"limit", "cursor"}
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,27 @@ def resolve_limit(limit: int | str | None) -> int:
     if parsed < 1 or parsed > MAX_LIMIT:
         raise ExplorerQueryError(f"limit must be between 1 and {MAX_LIMIT}")
     return parsed
+
+
+def list_request_params(dataset: Dataset) -> frozenset[str]:
+    """Every query parameter the dataset's list endpoint accepts."""
+    return COMMON_LIST_PARAMS | frozenset(dataset.filter_names)
+
+
+def declared_params(
+    query: Mapping[str, str], accepted: Collection[str], endpoint: str
+) -> dict[str, str]:
+    """Reject every parameter outside `accepted`, even one sent empty, then drop the empty
+    values: an empty declared parameter reads as not given."""
+    unknown = sorted(set(query) - set(accepted))
+    if unknown:
+        raise ExplorerQueryError(f"unsupported {endpoint} parameters: {', '.join(unknown)}")
+    return {key: value for key, value in query.items() if value != ""}
+
+
+def list_params(dataset: Dataset, query: Mapping[str, str]) -> dict[str, str]:
+    """The list request's non-empty parameters, once every one is declared for its list."""
+    return declared_params(query, list_request_params(dataset), "list")
 
 
 def bound_filters(dataset: Dataset, params: dict[str, Any], window: TimeWindow) -> dict[str, Any]:

@@ -5,9 +5,10 @@ Status judgement lives in `dataset_status` and gap finding in `gap_scan`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from functools import cached_property
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,18 +21,36 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
 from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import paginate_raw_list
-from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.query import ExplorerQuery, list_params
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
     StatusResponse,
 )
-from shiro_mlops.service.data_explorer.series import Agg, Bucket, SeriesReader, SeriesRequest
+from shiro_mlops.service.data_explorer.series import (
+    Agg,
+    Bucket,
+    SeriesReader,
+    SeriesRequest,
+    series_params,
+)
 from shiro_mlops.service.data_explorer.timefmt import now_taiwan
 
 
-def validate_cursor(dataset: Dataset, params: dict[str, Any]) -> dict[str, Any] | None:
-    """Validate the whole cursor before any database read; return the filters it binds."""
+class ListRequest(NamedTuple):
+    """A list request's non-empty declared parameters and the filters its cursor binds."""
+
+    params: dict[str, str]
+    cursor_filters: dict[str, Any] | None
+
+
+def validate_list_request(dataset: Dataset, query: Mapping[str, str]) -> ListRequest:
+    """Reject undeclared parameters, then validate the whole cursor, before any database read."""
+    params = list_params(dataset, query)
+    return ListRequest(params, _validate_cursor(dataset, params))
+
+
+def _validate_cursor(dataset: Dataset, params: dict[str, str]) -> dict[str, Any] | None:
     cursor = params.get("cursor")
     if not cursor:
         return None
@@ -52,8 +71,8 @@ class DatasetQuery:
     def __init__(self, engine: Engine) -> None:
         self.db = ExplorerDb(engine)
 
-    def list(self, dataset: Dataset, params: dict[str, Any]) -> ListEnvelope:
-        cursor_filters = validate_cursor(dataset, params)
+    def list(self, dataset: Dataset, query: Mapping[str, str]) -> ListEnvelope:
+        params, cursor_filters = validate_list_request(dataset, query)
         try:
             query_params = (
                 dataset.resolve_version.pin(self.db, params, cursor_filters)
@@ -68,7 +87,7 @@ class DatasetQuery:
     def series(
         self,
         dataset: Dataset,
-        params: dict[str, str],
+        query: Mapping[str, str],
         *,
         fields: list[str] | None,
         bucket: Bucket,
@@ -78,6 +97,7 @@ class DatasetQuery:
         if dataset.series is None:
             raise ValueError(f"dataset {dataset.id} declares no series")
         options = dataset.series
+        params = series_params(dataset, options, query)
         if dataset.resolve_version is not None:
             options, params = dataset.resolve_version.plan_series(self.db, options, params)
         request = SeriesRequest.build(

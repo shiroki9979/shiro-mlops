@@ -1,6 +1,5 @@
 """Data Explorer HTTP contracts against a real SQLite repository."""
 
-import importlib
 import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timedelta
@@ -68,6 +67,13 @@ def _upsert_hours(
     repo.upsert_taipower_load(frame, default_subject=subject)
 
 
+class _UnreachableEngine:
+    """An engine whose every connection fails, as when TimescaleDB is down."""
+
+    def connect(self):
+        raise SQLAlchemyError("connection refused")
+
+
 def test_data_explorer_is_unavailable_when_disabled(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -86,30 +92,23 @@ def test_legacy_features_latest_is_removed(explorer_client) -> None:
     assert client.get("/features/latest").status_code == 404
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/data/power/load",
-        "/data/power/supply-demand",
-        "/data/power/regional",
-        "/data/power/units",
-        "/data/weather/observations",
-        "/data/weather/forecasts",
-        "/data/audits/cwa-observations",
-        "/data/audits/cwa-forecasts",
-    ],
-)
-def test_all_lists_reject_v1_cursor_before_database_access(
-    explorer_client, monkeypatch: pytest.MonkeyPatch, path: str
-) -> None:
-    client, _ = explorer_client
+LIST_PATHS = [
+    "/data/power/load",
+    "/data/power/supply-demand",
+    "/data/power/regional",
+    "/data/power/units",
+    "/data/weather/observations",
+    "/data/weather/forecasts",
+    "/data/audits/cwa-observations",
+    "/data/audits/cwa-forecasts",
+]
+
+
+@pytest.mark.parametrize("path", LIST_PATHS)
+def test_all_lists_reject_v1_cursor_before_database_access(explorer_client, path: str) -> None:
+    client, repo = explorer_client
     legacy = urlsafe_b64encode(b'{"v":1,"ds":"hourly_load","f":{},"k":{}}').decode().rstrip("=")
-
-    def unavailable(_request):
-        raise SQLAlchemyError("database unavailable")
-
-    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
-    monkeypatch.setattr(router_module, "_engine", unavailable)
+    repo.engine = _UnreachableEngine()
 
     response = client.get(path, params={"cursor": legacy})
 
@@ -117,21 +116,72 @@ def test_all_lists_reject_v1_cursor_before_database_access(
     assert response.json()["detail"] == "Incompatible cursor version"
 
 
-def test_malformed_v2_cursor_precedes_database_failure(
-    explorer_client, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("path", LIST_PATHS)
+def test_all_lists_reject_undeclared_parameters_before_database_access(
+    explorer_client, path: str
 ) -> None:
+    """打錯的篩選名稱回 422，而不是回傳未篩選的結果。"""
+    client, repo = explorer_client
+    repo.engine = _UnreachableEngine()
+
+    response = client.get(path, params={"regoin": "北部", "bucket": "1h"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported list parameters: bucket, regoin"
+
+
+def test_undeclared_list_parameter_precedes_invalid_cursor(explorer_client) -> None:
+    """打錯的參數先回 422：否則使用者回到第一頁後才會看到第二個錯誤。"""
     client, _ = explorer_client
+
+    response = client.get(
+        "/data/power/regional", params={"regoin": "北部", "cursor": "not-a-cursor"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported list parameters: regoin"
+
+
+@pytest.mark.parametrize(
+    "query", [[("regoin", "")], [("regoin", "北部"), ("regoin", "")]], ids=["empty", "last-empty"]
+)
+def test_list_rejects_an_undeclared_parameter_sent_empty(
+    explorer_client, query: list[tuple[str, str]]
+) -> None:
+    """值為空的未宣告參數也回 422：`?regoin=` 不得回傳未篩選的結果。"""
+    client, _ = explorer_client
+
+    response = client.get("/data/power/regional", params=query)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported list parameters: regoin"
+
+
+def test_list_reads_a_declared_filter_sent_empty_as_not_given(explorer_client) -> None:
+    """值為空的已宣告篩選視為沒有篩選。"""
+    client, repo = explorer_client
+    hour = _now().replace(minute=0) - timedelta(hours=2)
+    _upsert_hours(repo, [hour])
+    window = {"start": rfc3339(hour - timedelta(hours=1)), "end": rfc3339(hour)}
+
+    with_empty = client.get("/data/power/load", params={**window, "subject": ""})
+    without = client.get("/data/power/load", params=window)
+
+    assert with_empty.status_code == 200
+    assert with_empty.json()["items"] == without.json()["items"]
+    assert len(with_empty.json()["items"]) == 1
+
+
+def test_malformed_v2_cursor_precedes_database_failure(
+    explorer_client,
+) -> None:
+    client, repo = explorer_client
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     filters = ExplorerQuery.from_params(HOURLY_LOAD, window).filters
     cursor = encode_cursor(
         dataset="hourly_load", filters=filters, key={"time": 123, "subject": "nationwide"}
     )
-    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
-    monkeypatch.setattr(
-        router_module,
-        "_engine",
-        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
-    )
+    repo.engine = _UnreachableEngine()
 
     response = client.get("/data/power/load", params={**window, "cursor": cursor})
 
@@ -140,9 +190,9 @@ def test_malformed_v2_cursor_precedes_database_failure(
 
 
 def test_forecast_cursor_filter_mismatch_precedes_database_failure(
-    explorer_client, monkeypatch: pytest.MonkeyPatch
+    explorer_client,
 ) -> None:
-    client, _ = explorer_client
+    client, repo = explorer_client
     window = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     filters = ExplorerQuery.from_params(CWA_FORECASTS, {**window, "geocode": "A"}).filters
     cursor = encode_cursor(
@@ -157,12 +207,7 @@ def test_forecast_cursor_filter_mismatch_precedes_database_failure(
             "valid_to": "2026-08-01T13:00:00+08:00",
         },
     )
-    router_module = importlib.import_module("shiro_mlops.service.data_explorer.router")
-    monkeypatch.setattr(
-        router_module,
-        "_engine",
-        lambda _request: (_ for _ in ()).throw(SQLAlchemyError("database unavailable")),
-    )
+    repo.engine = _UnreachableEngine()
 
     response = client.get(
         "/data/weather/forecasts", params={**window, "geocode": "B", "cursor": cursor}
@@ -412,11 +457,7 @@ def test_status_returns_503_when_database_unavailable(explorer_client) -> None:
     """TimescaleDB 無法連線時必須回傳 HTTP 503。"""
     client, repo = explorer_client
 
-    class BrokenEngine:
-        def connect(self):
-            raise SQLAlchemyError("connection refused")
-
-    repo.engine = BrokenEngine()
+    repo.engine = _UnreachableEngine()
     assert client.get("/data/status").status_code == 503
     assert client.get("/data/power/load").status_code == 503
     assert client.get("/data/weather/forecasts").status_code == 503
