@@ -284,15 +284,17 @@ def insert_legacy_load_row(
         )
 
 
-def insert_other_source_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
-    """Insert a nationwide row of another derivation source, which no production path writes."""
+def insert_other_source_load_row(
+    engine: Engine, taiwan_time: datetime, load_mw: float, *, subject: str = NATIONWIDE_SUBJECT
+) -> None:
+    """Insert a row of another derivation source, which no production path writes."""
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
-                "VALUES (:time, 'nationwide', :load_mw, 'other_source')"
+                "VALUES (:time, :subject, :load_mw, 'other_source')"
             ),
-            {"time": to_storage_time(taiwan_time), "load_mw": load_mw},
+            {"time": to_storage_time(taiwan_time), "subject": subject, "load_mw": load_mw},
         )
 
 
