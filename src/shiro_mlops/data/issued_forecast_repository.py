@@ -1,16 +1,14 @@
 """Repository for issued forecasts: insert once per issue time, never update (ADR-0013)."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
-from shiro_mlops.data.forecast_track_record import TrackRecordWindow
-from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep, IssuedStep
-from shiro_mlops.data.repository_utils import taiwan_instant_to_utc, utc_instant_to_taiwan
+from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
+from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 
 logger = logging.getLogger(__name__)
 
@@ -54,23 +52,6 @@ _SELECT_STEPS = text(
     """
 )
 
-# 步數最遠落在負載起點後 168 小時，而負載起點早於發布時刻，
-# 所以目標小時不早於窗起點的步數，其發布時刻必晚於窗起點 − 168h。
-# 以此限定 hypertable 的分區欄位，查詢不必掃過整段歷史。
-_SELECT_STEPS_AFTER_ISSUE = text(
-    """
-    SELECT issued_at, target_hour, predicted_load_mw
-    FROM issued_forecast_step
-    WHERE issued_at > :earliest_issued_at
-      AND issued_at < :window_end
-      AND target_hour >= :window_start
-      AND target_hour < :window_end
-      AND target_hour > issued_at
-    ORDER BY target_hour, issued_at
-    """
-)
-_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
-
 
 class IssuedForecastRepository:
     """Persist issued forecasts as a header keyed by issue time plus its steps.
@@ -89,10 +70,10 @@ class IssuedForecastRepository:
         Returns ``False`` without touching anything when the issue time already
         exists, so a retried or concurrent run never overwrites the first record.
         """
-        issued_at = taiwan_instant_to_utc(forecast.issued_at)
+        issued_at = to_storage_time(forecast.issued_at)
         header = {
             "issued_at": issued_at,
-            "load_anchor": taiwan_instant_to_utc(forecast.load_anchor),
+            "load_anchor": to_storage_time(forecast.load_anchor),
             "status": forecast.status,
             "model_sha256": forecast.model_sha256,
             "mlflow_model_version": forecast.mlflow_model_version,
@@ -100,7 +81,7 @@ class IssuedForecastRepository:
         steps = [
             {
                 "issued_at": issued_at,
-                "target_hour": taiwan_instant_to_utc(step.target_hour),
+                "target_hour": to_storage_time(step.target_hour),
                 "predicted_load_mw": float(step.predicted_load_mw),
             }
             for step in forecast.steps
@@ -118,21 +99,21 @@ class IssuedForecastRepository:
 
     def fetch(self, issued_at: datetime) -> IssuedForecast | None:
         """Read the forecast issued at a Taiwan-local issue time, or ``None``."""
-        params = {"issued_at": taiwan_instant_to_utc(issued_at)}
+        params = {"issued_at": to_storage_time(issued_at)}
         with self.engine.connect() as conn:
             header = conn.execute(_SELECT_HEADER, params).mappings().first()
             if header is None:
                 return None
             steps = conn.execute(_SELECT_STEPS, params).mappings().all()
         return IssuedForecast(
-            issued_at=utc_instant_to_taiwan(header["issued_at"]),
-            load_anchor=utc_instant_to_taiwan(header["load_anchor"]),
+            issued_at=from_storage_time(header["issued_at"], column="issued_at"),
+            load_anchor=from_storage_time(header["load_anchor"], column="load_anchor"),
             status=header["status"],
             model_sha256=header["model_sha256"],
             mlflow_model_version=header["mlflow_model_version"],
             steps=tuple(
                 IssuedForecastStep(
-                    target_hour=utc_instant_to_taiwan(step["target_hour"]),
+                    target_hour=from_storage_time(step["target_hour"], column="target_hour"),
                     predicted_load_mw=float(step["predicted_load_mw"]),
                 )
                 for step in steps
@@ -145,28 +126,4 @@ class IssuedForecastRepository:
             latest = conn.execute(_SELECT_LATEST_ISSUED_AT).scalar()
         if latest is None:
             return None
-        return self.fetch(utc_instant_to_taiwan(latest))
-
-    def fetch_steps_after_issue(self, window: TrackRecordWindow) -> tuple[IssuedStep, ...]:
-        """Steps targeting the window whose target hour is after their issue time.
-
-        Each step comes with its Taiwan-local issue time, ordered by target hour
-        then issue time.
-        """
-        params = {
-            "earliest_issued_at": taiwan_instant_to_utc(window.start - _HORIZON),
-            "window_start": taiwan_instant_to_utc(window.start),
-            "window_end": taiwan_instant_to_utc(window.end),
-        }
-        with self.engine.connect() as conn:
-            rows = conn.execute(_SELECT_STEPS_AFTER_ISSUE, params).mappings().all()
-        return tuple(
-            IssuedStep(
-                issued_at=utc_instant_to_taiwan(row["issued_at"]),
-                step=IssuedForecastStep(
-                    target_hour=utc_instant_to_taiwan(row["target_hour"]),
-                    predicted_load_mw=float(row["predicted_load_mw"]),
-                ),
-            )
-            for row in rows
-        )
+        return self.fetch(from_storage_time(latest, column="issued_at"))

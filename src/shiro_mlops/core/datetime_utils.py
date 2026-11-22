@@ -42,18 +42,3 @@ def standardize_taiwan_datetime(s: pd.Series) -> pd.Series:
         return timestamp
 
     return pd.to_datetime(s.map(to_taiwan_local), errors="coerce")
-
-
-def taiwan_local_to_utc(s: pd.Series) -> pd.Series:
-    """Convert source timestamps to UTC for persistence and database filtering.
-
-    Timezone-naive values represent Taiwan local time at the ingestion boundary;
-    timezone-aware values retain their stated instant before conversion to UTC.
-    """
-    local_time = standardize_taiwan_datetime(s)
-    return local_time.dt.tz_localize(TAIWAN_TZ).dt.tz_convert("UTC")
-
-
-def utc_to_taiwan_datetime(s: pd.Series) -> pd.Series:
-    """Convert UTC database timestamps to Taiwan-local, timezone-naive feature time."""
-    return pd.to_datetime(s, utc=True).dt.tz_convert(TAIWAN_TZ).dt.tz_localize(None)

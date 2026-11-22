@@ -9,18 +9,16 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
-from shiro_mlops.data.repository_utils import (
-    deserialize_raw_payload,
-    serialize_raw_payload,
-    taiwan_instant_to_utc,
-    utc_instant_to_taiwan,
-)
+from shiro_mlops.core.storage_time import from_storage_time, half_open_window, to_storage_time
+from shiro_mlops.data.repository_utils import deserialize_raw_payload, serialize_raw_payload
 from shiro_mlops.data.taipower_regional_supply_demand import (
     REGIONAL_SUPPLY_DEMAND_REGIONS,
     TaipowerRegionalSupplyDemandSnapshot,
 )
 
 logger = logging.getLogger(__name__)
+
+_TABLE = "raw_taipower_regional_supply_demand_snapshot"
 
 
 class TaipowerRegionalSupplyDemandRepository:
@@ -83,9 +81,9 @@ class TaipowerRegionalSupplyDemandRepository:
 
             records.append(
                 {
-                    "observed_at": taiwan_instant_to_utc(snapshot.observed_at),
+                    "observed_at": to_storage_time(snapshot.observed_at),
                     "region": snapshot.region,
-                    "source_time": taiwan_instant_to_utc(snapshot.source_time),
+                    "source_time": to_storage_time(snapshot.source_time),
                     "generation_wan_kw": snapshot.generation_wan_kw,
                     "load_wan_kw": float(snapshot.load_wan_kw),
                     "raw_payload": serialize_raw_payload(snapshot.raw_payload),
@@ -110,7 +108,7 @@ class TaipowerRegionalSupplyDemandRepository:
             WHERE observed_at = :observed_at
             """
         )
-        params = {"observed_at": taiwan_instant_to_utc(observed_at)}
+        params = {"observed_at": to_storage_time(observed_at)}
 
         with self.engine.connect() as conn:
             rows = conn.execute(query, params).mappings().all()
@@ -128,20 +126,17 @@ class TaipowerRegionalSupplyDemandRepository:
         self, start_time: datetime, end_time: datetime
     ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
         """Fetch snapshots whose Taiwan-local source_time is in [start_time, end_time)."""
+        window = half_open_window("source_time", start_time, end_time)
         query = text(
             f"""
             {_SELECT_SNAPSHOT_COLUMNS}
-            WHERE source_time >= :start_time AND source_time < :end_time
+            WHERE {window.sql}
             ORDER BY source_time ASC, observed_at ASC, region ASC
             """
         )
-        params = {
-            "start_time": taiwan_instant_to_utc(start_time),
-            "end_time": taiwan_instant_to_utc(end_time),
-        }
 
         with self.engine.connect() as conn:
-            rows = conn.execute(query, params).mappings().all()
+            rows = conn.execute(query, window.params).mappings().all()
         return [_row_to_snapshot(row) for row in rows]
 
 
@@ -176,11 +171,4 @@ def _row_to_snapshot(row: Any) -> TaipowerRegionalSupplyDemandSnapshot:
 
 
 def _required_instant(row: Any, column: str) -> datetime:
-    value = utc_instant_to_taiwan(row[column])
-    if value is None:
-        raise ValueError(
-            f"raw_taipower_regional_supply_demand_snapshot row for region {row['region']!r} "
-            f"has no {column} (observed_at={row['observed_at']!r}, "
-            f"source_time={row['source_time']!r})"
-        )
-    return value
+    return from_storage_time(row[column], column=f"{_TABLE}.{column} for region {row['region']!r}")

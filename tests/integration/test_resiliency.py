@@ -17,7 +17,11 @@ from shiro_mlops.data.cwa_client import (
     CWATownshipForecast,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.pipelines.assets import raw_cwa_station_observation, raw_cwa_township_forecast
+from shiro_mlops.pipelines.assets import (
+    CWA_SOURCE,
+    raw_cwa_station_observation,
+    raw_cwa_township_forecast,
+)
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_RETRY_POLICY,
     cwa_forecast_job,
@@ -28,8 +32,10 @@ from shiro_mlops.service.served_tasks import Loaded, ServedTasks
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from shiro_mlops.tasks.types.base import TaskModel
 from tests.helpers import (
+    FixtureCWASource,
     insert_legacy_load_row,
     override_task_policies,
+    upstream_http_500,
     with_dynamic_horizon_lookback,
 )
 
@@ -175,23 +181,16 @@ def api(serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel) -> _Se
 # --- CWA ingestion: bounded retries never mutate persisted data ---------------------------
 
 
-def _fail_every_cwa_request(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Route every CWA HTTP call to an HTTP 500 and record the attempted URLs."""
-    attempted: list[str] = []
-    real_client = httpx.Client
-
-    def respond_500(request: httpx.Request) -> httpx.Response:
-        attempted.append(str(request.url.copy_with(params=None)))
-        return httpx.Response(500, request=request)
-
-    def client_factory(**kwargs: object) -> httpx.Client:
-        return real_client(transport=httpx.MockTransport(respond_500), **kwargs)
-
-    monkeypatch.setattr("shiro_mlops.data.cwa_client.httpx.Client", client_factory)
-    return attempted
+def _cwa_source_answering_500() -> FixtureCWASource:
+    """A CWA source whose every product answers HTTP 500; its calls record each attempt."""
+    error = upstream_http_500("https://opendata.cwa.gov.tw/failed-product")
+    return FixtureCWASource(
+        observation_batch=error,
+        forecast_releases={"F-D0047-089": error, "F-D0047-091": error},
+    )
 
 
-def _execute_without_retry_delay(job, repo: TimeSeriesRepository, instance):
+def _execute_without_retry_delay(job, repo: TimeSeriesRepository, source, instance):
     """Run the production selection and retry count, skipping only the real backoff sleep."""
     job_without_delay = define_asset_job(
         name=job.name,
@@ -201,7 +200,7 @@ def _execute_without_retry_delay(job, repo: TimeSeriesRepository, instance):
     defs = Definitions(
         assets=[raw_cwa_station_observation, raw_cwa_township_forecast],
         jobs=[job_without_delay],
-        resources={"time_series_repo": repo},
+        resources={"time_series_repo": repo, CWA_SOURCE: source},
     )
     return defs.resolve_job_def(job.name).execute_in_process(
         instance=instance, raise_on_error=False
@@ -221,17 +220,16 @@ def test_cwa_http_500_exhausts_retries_fails_run_and_keeps_existing_data(
     test_repo: TimeSeriesRepository,
     cwa_observation_batch: CWAObservationBatch,
     dagster_instance,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
     test_repo.upsert_cwa_forecast_release(_stale_forecast_release())
     observations_before, forecasts_before = _persisted_cwa_state(test_repo)
-    attempted = _fail_every_cwa_request(monkeypatch)
+    source = _cwa_source_answering_500()
 
-    result = _execute_without_retry_delay(job, test_repo, dagster_instance)
+    result = _execute_without_retry_delay(job, test_repo, source, dagster_instance)
 
     assert not result.success
-    assert len(attempted) == TOTAL_ATTEMPTS
+    assert len(source.calls) == TOTAL_ATTEMPTS
     observations_after, forecasts_after = _persisted_cwa_state(test_repo)
     pd.testing.assert_frame_equal(observations_after, observations_before)
     pd.testing.assert_frame_equal(forecasts_after, forecasts_before)
@@ -240,25 +238,17 @@ def test_cwa_http_500_exhausts_retries_fails_run_and_keeps_existing_data(
 def test_second_cwa_product_failure_keeps_forecast_versions_unchanged(
     test_repo: TimeSeriesRepository,
     dagster_instance,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_repo.upsert_cwa_forecast_release(_stale_forecast_release())
     before = test_repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE)
-    new_release = _forecast_release(FRESH_REQUEST_TIME, 32.0)
+    source = FixtureCWASource(
+        forecast_releases={
+            "F-D0047-089": _forecast_release(FRESH_REQUEST_TIME, 32.0),
+            "F-D0047-091": upstream_http_500("https://opendata.cwa.gov.tw/failed-product"),
+        }
+    )
 
-    def fetch_release(self, dataset_id: str, locations: object) -> CWAForecastRelease:
-        if dataset_id == "F-D0047-089":
-            return new_release
-        request = httpx.Request("GET", "https://opendata.cwa.gov.tw/failed-product")
-        raise httpx.HTTPStatusError(
-            "CWA returned HTTP 500",
-            request=request,
-            response=httpx.Response(500, request=request),
-        )
-
-    monkeypatch.setattr(CWAClient, "fetch_forecast_release", fetch_release)
-
-    result = _execute_without_retry_delay(cwa_forecast_job, test_repo, dagster_instance)
+    result = _execute_without_retry_delay(cwa_forecast_job, test_repo, source, dagster_instance)
 
     assert not result.success
     pd.testing.assert_frame_equal(test_repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE), before)

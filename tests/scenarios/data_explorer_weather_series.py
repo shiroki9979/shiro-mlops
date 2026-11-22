@@ -10,6 +10,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
     CWAObservationBatch,
@@ -78,7 +79,7 @@ def _seeded_observations(
                 )
             connection.execute(
                 text("DELETE FROM raw_cwa_observation_batch WHERE fetched_at = :fetched_at"),
-                {"fetched_at": batch.fetched_at},
+                {"fetched_at": to_storage_time(batch.fetched_at)},
             )
 
 
@@ -340,7 +341,7 @@ def assert_forecast_series_prefers_three_day_dataset_on_shared_issue(
             for table in ("raw_cwa_township_forecast", "raw_cwa_forecast_release"):
                 connection.execute(
                     text(f"DELETE FROM {table} WHERE issued_at = :issued_at"),
-                    {"issued_at": issued_at},
+                    {"issued_at": to_storage_time(issued_at)},
                 )
 
     assert default.status_code == 200

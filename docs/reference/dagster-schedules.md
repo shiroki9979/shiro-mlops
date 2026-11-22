@@ -1,7 +1,7 @@
 # Dagster 資產排程與觸發規格
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 3 節拆出。
@@ -35,7 +35,8 @@
 2. **`taipower_supply_demand_snapshot_job`**：
    - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。
    - **管線鏈路**：`raw_taipower_supply_demand_snapshot`、`raw_taipower_regional_supply_demand_snapshot` 與 `raw_taipower_unit_generation_snapshot` 資產擷取台電當前全台供需、各區域供需與各機組即時淨發電量並 upsert 至 TimescaleDB；三者皆不得進入任何任務的 `{task_id}__training_job` 或 `{task_id}__monitoring_job`；區域快照僅能經由 `hourly_actual_load_job` 推算後間接供訓練使用。
-   - **冪等性**：排程觸發以 tick 時間作為 `observed_at`；手動 materialize 則以實際抓取起始時間向下取整至 10 分鐘。全台快照以 `observed_at` 為鍵；區域快照以 `(observed_at, region)` 為鍵；機組快照以 `(observed_at, unit_type, unit_name)` 為鍵。相同 slot 重跑時皆更新同一快照。
+   - **來源 port**：三個資產的 fetch 皆由 Dagster resource 注入（`taipower_supply_demand_source`、`taipower_regional_supply_demand_source`、`taipower_unit_generation_source`），只回傳來源原始 payload；asset 以各來源 module 的 parse 函式轉為 typed 快照後 upsert。正式環境綁定 `Taipower*Client` HTTP adapter（端點取自 settings），測試綁定 fixture adapter。
+   - **冪等性**：排程觸發以 tick 時間作為 `observed_at`；手動 materialize 則以實際抓取起始時間向下取整至 10 分鐘。兩者共用 `resolve_snapshot_observed_at` 的取整規則，adapter 不決定 slot。全台快照以 `observed_at` 為鍵；區域快照以 `(observed_at, region)` 為鍵；機組快照以 `(observed_at, unit_type, unit_name)` 為鍵。相同 slot 重跑時皆更新同一快照。
    - **資料完整度與失敗政策**：
      - 全台：`curr_load` 與 `curr_util_rate` 為必填欄位；缺少、無法解析，或 HTTP／重試最終失敗時，asset 必須失敗且不得寫入快照。預估尖峰、昨日尖峰與實際最高供電能力資料組可缺少，對應 typed 欄位保存為 `NULL`，完整來源回應仍保存於 `raw_payload`。
      - 區域：來源列缺少核心 `時間`、`區域` 或 `用電(萬瓩)`、或無法解析時，略過該列且不寫入該區域快照；`發電(萬瓩)` 可缺少並保存為 `NULL`。HTTP／重試最終失敗，或成功回應中無任何有效區域列時，asset 必須失敗且不得寫入。
@@ -43,6 +44,7 @@
 3. **CWA 逐時測站觀測擷取工作**：
    - **排程**：`10 * * * *`（`Asia/Taipei`）；失敗時在同一 run 內最多重試三次，以三十秒起算指數退避（Dagster 依序等待 30／90／210 秒，約 5.5 分鐘內結束）；重試用盡時 run 必須失敗且不得改動既有資料。
    - **故障邊界**：使用獨立 job 與 schedule，不與台電即時快照、任務訓練或監控工作共用成敗狀態。
+   - **來源 port**：觀測與預報資產皆由 `cwa_source` resource 注入來源；正式環境綁定 `CWAClient`（API key 取自 settings），其回傳已 parse 的 typed batch／release。
 4. **CWA 鄉鎮預報版本擷取工作**：
    - **排程**：`40 * * * *`（`Asia/Taipei`）；每小時檢查 `F-D0047-089` 與 `F-D0047-091`，以 `(dataset_id, IssueTime, Update)` 去重；失敗時在同一 run 內最多重試三次，以三十秒起算指數退避；重試用盡時 run 必須失敗且不得改動既有預報版本。
    - **故障邊界**：使用獨立 job 與 schedule，不因觀測擷取或其他管線失敗而跳過當次預報版本。
@@ -68,7 +70,7 @@
    - **統計截至時刻 E**：執行時點取整點。資產設定 `scheduled_at`（台灣本地時間 ISO 字串）帶入排程 tick 時，執行時點為該 tick；未設定時（手動 materialize）為執行當下。
    - **統計窗**：目標小時 ∈ [E − 720h, E)，以目標小時判斷，與發布時刻無關；窗開始前發布、目標小時落在窗內的步數也計入。
    - **配對與計入**：提前時數 = ⌈(目標小時 − 發布時刻) / 1h⌉，不大於 0 的步數不計入，例如 10:15 發布時 10:00 不計入、11:00 為提前 1、隔天 10:00 為提前 24。只配對有有效逐時觀測的目標小時，即 `raw_taipower_load` 中 `subject = 'nationwide'`、`source = 'regional_snapshot_sum'` 的列。降級預報照常計入。
-   - **有界查詢**：repository `fetch_track_record_pairs` 只讀目標小時在窗內、發布時刻晚於窗起點前 168 小時的步數（步數最遠落在負載起點後 168 小時，而負載起點早於發布時刻），以及窗內的逐時負載，不讀整段歷史。
+   - **有界查詢**：repository `fetch_track_record_pairs` 以一條 SQL join，依目標小時把已發布預報步數對上窗內的有效逐時觀測，只回傳配對成功的列（發布時刻、目標小時、預測值、實際值）。只讀目標小時在窗內、發布時刻晚於窗起點前 168 小時的步數（步數最遠落在負載起點後 168 小時，而負載起點早於發布時刻），不讀整段歷史；提前時數與 MAPE／MAE 等彙總在 Python 計算。
    - **累積天數**：窗內有配對的目標小時，取台灣日期去重後的天數，最多 31。
    - **重算**：每次都從頭重算、不保存歷次結果，因此允許手動執行、重試與重新執行，事後推算補上的小時在下次彙整自然計入。尚無已發布預報時照常成功，累積天數為 0。
    - **輸出與 metadata**：輸出格式見 [資料契約 §5.1](data-contracts.md#51-預報實績-forecast_track_record)。materialization metadata 記 `cutoff`（統計截至時刻）、`accumulated_days`、`window_pairs`（窗內總配對數）與 `lead_24_pairs`（窗內提前 24 的配對數，未滿 7 天也記），只在 Dagster UI 可見，不匯出。

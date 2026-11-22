@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-21
+- 最後更新：2026-11-22
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 1 節拆出。
@@ -59,7 +59,12 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 ## 3. 地端時序資料庫模型 (TimescaleDB Hypertables)
 
 - **資料庫**：`shiro_timeseries` (TimescaleDB / PostgreSQL 15+)
-- **時間契約**：擷取與特徵工程邊界的無時區時間均表示台灣本地時間（`Asia/Taipei`）；帶時區的來源時間保留其原始瞬間。寫入 `TIMESTAMPTZ` 前，repository 一律轉為 UTC；範圍查詢條件同樣轉為 UTC。讀回資料在交給特徵工程前轉回無時區的台灣本地時間。
+- **時間契約**：
+  - 擷取與特徵工程邊界的無時區時間均表示台灣本地時間（`Asia/Taipei`）；帶時區的來源時間保留其原始瞬間。
+  - 儲存時刻轉換只經 `shiro_mlops.core.storage_time`，所有 store 與 Data Explorer 皆然：寫入值與查詢參數以 `to_storage_time`（nullable 欄位用 `to_storage_time_or_none`）轉換；半開窗 `[start, end)` 以 `half_open_window` 產生 SQL 條件與參數；讀回以 `from_storage_time`、`from_storage_time_series` 轉為無時區的台灣本地時間。
+  - 綁定參數一律為帶時區的 UTC，寫入 `TIMESTAMPTZ` 因此不依賴 session `TimeZone`。此規則只適用於應用程式寫入的時刻欄位；DDL 預設值（如 `created_at`）與 `legacy_cwa_weather` 不在此列，讀回時無時區的儲存值視為 UTC。
+  - NOT NULL 時刻欄位讀到 `NULL` 視為儲存損毀並失敗，不以查詢條件代填；nullable 時刻欄位讀回 `None`。
+  - SQLite 只用於測試，時刻以文字保存為單一形式 `YYYY-MM-DD HH:MM:SS[.ffffff]+00:00`（小數秒僅在非零時出現），字串比較、排序與跨表等值 join 因此與 TimescaleDB 的時刻比較一致。測試環境註冊的 SQLite adapter 拒絕無時區或非 UTC 的 datetime 綁定，繞過 `shiro_mlops.core.storage_time` 的寫入或查詢會直接失敗。
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)

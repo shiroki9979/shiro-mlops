@@ -34,8 +34,7 @@ def test_unit_series_scenarios_on_timescaledb(
     scenario(TimeSeriesRepository(engine=data_explorer_timescaledb_engine, auto_init=False))
 
 
-# WHY-NOT(SUPPLY_DEMAND_UTC_SESSION): the snapshot repositories write naive UTC instants and
-# rely on a UTC session, as the power pagination suite does; bucketing names Asia/Taipei itself.
+@pytest.mark.parametrize("data_explorer_timescaledb_engine", ["Asia/Taipei"], indirect=True)
 @pytest.mark.parametrize(
     "scenario", SUPPLY_DEMAND_SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__
 )

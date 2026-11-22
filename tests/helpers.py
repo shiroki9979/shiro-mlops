@@ -1,18 +1,21 @@
 """集中共用測試資料，避免測試模組互相依賴私有 builder。"""
 
 import json
+import math
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_local_to_utc
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAForecastRelease,
@@ -63,6 +66,25 @@ OFFICIAL_2026_WEEKDAY_DAYS_OFF = {
 def rfc3339(value: datetime) -> str:
     """測試時間統一套用臺灣時區，避免各測試產生不同 offset 語意。"""
     return value.replace(tzinfo=TAIWAN).isoformat(timespec="seconds")
+
+
+def explorer_pages(reader, params: dict[str, Any], *, max_pages: int = 20) -> list:
+    """Follow a Data Explorer reader's cursors from the first page to the last.
+
+    A cursor handed out twice fails at once; paging that never reaches the last page fails
+    at ``max_pages`` instead of hanging.
+    """
+    pages = [reader.list(params)]
+    seen_cursors: set[str] = set()
+    while pages[-1].has_more:
+        assert len(pages) < max_pages, f"cursor paging did not end within {max_pages} pages"
+        cursor = pages[-1].next_cursor
+        assert cursor is not None
+        assert cursor not in seen_cursors, f"repeated cursor {cursor!r} after {len(pages)} pages"
+        seen_cursors.add(cursor)
+        pages.append(reader.list({**params, "cursor": cursor}))
+    assert pages[-1].next_cursor is None
+    return pages
 
 
 def supply_demand_snapshot(
@@ -233,14 +255,13 @@ def create_location_keyed_load_table(engine: Engine) -> None:
 
 def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
     """Insert a d015046-era row without source after migrating the schema to allow NULL source."""
-    utc_time = pd.Timestamp(taiwan_local_to_utc(pd.Series([taiwan_time])).iloc[0])
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO raw_taipower_load (time, subject, load_mw) "
                 "VALUES (:time, 'nationwide', :load_mw)"
             ),
-            {"time": utc_time.to_pydatetime(), "load_mw": load_mw},
+            {"time": to_storage_time(taiwan_time), "load_mw": load_mw},
         )
 
 
@@ -299,3 +320,97 @@ def override_task_policies(
     updated = replace(task, policies=task.policies.model_copy(update=updates))
     monkeypatch.setitem(tasks, task_id, updated)
     return updated
+
+
+def upstream_http_500(url: str = "https://example.invalid/source") -> httpx.HTTPStatusError:
+    """The error an HTTP adapter raises when the upstream source answers HTTP 500."""
+    request = httpx.Request("GET", url)
+    return httpx.HTTPStatusError(
+        "upstream returned HTTP 500", request=request, response=httpx.Response(500, request=request)
+    )
+
+
+class FixtureSource:
+    """Fixture adapter for a Taipower source port: serves one payload, optionally failing first.
+
+    ``fail_first`` counts the fetches that raise ``error`` before the payload is served;
+    ``math.inf`` makes every fetch fail.
+    """
+
+    def __init__(
+        self,
+        payload: Any = None,
+        *,
+        fail_first: float = 0,
+        error: Exception | None = None,
+    ) -> None:
+        self.payload = payload
+        self.fail_first = fail_first
+        self.error = error or upstream_http_500()
+        self.calls = 0
+
+    def fetch_payload(self) -> Any:
+        self.calls += 1
+        if self.calls <= self.fail_first:
+            raise self.error
+        return self.payload
+
+
+class FixtureCWASource:
+    """Fixture adapter for the CWA source port; an exception value is raised instead of served."""
+
+    def __init__(
+        self,
+        observation_batch: CWAObservationBatch | Exception | None = None,
+        forecast_releases: dict[str, CWAForecastRelease | Exception] | None = None,
+    ) -> None:
+        self.observation_batch = observation_batch
+        self.forecast_releases = forecast_releases or {}
+        self.calls: list[str] = []
+
+    def fetch_observation_batch(self, locations: object = None) -> CWAObservationBatch:
+        self.calls.append("observation")
+        return _served(self.observation_batch)
+
+    def fetch_forecast_release(
+        self, dataset_id: str, locations: object = None
+    ) -> CWAForecastRelease:
+        self.calls.append(dataset_id)
+        return _served(self.forecast_releases[dataset_id])
+
+
+def _served(value: Any) -> Any:
+    if isinstance(value, Exception):
+        raise value
+    if value is None:
+        raise AssertionError("FixtureCWASource was asked for a payload it was not given")
+    return value
+
+
+def unfetched_source_resources() -> dict[str, Any]:
+    """Every ingestion source port bound to an adapter that fails if a run ever fetches it.
+
+    Definitions that load the ingestion assets without running them still have to bind
+    their source resources.
+    """
+    from shiro_mlops.pipelines.assets import (
+        CWA_SOURCE,
+        TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE,
+        TAIPOWER_SUPPLY_DEMAND_SOURCE,
+        TAIPOWER_UNIT_GENERATION_SOURCE,
+    )
+
+    def unfetched(key: str) -> FixtureSource:
+        return FixtureSource(fail_first=math.inf, error=AssertionError(f"{key} was fetched"))
+
+    return {
+        CWA_SOURCE: FixtureCWASource(),
+        **{
+            key: unfetched(key)
+            for key in (
+                TAIPOWER_SUPPLY_DEMAND_SOURCE,
+                TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE,
+                TAIPOWER_UNIT_GENERATION_SOURCE,
+            )
+        },
+    }
