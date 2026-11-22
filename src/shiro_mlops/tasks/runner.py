@@ -2,9 +2,10 @@
 
 The runner owns I/O and the shared components (ADR-0009): the minimum
 accumulation gate, bounded data retrieval, the stale load anchor rule, and
-weather resolution with degradation. Task types only ever receive in-memory
-frames. Every time-dependent decision takes an explicit ``as_of`` in
-Taiwan-local naive time.
+weather resolution with degradation. The prediction input gate
+(``tasks/prediction_inputs.py``) judges the frames it reads before any task type
+sees them; task types only ever receive in-memory frames. Every time-dependent
+decision takes an explicit ``as_of`` in Taiwan-local naive time.
 """
 
 from __future__ import annotations
@@ -28,6 +29,18 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_weather
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
 from shiro_mlops.tasks.definition import TaskDefinition
+
+# WHY-NOT(InsufficientLoadHistoryError): 看似未用的匯入是重新匯出；例外定義於預測輸入關卡，
+# runner 本身不引用它；只有 runner 的兩支整合測試由此匯入，保留這條既有匯入路徑。
+from shiro_mlops.tasks.prediction_inputs import (
+    InsufficientLoadHistoryError as InsufficientLoadHistoryError,
+)
+from shiro_mlops.tasks.prediction_inputs import (
+    TaskUnavailableError,
+    WeatherUnavailableError,
+    admit_prediction_inputs,
+    require_load_coverage,
+)
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
@@ -67,27 +80,12 @@ class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interfac
         self.readiness = readiness
 
 
-class TaskUnavailableError(RuntimeError):
-    """Serving inputs cannot support a prediction right now; the caller should answer 503."""
-
-
 class MissingLoadHistoryError(TaskUnavailableError):
     """No persisted target history exists to anchor a prediction."""
 
 
 class StaleLoadAnchorError(TaskUnavailableError):
     """The latest actual load is too old to anchor a recursive forecast."""
-
-
-class InsufficientLoadHistoryError(TaskUnavailableError):
-    """Too few actual load hours before the anchor for the task type's history window."""
-
-
-class WeatherUnavailableError(TaskUnavailableError):
-    """Neither forecasts nor degraded fallbacks cover the requested horizon.
-
-    For observed-weather tasks: no station observation exists in the lookback.
-    """
 
 
 class ObservedInputsIncompleteError(TaskUnavailableError):
@@ -353,13 +351,16 @@ def _prepare_prediction(request: _ServingRequest) -> tuple[PredictionData, Weigh
     anchor = _fresh_load_anchor(task, request.repository, request.as_of)
     history_start = anchor - timedelta(hours=requirements.lookback_hours)
     history = _fetch_target(task, request.repository, start=history_start, end=anchor)
-    _require_history_coverage(request, history, anchor)
+    require_load_coverage(requirements, anchor=anchor, load=history, subject=task.subject)
     weather = request.weather_path.read(request, history_start, anchor)
-    data = PredictionData(
+    data = admit_prediction_inputs(
+        requirements,
         anchor=anchor,
-        load_history=history,
-        weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],
+        load=history,
+        weather=weather.dataframe,
+        weather_fields=task.weather.fields,
         horizon_hours=request.horizon_hours,
+        subject=task.subject,
     )
     return data, weather
 
@@ -376,23 +377,6 @@ def _fresh_load_anchor(
             f"{pd.Timestamp(as_of).isoformat()} by more than {max_lag_hours} hours."
         )
     return anchor
-
-
-def _require_history_coverage(
-    request: _ServingRequest, history: pd.DataFrame, anchor: pd.Timestamp
-) -> None:
-    """Refuse rather than let the task type fail: missing past load has no substitute."""
-    coverage = request.requirements.history_coverage
-    if coverage is None:
-        return
-    window_start = anchor - timedelta(hours=coverage.window_hours)
-    times = pd.to_datetime(history.loc[history[LOAD_MW_COL].notna(), DATETIME_COL])
-    valid_hours = times[(times > window_start) & (times <= anchor)].nunique()
-    if valid_hours < coverage.min_valid_hours:
-        raise InsufficientLoadHistoryError(
-            f"Only {valid_hours} {request.task.subject} load hours in the {coverage.window_hours}-hour "
-            f"window ending at anchor {anchor.isoformat()}; {coverage.min_valid_hours} required."
-        )
 
 
 def _resolve_future_weather(
@@ -485,7 +469,7 @@ def _forecast_weather_as_delivered(
 def _forecast_weather_covers_horizon(
     _model: TaskModel, _data: PredictionData, weather: WeightedWeather
 ) -> WeightedWeather:
-    """Resolving the full horizon already proved forecast coverage; predicting adds nothing."""
+    """The gate already proved every target hour has weather; predicting adds nothing."""
     return weather
 
 
