@@ -19,7 +19,12 @@ import pandas as pd
 
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.query import TimeWindow, resolve_window
+from shiro_mlops.service.data_explorer.query import (
+    WINDOW_PARAMS,
+    TimeWindow,
+    declared_params,
+    resolve_window,
+)
 from shiro_mlops.service.data_explorer.schemas import Series, SeriesPoint, SeriesResponse
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time, now_taiwan
 from shiro_mlops.service.data_explorer.values import format_row_time, row_time, to_float
@@ -53,7 +58,7 @@ class Agg(StrEnum):
 
 RESOLVED_BUCKETS = (Bucket.RAW, Bucket.HOUR, Bucket.DAY)
 BUCKET_FREQUENCY = {Bucket.HOUR: "h", Bucket.DAY: "D"}
-COMMON_SERIES_PARAMS = frozenset({"start", "end", "fields", "bucket", "agg"})
+COMMON_SERIES_PARAMS = WINDOW_PARAMS | {"fields", "bucket", "agg"}
 COUNT_SERIES_PARAMS = COMMON_SERIES_PARAMS - {"fields", "agg"}
 GROUP_BY_PARAM = "group_by"
 
@@ -136,6 +141,13 @@ def series_request_params(dataset: Dataset, options: SeriesOptions) -> frozenset
     return common | dataset.series_filter_keys | grouping
 
 
+def series_params(
+    dataset: Dataset, options: SeriesOptions, query: Mapping[str, str]
+) -> dict[str, str]:
+    """The series request's non-empty parameters, once every one is declared for its series."""
+    return declared_params(query, series_request_params(dataset, options), "series")
+
+
 class TooManyPointsError(ExplorerQueryError):
     """Raised when an explicit bucket exceeds the per-series or total point limit."""
 
@@ -172,10 +184,7 @@ class SeriesRequest:
         bucket: Bucket,
         agg: Agg | None = None,
     ) -> SeriesRequest:
-        """Reject undeclared parameters, then resolve the window under the series limit."""
-        unknown = sorted(set(query_params) - series_request_params(dataset, options))
-        if unknown:
-            raise ExplorerQueryError(f"unsupported series parameters: {', '.join(unknown)}")
+        """Resolve the window under the series limit from parameters `series_params` declared."""
         window = resolve_window(query_params.get("start"), query_params.get("end"), SERIES_MAX_DAYS)
         accepted = dataset.series_filter_keys
         filters = {key: value for key, value in query_params.items() if key in accepted}

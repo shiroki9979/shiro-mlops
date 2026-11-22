@@ -148,6 +148,36 @@ def test_undeclared_list_parameter_precedes_invalid_cursor(explorer_client) -> N
     assert response.json()["detail"] == "unsupported list parameters: regoin"
 
 
+@pytest.mark.parametrize(
+    "query", [[("regoin", "")], [("regoin", "北部"), ("regoin", "")]], ids=["empty", "last-empty"]
+)
+def test_list_rejects_an_undeclared_parameter_sent_empty(
+    explorer_client, query: list[tuple[str, str]]
+) -> None:
+    """值為空的未宣告參數也回 422：`?regoin=` 不得回傳未篩選的結果。"""
+    client, _ = explorer_client
+
+    response = client.get("/data/power/regional", params=query)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unsupported list parameters: regoin"
+
+
+def test_list_reads_a_declared_filter_sent_empty_as_not_given(explorer_client) -> None:
+    """值為空的已宣告篩選視為沒有篩選。"""
+    client, repo = explorer_client
+    hour = _now().replace(minute=0) - timedelta(hours=2)
+    _upsert_hours(repo, [hour])
+    window = {"start": rfc3339(hour - timedelta(hours=1)), "end": rfc3339(hour)}
+
+    with_empty = client.get("/data/power/load", params={**window, "subject": ""})
+    without = client.get("/data/power/load", params=window)
+
+    assert with_empty.status_code == 200
+    assert with_empty.json()["items"] == without.json()["items"]
+    assert len(with_empty.json()["items"]) == 1
+
+
 def test_malformed_v2_cursor_precedes_database_failure(
     explorer_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
