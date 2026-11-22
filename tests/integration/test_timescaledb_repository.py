@@ -1,14 +1,24 @@
 """Opt-in integration tests for TimescaleDB repository time semantics."""
 
+import json
 import os
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.core.config import settings
+from shiro_mlops.core.database import get_timescale_engine
+from shiro_mlops.data.cwa_client import (
+    CWAObservationBatch,
+    CWAStationObservation,
+    parse_forecast_release,
+)
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.repository_utils import deserialize_raw_payload
 from shiro_mlops.features.transformers import merge_weather_features
 
 TIMESCALE_INTEGRATION_URI_ENV = "TIMESCALE_INTEGRATION_URI"
@@ -21,7 +31,7 @@ def timescaledb_engine() -> Engine:
     if uri is None:
         pytest.skip(f"Set {TIMESCALE_INTEGRATION_URI_ENV} to run TimescaleDB integration tests.")
 
-    engine = create_engine(uri)
+    engine = get_timescale_engine(uri)
     with engine.connect() as connection:
         extension_version = connection.execute(
             text("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
@@ -36,54 +46,85 @@ def timescaledb_engine() -> Engine:
 
 def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_queries(
     timescaledb_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Taiwan-local and UTC inputs represent one instant through storage, readback, and merge."""
-    location = f"integration-{uuid4().hex}"
+    run_id = uuid4()
+    subject = f"integration-{run_id.hex}"
+    station_id = f"it-{run_id.hex[:13]}"
+    reference_point = f"Integration-{run_id.hex}"
+    # 批次以 fetched_at 為主鍵且 upsert 會覆寫，取遠離實際擷取時刻的唯一瞬間，免得蓋掉本機真實批次。
+    fetched_at = datetime(2000, 1, 1, tzinfo=UTC) + timedelta(microseconds=run_id.int % 10**12)
+    monkeypatch.setattr(
+        settings,
+        "CWA_LOCATION_ALLOWLIST",
+        json.dumps({reference_point: {"station_id": station_id, "geocode": "63000000"}}),
+    )
     repository = TimeSeriesRepository(engine=timescaledb_engine, auto_init=False)
     load_df = pd.DataFrame(
-        [{"datetime": "2026-08-20T14:00:00", "load_mw": 38000.0, "location": location}]
+        [{"datetime": "2026-08-20T14:00:00", "load_mw": 38000.0, "subject": subject}]
     )
     revised_load_df = pd.DataFrame(
-        [{"datetime": "2026-08-20T06:00:00Z", "load_mw": 39000.0, "location": location}]
+        [{"datetime": "2026-08-20T06:00:00Z", "load_mw": 39000.0, "subject": subject}]
     )
-    weather_df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20T06:00:00Z",
-                "temperature": 35.5,
-                "relative_humidity": 55.0,
-                "location": location,
-            }
-        ]
+    observation_batch = CWAObservationBatch(
+        fetched_at=fetched_at,
+        status="complete",
+        missing_station_ids=(),
+        raw_payload={"fixture": "timescaledb-storage-time"},
+        observations=(
+            CWAStationObservation(
+                observed_at=pd.Timestamp("2026-08-20T06:00:00Z"),
+                station_id=station_id,
+                station_name=reference_point,
+                town_code="63000000",
+                temperature_c=35.5,
+                relative_humidity_pct=55.0,
+                air_pressure_hpa=None,
+                precipitation_mm=None,
+                wind_speed_m_s=None,
+                wind_direction_deg=None,
+            ),
+        ),
     )
 
     try:
         assert repository.upsert_taipower_load(load_df) == 1
         assert repository.upsert_taipower_load(revised_load_df) == 1
-        assert repository.upsert_cwa_weather(weather_df) == 1
+        assert repository.upsert_cwa_observation_batch(observation_batch) == 1
 
         with timescaledb_engine.connect() as connection:
-            stored_time = connection.execute(
-                text("SELECT time FROM raw_taipower_load WHERE location = :location"),
-                {"location": location},
+            stored_load_time = connection.execute(
+                text("SELECT time FROM raw_taipower_load WHERE subject = :subject"),
+                {"subject": subject},
             ).scalar_one()
-        assert pd.Timestamp(stored_time) == pd.Timestamp("2026-08-20T06:00:00Z")
+            stored_observed_at = connection.execute(
+                text(
+                    "SELECT observed_at FROM raw_cwa_station_observation "
+                    "WHERE station_id = :station_id"
+                ),
+                {"station_id": station_id},
+            ).scalar_one()
+        assert pd.Timestamp(stored_load_time) == pd.Timestamp("2026-08-20T06:00:00Z")
+        assert pd.Timestamp(stored_observed_at) == pd.Timestamp("2026-08-20T06:00:00Z")
 
         persisted_load = repository.fetch_load_range(
             start_time="2026-08-20T14:00:00",
             end_time="2026-08-20T14:00:00",
-            location=location,
+            subject=subject,
         )
         persisted_weather = repository.fetch_weather_range(
             start_time="2026-08-20T06:00:00Z",
             end_time="2026-08-20T06:00:00Z",
-            location=location,
+            reference_point=reference_point,
         )
 
         assert len(persisted_load) == 1
         assert persisted_load.iloc[0]["time"] == pd.Timestamp("2026-08-20T14:00:00")
         assert persisted_load.iloc[0]["load_mw"] == pytest.approx(39000.0)
+        assert len(persisted_weather) == 1
         assert persisted_weather.iloc[0]["time"] == pd.Timestamp("2026-08-20T14:00:00")
+        assert persisted_weather.iloc[0]["location"] == reference_point
 
         merged = merge_weather_features(
             persisted_load.rename(columns={"time": "datetime"}),
@@ -94,10 +135,54 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
     finally:
         with timescaledb_engine.begin() as connection:
             connection.execute(
-                text("DELETE FROM raw_cwa_weather WHERE location = :location"),
-                {"location": location},
+                text("DELETE FROM raw_cwa_station_observation WHERE station_id = :station_id"),
+                {"station_id": station_id},
             )
             connection.execute(
-                text("DELETE FROM raw_taipower_load WHERE location = :location"),
-                {"location": location},
+                text("DELETE FROM raw_cwa_observation_batch WHERE fetched_at = :fetched_at"),
+                {"fetched_at": fetched_at},
             )
+            connection.execute(
+                text("DELETE FROM raw_taipower_load WHERE subject = :subject"),
+                {"subject": subject},
+            )
+
+
+def test_string_raw_payload_round_trips_through_timescaledb_jsonb(
+    timescaledb_engine: Engine,
+) -> None:
+    """XML 預報原始檔寫入 JSONB 後讀回，反序列化得到原字串而非再解碼一次。"""
+    source_xml = f"<cwaopendata><Dataset>{uuid4().hex}</Dataset></cwaopendata>"
+    release = parse_forecast_release(
+        {
+            "records": {
+                "IssueTime": "2026-08-20T11:00:00+08:00",
+                "Update": "2026-08-20T11:20:00+08:00",
+                "Locations": [],
+            }
+        },
+        dataset_id="F-D0047-089",
+        raw_payload=source_xml,
+    )
+    repository = TimeSeriesRepository(engine=timescaledb_engine, auto_init=False)
+    delete_release = text(
+        "DELETE FROM raw_cwa_forecast_release "
+        "WHERE dataset_id = :dataset_id AND issued_at = :issued_at"
+    )
+    release_key = {"dataset_id": "F-D0047-089", "issued_at": pd.Timestamp("2026-08-20T03:00:00Z")}
+
+    try:
+        repository.upsert_cwa_forecast_release(release)
+        with timescaledb_engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    "SELECT raw_payload FROM raw_cwa_forecast_release "
+                    "WHERE dataset_id = :dataset_id AND issued_at = :issued_at"
+                ),
+                release_key,
+            ).scalar_one()
+
+        assert deserialize_raw_payload(stored) == source_xml
+    finally:
+        with timescaledb_engine.begin() as connection:
+            connection.execute(delete_release, release_key)

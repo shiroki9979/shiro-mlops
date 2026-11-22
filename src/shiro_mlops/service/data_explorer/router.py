@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -12,68 +12,43 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
-from shiro_mlops.service.data_explorer.audit_series import (
-    FORECAST_AUDIT_SERIES,
-    OBSERVATION_AUDIT_SERIES,
-)
-from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.cursor import CursorError
-from shiro_mlops.service.data_explorer.dataset_reader import DatasetReader
-from shiro_mlops.service.data_explorer.db import ExplorerDb
-from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError, ExplorerQueryError
-from shiro_mlops.service.data_explorer.hourly_load import (
-    HOURLY_LOAD_SERIES,
-    HourlyLoadReader,
-    HourlyLoadSeriesField,
+from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery, validate_cursor
+from shiro_mlops.service.data_explorer.datasets import (
+    CWA_FORECAST_AUDITS,
+    CWA_FORECASTS,
+    CWA_OBSERVATION_AUDITS,
+    CWA_OBSERVATIONS,
+    HOURLY_LOAD,
+    NATIONAL_SUPPLY_DEMAND,
+    REGIONAL_SUPPLY_DEMAND,
+    UNIT_GENERATION,
+    Dataset,
 )
-from shiro_mlops.service.data_explorer.power import (
-    UNIT_GENERATION_SERIES,
-    NationalSupplyDemandReader,
-    RegionalSupplyDemandReader,
-    UnitGenerationReader,
+from shiro_mlops.service.data_explorer.datasets.power import (
+    HourlyLoadSeriesField,
+    NationalSeriesField,
+    RegionalSeriesField,
     UnitGroupBy,
     UnitSeriesField,
 )
+from shiro_mlops.service.data_explorer.datasets.weather import (
+    ForecastSeriesField,
+    ObservationSeriesField,
+)
+from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError, ExplorerQueryError
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
     StatusResponse,
 )
-from shiro_mlops.service.data_explorer.series import (
-    Agg,
-    Bucket,
-    SeriesReader,
-    SeriesRequest,
-    SeriesSpec,
-    TooManyPointsError,
-)
-from shiro_mlops.service.data_explorer.supply_demand_series import (
-    NATIONAL_SERIES,
-    REGIONAL_SERIES,
-    NationalSeriesField,
-    RegionalSeriesField,
-)
-from shiro_mlops.service.data_explorer.weather import (
-    FORECAST_SERIES,
-    OBSERVATION_SERIES,
-    ForecastAuditReader,
-    ForecastReader,
-    ForecastSeriesField,
-    ObservationAuditReader,
-    ObservationReader,
-    ObservationSeriesField,
-    plan_forecast_series,
-)
+from shiro_mlops.service.data_explorer.series import Agg, Bucket, TooManyPointsError
 
 router = APIRouter(prefix="/data", tags=["data-explorer"])
 
-SeriesPlan = Callable[[ExplorerDb, dict[str, str]], tuple[SeriesSpec, dict[str, str]]]
-
 
 def _repository(request: Request) -> TimeSeriesRepository:
-    from shiro_mlops.service import api as service_api
-
-    return service_api.repository_store or TimeSeriesRepository()
+    return request.app.state.repository
 
 
 def _engine(request: Request) -> Engine:
@@ -89,12 +64,12 @@ def _query_params(request: Request) -> dict[str, Any]:
     return {key: value for key, value in request.query_params.items() if value not in (None, "")}
 
 
-def _run_list(request: Request, reader_cls: type[DatasetReader]) -> ListEnvelope:
+def _run_list(request: Request, dataset: Dataset) -> ListEnvelope:
     _ensure_enabled()
     try:
         params = _query_params(request)
-        reader_cls.validate_cursor_request(params)
-        return reader_cls(_engine(request)).list(params)
+        validate_cursor(dataset, params)
+        return DatasetQuery(_engine(request)).list(dataset, params)
     except CursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ExplorerQueryError as exc:
@@ -105,24 +80,21 @@ def _run_list(request: Request, reader_cls: type[DatasetReader]) -> ListEnvelope
 
 def _run_series(
     request: Request,
-    spec: SeriesSpec,
+    dataset: Dataset,
     *,
     fields: Sequence[StrEnum] | None = None,
     bucket: Bucket,
     agg: Agg | None = None,
-    plan: SeriesPlan | None = None,
 ) -> SeriesResponse:
-    """Read a series; `plan` lets a dataset specialise its spec from the request first."""
     _ensure_enabled()
     try:
-        engine = _engine(request)
-        params = _series_query_params(request)
-        if plan is not None:
-            spec, params = plan(ExplorerDb(engine), params)
-        series_request = SeriesRequest.build(
-            spec, params, fields=_field_names(fields), bucket=bucket, agg=agg
+        return DatasetQuery(_engine(request)).series(
+            dataset,
+            _series_query_params(request),
+            fields=_field_names(fields),
+            bucket=bucket,
+            agg=agg,
         )
-        return SeriesReader(engine, spec).read(series_request)
     except TooManyPointsError as exc:
         suggested = exc.suggested_bucket.value if exc.suggested_bucket else None
         raise HTTPException(
@@ -148,7 +120,7 @@ def get_status(request: Request) -> StatusResponse:
     """Return shared dataset availability, freshness, and completeness."""
     _ensure_enabled()
     try:
-        return DatasetStatusCatalog(_engine(request)).status()
+        return DatasetQuery(_engine(request)).status()
     except (DatabaseUnavailableError, SQLAlchemyError) as exc:
         raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
 
@@ -164,7 +136,7 @@ def list_hourly_load(
 ) -> ListEnvelope:
     """List persisted hourly electricity load rows."""
     del start, end, subject, limit, cursor
-    return _run_list(request, HourlyLoadReader)
+    return _run_list(request, HOURLY_LOAD)
 
 
 @router.get("/power/load/series", response_model=SeriesResponse)
@@ -186,7 +158,7 @@ def hourly_load_series(
     del start, end, subject
     return _run_series(
         request,
-        HOURLY_LOAD_SERIES,
+        HOURLY_LOAD,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -196,7 +168,7 @@ def hourly_load_series(
 @router.get("/power/supply-demand", response_model=ListEnvelope)
 def list_national_supply_demand(request: Request) -> ListEnvelope:
     """List persisted national supply-demand snapshots."""
-    return _run_list(request, NationalSupplyDemandReader)
+    return _run_list(request, NATIONAL_SUPPLY_DEMAND)
 
 
 @router.get("/power/supply-demand/series", response_model=SeriesResponse)
@@ -217,7 +189,7 @@ def national_supply_demand_series(
     del start, end
     return _run_series(
         request,
-        NATIONAL_SERIES,
+        NATIONAL_SUPPLY_DEMAND,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -227,7 +199,7 @@ def national_supply_demand_series(
 @router.get("/power/regional", response_model=ListEnvelope)
 def list_regional_supply_demand(request: Request) -> ListEnvelope:
     """List persisted regional supply-demand snapshots."""
-    return _run_list(request, RegionalSupplyDemandReader)
+    return _run_list(request, REGIONAL_SUPPLY_DEMAND)
 
 
 @router.get("/power/regional/series", response_model=SeriesResponse)
@@ -248,7 +220,7 @@ def regional_supply_demand_series(
     del start, end, region
     return _run_series(
         request,
-        REGIONAL_SERIES,
+        REGIONAL_SUPPLY_DEMAND,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -258,7 +230,7 @@ def regional_supply_demand_series(
 @router.get("/power/units", response_model=ListEnvelope)
 def list_unit_generation(request: Request) -> ListEnvelope:
     """List persisted unit-generation snapshots."""
-    return _run_list(request, UnitGenerationReader)
+    return _run_list(request, UNIT_GENERATION)
 
 
 @router.get("/power/units/series", response_model=SeriesResponse)
@@ -283,7 +255,7 @@ def unit_generation_series(
     del start, end, unit_type, unit_name, group_by
     return _run_series(
         request,
-        UNIT_GENERATION_SERIES,
+        UNIT_GENERATION,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -293,7 +265,7 @@ def unit_generation_series(
 @router.get("/weather/observations", response_model=ListEnvelope)
 def list_observations(request: Request) -> ListEnvelope:
     """List persisted CWA station observations."""
-    return _run_list(request, ObservationReader)
+    return _run_list(request, CWA_OBSERVATIONS)
 
 
 @router.get("/weather/observations/series", response_model=SeriesResponse)
@@ -314,7 +286,7 @@ def observation_series(
     del start, end, station_id
     return _run_series(
         request,
-        OBSERVATION_SERIES,
+        CWA_OBSERVATIONS,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -324,7 +296,7 @@ def observation_series(
 @router.get("/weather/forecasts", response_model=ListEnvelope)
 def list_forecasts(request: Request) -> ListEnvelope:
     """List persisted CWA township forecast vintages."""
-    return _run_list(request, ForecastReader)
+    return _run_list(request, CWA_FORECASTS)
 
 
 @router.get("/weather/forecasts/series", response_model=SeriesResponse)
@@ -352,24 +324,23 @@ def forecast_series(
     del start, end, dataset_id, geocode, issued_at, source_updated_at, all_vintages
     return _run_series(
         request,
-        FORECAST_SERIES,
+        CWA_FORECASTS,
         fields=fields,
         bucket=bucket,
         agg=agg,
-        plan=plan_forecast_series,
     )
 
 
 @router.get("/audits/cwa-observations", response_model=ListEnvelope)
 def list_observation_audits(request: Request) -> ListEnvelope:
     """List CWA observation batch audit headers without raw payloads."""
-    return _run_list(request, ObservationAuditReader)
+    return _run_list(request, CWA_OBSERVATION_AUDITS)
 
 
 @router.get("/audits/cwa-forecasts", response_model=ListEnvelope)
 def list_forecast_audits(request: Request) -> ListEnvelope:
     """List CWA forecast release audit headers without raw payloads."""
-    return _run_list(request, ForecastAuditReader)
+    return _run_list(request, CWA_FORECAST_AUDITS)
 
 
 @router.get("/audits/cwa-observations/series", response_model=SeriesResponse)
@@ -388,7 +359,7 @@ def observation_audit_series(
     or `agg` are rejected with 422.
     """
     del start, end, status, missing_station_id
-    return _run_series(request, OBSERVATION_AUDIT_SERIES, bucket=bucket)
+    return _run_series(request, CWA_OBSERVATION_AUDITS, bucket=bucket)
 
 
 @router.get("/audits/cwa-forecasts/series", response_model=SeriesResponse)
@@ -408,4 +379,4 @@ def forecast_audit_series(
     Buckets without versions are omitted, and `fields` or `agg` are rejected with 422.
     """
     del start, end, dataset_id, status, missing_geocode
-    return _run_series(request, FORECAST_AUDIT_SERIES, bucket=bucket)
+    return _run_series(request, CWA_FORECAST_AUDITS, bucket=bucket)

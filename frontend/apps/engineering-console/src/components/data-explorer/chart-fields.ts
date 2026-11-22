@@ -5,7 +5,7 @@ export const MAX_CHART_UNITS = 2
 
 export interface ChartFieldOption {
   field: ExplorerFieldKey
-  // SYNC(src/shiro_mlops/service/data_explorer/series.py): the `SeriesField.unit` the dataset's SeriesSpec declares, known before any response so a third unit can be disabled up front.
+  // SYNC(src/shiro_mlops/service/data_explorer/datasets/power.py, src/shiro_mlops/service/data_explorer/datasets/weather.py, src/shiro_mlops/service/data_explorer/datasets/audits.py): the `SeriesField.unit` each dataset's SeriesOptions declares, known before any response so a third unit can be disabled up front.
   unit: string
 }
 

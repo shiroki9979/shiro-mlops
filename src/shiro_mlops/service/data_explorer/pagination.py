@@ -11,17 +11,6 @@ from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.service.data_explorer.timefmt import parse_api_storage_time
 from shiro_mlops.service.data_explorer.values import format_row_time
 
-CURSOR_TIME_COLS = {
-    "time",
-    "observed_at",
-    "fetched_at",
-    "issued_at",
-    "source_updated_at",
-    "valid_from",
-    "valid_to",
-    "ingested_at",
-}
-
 RowFetcher = Callable[[ExplorerQuery, dict[str, Any] | None, int], list[dict[str, Any]]]
 PageProjector = Callable[
     [ExplorerQuery, list[dict[str, Any]]], tuple[list[dict[str, Any]], list[str]]
@@ -37,9 +26,9 @@ def paginate_raw_list(
     has_more = len(rows) > query.limit
     next_cursor = (
         encode_cursor(
-            dataset=query.dataset,
+            dataset=query.dataset.id,
             filters=query.filters,
-            key=raw_cursor_key(visible[-1], query.sort_columns),
+            key=raw_cursor_key(visible[-1], query.sort_columns, query.dataset.instant_columns),
         )
         if has_more and visible
         else None
@@ -47,7 +36,7 @@ def paginate_raw_list(
     items, missing = project_page(query, visible)
     if len(items) != len(visible):
         raise ValueError(
-            f"Page projection for {query.dataset} returned {len(items)} items "
+            f"Page projection for {query.dataset.id} returned {len(items)} items "
             f"for {len(visible)} rows"
         )
     return ListEnvelope(
@@ -55,17 +44,14 @@ def paginate_raw_list(
     )
 
 
-def is_cursor_time_column(column: str) -> bool:
-    """Identify sort columns whose cursor values are serialized timestamps."""
-    return column in CURSOR_TIME_COLS or column.endswith("_at")
-
-
-def raw_cursor_key(row: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
+def raw_cursor_key(
+    row: dict[str, Any], columns: tuple[str, ...], instants: frozenset[str]
+) -> dict[str, Any]:
     """Serialize full-precision sort values without using display timestamps."""
     return {
         column: (
             format_row_time(row, column, timespec="microseconds")
-            if is_cursor_time_column(column)
+            if column in instants
             else row[column]
         )
         for column in columns
@@ -96,7 +82,9 @@ def apply_cursor(
     return " AND ".join(clauses), params
 
 
-def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
+def sql_cursor_key(
+    key: dict[str, Any], columns: tuple[str, ...], instants: frozenset[str]
+) -> dict[str, Any]:
     """Convert a public cursor key into SQL-comparable values."""
     converted: dict[str, Any] = {}
     for column in columns:
@@ -105,9 +93,7 @@ def sql_cursor_key(key: dict[str, Any], columns: tuple[str, ...]) -> dict[str, A
         if not isinstance(value, str):
             raise CursorError("Invalid cursor key")
         try:
-            converted[column] = (
-                parse_api_storage_time(value) if is_cursor_time_column(column) else value
-            )
+            converted[column] = parse_api_storage_time(value) if column in instants else value
         except (TypeError, ValueError, OverflowError) as exc:
             raise CursorError("Invalid cursor key") from exc
     return converted

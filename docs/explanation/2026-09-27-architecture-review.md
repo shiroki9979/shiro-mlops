@@ -2,7 +2,7 @@
 # 架構檢視：module 加深候選紀錄
 
 - 建立日期：2026-09-27
-- 最後更新：2026-11-20
+- 最後更新：2026-11-22
 - 文件類型：Explanation（架構現況與取捨分析）
 - 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估，分別登記為技術債 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)、[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)
 - 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)
@@ -37,22 +37,22 @@
 
 ### 現況與證據
 
-排序 invariant 分散於 [specs.py](../../src/shiro_mlops/service/data_explorer/specs.py) 的 `sort`、
+排序 invariant 分散於 [specs.py](https://github.com/shiroki9979/shiro-mlops/blob/da538a58433a3e00ccf84dee19f7de9679c02e0e/src/shiro_mlops/service/data_explorer/specs.py) 的 `sort`、
 各 reader 傳給 `apply_cursor` 的欄位 tuple，以及 SQL 的 `ORDER BY`。
 [query.py](../../src/shiro_mlops/service/data_explorer/query.py) 與
 [pagination.py](../../src/shiro_mlops/service/data_explorer/pagination.py) 另負責 cursor 解碼與時間轉換。
 
 `c3be008` 為避免只有 `valid_to` 不同的預報列漏頁，曾同時修改上述三處排序宣告；
 `c75092a` 修正 cursor 的 aware／naive UTC 比較。
-目前 [ForecastReader](../../src/shiro_mlops/service/data_explorer/weather.py) 仍須傳入 dialect，
+目前 [ForecastReader](https://github.com/shiroki9979/shiro-mlops/blob/da538a58433a3e00ccf84dee19f7de9679c02e0e/src/shiro_mlops/service/data_explorer/weather.py) 仍須傳入 dialect，
 決定是否套用 SQLite 時間正規化。
 這些是已修補問題所揭露的維護摩擦，並非本次重現仍存在的漏頁缺陷。
 
 ### 加深方向與取捨
 
 由既有分頁 module 統一持有排序、cursor key 與時間比較規則；
-[hourly_load.py](../../src/shiro_mlops/service/data_explorer/hourly_load.py)、
-[power.py](../../src/shiro_mlops/service/data_explorer/power.py) 與氣象 reader
+[hourly_load.py](https://github.com/shiroki9979/shiro-mlops/blob/da538a58433a3e00ccf84dee19f7de9679c02e0e/src/shiro_mlops/service/data_explorer/hourly_load.py)、
+[power.py](https://github.com/shiroki9979/shiro-mlops/blob/da538a58433a3e00ccf84dee19f7de9679c02e0e/src/shiro_mlops/service/data_explorer/power.py) 與氣象 reader
 保留 dataset 特有的篩選及資料投影。
 
 ```text

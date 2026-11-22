@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.service.data_explorer.cursor import (
@@ -14,12 +14,17 @@ from shiro_mlops.service.data_explorer.cursor import (
     decode_cursor_filters,
 )
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.specs import DATASET_SPECS, DEFAULT_LIMIT, MAX_LIMIT
 from shiro_mlops.service.data_explorer.timefmt import (
     format_taiwan_time,
     now_taiwan,
     parse_api_time,
 )
+
+if TYPE_CHECKING:
+    from shiro_mlops.service.data_explorer.datasets.definition import Dataset
+
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 200
 
 
 @dataclass(frozen=True)
@@ -37,7 +42,7 @@ class TimeWindow:
 class ExplorerQuery:
     """Window, dataset filters, page size, and opaque cursor for one list request."""
 
-    dataset: str
+    dataset: Dataset
     window: TimeWindow
     filters: dict[str, Any]
     limit: int
@@ -46,27 +51,26 @@ class ExplorerQuery:
     @classmethod
     def from_params(
         cls,
-        dataset: str,
+        dataset: Dataset,
         params: Mapping[str, Any],
         *,
         cursor_filters: Mapping[str, Any] | None = None,
     ) -> ExplorerQuery:
         """Build a typed query from HTTP parameters and already-decoded cursor filters."""
-        spec = DATASET_SPECS[dataset]
         cursor = params.get("cursor")
         start, end = params.get("start"), params.get("end")
         if cursor not in (None, "") and (start is None or end is None):
             if cursor_filters is None:
-                cursor_filters = decode_cursor_filters(str(cursor), dataset=dataset)
+                cursor_filters = decode_cursor_filters(str(cursor), dataset=dataset.id)
             try:
                 cursor_window = resolve_window(
-                    cursor_filters["start"], cursor_filters["end"], spec["max_days"]
+                    cursor_filters["start"], cursor_filters["end"], dataset.max_days
                 )
             except (KeyError, ExplorerQueryError) as exc:
                 raise CursorError("Invalid cursor window") from exc
             start = start if start is not None else cursor_window.start
             end = end if end is not None else cursor_window.end
-        window = resolve_window(start, end, spec["max_days"])
+        window = resolve_window(start, end, dataset.max_days)
         limit = resolve_limit(params.get("limit"))
         filters = bound_filters(dataset, dict(params), window)
         if cursor in (None, ""):
@@ -82,7 +86,7 @@ class ExplorerQuery:
     @property
     def sort_columns(self) -> tuple[str, ...]:
         """Newest-first keyset columns declared once per dataset."""
-        return DATASET_SPECS[self.dataset]["sort"]
+        return self.dataset.sort
 
     def cursor_key(self) -> dict[str, Any] | None:
         """Decode the opaque cursor against this query's bound filters and sort key."""
@@ -90,8 +94,8 @@ class ExplorerQuery:
             return None
         from shiro_mlops.service.data_explorer.pagination import sql_cursor_key
 
-        raw_key = decode_cursor(self.cursor, dataset=self.dataset, filters=self.filters)
-        return sql_cursor_key(raw_key, self.sort_columns)
+        raw_key = decode_cursor(self.cursor, dataset=self.dataset.id, filters=self.filters)
+        return sql_cursor_key(raw_key, self.sort_columns, self.dataset.instant_columns)
 
 
 def resolve_window(
@@ -126,30 +130,17 @@ def resolve_limit(limit: int | str | None) -> int:
     return parsed
 
 
-def bound_filters(dataset: str, params: dict[str, Any], window: TimeWindow) -> dict[str, Any]:
-    """Canonical filter payload stored inside a keyset cursor."""
+def bound_filters(dataset: Dataset, params: dict[str, Any], window: TimeWindow) -> dict[str, Any]:
+    """Canonical filter payload stored inside a keyset cursor: the window and every filter
+    the dataset declares, so a declared filter is always bound and an undeclared one never is.
+    """
     filters = {
         "start": format_taiwan_time(window.start, timespec="auto"),
         "end": format_taiwan_time(window.end, timespec="auto"),
     }
-    for key in (
-        "subject",
-        "region",
-        "completeness",
-        "unit_type",
-        "unit_name",
-        "station_id",
-        "dataset_id",
-        "geocode",
-        "issued_at",
-        "source_updated_at",
-        "status",
-        "missing_station_id",
-        "missing_geocode",
-        "all_vintages",
-    ):
+    for key in dataset.filter_names:
         value = params.get(key)
         if value not in (None, ""):
             filters[key] = str(value)
-    filters["dataset"] = dataset
+    filters["dataset"] = dataset.id
     return filters

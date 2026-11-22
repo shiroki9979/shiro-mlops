@@ -1,21 +1,24 @@
-"""SeriesSpec rejects flag combinations whose series would have no defined meaning."""
+"""A dataset rejects series flag combinations whose series would have no defined meaning."""
+
+from dataclasses import replace
 
 import pytest
 
-from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
+from shiro_mlops.service.data_explorer.datasets import CWA_FORECAST_AUDITS, Dataset
+from shiro_mlops.service.data_explorer.series import (
+    SeriesField,
+    SeriesOptions,
+    series_request_params,
+)
 
 
-def _spec(**flags: bool) -> SeriesSpec:
-    return SeriesSpec(
-        dataset="cwa_forecast_audits",
-        table="raw_cwa_forecast_release",
-        time_column="issued_at",
+def _dataset(**flags: bool) -> Dataset:
+    options = SeriesOptions(
         fields={"version_count": SeriesField(sql="1", unit="count")},
         group_columns=("status",),
-        filter_keys=frozenset(),
-        filters=lambda filters: ([], {}),
         **flags,
     )
+    return replace(CWA_FORECAST_AUDITS, series=options)
 
 
 @pytest.mark.parametrize(
@@ -30,10 +33,12 @@ def _spec(**flags: bool) -> SeriesSpec:
 )
 def test_contradictory_series_flags_are_rejected_at_declaration(flags: dict[str, bool]) -> None:
     with pytest.raises(ValueError, match="cwa_forecast_audits"):
-        _spec(**flags)
+        _dataset(**flags)
 
 
 def test_count_series_without_gap_fill_is_accepted() -> None:
-    spec = _spec(count_rows=True, gap_fill=False)
+    dataset = _dataset(count_rows=True, gap_fill=False)
 
-    assert spec.request_params == frozenset({"start", "end", "bucket"})
+    assert series_request_params(dataset, dataset.series) == frozenset(
+        {"start", "end", "bucket", "dataset_id", "status", "missing_geocode"}
+    )

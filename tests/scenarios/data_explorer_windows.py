@@ -8,26 +8,20 @@ from typing import Any, NamedTuple
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.service.data_explorer.completeness import (
-    hourly_gaps,
-    observation_gaps,
-    regional_slot_map,
-    ten_minute_gaps,
-)
-from shiro_mlops.service.data_explorer.db import ExplorerDb
-from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
-from shiro_mlops.service.data_explorer.power import (
-    NationalSupplyDemandReader,
-    RegionalSupplyDemandReader,
-    UnitGenerationReader,
+from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.service.data_explorer.datasets import (
+    CWA_FORECAST_AUDITS,
+    CWA_FORECASTS,
+    CWA_OBSERVATION_AUDITS,
+    CWA_OBSERVATIONS,
+    HOURLY_LOAD,
+    NATIONAL_SUPPLY_DEMAND,
+    REGIONAL_SUPPLY_DEMAND,
+    UNIT_GENERATION,
 )
 from shiro_mlops.service.data_explorer.query import TimeWindow
-from shiro_mlops.service.data_explorer.weather import (
-    ForecastAuditReader,
-    ForecastReader,
-    ObservationAuditReader,
-    ObservationReader,
-)
+from tests.helpers import DatasetLister, rfc3339
+from tests.scenarios.data_explorer_gaps import explorer_http_client
 
 
 class SqlFixture(NamedTuple):
@@ -150,29 +144,29 @@ def _all_dataset_fixtures(start: datetime, times: tuple[datetime, ...]) -> tuple
 
 
 def _assert_dataset_windows(engine: Engine, start: datetime, end: datetime) -> None:
-    readers = (
-        (HourlyLoadReader, "load_mw", [2.0, 1.0]),
-        (NationalSupplyDemandReader, "curr_load_wan_kw", [2.0, 1.0]),
-        (RegionalSupplyDemandReader, "region", ["南部", "中部"]),
-        (UnitGenerationReader, "unit_name", ["edge-2", "edge-1"]),
-        (ObservationReader, "temperature_c", [2.0, 1.0]),
-        (ForecastReader, "temperature_c", [2.0, 1.0]),
-        (ObservationAuditReader, "missing_station_ids", [["edge-2"], ["edge-1"]]),
-        (ForecastAuditReader, "missing_geocodes", [["edge-2"], ["edge-1"]]),
+    datasets = (
+        (HOURLY_LOAD, "load_mw", [2.0, 1.0]),
+        (NATIONAL_SUPPLY_DEMAND, "curr_load_wan_kw", [2.0, 1.0]),
+        (REGIONAL_SUPPLY_DEMAND, "region", ["南部", "中部"]),
+        (UNIT_GENERATION, "unit_name", ["edge-2", "edge-1"]),
+        (CWA_OBSERVATIONS, "temperature_c", [2.0, 1.0]),
+        (CWA_FORECASTS, "temperature_c", [2.0, 1.0]),
+        (CWA_OBSERVATION_AUDITS, "missing_station_ids", [["edge-2"], ["edge-1"]]),
+        (CWA_FORECAST_AUDITS, "missing_geocodes", [["edge-2"], ["edge-1"]]),
     )
     params = {
         "start": start.isoformat(timespec="microseconds"),
         "end": end.isoformat(timespec="microseconds"),
         "limit": 1,
     }
-    for reader_class, field, expected in readers:
-        reader = reader_class(engine)
-        filters = {"all_vintages": "true"} if reader_class is ForecastReader else {}
+    for dataset, field, expected in datasets:
+        reader = DatasetLister(engine, dataset)
+        filters = {"all_vintages": "true"} if dataset is CWA_FORECASTS else {}
         first = reader.list({**params, **filters})
         second = reader.list({**params, **filters, "cursor": first.next_cursor})
         point = reader.list({**params, **filters, "end": params["start"]})
 
-        assert [first.items[0][field], second.items[0][field]] == expected, reader_class
+        assert [first.items[0][field], second.items[0][field]] == expected, dataset
         assert [first.has_more, second.has_more] == [True, False]
         assert first.next_cursor and second.next_cursor is None
         assert first.missing_slots == second.missing_slots
@@ -226,23 +220,40 @@ def _completeness_fixtures(
 
 
 def _assert_completeness_windows(engine: Engine, window: TimeWindow) -> None:
-    db = ExplorerDb(engine)
-    narrow = TimeWindow(window.start + timedelta(microseconds=1), window.end)
-    hourly = hourly_gaps(db, window, "edge-completeness")
-    observations = observation_gaps(db, window, "466920")
-    narrow_observations = observation_gaps(db, narrow, "466920")
-    ten_minute = ten_minute_gaps(db, window)
-    regional = regional_slot_map(db, window)
+    """Rows at the window's start and end count; a row one microsecond past the end does not."""
+    span = {"start": rfc3339(window.start), "end": rfc3339(window.end)}
+    narrow = {**span, "start": f"{window.start.isoformat()}.000001+08:00"}
+    repo = TimeSeriesRepository(engine=engine, auto_init=False)
+    with explorer_http_client(repo) as client:
+        hourly = client.get("/data/power/load", params={**span, "subject": "edge-completeness"})
+        observations = client.get(
+            "/data/weather/observations", params={**span, "station_id": "466920"}
+        )
+        narrow_observations = client.get(
+            "/data/weather/observations", params={**narrow, "station_id": "466920"}
+        )
+        ten_minute = client.get("/data/power/supply-demand", params=span)
+        regional = client.get("/data/power/regional", params=span)
 
-    assert hourly == ["2026-09-20T13:00:00+08:00"]
-    assert observations == ["2026-09-20T13:00:00+08:00:466920"]
-    assert "2026-09-20T12:00:00+08:00" not in narrow_observations
-    assert "2026-09-20T12:00:00+08:00" not in ten_minute
-    assert "2026-09-20T13:00:00+08:00" in ten_minute
-    assert regional == {
-        datetime(2026, 9, 20, 12): {"北部"},
-        datetime(2026, 9, 20, 13): {"北部", "中部", "南部", "東部"},
+    assert hourly.json()["missing_slots"] == ["2026-09-20T13:00:00+08:00"]
+    assert observations.json()["missing_slots"] == ["2026-09-20T13:00:00+08:00:466920"]
+    assert "2026-09-20T12:00:00+08:00" not in narrow_observations.json()["missing_slots"]
+    assert "2026-09-20T12:00:00+08:00" not in ten_minute.json()["missing_slots"]
+    assert "2026-09-20T13:00:00+08:00" in ten_minute.json()["missing_slots"]
+    slots = {
+        (item["observed_at"], item["region"]): item["missing_regions"]
+        for item in regional.json()["items"]
     }
+    assert slots == {
+        ("2026-09-20T13:00:00+08:00", "東部"): [],
+        ("2026-09-20T13:00:00+08:00", "南部"): [],
+        ("2026-09-20T13:00:00+08:00", "中部"): [],
+        ("2026-09-20T13:00:00+08:00", "北部"): [],
+        ("2026-09-20T12:00:00+08:00", "北部"): ["中部", "南部", "東部"],
+    }
+    assert regional.json()["missing_slots"] == [
+        f"2026-09-20T12:{minute}:00+08:00" for minute in ("00", "10", "20", "30", "40", "50")
+    ]
 
 
 def assert_completeness_windows(engine: Engine) -> None:

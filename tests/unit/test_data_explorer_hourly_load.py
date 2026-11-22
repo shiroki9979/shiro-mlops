@@ -10,17 +10,17 @@ from sqlalchemy.engine import Engine
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
+from shiro_mlops.service.data_explorer.datasets import HOURLY_LOAD
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.hourly_load import HourlyLoadReader
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from tests.helpers import TAIWAN, explorer_pages, rfc3339
+from tests.helpers import TAIWAN, DatasetLister, explorer_pages, rfc3339
 
 
 def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
     sqlite_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 13, 15),
     )
     rows = [
@@ -37,7 +37,7 @@ def test_hourly_load_pages_keep_microseconds_composite_key_and_window_gaps(
             ),
             [{"time": time, "subject": subject, "load_mw": load} for time, subject, load in rows],
         )
-    reader = HourlyLoadReader(sqlite_engine)
+    reader = DatasetLister(sqlite_engine, HOURLY_LOAD)
     params = {
         "start": "2026-09-20T10:00:00+08:00",
         "end": "2026-09-20T12:00:01+08:00",
@@ -75,7 +75,7 @@ def test_hourly_load_cursor_orders_whole_second_before_fractional_rows(
             ),
             [{"time": time, "load_mw": load} for time, load in stored],
         )
-    reader = HourlyLoadReader(sqlite_engine)
+    reader = DatasetLister(sqlite_engine, HOURLY_LOAD)
     params = {"start": "2026-09-20T12:00:00+08:00", "end": "2026-09-20T12:00:01+08:00", "limit": 1}
 
     pages = explorer_pages(reader, params)
@@ -87,7 +87,7 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
     legacy_upgraded_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 13, 15),
     )
     with legacy_upgraded_engine.begin() as conn:
@@ -99,7 +99,7 @@ def test_hourly_load_excludes_legacy_source_from_rows_and_gaps(
                 "('2026-09-20 04:00:00+00:00', 'Taipei', 12, 'regional_snapshot_sum')"
             )
         )
-    page = HourlyLoadReader(legacy_upgraded_engine).list(
+    page = DatasetLister(legacy_upgraded_engine, HOURLY_LOAD).list(
         {
             "start": "2026-09-20T10:00:00+08:00",
             "end": "2026-09-20T12:00:00+08:00",
@@ -128,12 +128,12 @@ def test_hourly_load_gaps_only_include_completed_hours_inside_the_window(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch, hours, missing
 ) -> None:
     monkeypatch.setattr(
-        "shiro_mlops.service.data_explorer.completeness.now_taiwan",
+        "shiro_mlops.service.data_explorer.dataset_query.now_taiwan",
         lambda: datetime(2026, 9, 20, 12, 15),
     )
     _upsert_hours(test_repo, [datetime(2026, 9, 20, hour) for hour in hours])
 
-    page = HourlyLoadReader(test_repo.engine).list(
+    page = DatasetLister(test_repo.engine, HOURLY_LOAD).list(
         {"start": "2026-09-20T09:15:00+08:00", "end": "2026-09-20T13:15:00+08:00"}
     )
 
@@ -148,7 +148,7 @@ def test_hourly_load_reader_filters_subject_and_traverses_next_page(
     hours = [latest - timedelta(hours=offset) for offset in (2, 1, 0)]
     _upsert_hours(test_repo, hours)
     _upsert_hours(test_repo, hours, subject="north")
-    reader = HourlyLoadReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, HOURLY_LOAD)
     params = {
         "start": rfc3339(latest - timedelta(hours=2)),
         "end": rfc3339(latest),
@@ -175,7 +175,7 @@ def test_hourly_load_reader_rejects_invalid_window_and_cursor(
     """無效時間窗為 query 錯誤；不相容 cursor 必須拒絕。"""
     latest = datetime.now(TAIWAN).replace(tzinfo=None, minute=0, second=0, microsecond=0)
     _upsert_hours(test_repo, [latest - timedelta(hours=1), latest])
-    reader = HourlyLoadReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, HOURLY_LOAD)
     params = {
         "start": rfc3339(latest - timedelta(hours=1)),
         "end": rfc3339(latest),
@@ -204,12 +204,12 @@ def test_hourly_load_reader_rejects_nonscalar_cursor_key(
     params = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     cursor = encode_cursor(
         dataset="hourly_load",
-        filters=ExplorerQuery.from_params("hourly_load", params).filters,
+        filters=ExplorerQuery.from_params(HOURLY_LOAD, params).filters,
         key={"time": "2026-08-01T12:00:00+08:00", "subject": subject},
     )
 
     with pytest.raises(CursorError, match="Invalid cursor key"):
-        HourlyLoadReader(test_repo.engine).list({**params, "cursor": cursor})
+        DatasetLister(test_repo.engine, HOURLY_LOAD).list({**params, "cursor": cursor})
 
 
 @pytest.mark.parametrize("time_key", [0, 1758499200.5, True])
@@ -219,9 +219,9 @@ def test_hourly_load_reader_rejects_non_string_cursor_time_key(
     params = {"start": "2026-08-01T00:00:00+08:00", "end": "2026-08-02T00:00:00+08:00"}
     cursor = encode_cursor(
         dataset="hourly_load",
-        filters=ExplorerQuery.from_params("hourly_load", params).filters,
+        filters=ExplorerQuery.from_params(HOURLY_LOAD, params).filters,
         key={"time": time_key, "subject": "nationwide"},
     )
 
     with pytest.raises(CursorError, match="Invalid cursor key"):
-        HourlyLoadReader(test_repo.engine).list({**params, "cursor": cursor})
+        DatasetLister(test_repo.engine, HOURLY_LOAD).list({**params, "cursor": cursor})

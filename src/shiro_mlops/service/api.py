@@ -2,17 +2,14 @@
 
 import logging
 import operator
-from collections.abc import AsyncGenerator, Callable, Iterable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache, reduce
-from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, create_model
-from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import JSONResponse
 
 from shiro_mlops import __version__
@@ -22,6 +19,11 @@ from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
+from shiro_mlops.service.served_tasks import (
+    ServedTasks,
+    ServingFailedError,
+    ServingUnavailableError,
+)
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import (
     DYNAMIC_HORIZON_FORECAST,
@@ -29,51 +31,10 @@ from shiro_mlops.tasks.deployed import (
     deployed_task,
     deployed_tasks,
 )
-from shiro_mlops.tasks.model_store import load_model
-from shiro_mlops.tasks.runner import (
-    MODEL_NOT_LOADED_REASON,
-    PredictionOutcome,
-    Readiness,
-    TaskNotReady,
-    TaskRuntime,
-    TaskUnavailableError,
-    check_task_ready,
-    predict_task,
-)
+from shiro_mlops.tasks.runner import PredictionOutcome
 from shiro_mlops.tasks.types import get_task_type
-from shiro_mlops.tasks.types.base import TaskModel, WeatherEchoingItem
+from shiro_mlops.tasks.types.base import WeatherEchoingItem
 
-
-class ModelStore:
-    """In-memory models of the deployed tasks, keyed by task id; untrained tasks are absent.
-
-    ``load_errors`` holds, per task whose model failed to load at startup, the
-    reason served instead of the untrained one, so a failure never passes for
-    a task not trained yet.
-    """
-
-    def __init__(self) -> None:
-        self.models: dict[str, TaskModel] = {}
-        self.load_errors: dict[str, str] = {}
-
-    def record_loaded(self, task_id: str, model: TaskModel | None) -> None:
-        """Keep the task's model; an untrained task (``None``) only clears an earlier failure."""
-        self.load_errors.pop(task_id, None)
-        if model is not None:
-            self.models[task_id] = model
-
-    def record_load_failure(self, task_id: str, error: Exception) -> None:
-        """Drop any earlier model so the task reports this failure instead of serving it."""
-        self.models.pop(task_id, None)
-        self.load_errors[task_id] = f"Model failed to load: {type(error).__name__}: {error}"
-
-    def missing_model_reason(self, task_id: str) -> str:
-        return self.load_errors.get(task_id, MODEL_NOT_LOADED_REASON)
-
-
-model_store = ModelStore()
-repository_store: TimeSeriesRepository | None = None
-request_clock: Callable[[], pd.Timestamp] = taiwan_now
 logger = logging.getLogger(__name__)
 WEATHER_SOURCES_FIELD = "weather_sources"
 
@@ -83,45 +44,23 @@ def _served_task() -> TaskDefinition:
     return deployed_task(DYNAMIC_HORIZON_FORECAST)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Ensure DB schema, fail fast on invalid task definitions, and load every task model."""
-    if settings.ENVIRONMENT != "test":
-        try:
-            from shiro_mlops.core.database import init_db
-
-            init_db()
-        except Exception:
-            logger.exception("Database initialization failed; readiness will remain unavailable.")
-
-    _load_task_models(deployed_tasks().values(), settings.models_dir)
-    yield
+def get_served_tasks(request: Request) -> ServedTasks:
+    return request.app.state.served_tasks
 
 
-def _load_task_models(tasks: Iterable[TaskDefinition], root: Path) -> None:
-    """A broken model leaves only its own task unserved; the other tasks still load."""
-    for task in tasks:
-        try:
-            model = load_model(root, task)
-        except Exception as error:
-            logger.exception("Could not load the %s model from %s.", task.task_id, root)
-            model_store.record_load_failure(task.task_id, error)
-        else:
-            model_store.record_loaded(task.task_id, model)
-
-
-app = FastAPI(
-    title="shiro-mlops Dynamic Horizon Load Forecasting API",
-    version=__version__,
-    lifespan=lifespan,
-)
-
-app.include_router(data_explorer_router)
+Served = Annotated[ServedTasks, Depends(get_served_tasks)]
+routes = APIRouter()
 
 
 class TaskModelHealth(BaseModel):
     task_type: str
     model_loaded: bool
+    model_sha256: str | None = Field(
+        description="sha256 of the model directory version being served; null without a model"
+    )
+    reason: str | None = Field(
+        description="Why no model serves: untrained or the load failure; null when loaded"
+    )
 
 
 class HealthResponse(BaseModel):
@@ -246,41 +185,44 @@ TaskPredictionResponse = reduce(
 )
 
 
-@app.get("/health", response_model=HealthResponse)
-def health_check() -> HealthResponse:
+@routes.get("/health", response_model=HealthResponse)
+def health_check(served: Served) -> HealthResponse:
     """Check API and per-task model health status."""
-    tasks = {
-        task_id: TaskModelHealth(
-            task_type=task.task_type, model_loaded=task_id in model_store.models
-        )
-        for task_id, task in deployed_tasks().items()
-    }
+    statuses = served.model_status()
     return HealthResponse(
         status="ok",
         version=__version__,
         environment=settings.ENVIRONMENT,
-        model_loaded=DYNAMIC_HORIZON_FORECAST in model_store.models,
-        tasks=tasks,
+        model_loaded=statuses[DYNAMIC_HORIZON_FORECAST].model_loaded,
+        tasks={
+            task_id: TaskModelHealth(
+                task_type=status.task_type,
+                model_loaded=status.model_loaded,
+                model_sha256=status.model_sha256,
+                reason=status.reason,
+            )
+            for task_id, status in statuses.items()
+        },
         data_explorer_enabled=is_data_explorer_enabled(),
     )
 
 
-@app.get("/ready", response_model=ReadyResponse)
-def readiness_check() -> ReadyResponse:
+@routes.get("/ready", response_model=ReadyResponse)
+def readiness_check(served: Served) -> ReadyResponse:
     """Report whether a model and full normal/degraded weather horizon are available."""
-    return _readiness(_served_task())
+    return _readiness(served, DYNAMIC_HORIZON_FORECAST)
 
 
-@app.get("/tasks/{task_id}/ready", response_model=ReadyResponse)
-def task_readiness_check(task_id: str) -> ReadyResponse:
+@routes.get("/tasks/{task_id}/ready", response_model=ReadyResponse)
+def task_readiness_check(task_id: str, served: Served) -> ReadyResponse:
     """Report whether one task can serve a full-horizon prediction now."""
-    return _readiness(_deployed_task_or_404(task_id))
+    return _readiness(served, _task_or_404(served, task_id).task_id)
 
 
-@app.post("/predict", response_model=PredictionResponse)
-def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
+@routes.post("/predict", response_model=PredictionResponse)
+def predict_dynamic_horizon(request: PredictionRequest, served: Served) -> PredictionResponse:
     """Predict dynamic horizon future power loads from persisted weather and load data."""
-    outcome = _predict(_served_task(), horizon_hours=request.horizon_hours)
+    outcome = _predict(served, DYNAMIC_HORIZON_FORECAST, horizon_hours=request.horizon_hours)
     rows = _prediction_rows(outcome)
     return PredictionResponse(
         status="success",
@@ -291,15 +233,17 @@ def predict_dynamic_horizon(request: PredictionRequest) -> PredictionResponse:
     )
 
 
-@app.post(
+@routes.post(
     "/tasks/{task_id}/predict",
     response_model=None,
     responses={200: {"model": TaskPredictionResponse}},
 )
-def predict_for_task(task_id: str, request: TaskPredictionRequest) -> TaskPredictionEnvelope:
+def predict_for_task(
+    task_id: str, request: TaskPredictionRequest, served: Served
+) -> TaskPredictionEnvelope:
     """Predict with one task; the prediction item schema depends on the task."""
-    task = _deployed_task_or_404(task_id)
-    outcome = _predict(task, horizon_hours=request.horizon_hours)
+    task = _task_or_404(served, task_id)
+    outcome = _predict(served, task.task_id, horizon_hours=request.horizon_hours)
     return _response_model(task)(
         status="success",
         task_id=task.task_id,
@@ -310,24 +254,17 @@ def predict_for_task(task_id: str, request: TaskPredictionRequest) -> TaskPredic
     )
 
 
-def _deployed_task_or_404(task_id: str) -> TaskDefinition:
+def _task_or_404(served: ServedTasks, task_id: str) -> TaskDefinition:
     try:
-        return deployed_task(task_id)
+        return served.task(task_id)
     except UnknownTaskError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
-def _readiness(task: TaskDefinition) -> ReadyResponse:
-    model = model_store.models.get(task.task_id)
-    if model is None:
-        return _not_ready(model_loaded=False, reason=model_store.missing_model_reason(task.task_id))
-    try:
-        readiness = check_task_ready(task, model, _runtime(), as_of=request_clock())
-    except Exception as error:
-        logger.exception("Readiness check failed for task %s", task.task_id)
-        readiness = Readiness(ready=False, reason=str(error))
+def _readiness(served: ServedTasks, task_id: str) -> ReadyResponse:
+    readiness = served.readiness(task_id)
     if not readiness.ready:
-        return _not_ready(model_loaded=True, reason=readiness.reason)
+        return _not_ready(model_loaded=readiness.model_loaded, reason=readiness.reason)
     return ReadyResponse(status="ready", mode=readiness.mode, model_loaded=True)
 
 
@@ -336,22 +273,14 @@ def _not_ready(*, model_loaded: bool, reason: str | None) -> JSONResponse:
     return JSONResponse(status_code=503, content=response.model_dump())
 
 
-def _predict(task: TaskDefinition, *, horizon_hours: int) -> PredictionOutcome:
-    """Run the task's prediction, mapping missing models and unavailable inputs to HTTP 503."""
-    model = model_store.models.get(task.task_id)
-    if model is None:
-        raise HTTPException(status_code=503, detail=model_store.missing_model_reason(task.task_id))
+def _predict(served: ServedTasks, task_id: str, *, horizon_hours: int) -> PredictionOutcome:
+    """Map an unavailable task to HTTP 503 and an unexpected failure to HTTP 500."""
     try:
-        return predict_task(
-            task, model, _runtime(), as_of=request_clock(), horizon_hours=horizon_hours
-        )
-    except (TaskUnavailableError, TaskNotReady) as error:
+        return served.predict(task_id, horizon_hours=horizon_hours)
+    except ServingUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    except SQLAlchemyError as error:
-        raise HTTPException(status_code=503, detail=f"Persistence unavailable: {error}") from error
-    except Exception as error:
-        logger.exception("Prediction failed for task %s", task.task_id)
-        raise HTTPException(status_code=500, detail=f"Prediction error: {error}") from error
+    except ServingFailedError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
 
 
 def _prediction_rows(outcome: PredictionOutcome) -> list[dict[str, object]]:
@@ -376,6 +305,54 @@ def _prediction_rows(outcome: PredictionOutcome) -> list[dict[str, object]]:
     ]
 
 
-def _runtime() -> TaskRuntime:
-    """Runner resources for this process, allowing tests to inject an isolated store."""
-    return TaskRuntime(repository=repository_store or TimeSeriesRepository())
+def create_app(
+    *, repository: TimeSeriesRepository | None = None, served_tasks: ServedTasks | None = None
+) -> FastAPI:
+    """Build the API; whatever is not injected is set up at startup from settings.
+
+    Inject ``repository`` together with ``served_tasks``: injected alone,
+    ``served_tasks`` reads through its own repository while the Data Explorer
+    gets the one startup builds. Invalid task definitions fail startup.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        app.state.repository = repository or _startup_repository()
+        app.state.served_tasks = served_tasks or ServedTasks.load(
+            deployed_tasks(),
+            settings.models_dir,
+            repository=app.state.repository,
+            clock=taiwan_now,
+        )
+        yield
+
+    app = FastAPI(
+        title="shiro-mlops Dynamic Horizon Load Forecasting API",
+        version=__version__,
+        lifespan=lifespan,
+    )
+    # WHY-NOT(repository): 注入的 repository 與 served_tasks 都在建構時放入 app.state，不等 lifespan。
+    # 未進入 lifespan 的 TestClient 也會呼叫端點；改等 lifespan 時，get_served_tasks
+    # 與營運資料檢視器的 _repository 讀 app.state 會拋 AttributeError。
+    if repository is not None:
+        app.state.repository = repository
+    if served_tasks is not None:
+        app.state.served_tasks = served_tasks
+    app.include_router(routes)
+    app.include_router(data_explorer_router)
+    return app
+
+
+def _startup_repository() -> TimeSeriesRepository:
+    """The schema is ensured once here, so requests do not rerun its DDL."""
+    if settings.ENVIRONMENT != "test":
+        try:
+            from shiro_mlops.core.database import init_db
+
+            init_db()
+        except Exception:
+            logger.exception("Database initialization failed; readiness will remain unavailable.")
+    return TimeSeriesRepository(auto_init=False)
+
+
+app = create_app()

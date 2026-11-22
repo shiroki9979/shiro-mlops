@@ -8,13 +8,14 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
-from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
-from shiro_mlops.service.data_explorer.power import (
-    NationalSupplyDemandReader,
-    RegionalSupplyDemandReader,
-    UnitGenerationReader,
+from shiro_mlops.service.data_explorer.datasets import (
+    NATIONAL_SUPPLY_DEMAND,
+    REGIONAL_SUPPLY_DEMAND,
+    UNIT_GENERATION,
 )
+from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from tests.helpers import (
+    DatasetLister,
     rfc3339,
     supply_demand_snapshot,
     unit_generation_snapshots,
@@ -28,7 +29,7 @@ from tests.scenarios.data_explorer_power import (
 
 def _freeze_clock(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
     """Missing slots stop at "now", so a fixed clock keeps the window's slots in the past."""
-    monkeypatch.setattr("shiro_mlops.service.data_explorer.completeness.now_taiwan", lambda: now)
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.dataset_query.now_taiwan", lambda: now)
 
 
 def test_national_reader_converts_mw_and_preserves_nullable_fields(
@@ -42,7 +43,7 @@ def test_national_reader_converts_mw_and_preserves_nullable_fields(
     )
     test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed))
 
-    page = NationalSupplyDemandReader(test_repo.engine).list(
+    page = DatasetLister(test_repo.engine, NATIONAL_SUPPLY_DEMAND).list(
         {"start": rfc3339(observed - timedelta(hours=1)), "end": rfc3339(observed)}
     )
     item = page.items[0]
@@ -82,7 +83,7 @@ def test_regional_reader_marks_incomplete_slots_and_filters_completeness(
         )
     )
     test_repo.upsert_regional_supply_demand_snapshots(rows)
-    reader = RegionalSupplyDemandReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, REGIONAL_SUPPLY_DEMAND)
     params = {"start": rfc3339(complete_slot), "end": rfc3339(observed), "limit": "50"}
 
     page = reader.list(params)
@@ -110,7 +111,7 @@ def test_unit_generation_reader_preserves_zero_and_nullable_fields(
     """機組零發電必須保留，契約允許空值不得被當成缺失。"""
     observed = datetime(2026, 9, 5, 17, 10)
     test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
-    reader = UnitGenerationReader(test_repo.engine)
+    reader = DatasetLister(test_repo.engine, UNIT_GENERATION)
     window = {
         "start": rfc3339(observed - timedelta(hours=1)),
         "end": rfc3339(observed),

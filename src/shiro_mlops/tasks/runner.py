@@ -60,7 +60,6 @@ from shiro_mlops.tasks.weighted_weather import (
     weighted_resolution,
 )
 
-MODEL_NOT_LOADED_REASON = "Model is not loaded or trained yet."
 OBSERVED_WEATHER_SOURCE = "station_observation"
 OBSERVED_AT_FIELD = "observed_at"
 TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
@@ -251,11 +250,9 @@ def monitor_task(
 
 
 def check_task_ready(
-    task: TaskDefinition, model: TaskModel | None, runtime: TaskRuntime, *, as_of: datetime
+    task: TaskDefinition, model: TaskModel, runtime: TaskRuntime, *, as_of: datetime
 ) -> Readiness:
-    """Whether a loaded model, a fresh load anchor, and full-horizon weather are all available."""
-    if model is None:
-        return Readiness(ready=False, reason=MODEL_NOT_LOADED_REASON)
+    """Whether a fresh load anchor and full-horizon weather are available to the model."""
     request = _readiness_request(task, runtime, as_of)
     try:
         data, weather = _prepare_prediction(request)

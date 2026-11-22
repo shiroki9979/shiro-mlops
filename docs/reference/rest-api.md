@@ -22,15 +22,21 @@
     "tasks": {
       "dynamic_horizon_forecast": {
         "task_type": "recursive_regression",
-        "model_loaded": true
+        "model_loaded": true,
+        "model_sha256": "3f6c…（64 字元）",
+        "reason": null
       },
       "high_load_alert": {
         "task_type": "direct_classification",
-        "model_loaded": false
+        "model_loaded": false,
+        "model_sha256": null,
+        "reason": "Model is not loaded or trained yet."
       },
       "load_pattern_anomaly": {
         "task_type": "unsupervised_reconstruction",
-        "model_loaded": true
+        "model_loaded": true,
+        "model_sha256": "9a01…（64 字元）",
+        "reason": null
       }
     },
     "data_explorer_enabled": true
@@ -39,6 +45,7 @@
 
 - 此端點只代表 process liveness，存活時固定回傳 HTTP 200；不得因模型或資料尚未就緒而改回 503。
 - `model_loaded` 為相容欄位，僅代表 `/predict` 所服務的動態視界預報任務模型；`tasks` 以 `task_id` 為鍵，逐一揭露每個已部署任務的任務類型與模型載入狀態。
+- `tasks.<task_id>.model_sha256` 為 API 啟動時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)），與已發布預報的 `model_sha256` 同一定義；沒有模型時為 `null`。`reason` 在沒有模型時說明原因，與該任務 `/ready` 的 `reason` 相同（未訓練或載入失敗，見 [§2](#2-就緒狀態檢查)）；模型已載入時為 `null`。
 - `data_explorer_enabled` 表示當前 process 是否開放 Data Explorer 讀取面（`ENVIRONMENT=local` 或 `DATA_EXPLORER_ENABLED=true`）。
 
 ## 2. 就緒狀態檢查
@@ -51,6 +58,7 @@
 - **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過任務設定 `[policies].stale_anchor_max_lag_hours`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
 - **模型**：API 啟動時依任務設定逐一載入 `DATA_DIR/models/<task_id>/`（[ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）；單一任務的模型目錄不存在或無法載入時，只有該任務維持 `not_ready`，其他任務照常服務。未訓練（模型目錄不存在）時 `reason` 為 `Model is not loaded or trained yet.`；載入失敗時 `reason` 為 `Model failed to load: <例外類型>: <訊息>`，完整 traceback 寫入日誌。兩者皆回傳 HTTP 503，該任務的 `/predict` 以同一字串作為 `detail`。既有 `DATA_DIR/model.joblib` 不載入，首次以新格式重新訓練前 `/ready` 維持 `not_ready`。任務設定無效時 API 啟動失敗。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
+- **資料庫**：API 啟動時確保一次 schema（`init_db`），之後所有 request 共用同一個 repository 與連線池，不再逐 request 執行 DDL。啟動時資料庫無法連線只記錄錯誤，API 之後不會自行補建 schema；資料庫恢復連線後即可讀取既有資料表。
 
 ## 3. 隨需動態視界負載預報
 
@@ -258,7 +266,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 機組發電的每個點是成員合成後再做時間聚合的值：同一時點、同一分組的機組先加總（`NULL` 略過、不當成 0；全部為 `NULL` 時為 `null`），`1h`／`1d` 再對這些合計取 `avg`、`min` 或 `max`。儲能負載的負值照常加總，因此總和會扣掉充電功率。`auto` 以序列數計算點數：7 天窗口依 12 種 `unit_type` 分組時 `raw` 合計 12,108 點，超過 10,000，解析為 `1h`。
 
 - **測站觀測**：觀測表沒有露點欄位，因此白名單不含露點；風向（`wind_direction_deg`）是方位角，平均值沒有意義，不列入。
-- **鄉鎮預報**：時間軸為 `valid_from`。沒有指定 `issued_at`、`source_updated_at` 也沒有開啟 `all_vintages` 時，釘選最新發布版本（有 `dataset_id` 時取該資料集的最新版本），每個 `geocode` 一條 series。沒有 `dataset_id` 時與 list 有一處不同：兩個資料集常共用同一個最新 `issued_at`，而 `F-D0047-091` 的 `source_updated_at` 通常晚幾十秒，list 依 `source_updated_at` 會選到 12 小時區間的一週預報；series 在共用最新 `issued_at` 的版本中優先取逐時的 `F-D0047-089`，再比 `source_updated_at`。list 的解析不變，兩者集中於同一處屬 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102) 的範圍，`group` 為 `{"geocode": ...}`。開啟 `all_vintages` 或指定版本篩選時，每個（`geocode`, `dataset_id`, `issued_at`）一條 series，`group` 帶這三個鍵；同一 `issued_at` 有多個更正版本時取 `source_updated_at` 最新者，有指定 `source_updated_at` 時改用該版本。兩個版本永不合併成同一條線。
+- **鄉鎮預報**：時間軸為 `valid_from`。沒有指定 `issued_at`、`source_updated_at` 也沒有開啟 `all_vintages` 時，釘選最新發布版本（有 `dataset_id` 時取該預報產品的最新版本），每個 `geocode` 一條 series。沒有 `dataset_id` 時與 list 有一處不同：兩個預報產品常共用同一個最新 `issued_at`，而 `F-D0047-091` 的 `source_updated_at` 通常晚幾十秒，list 依 `source_updated_at` 會選到 12 小時區間的一週預報；series 在共用最新 `issued_at` 的版本中優先取逐時的 `F-D0047-089`，再比 `source_updated_at`。list 的解析不變，兩者集中於同一處屬 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102) 的範圍，`group` 為 `{"geocode": ...}`。開啟 `all_vintages` 或指定版本篩選時，每個（`geocode`, `dataset_id`, `issued_at`）一條 series，`group` 帶這三個鍵；同一 `issued_at` 有多個更正版本時取 `source_updated_at` 最新者，有指定 `source_updated_at` 時改用該版本。兩個版本永不合併成同一條線。
 - **鄉鎮預報的同時間多列**：同一版本、同一 `geocode`、同一 `valid_from` 可能有逐時列與三小時降雨機率列，各自只帶部分欄位；`raw` 取每個欄位在該時點的值。
 
 #### CWA audit series

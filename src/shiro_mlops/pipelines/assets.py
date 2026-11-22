@@ -21,9 +21,9 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import (
-    CWAClient,
     CWAForecastRelease,
     CWAObservationBatch,
+    CWASource,
 )
 from shiro_mlops.data.hourly_actual_load import (
     ONE_HOUR,
@@ -35,30 +35,33 @@ from shiro_mlops.data.hourly_actual_load import (
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
-    TaipowerRegionalSupplyDemandClient,
+    RegionalSupplyDemandSource,
     TaipowerRegionalSupplyDemandSnapshot,
+    parse_regional_supply_demand_csv,
 )
 from shiro_mlops.data.taipower_supply_demand import (
-    TaipowerSupplyDemandClient,
+    SupplyDemandSource,
     TaipowerSupplyDemandSnapshot,
+    parse_supply_demand_payload,
     resolve_snapshot_observed_at,
 )
 from shiro_mlops.data.taipower_unit_generation import (
-    TaipowerUnitGenerationClient,
     TaipowerUnitGenerationSnapshot,
+    UnitGenerationSource,
+    parse_unit_generation_payload,
 )
 from shiro_mlops.features.feast_export import build_feast_feature_frames
-from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO, TaskPipelineNames
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import training_data_from_table
 
 FEAST_TASK_NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 FEAST_EXPORT_ASSET = f"{DYNAMIC_HORIZON_FORECAST}_feast_export"
 
-
-def _get_time_series_repo(context: AssetExecutionContext) -> TimeSeriesRepository:
-    """Retrieve TimeSeriesRepository from Dagster resources or instantiate default."""
-    return getattr(context.resources, "time_series_repo", None) or TimeSeriesRepository()
+CWA_SOURCE = "cwa_source"
+TAIPOWER_SUPPLY_DEMAND_SOURCE = "taipower_supply_demand_source"
+TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE = "taipower_regional_supply_demand_source"
+TAIPOWER_UNIT_GENERATION_SOURCE = "taipower_unit_generation_source"
 
 
 class SnapshotObservationConfig(Config):
@@ -87,13 +90,13 @@ TAIPOWER_REGIONAL_SNAPSHOT_RETRY_POLICY = RetryPolicy(
     name="raw_cwa_station_observation",
     group_name="ingestion",
     description="Fetch and persist canonical CWA station observations",
-    required_resource_keys={"time_series_repo"},
+    required_resource_keys={TIME_SERIES_REPO, CWA_SOURCE},
 )
 def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservationBatch:
     """Asset: canonical CWA station observation batch."""
-    client = CWAClient(api_key=settings.CWA_API_KEY)
-    batch = client.fetch_observation_batch(locations=settings.cwa_locations)
-    repository = _get_time_series_repo(context)
+    source: CWASource = getattr(context.resources, CWA_SOURCE)
+    batch = source.fetch_observation_batch(locations=settings.cwa_locations)
+    repository = getattr(context.resources, TIME_SERIES_REPO)
     persisted = repository.upsert_cwa_observation_batch(batch)
     context.log.info("Persisted %s canonical CWA station observations.", persisted)
     if batch.status != "complete":
@@ -106,16 +109,16 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
     name="raw_cwa_township_forecast",
     group_name="ingestion",
     description="Fetch and persist canonical CWA township forecast vintages",
-    required_resource_keys={"time_series_repo"},
+    required_resource_keys={TIME_SERIES_REPO, CWA_SOURCE},
 )
 def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecastRelease]:
     """Asset: canonical CWA township forecast releases for three-day and weekly products."""
-    client = CWAClient(api_key=settings.CWA_API_KEY)
-    repository = _get_time_series_repo(context)
+    source: CWASource = getattr(context.resources, CWA_SOURCE)
+    repository = getattr(context.resources, TIME_SERIES_REPO)
     releases: list[CWAForecastRelease] = []
     missing: dict[str, tuple[str, ...]] = {}
     for dataset_id in ("F-D0047-089", "F-D0047-091"):
-        release = client.fetch_forecast_release(dataset_id, locations=settings.cwa_locations)
+        release = source.fetch_forecast_release(dataset_id, locations=settings.cwa_locations)
         releases.append(release)
         if release.status != "complete":
             missing[dataset_id] = release.missing_geocodes
@@ -131,28 +134,29 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
 @asset(
     group_name="ingestion",
     description="Fetch current Taipower power supply-demand snapshot",
-    required_resource_keys={"time_series_repo"},
+    required_resource_keys={TIME_SERIES_REPO, TAIPOWER_SUPPLY_DEMAND_SOURCE},
 )
 def raw_taipower_supply_demand_snapshot(
     context: AssetExecutionContext,
     config: SnapshotObservationConfig,
 ) -> TaipowerSupplyDemandSnapshot:
     """Asset: Taipower supply-demand snapshot upserted by observation slot."""
-    client = TaipowerSupplyDemandClient(base_url=settings.TAIPOWER_SUPPLY_DEMAND_API_URL)
-    snapshot = client.fetch_snapshot(observed_at=resolve_snapshot_observed_at(config.observed_at))
+    observed_at = resolve_snapshot_observed_at(config.observed_at)
+    source: SupplyDemandSource = getattr(context.resources, TAIPOWER_SUPPLY_DEMAND_SOURCE)
+    snapshot = parse_supply_demand_payload(source.fetch_payload(), observed_at=observed_at)
     context.log.info(
         "Fetched supply-demand snapshot for observed_at=%s curr_load=%s",
         snapshot.observed_at.isoformat(),
         snapshot.curr_load_wan_kw,
     )
-    _get_time_series_repo(context).upsert_supply_demand_snapshot(snapshot)
+    getattr(context.resources, TIME_SERIES_REPO).upsert_supply_demand_snapshot(snapshot)
     return snapshot
 
 
 @asset(
     group_name="ingestion",
     description="Fetch current Taipower regional supply-demand snapshots",
-    required_resource_keys={"time_series_repo"},
+    required_resource_keys={TIME_SERIES_REPO, TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE},
     retry_policy=TAIPOWER_REGIONAL_SNAPSHOT_RETRY_POLICY,
 )
 def raw_taipower_regional_supply_demand_snapshot(
@@ -160,16 +164,17 @@ def raw_taipower_regional_supply_demand_snapshot(
     config: SnapshotObservationConfig,
 ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
     """Asset: regional supply-demand snapshots upserted by observation slot and region."""
-    client = TaipowerRegionalSupplyDemandClient(
-        base_url=settings.TAIPOWER_REGIONAL_SUPPLY_DEMAND_API_URL
+    observed_at = resolve_snapshot_observed_at(config.observed_at)
+    source: RegionalSupplyDemandSource = getattr(
+        context.resources, TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE
     )
-    snapshots = client.fetch_snapshots(observed_at=resolve_snapshot_observed_at(config.observed_at))
+    snapshots = parse_regional_supply_demand_csv(source.fetch_payload(), observed_at=observed_at)
     context.log.info(
         "Fetched %s regional supply-demand snapshots for observed_at=%s",
         len(snapshots),
         snapshots[0].observed_at.isoformat(),
     )
-    _get_time_series_repo(context).upsert_regional_supply_demand_snapshots(snapshots)
+    getattr(context.resources, TIME_SERIES_REPO).upsert_regional_supply_demand_snapshots(snapshots)
     return snapshots
 
 
@@ -186,7 +191,7 @@ def _latest_derived_hour(
 @asset(
     group_name="ingestion",
     description="Derive nationwide hourly actual load from regional supply-demand snapshots",
-    required_resource_keys={"time_series_repo"},
+    required_resource_keys={TIME_SERIES_REPO},
     deps=[raw_taipower_regional_supply_demand_snapshot],
 )
 def raw_taipower_load(
@@ -195,7 +200,7 @@ def raw_taipower_load(
 ) -> pd.DataFrame:
     """Asset: recompute recent hours and any after the latest derived hour, then upsert them."""
     evaluated_at = resolve_evaluation_time(config.evaluated_at)
-    repository = _get_time_series_repo(context)
+    repository = getattr(context.resources, TIME_SERIES_REPO)
     latest_derived_hour = _latest_derived_hour(
         repository, at_or_before=floor_to_hour(evaluated_at) - ONE_HOUR
     )
@@ -237,21 +242,22 @@ def raw_taipower_load(
 @asset(
     group_name="ingestion",
     description="Fetch current Taipower unit net-generation snapshots",
-    required_resource_keys={"time_series_repo"},
+    required_resource_keys={TIME_SERIES_REPO, TAIPOWER_UNIT_GENERATION_SOURCE},
 )
 def raw_taipower_unit_generation_snapshot(
     context: AssetExecutionContext,
     config: SnapshotObservationConfig,
 ) -> list[TaipowerUnitGenerationSnapshot]:
     """Asset: unit net-generation snapshots upserted by observation slot and unit identity."""
-    client = TaipowerUnitGenerationClient(base_url=settings.TAIPOWER_UNIT_GENERATION_API_URL)
-    snapshots = client.fetch_snapshots(observed_at=resolve_snapshot_observed_at(config.observed_at))
+    observed_at = resolve_snapshot_observed_at(config.observed_at)
+    source: UnitGenerationSource = getattr(context.resources, TAIPOWER_UNIT_GENERATION_SOURCE)
+    snapshots = parse_unit_generation_payload(source.fetch_payload(), observed_at=observed_at)
     context.log.info(
         "Fetched %s unit-generation snapshots for observed_at=%s",
         len(snapshots),
         snapshots[0].observed_at.isoformat(),
     )
-    _get_time_series_repo(context).upsert_unit_generation_snapshots(snapshots)
+    getattr(context.resources, TIME_SERIES_REPO).upsert_unit_generation_snapshots(snapshots)
     return snapshots
 
 
