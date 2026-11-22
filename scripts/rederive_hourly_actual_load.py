@@ -19,10 +19,9 @@ from datetime import datetime
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.database import get_timescale_engine
 from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.hourly_actual_load import HourWindow, floor_to_hour
-from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
+from shiro_mlops.data.repository import TimeSeriesRepository
 
 CLI_DESCRIPTION = (
     "Derive hourly actual load for stored regional snapshots the scheduled asset never covered."
@@ -52,7 +51,7 @@ def _reject_unfinished_window(start: datetime, end: datetime) -> None:
 def main(argv: list[str] | None = None, engine: Engine | None = None) -> int:
     args = _parse_args(argv)
     _reject_unfinished_window(args.start, args.end)
-    store = HourlyActualLoadStore(engine or get_timescale_engine())
+    store = TimeSeriesRepository(engine=engine).hourly_actual_load_store
     hours = store.rederive(
         HourWindow(start=args.start, end=args.end),
         min_samples=args.min_samples,

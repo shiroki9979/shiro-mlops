@@ -17,7 +17,7 @@ from shiro_mlops.data.taipower_regional_supply_demand import (
 from shiro_mlops.data.taipower_regional_supply_demand_repository import (
     TaipowerRegionalSupplyDemandRepository,
 )
-from tests.helpers import insert_legacy_load_row
+from tests.helpers import create_legacy_load_table, insert_legacy_load_row
 
 REGION_LOADS_WAN_KW = {"北部": 1000.0, "中部": 800.0, "南部": 1100.0, "東部": 100.0}
 NATIONWIDE_MW = 30000.0  # 3000 萬瓩
@@ -131,6 +131,23 @@ def test_cli_prints_the_hours_it_wrote(
         "Wrote 1 hours in [2026-09-06T00:00:00, 2026-09-07T00:00:00)."
     )
     assert _stored_rows(sqlite_engine) == {HOUR_A: (NATIONWIDE_MW, DERIVED_SOURCE)}
+
+
+def test_cli_migrates_a_load_table_that_predates_the_source_and_subject_columns(
+    sqlite_engine: Engine,
+) -> None:
+    with sqlite_engine.begin() as connection:
+        connection.execute(text("DROP TABLE raw_taipower_load"))
+    create_legacy_load_table(sqlite_engine)
+    _store_snapshots(sqlite_engine, [HOUR_A])
+
+    exit_code = main(WINDOW_ARGS, engine=sqlite_engine)
+
+    assert exit_code == 0
+    assert _stored_rows(sqlite_engine) == {
+        datetime(2026, 8, 20, 8): (26500.0, None),
+        HOUR_A: (NATIONWIDE_MW, DERIVED_SOURCE),
+    }
 
 
 def test_cli_rejects_a_window_ending_after_the_latest_completed_hour() -> None:
