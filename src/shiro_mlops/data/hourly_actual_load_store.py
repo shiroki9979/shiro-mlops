@@ -1,8 +1,8 @@
-"""The single owner of ``raw_taipower_load``: nationwide hourly actual load (ADR-0008).
+"""Nationwide hourly actual load persisted in ``raw_taipower_load`` (ADR-0008).
 
-Every row this store writes carries the derived source, and every read selects only
-that source, so d015046-era rows (NULL source) and other sources never mix into the
-derived series. Callers pass and receive Taiwan-local hours in a ``datetime`` column;
+Every row this store writes carries the derived source, and every read it offers
+selects only that source, so d015046-era rows (NULL source) and other sources never
+mix into the derived series. Callers pass and receive Taiwan-local hours in a ``datetime`` column;
 the stored column name ``time`` stays inside this module.
 """
 
