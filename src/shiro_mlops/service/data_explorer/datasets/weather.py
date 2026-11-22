@@ -20,7 +20,7 @@ from shiro_mlops.service.data_explorer.datasets.definition import (
 )
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
-from shiro_mlops.service.data_explorer.series import SeriesField, SeriesSpec
+from shiro_mlops.service.data_explorer.series import SeriesField, SeriesOptions
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import (
     format_row_time,
@@ -30,6 +30,38 @@ from shiro_mlops.service.data_explorer.values import (
 )
 
 HOURLY = timedelta(hours=1)
+
+
+class ObservationSeriesField(StrEnum):
+    """Numeric observation fields a series request may name.
+
+    Wind direction is left out: an average of compass bearings is not a direction.
+    """
+
+    TEMPERATURE_C = "temperature_c"
+    RELATIVE_HUMIDITY_PCT = "relative_humidity_pct"
+    AIR_PRESSURE_HPA = "air_pressure_hpa"
+    PRECIPITATION_MM = "precipitation_mm"
+    WIND_SPEED_M_S = "wind_speed_m_s"
+
+
+OBSERVATION_FIELD_UNITS = {
+    ObservationSeriesField.TEMPERATURE_C: "°C",
+    ObservationSeriesField.RELATIVE_HUMIDITY_PCT: "%",
+    ObservationSeriesField.AIR_PRESSURE_HPA: "hPa",
+    ObservationSeriesField.PRECIPITATION_MM: "mm",
+    ObservationSeriesField.WIND_SPEED_M_S: "m/s",
+}
+
+OBSERVATION_SERIES = SeriesOptions(
+    fields={
+        field.value: SeriesField(sql=field.value, unit=unit)
+        for field, unit in OBSERVATION_FIELD_UNITS.items()
+    },
+    group_columns=("station_id",),
+    default_fields=(ObservationSeriesField.TEMPERATURE_C.value,),
+)
+"""Stations are never combined, so there is no `group_by`: one series per station."""
 
 
 def _observation_item(row: Row) -> dict[str, Any]:
@@ -79,6 +111,7 @@ CWA_OBSERVATIONS = Dataset(
     project=each(_observation_item),
     filters=(Exact(name="station_id"),),
     list_gaps=_observation_gaps,
+    series=OBSERVATION_SERIES,
 )
 
 
@@ -168,6 +201,86 @@ class LatestForecastVersion:
             query_params.update(_version_filters(latest))
         return query_params
 
+    def plan_series(
+        self, db: ExplorerDb, options: SeriesOptions, params: dict[str, str]
+    ) -> tuple[SeriesOptions, dict[str, str]]:
+        """Resolve the forecast version the way the list does, so chart and table agree.
+
+        Without an explicit version the latest release is pinned and each geocode is one
+        series; unlike the list, the three-day product wins when both products share the
+        newest issue. Otherwise (`all_vintages` or a version filter) one series per geocode
+        and issue, drawn from the issue's newest correction unless `source_updated_at`
+        names one; two releases are never merged into one line.
+        """
+        if _has_explicit_forecast_version(params):
+            planned = replace(
+                options,
+                group_columns=FORECAST_VINTAGE_COLUMNS,
+                filters=_forecast_vintage_series_filters,
+            )
+            return planned, dict(params)
+        pinned = dict(params)
+        latest = latest_forecast_version(
+            db,
+            params.get("dataset_id"),
+            preferred_dataset_id=SERIES_PREFERRED_FORECAST_DATASET_ID,
+        )
+        if latest is not None:
+            pinned.update(_version_filters(latest))
+        return replace(options, filters=CWA_FORECASTS.series_clauses), pinned
+
+
+class ForecastSeriesField(StrEnum):
+    """Numeric township forecast fields a series request may name."""
+
+    TEMPERATURE_C = "temperature_c"
+    APPARENT_TEMPERATURE_C = "apparent_temperature_c"
+    DEW_POINT_C = "dew_point_c"
+    RELATIVE_HUMIDITY_PCT = "relative_humidity_pct"
+    PROBABILITY_OF_PRECIPITATION_PCT = "probability_of_precipitation_pct"
+    WIND_SPEED_M_S = "wind_speed_m_s"
+
+
+FORECAST_FIELD_UNITS = {
+    ForecastSeriesField.TEMPERATURE_C: "°C",
+    ForecastSeriesField.APPARENT_TEMPERATURE_C: "°C",
+    ForecastSeriesField.DEW_POINT_C: "°C",
+    ForecastSeriesField.RELATIVE_HUMIDITY_PCT: "%",
+    ForecastSeriesField.PROBABILITY_OF_PRECIPITATION_PCT: "%",
+    ForecastSeriesField.WIND_SPEED_M_S: "m/s",
+}
+FORECAST_VINTAGE_COLUMNS = ("geocode", "dataset_id", "issued_at")
+SERIES_PREFERRED_FORECAST_DATASET_ID = "F-D0047-089"
+"""Both products usually share `issued_at` and the weekly one is updated seconds later, so
+picking by `source_updated_at` alone would chart the 12-hourly weekly forecast by default."""
+NEWEST_CORRECTION_SQL = """
+    (dataset_id, issued_at, geocode, source_updated_at) IN (
+        SELECT dataset_id, issued_at, geocode, MAX(source_updated_at)
+        FROM {table}
+        {where}
+        GROUP BY dataset_id, issued_at, geocode
+    )
+"""
+
+
+def _unplanned_forecast_filters(db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
+    raise RuntimeError("forecast series filters are bound by LatestForecastVersion.plan_series")
+
+
+FORECAST_SERIES = SeriesOptions(
+    fields={
+        field.value: SeriesField(sql=field.value, unit=unit)
+        for field, unit in FORECAST_FIELD_UNITS.items()
+    },
+    group_columns=("geocode",),
+    filters=_unplanned_forecast_filters,
+    gap_fill=False,
+    default_fields=(ForecastSeriesField.TEMPERATURE_C.value,),
+    instant_group_columns=frozenset({"issued_at"}),
+    rows_share_time=True,
+)
+"""Forecast series template; `LatestForecastVersion.plan_series` binds its filters and grouping."""
+
 
 def _forecast_item(row: Row) -> dict[str, Any]:
     return {
@@ -225,120 +338,8 @@ CWA_FORECASTS = Dataset(
         Flag(name="all_vintages"),
     ),
     resolve_version=LatestForecastVersion(),
+    series=FORECAST_SERIES,
 )
-
-
-class ObservationSeriesField(StrEnum):
-    """Numeric observation fields a series request may name.
-
-    Wind direction is left out: an average of compass bearings is not a direction.
-    """
-
-    TEMPERATURE_C = "temperature_c"
-    RELATIVE_HUMIDITY_PCT = "relative_humidity_pct"
-    AIR_PRESSURE_HPA = "air_pressure_hpa"
-    PRECIPITATION_MM = "precipitation_mm"
-    WIND_SPEED_M_S = "wind_speed_m_s"
-
-
-OBSERVATION_FIELD_UNITS = {
-    ObservationSeriesField.TEMPERATURE_C: "°C",
-    ObservationSeriesField.RELATIVE_HUMIDITY_PCT: "%",
-    ObservationSeriesField.AIR_PRESSURE_HPA: "hPa",
-    ObservationSeriesField.PRECIPITATION_MM: "mm",
-    ObservationSeriesField.WIND_SPEED_M_S: "m/s",
-}
-
-OBSERVATION_SERIES = SeriesSpec(
-    dataset=CWA_OBSERVATIONS,
-    fields={
-        field.value: SeriesField(sql=field.value, unit=unit)
-        for field, unit in OBSERVATION_FIELD_UNITS.items()
-    },
-    group_columns=("station_id",),
-    default_fields=(ObservationSeriesField.TEMPERATURE_C.value,),
-)
-"""Stations are never combined, so there is no `group_by`: one series per station."""
-
-
-class ForecastSeriesField(StrEnum):
-    """Numeric township forecast fields a series request may name."""
-
-    TEMPERATURE_C = "temperature_c"
-    APPARENT_TEMPERATURE_C = "apparent_temperature_c"
-    DEW_POINT_C = "dew_point_c"
-    RELATIVE_HUMIDITY_PCT = "relative_humidity_pct"
-    PROBABILITY_OF_PRECIPITATION_PCT = "probability_of_precipitation_pct"
-    WIND_SPEED_M_S = "wind_speed_m_s"
-
-
-FORECAST_FIELD_UNITS = {
-    ForecastSeriesField.TEMPERATURE_C: "°C",
-    ForecastSeriesField.APPARENT_TEMPERATURE_C: "°C",
-    ForecastSeriesField.DEW_POINT_C: "°C",
-    ForecastSeriesField.RELATIVE_HUMIDITY_PCT: "%",
-    ForecastSeriesField.PROBABILITY_OF_PRECIPITATION_PCT: "%",
-    ForecastSeriesField.WIND_SPEED_M_S: "m/s",
-}
-FORECAST_VINTAGE_COLUMNS = ("geocode", "dataset_id", "issued_at")
-SERIES_PREFERRED_FORECAST_DATASET_ID = "F-D0047-089"
-"""Both products usually share `issued_at` and the weekly one is updated seconds later, so
-picking by `source_updated_at` alone would chart the 12-hourly weekly forecast by default."""
-NEWEST_CORRECTION_SQL = """
-    (dataset_id, issued_at, geocode, source_updated_at) IN (
-        SELECT dataset_id, issued_at, geocode, MAX(source_updated_at)
-        FROM {table}
-        {where}
-        GROUP BY dataset_id, issued_at, geocode
-    )
-"""
-
-
-def _unplanned_forecast_filters(db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
-    raise RuntimeError("forecast series filters are bound by plan_forecast_series")
-
-
-FORECAST_SERIES = SeriesSpec(
-    dataset=CWA_FORECASTS,
-    fields={
-        field.value: SeriesField(sql=field.value, unit=unit)
-        for field, unit in FORECAST_FIELD_UNITS.items()
-    },
-    group_columns=("geocode",),
-    filters=_unplanned_forecast_filters,
-    gap_fill=False,
-    default_fields=(ForecastSeriesField.TEMPERATURE_C.value,),
-    instant_group_columns=frozenset({"issued_at"}),
-    rows_share_time=True,
-)
-"""Forecast series template; `plan_forecast_series` binds its filters and grouping."""
-
-
-def plan_forecast_series(
-    db: ExplorerDb, params: Mapping[str, str]
-) -> tuple[SeriesSpec, dict[str, str]]:
-    """Resolve the forecast version the way the list does, so chart and table agree.
-
-    Without an explicit version the latest release is pinned and each geocode is one series;
-    unlike the list, the three-day product wins when both products share the newest issue.
-    Otherwise (`all_vintages` or a version filter) one series per geocode and issue, drawn
-    from the issue's newest correction unless `source_updated_at` names one; two releases
-    are never merged into one line.
-    """
-    if _has_explicit_forecast_version(params):
-        spec = replace(
-            FORECAST_SERIES,
-            group_columns=FORECAST_VINTAGE_COLUMNS,
-            filters=_forecast_vintage_series_filters,
-        )
-        return spec, dict(params)
-    pinned = dict(params)
-    latest = latest_forecast_version(
-        db, params.get("dataset_id"), preferred_dataset_id=SERIES_PREFERRED_FORECAST_DATASET_ID
-    )
-    if latest is not None:
-        pinned.update(_version_filters(latest))
-    return replace(FORECAST_SERIES, filters=CWA_FORECASTS.series_clauses), pinned
 
 
 def _forecast_vintage_series_filters(db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:

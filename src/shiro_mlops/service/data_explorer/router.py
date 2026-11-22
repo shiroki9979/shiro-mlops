@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -26,15 +26,7 @@ from shiro_mlops.service.data_explorer.datasets import (
     UNIT_GENERATION,
     Dataset,
 )
-from shiro_mlops.service.data_explorer.datasets.audits import (
-    FORECAST_AUDIT_SERIES,
-    OBSERVATION_AUDIT_SERIES,
-)
 from shiro_mlops.service.data_explorer.datasets.power import (
-    HOURLY_LOAD_SERIES,
-    NATIONAL_SERIES,
-    REGIONAL_SERIES,
-    UNIT_GENERATION_SERIES,
     HourlyLoadSeriesField,
     NationalSeriesField,
     RegionalSeriesField,
@@ -42,31 +34,18 @@ from shiro_mlops.service.data_explorer.datasets.power import (
     UnitSeriesField,
 )
 from shiro_mlops.service.data_explorer.datasets.weather import (
-    FORECAST_SERIES,
-    OBSERVATION_SERIES,
     ForecastSeriesField,
     ObservationSeriesField,
-    plan_forecast_series,
 )
-from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError, ExplorerQueryError
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
     StatusResponse,
 )
-from shiro_mlops.service.data_explorer.series import (
-    Agg,
-    Bucket,
-    SeriesReader,
-    SeriesRequest,
-    SeriesSpec,
-    TooManyPointsError,
-)
+from shiro_mlops.service.data_explorer.series import Agg, Bucket, TooManyPointsError
 
 router = APIRouter(prefix="/data", tags=["data-explorer"])
-
-SeriesPlan = Callable[[ExplorerDb, dict[str, str]], tuple[SeriesSpec, dict[str, str]]]
 
 
 def _repository(request: Request) -> TimeSeriesRepository:
@@ -102,24 +81,21 @@ def _run_list(request: Request, dataset: Dataset) -> ListEnvelope:
 
 def _run_series(
     request: Request,
-    spec: SeriesSpec,
+    dataset: Dataset,
     *,
     fields: Sequence[StrEnum] | None = None,
     bucket: Bucket,
     agg: Agg | None = None,
-    plan: SeriesPlan | None = None,
 ) -> SeriesResponse:
-    """Read a series; `plan` lets a dataset specialise its spec from the request first."""
     _ensure_enabled()
     try:
-        engine = _engine(request)
-        params = _series_query_params(request)
-        if plan is not None:
-            spec, params = plan(ExplorerDb(engine), params)
-        series_request = SeriesRequest.build(
-            spec, params, fields=_field_names(fields), bucket=bucket, agg=agg
+        return DatasetQuery(_engine(request)).series(
+            dataset,
+            _series_query_params(request),
+            fields=_field_names(fields),
+            bucket=bucket,
+            agg=agg,
         )
-        return SeriesReader(engine, spec).read(series_request)
     except TooManyPointsError as exc:
         suggested = exc.suggested_bucket.value if exc.suggested_bucket else None
         raise HTTPException(
@@ -183,7 +159,7 @@ def hourly_load_series(
     del start, end, subject
     return _run_series(
         request,
-        HOURLY_LOAD_SERIES,
+        HOURLY_LOAD,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -214,7 +190,7 @@ def national_supply_demand_series(
     del start, end
     return _run_series(
         request,
-        NATIONAL_SERIES,
+        NATIONAL_SUPPLY_DEMAND,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -245,7 +221,7 @@ def regional_supply_demand_series(
     del start, end, region
     return _run_series(
         request,
-        REGIONAL_SERIES,
+        REGIONAL_SUPPLY_DEMAND,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -280,7 +256,7 @@ def unit_generation_series(
     del start, end, unit_type, unit_name, group_by
     return _run_series(
         request,
-        UNIT_GENERATION_SERIES,
+        UNIT_GENERATION,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -311,7 +287,7 @@ def observation_series(
     del start, end, station_id
     return _run_series(
         request,
-        OBSERVATION_SERIES,
+        CWA_OBSERVATIONS,
         fields=fields,
         bucket=bucket,
         agg=agg,
@@ -349,11 +325,10 @@ def forecast_series(
     del start, end, dataset_id, geocode, issued_at, source_updated_at, all_vintages
     return _run_series(
         request,
-        FORECAST_SERIES,
+        CWA_FORECASTS,
         fields=fields,
         bucket=bucket,
         agg=agg,
-        plan=plan_forecast_series,
     )
 
 
@@ -385,7 +360,7 @@ def observation_audit_series(
     or `agg` are rejected with 422.
     """
     del start, end, status, missing_station_id
-    return _run_series(request, OBSERVATION_AUDIT_SERIES, bucket=bucket)
+    return _run_series(request, CWA_OBSERVATION_AUDITS, bucket=bucket)
 
 
 @router.get("/audits/cwa-forecasts/series", response_model=SeriesResponse)
@@ -405,4 +380,4 @@ def forecast_audit_series(
     Buckets without versions are omitted, and `fields` or `agg` are rejected with 422.
     """
     del start, end, dataset_id, status, missing_geocode
-    return _run_series(request, FORECAST_AUDIT_SERIES, bucket=bucket)
+    return _run_series(request, CWA_FORECAST_AUDITS, bucket=bucket)
