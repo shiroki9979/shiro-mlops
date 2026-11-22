@@ -73,7 +73,7 @@ def test_list_accepts_the_shared_parameters_and_every_declared_filter(dataset: D
         **{item.name: _valid_value(item) for item in dataset.filters},
     }
 
-    assert validate_list_request(dataset, params) == params
+    assert validate_list_request(dataset, params).params == params
 
 
 @pytest.mark.parametrize("dataset", DATASETS.values(), ids=lambda dataset: dataset.id)
@@ -98,7 +98,9 @@ def test_a_newly_declared_filter_is_accepted_by_the_list_without_any_other_chang
     """新增篩選只需宣告在資料集定義上，list 就接受它；沒有另一份白名單要同步。"""
     extended = replace(HOURLY_LOAD, filters=(*HOURLY_LOAD.filters, Exact(name="new_filter")))
 
-    assert validate_list_request(extended, {**WINDOW, "new_filter": "x"})["new_filter"] == "x"
+    assert (
+        validate_list_request(extended, {**WINDOW, "new_filter": "x"}).params["new_filter"] == "x"
+    )
     with pytest.raises(ExplorerQueryError):
         validate_list_request(HOURLY_LOAD, {**WINDOW, "new_filter": "x"})
 

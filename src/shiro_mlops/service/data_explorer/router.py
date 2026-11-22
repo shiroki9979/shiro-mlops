@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.cursor import CursorError
-from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery, validate_list_request
+from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
 from shiro_mlops.service.data_explorer.datasets import (
     CWA_FORECAST_AUDITS,
     CWA_FORECASTS,
@@ -68,9 +68,7 @@ def _query_params(request: Request) -> dict[str, str]:
 def _run_list(request: Request, dataset: Dataset) -> ListEnvelope:
     _ensure_enabled()
     try:
-        query = _query_params(request)
-        validate_list_request(dataset, query)
-        return DatasetQuery(_engine(request)).list(dataset, query)
+        return DatasetQuery(_engine(request)).list(dataset, _query_params(request))
     except CursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ExplorerQueryError as exc:
