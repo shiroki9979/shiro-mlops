@@ -13,25 +13,23 @@ from typing import Any
 
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.taipower_regional_supply_demand import REGIONAL_SUPPLY_DEMAND_REGIONS
-from shiro_mlops.service.data_explorer.completeness import (
-    gaps_until_now,
-    hourly_gaps,
-    missing_regional_identifiers,
-    regional_gaps,
-    regional_slot_map,
-    ten_minute_gaps,
-)
 from shiro_mlops.service.data_explorer.datasets.definition import (
+    AlwaysComplete,
     Clauses,
     Dataset,
     Exact,
+    GapMembers,
+    GapPolicy,
+    LastCompletedHours,
+    LatestSlot,
     OneOf,
+    Page,
     Pinned,
     Row,
+    TrailingWindow,
     each,
 )
 from shiro_mlops.service.data_explorer.db import ExplorerDb
-from shiro_mlops.service.data_explorer.query import ExplorerQuery
 from shiro_mlops.service.data_explorer.series import SeriesField, SeriesOptions
 from shiro_mlops.service.data_explorer.values import (
     WAN_KW_TO_MW,
@@ -46,6 +44,8 @@ POWER_UNIT = "MW"
 PERCENT_UNIT = "%"
 TEN_MINUTES = timedelta(minutes=10)
 COMPLETENESS_VALUES = ("complete", "incomplete")
+LOAD_HOUR_DUE_AFTER = timedelta(hours=1)
+"""An hourly load row labels the hour it summarises, so the hour is due once it has ended."""
 
 
 class HourlyLoadSeriesField(StrEnum):
@@ -57,7 +57,7 @@ class HourlyLoadSeriesField(StrEnum):
 HOURLY_LOAD_SERIES = SeriesOptions(
     fields={HourlyLoadSeriesField.LOAD_MW.value: SeriesField(sql="load_mw", unit=POWER_UNIT)},
     group_columns=("subject",),
-    slot_lag=timedelta(hours=1),
+    slot_lag=LOAD_HOUR_DUE_AFTER,
 )
 
 
@@ -156,10 +156,6 @@ def _hourly_load_item(row: Row) -> dict[str, Any]:
     }
 
 
-def _hourly_load_gaps(db: ExplorerDb, query: ExplorerQuery) -> list[str]:
-    return hourly_gaps(db, query.window, query.filters.get("subject"))
-
-
 HOURLY_LOAD = Dataset(
     id="hourly_load",
     label="逐時用電負載",
@@ -172,9 +168,10 @@ HOURLY_LOAD = Dataset(
     instant_columns=frozenset({"time"}),
     list_columns=("time", "subject", "load_mw", "created_at"),
     project=each(_hourly_load_item),
+    status=LastCompletedHours(hours=24),
     pinned=(Pinned("source = :source", {"source": REGIONAL_SNAPSHOT_SUM_SOURCE}),),
-    filters=(Exact(name="subject"),),
-    list_gaps=_hourly_load_gaps,
+    filters=(Exact(name="subject", narrows_gaps=True),),
+    gaps=GapPolicy(slot_lag=LOAD_HOUR_DUE_AFTER),
     series=HOURLY_LOAD_SERIES,
 )
 
@@ -211,10 +208,6 @@ def _national_item(row: Row) -> dict[str, Any]:
     }
 
 
-def _national_gaps(db: ExplorerDb, query: ExplorerQuery) -> list[str]:
-    return gaps_until_now(query.window, lambda window: ten_minute_gaps(db, window))
-
-
 NATIONAL_SUPPLY_DEMAND = Dataset(
     id="national_supply_demand",
     label="全台供需",
@@ -247,7 +240,8 @@ NATIONAL_SUPPLY_DEMAND = Dataset(
         "created_at",
     ),
     project=each(_national_item),
-    list_gaps=_national_gaps,
+    status=TrailingWindow(span=timedelta(hours=24)),
+    gaps=GapPolicy(exact_instant=True),
     series=NATIONAL_SERIES,
 )
 
@@ -278,8 +272,7 @@ class SlotCompleteness(OneOf):
         return [clause], params
 
 
-def _regional_item(row: Row, present: set[str]) -> dict[str, Any]:
-    missing_regions = missing_regional_identifiers(present)
+def _regional_item(row: Row, missing_regions: list[str]) -> dict[str, Any]:
     return {
         "observed_at": format_row_time(row, "observed_at"),
         "region": row["region"],
@@ -294,15 +287,8 @@ def _regional_item(row: Row, present: set[str]) -> dict[str, Any]:
     }
 
 
-def _regional_page(db: ExplorerDb, query: ExplorerQuery, rows: list[Row]) -> list[dict[str, Any]]:
-    slot_regions = regional_slot_map(db, query.window)
-    return [
-        _regional_item(row, slot_regions.get(row_time(row, "observed_at"), set())) for row in rows
-    ]
-
-
-def _regional_gaps(db: ExplorerDb, query: ExplorerQuery) -> list[str]:
-    return gaps_until_now(query.window, lambda window: regional_gaps(db, window))
+def _regional_page(page: Page, rows: list[Row]) -> list[dict[str, Any]]:
+    return [_regional_item(row, page.missing_members(row_time(row, "observed_at"))) for row in rows]
 
 
 REGIONAL_SUPPLY_DEMAND = Dataset(
@@ -324,11 +310,15 @@ REGIONAL_SUPPLY_DEMAND = Dataset(
         "created_at",
     ),
     project=_regional_page,
+    status=LatestSlot(incomplete_href="/data/power/regional?completeness=incomplete"),
     filters=(
         OneOf(name="region", values=REGIONAL_SUPPLY_DEMAND_REGIONS),
         SlotCompleteness(name="completeness", values=COMPLETENESS_VALUES, in_series=False),
     ),
-    list_gaps=_regional_gaps,
+    gaps=GapPolicy(
+        exact_instant=True,
+        members=GapMembers(column="region", expected=lambda: REGIONAL_SUPPLY_DEMAND_REGIONS),
+    ),
     series=REGIONAL_SERIES,
 )
 
@@ -369,6 +359,7 @@ UNIT_GENERATION = Dataset(
         "created_at",
     ),
     project=each(_unit_item),
+    status=AlwaysComplete(),
     filters=(Exact(name="unit_type"), Exact(name="unit_name")),
     series=UNIT_GENERATION_SERIES,
 )

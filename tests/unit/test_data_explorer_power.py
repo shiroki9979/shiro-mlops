@@ -29,7 +29,7 @@ from tests.scenarios.data_explorer_power import (
 
 def _freeze_clock(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
     """Missing slots stop at "now", so a fixed clock keeps the window's slots in the past."""
-    monkeypatch.setattr("shiro_mlops.service.data_explorer.completeness.now_taiwan", lambda: now)
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.dataset_query.now_taiwan", lambda: now)
 
 
 def test_national_reader_converts_mw_and_preserves_nullable_fields(

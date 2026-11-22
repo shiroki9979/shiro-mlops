@@ -12,7 +12,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
-from shiro_mlops.service.data_explorer.catalog import DatasetStatusCatalog
 from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery, validate_cursor
 from shiro_mlops.service.data_explorer.datasets import (
@@ -121,7 +120,7 @@ def get_status(request: Request) -> StatusResponse:
     """Return shared dataset availability, freshness, and completeness."""
     _ensure_enabled()
     try:
-        return DatasetStatusCatalog(_engine(request)).status()
+        return DatasetQuery(_engine(request)).status()
     except (DatabaseUnavailableError, SQLAlchemyError) as exc:
         raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
 
