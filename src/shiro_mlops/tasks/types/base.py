@@ -37,6 +37,11 @@ class HistoryCoverage:
     window_hours: int
     min_valid_hours: int
 
+    @classmethod
+    def complete(cls, window_hours: int) -> HistoryCoverage:
+        """Every hour of the ``window_hours`` ending at the anchor must hold actual load."""
+        return cls(window_hours, window_hours)
+
 
 @dataclass(frozen=True)
 class InputRequirements:

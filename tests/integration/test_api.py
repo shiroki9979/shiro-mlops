@@ -28,7 +28,7 @@ from tests.helpers import (
     canonical_observation_batch,
     hourly_load_with_weather,
     override_task_policies,
-    with_complete_lookback,
+    with_dynamic_horizon_lookback,
 )
 
 HIGH_LOAD_ALERT = "high_load_alert"
@@ -83,7 +83,7 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(monkeypatch) -> None:
         ]
     )
     repository.fetch_latest_load.return_value = latest_load
-    repository.fetch_load_range.return_value = with_complete_lookback(latest_load)
+    repository.fetch_load_range.return_value = with_dynamic_horizon_lookback(latest_load)
     monkeypatch.setattr("shiro_mlops.service.api.repository_store", repository)
     monkeypatch.setattr(
         "shiro_mlops.service.api.request_clock", lambda: pd.Timestamp("2026-08-20 13:00")
@@ -124,7 +124,7 @@ def _serve_fitted_forecaster(
     """Attach a fitted model and a repository holding fresh load and forecast rows."""
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
     return _serve_fresh_inputs(
-        with_complete_lookback(taipower_raw_df), cwa_obs_df, cwa_forecast_df, monkeypatch
+        with_dynamic_horizon_lookback(taipower_raw_df), cwa_obs_df, cwa_forecast_df, monkeypatch
     )
 
 
@@ -347,7 +347,7 @@ def test_dynamic_horizon_with_a_missing_lookback_hour_answers_503(
     monkeypatch,
 ) -> None:
     """One missing actual load hour before a fresh anchor makes predict and ready return 503."""
-    load = with_complete_lookback(taipower_raw_df)
+    load = with_dynamic_horizon_lookback(taipower_raw_df)
     missing = load["datetime"].max() - pd.Timedelta(hours=24)
     monkeypatch.setitem(model_store.models, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
     _serve_fresh_inputs(load[load["datetime"] != missing], cwa_obs_df, cwa_forecast_df, monkeypatch)
@@ -425,7 +425,7 @@ def test_startup_loads_each_task_model_independently(
     corrupt.mkdir(parents=True)
     (corrupt / "metadata.json").write_text("not json", encoding="utf-8")
     _serve_fresh_inputs(
-        with_complete_lookback(taipower_raw_df), cwa_obs_df, cwa_forecast_df, monkeypatch
+        with_dynamic_horizon_lookback(taipower_raw_df), cwa_obs_df, cwa_forecast_df, monkeypatch
     )
 
     with TestClient(app) as client:

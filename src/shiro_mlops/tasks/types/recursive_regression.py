@@ -99,7 +99,7 @@ class RecursiveRegression:
         return InputRequirements(
             weather=WeatherInput.FORECAST,
             lookback_hours=lookback,
-            history_coverage=HistoryCoverage(lookback, lookback),
+            history_coverage=HistoryCoverage.complete(lookback),
         )
 
     def train(self, params: RecursiveRegressionParams, data: TrainingData) -> Trained:
