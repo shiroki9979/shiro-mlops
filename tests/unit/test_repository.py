@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import (
+    FORECAST_ROW_COLUMNS,
     TaipowerRegionalSupplyDemandRepository,
     TaipowerSupplyDemandRepository,
     TaipowerUnitGenerationRepository,
@@ -146,7 +147,10 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
 
 def _stored_text(engine: Engine, table: str, columns: str) -> list[tuple[str, ...]]:
     with engine.connect() as conn:
-        return [tuple(row) for row in conn.execute(text(f"SELECT {columns} FROM {table} ORDER BY {columns}"))]
+        return [
+            tuple(row)
+            for row in conn.execute(text(f"SELECT {columns} FROM {table} ORDER BY {columns}"))
+        ]
 
 
 def test_load_and_cwa_writes_store_one_aware_utc_text_form(
@@ -287,6 +291,16 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
             "valid_to": pd.Timestamp("2026-08-20 15:00"),
         }
     ]
+
+
+def test_point_in_time_forecast_read_without_rows_returns_empty_frame(
+    repository: TimeSeriesRepository,
+) -> None:
+    """A cutoff read before any vintage exists is an empty result, not an error."""
+    rows = repository.fetch_cwa_forecast_rows(geocode="63000050", issued_before="2026-08-20 12:00")
+
+    assert rows.empty
+    assert list(rows.columns) == FORECAST_ROW_COLUMNS
 
 
 def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepository):
