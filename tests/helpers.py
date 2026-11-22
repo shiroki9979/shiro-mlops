@@ -14,6 +14,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.core.constants import NATIONWIDE_SUBJECT
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.cwa_client import (
@@ -23,6 +24,7 @@ from shiro_mlops.data.cwa_client import (
     CWAStationObservation,
     CWATownshipForecast,
 )
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
     parse_regional_supply_demand_csv,
@@ -206,6 +208,18 @@ def derived_hourly_load(hours: int, last_hour: datetime) -> pd.DataFrame:
     return pd.DataFrame({"datetime": times, "load_mw": [30000.0 + i for i in range(hours)]})
 
 
+def write_derived_load(
+    engine: Engine, hourly_load: pd.DataFrame, *, subject: str = NATIONWIDE_SUBJECT
+) -> None:
+    """Seed derived hours from ``datetime`` and ``load_mw`` columns the way the schedule writes them."""
+    HourlyActualLoadStore(engine).write(hourly_load, subject=subject)
+
+
+def derived_load_series(engine: Engine, *, subject: str = NATIONWIDE_SUBJECT) -> pd.DataFrame:
+    """Every derived hour stored for ``subject``, oldest first, in ``datetime`` and ``load_mw``."""
+    return HourlyActualLoadStore(engine).series(end=datetime.max, subject=subject)
+
+
 def create_legacy_load_table(engine: Engine) -> None:
     """Model a d015046-era database without a source column; migration leaves legacy rows with NULL source."""
     with engine.begin() as connection:
@@ -263,6 +277,18 @@ def insert_legacy_load_row(engine: Engine, taiwan_time: datetime, load_mw: float
             text(
                 "INSERT INTO raw_taipower_load (time, subject, load_mw) "
                 "VALUES (:time, 'nationwide', :load_mw)"
+            ),
+            {"time": to_storage_time(taiwan_time), "load_mw": load_mw},
+        )
+
+
+def insert_other_source_load_row(engine: Engine, taiwan_time: datetime, load_mw: float) -> None:
+    """Insert a nationwide row of another derivation source, which no production path writes."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
+                "VALUES (:time, 'nationwide', :load_mw, 'other_source')"
             ),
             {"time": to_storage_time(taiwan_time), "load_mw": load_mw},
         )

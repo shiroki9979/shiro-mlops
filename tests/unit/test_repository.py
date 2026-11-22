@@ -11,7 +11,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.data.hourly_actual_load import REGIONAL_SNAPSHOT_SUM_SOURCE
 from shiro_mlops.data.repository import (
     FORECAST_ROW_COLUMNS,
     TaipowerRegionalSupplyDemandRepository,
@@ -24,8 +23,8 @@ from tests.helpers import (
     canonical_observation_batch,
     derived_hourly_load,
     forecast_release,
-    insert_legacy_load_row,
     township_forecast,
+    write_derived_load,
 )
 
 
@@ -69,35 +68,11 @@ def test_repository_initialization_reports_database_failure(repository_type, tmp
         engine.dispose()
 
 
-def test_upsert_taipower_load_insert_and_fetch(
-    repository: TimeSeriesRepository, taipower_raw_df: pd.DataFrame
-):
-    """Verify upsert_taipower_load inserts records and fetch_load_range retrieves them."""
-    affected = repository.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
-    assert affected == len(taipower_raw_df)
-
-    fetched_df = repository.fetch_load_range(subject="nationwide")
-    assert len(fetched_df) == len(taipower_raw_df)
-    assert "time" in fetched_df.columns
-    assert "subject" in fetched_df.columns
-    assert "load_mw" in fetched_df.columns
-    assert fetched_df.iloc[0]["load_mw"] == pytest.approx(26500.0)
-    assert fetched_df.iloc[0]["subject"] == "nationwide"
-
-
 def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_aligned(
     repository: TimeSeriesRepository,
 ) -> None:
     """Persist Taiwan-local load and weather as UTC, then return aligned local feature times."""
-    load_df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20T14:00:00.000",
-                "load_mw": 38000.0,
-                "subject": "nationwide",
-            }
-        ]
-    )
+    load_df = pd.DataFrame([{"datetime": "2026-08-20T14:00:00.000", "load_mw": 38000.0}])
     weather_df = pd.DataFrame(
         [
             {
@@ -109,7 +84,7 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
         ]
     )
 
-    repository.upsert_taipower_load(load_df)
+    write_derived_load(repository.engine, load_df)
     repository.upsert_cwa_observation_batch(canonical_observation_batch(weather_df))
 
     with repository.engine.connect() as conn:
@@ -124,10 +99,8 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     assert pd.Timestamp(stored_load_time) == expected_utc
     assert pd.Timestamp(stored_weather_time) == expected_utc
 
-    persisted_load = repository.fetch_load_range(
-        start_time="2026-08-20 14:00:00",
-        end_time="2026-08-20 14:00:00",
-        subject="nationwide",
+    persisted_load = repository.hourly_actual_load_store.series(
+        start=datetime(2026, 8, 20, 14, 0), end=datetime(2026, 8, 20, 15, 0)
     )
     persisted_weather = repository.fetch_weather_range(
         start_time="2026-08-20T06:00:00Z",
@@ -135,12 +108,11 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
         reference_point="Taipei",
     )
 
-    assert persisted_load.iloc[0]["time"] == pd.Timestamp("2026-08-20 14:00:00")
+    assert persisted_load.iloc[0]["datetime"] == pd.Timestamp("2026-08-20 14:00:00")
     assert persisted_weather.iloc[0]["time"] == pd.Timestamp("2026-08-20 14:00:00")
 
     merged = merge_weather_features(
-        persisted_load.rename(columns={"time": "datetime"}),
-        persisted_weather.rename(columns={"time": "datetime"}),
+        persisted_load, persisted_weather.rename(columns={"time": "datetime"})
     )
     assert merged.iloc[0]["temperature"] == pytest.approx(35.5)
 
@@ -157,7 +129,8 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
     repository: TimeSeriesRepository,
 ) -> None:
     """Load and CWA instants persist as aware UTC text whatever form the Taiwan-local input took."""
-    repository.upsert_taipower_load(
+    write_derived_load(
+        repository.engine,
         pd.DataFrame(
             {
                 "datetime": [
@@ -167,7 +140,7 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
                 ],
                 "load_mw": [38000.0, 38100.0, 38200.0],
             }
-        )
+        ),
     )
     repository.upsert_cwa_observation_batch(
         replace(
@@ -242,7 +215,7 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
     repository: TimeSeriesRepository,
 ) -> None:
     """Every load and CWA read hands back Taiwan-local naive instants, bounds included."""
-    repository.upsert_taipower_load(derived_hourly_load(3, datetime(2026, 8, 20, 16, 0)))
+    write_derived_load(repository.engine, derived_hourly_load(3, datetime(2026, 8, 20, 16, 0)))
     repository.upsert_cwa_forecast_release(
         replace(
             forecast_release(
@@ -259,13 +232,12 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
         )
     )
 
-    loads = repository.fetch_load_range(
-        start_time="2026-08-20T06:00:00Z", end_time=datetime(2026, 8, 20, 15, 0)
+    store = repository.hourly_actual_load_store
+    loads = store.series(
+        start=pd.Timestamp("2026-08-20T06:00:00Z"), end=datetime(2026, 8, 20, 16, 0)
     )
-    latest = repository.fetch_latest_load(at_or_before=datetime(2026, 8, 20, 15, 30))
-    accumulation = repository.summarize_hourly_load_accumulation(
-        at_or_before=datetime(2026, 8, 20, 15, 0)
-    )
+    latest = store.latest_observation(datetime(2026, 8, 20, 15, 30))
+    accumulation = store.accumulation(datetime(2026, 8, 20, 15, 0))
     forecasts = repository.fetch_cwa_forecast_rows(
         geocode="63000050",
         issued_before="2026-08-20T03:00:00Z",
@@ -274,11 +246,12 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
         valid_end="2026-08-20 12:00",
     )
 
-    assert list(loads["time"]) == [
+    assert list(loads["datetime"]) == [
         pd.Timestamp("2026-08-20 14:00"),
         pd.Timestamp("2026-08-20 15:00"),
     ]
-    assert list(latest["time"]) == [pd.Timestamp("2026-08-20 15:00")]
+    assert latest is not None
+    assert latest.hour == pd.Timestamp("2026-08-20 15:00")
     assert accumulation.valid_hours == 2
     assert accumulation.latest_hour == datetime(2026, 8, 20, 15, 0)
     assert forecasts[["issued_at", "source_updated_at", "valid_from", "valid_to"]].to_dict(
@@ -301,45 +274,6 @@ def test_point_in_time_forecast_read_without_rows_returns_empty_frame(
 
     assert rows.empty
     assert list(rows.columns) == FORECAST_ROW_COLUMNS
-
-
-def test_upsert_taipower_load_idempotency_and_update(repository: TimeSeriesRepository):
-    """Verify ON CONFLICT DO UPDATE updates load_mw without creating duplicate rows."""
-    initial_df = pd.DataFrame(
-        [
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 25000.0, "subject": "nationwide"},
-            {"datetime": "2026-08-20 01:00:00", "load_mw": 24000.0, "subject": "nationwide"},
-        ]
-    )
-    repository.upsert_taipower_load(initial_df)
-
-    revised_df = pd.DataFrame(
-        [
-            {"datetime": "2026-08-20 00:00:00", "load_mw": 26800.0, "subject": "nationwide"},
-        ]
-    )
-    repository.upsert_taipower_load(revised_df)
-
-    fetched_df = repository.fetch_load_range(subject="nationwide")
-    assert len(fetched_df) == 2
-    row_00 = fetched_df[fetched_df["time"] == pd.Timestamp("2026-08-20 00:00:00")].iloc[0]
-    assert row_00["load_mw"] == pytest.approx(26800.0)
-
-
-def test_upsert_taipower_load_marks_regional_snapshot_source(
-    repository: TimeSeriesRepository,
-) -> None:
-    """Upserting derived load records its source and updates that source when replacing an hour."""
-    load_df = pd.DataFrame([{"datetime": "2026-09-26 13:00:00", "load_mw": 30550.0}])
-
-    repository.upsert_taipower_load(load_df)
-    repository.upsert_taipower_load(load_df.assign(load_mw=30600.0))
-
-    with repository.engine.connect() as conn:
-        rows = pd.read_sql_query("SELECT subject, load_mw, source FROM raw_taipower_load", conn)
-    assert rows.to_dict("records") == [
-        {"subject": "nationwide", "load_mw": 30600.0, "source": "regional_snapshot_sum"}
-    ]
 
 
 def test_upsert_cwa_weather_insert_and_fetch(
@@ -482,62 +416,11 @@ def test_upsert_cwa_weather_preserves_non_null_fields_on_partial_update(
     assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(80.0)
 
 
-def test_upsert_empty_dataframe(repository: TimeSeriesRepository):
-    """Verify upsert methods gracefully handle empty DataFrames returning 0."""
+def test_legacy_weather_upsert_rejects_an_empty_dataframe(repository: TimeSeriesRepository):
+    """An empty frame is rejected like any legacy weather write rather than counted as zero rows."""
     empty_df = pd.DataFrame()
-    assert repository.upsert_taipower_load(empty_df) == 0
     with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
         repository.upsert_cwa_weather(empty_df)
-
-
-def test_fetch_load_range_by_source_excludes_legacy_rows(legacy_upgraded_engine: Engine):
-    """Under ADR-0008, source filtering excludes legacy d015046 rows with NULL source."""
-    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
-    repository.upsert_taipower_load(derived_hourly_load(2, datetime(2026, 8, 21, 1, 0)))
-    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
-
-    derived = repository.fetch_load_range(subject="nationwide", source=REGIONAL_SNAPSHOT_SUM_SOURCE)
-
-    assert list(derived["load_mw"]) == [30000.0, 30001.0]
-    assert derived["time"].max() == pd.Timestamp("2026-08-21 01:00")
-
-
-def test_fetch_latest_load_returns_newest_derived_row_only(legacy_upgraded_engine: Engine):
-    """Hourly drift reads only the newest derived row; newer legacy rows cannot stand in for actual load."""
-    repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
-    repository.upsert_taipower_load(derived_hourly_load(3, datetime(2026, 8, 21, 1, 0)))
-    insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 8, 21, 2, 0), load_mw=99999.0)
-
-    latest = repository.fetch_latest_load(subject="nationwide", source=REGIONAL_SNAPSHOT_SUM_SOURCE)
-
-    assert len(latest) == 1
-    assert latest.iloc[0]["time"] == pd.Timestamp("2026-08-21 01:00")
-    assert latest.iloc[0]["load_mw"] == 30002.0
-
-
-def test_fetch_load_range_filters_and_sorting(repository: TimeSeriesRepository):
-    """Verify fetch_load_range filters by date range and prediction subject with ascending sort."""
-    df = pd.DataFrame(
-        [
-            {"datetime": "2026-08-20 03:00:00", "load_mw": 23800.0, "subject": "nationwide"},
-            {"datetime": "2026-08-20 01:00:00", "load_mw": 25200.0, "subject": "nationwide"},
-            {"datetime": "2026-08-20 02:00:00", "load_mw": 24300.0, "subject": "nationwide"},
-            {"datetime": "2026-08-20 02:00:00", "load_mw": 18000.0, "subject": "south"},
-        ]
-    )
-    repository.upsert_taipower_load(df)
-
-    # Filter by time range and prediction subject
-    filtered_df = repository.fetch_load_range(
-        start_time=datetime(2026, 8, 20, 1, 0),
-        end_time="2026-08-20 02:00:00",
-        subject="nationwide",
-    )
-    assert len(filtered_df) == 2
-    assert list(filtered_df["load_mw"]) == [25200.0, 24300.0]
-
-    # Verify sorting
-    assert filtered_df.iloc[0]["time"] < filtered_df.iloc[1]["time"]
 
 
 def test_fetch_weather_range_filters_and_sorting(repository: TimeSeriesRepository):
@@ -590,14 +473,7 @@ def test_fetch_weather_range_propagates_database_errors(
 
 
 def test_fetch_empty_results_schema(repository: TimeSeriesRepository):
-    """Verify fetch methods on empty tables return empty DataFrames with correct columns and dtypes."""
-    load_df = repository.fetch_load_range()
-    assert load_df.empty
-    assert "time" in load_df.columns
-    assert "subject" in load_df.columns
-    assert "load_mw" in load_df.columns
-    assert pd.api.types.is_datetime64_any_dtype(load_df["time"])
-
+    """Verify the weather fetch on empty tables returns an empty DataFrame with typed columns."""
     weather_df = repository.fetch_weather_range()
     assert weather_df.empty
     assert "time" in weather_df.columns

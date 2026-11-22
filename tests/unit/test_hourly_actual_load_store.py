@@ -15,13 +15,14 @@ from shiro_mlops.data.hourly_actual_load_store import (
     HourlyLoadObservation,
     ScheduledDerivationPolicy,
 )
-from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand_repository import (
     TaipowerRegionalSupplyDemandRepository,
 )
 from tests.helpers import (
     derived_hourly_load,
+    derived_load_series,
     insert_legacy_load_row,
+    insert_other_source_load_row,
     regional_supply_demand_snapshots,
 )
 
@@ -63,7 +64,7 @@ def test_latest_observation_ignores_legacy_and_other_source_rows(
     store = HourlyActualLoadStore(legacy_upgraded_engine)
     store.write(derived_hourly_load(1, datetime(2026, 9, 5, 16)))
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 17), 26500.0)
-    _insert_other_source_row(legacy_upgraded_engine, datetime(2026, 9, 5, 18), 31000.0)
+    insert_other_source_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 18), 31000.0)
 
     assert store.latest_observation(datetime(2026, 9, 5, 18)) == HourlyLoadObservation(
         hour=datetime(2026, 9, 5, 16), load_mw=30000.0
@@ -88,7 +89,7 @@ def test_series_holds_only_derived_hours_in_a_datetime_column(
     store = HourlyActualLoadStore(legacy_upgraded_engine)
     store.write(derived_hourly_load(2, datetime(2026, 9, 5, 16)))  # 15:00、16:00
     insert_legacy_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 17), 26500.0)
-    _insert_other_source_row(legacy_upgraded_engine, datetime(2026, 9, 5, 18), 31000.0)
+    insert_other_source_load_row(legacy_upgraded_engine, datetime(2026, 9, 5, 18), 31000.0)
 
     series = store.series(start=datetime(2026, 9, 5), end=datetime(2026, 9, 6))
 
@@ -145,6 +146,28 @@ def test_series_reads_one_prediction_subject(store: HourlyActualLoadStore) -> No
     ]
 
 
+def test_series_is_oldest_first_whatever_order_the_hours_were_written(
+    store: HourlyActualLoadStore,
+) -> None:
+    store.write(
+        pd.DataFrame(
+            {
+                "datetime": ["2026-08-20 03:00", "2026-08-20 01:00", "2026-08-20 02:00"],
+                "load_mw": [23800.0, 25200.0, 24300.0],
+            }
+        )
+    )
+    store.write(
+        pd.DataFrame({"datetime": ["2026-08-20 02:00"], "load_mw": [18000.0]}), subject="south"
+    )
+
+    series = store.series(start=datetime(2026, 8, 20, 1), end=datetime(2026, 8, 20, 3))
+
+    assert len(series) == 2
+    assert list(series["load_mw"]) == [25200.0, 24300.0]
+    assert series.iloc[0]["datetime"] < series.iloc[1]["datetime"]
+
+
 def test_an_empty_series_keeps_its_datetime_and_load_columns(
     store: HourlyActualLoadStore,
 ) -> None:
@@ -160,7 +183,7 @@ def test_accumulation_counts_derived_hours_through_the_cutoff(
 ) -> None:
     store.write(derived_hourly_load(4, datetime(2026, 9, 5, 17)))  # 14:00 至 17:00
     store.write(derived_hourly_load(2, datetime(2026, 9, 5, 17)), subject="north")
-    _insert_other_source_row(sqlite_engine, datetime(2026, 9, 5, 13), 31000.0)
+    insert_other_source_load_row(sqlite_engine, datetime(2026, 9, 5, 13), 31000.0)
 
     assert store.accumulation(datetime(2026, 9, 5, 16)) == HourlyLoadAccumulation(
         valid_hours=3, legacy_rows=0, latest_hour=datetime(2026, 9, 5, 16)
@@ -204,7 +227,7 @@ def test_accumulation_counts_legacy_rows_at_any_time_and_subject(
 def test_write_replaces_another_source_with_the_derived_source(
     store: HourlyActualLoadStore, sqlite_engine: Engine
 ) -> None:
-    _insert_other_source_row(sqlite_engine, datetime(2026, 9, 5, 16), 31000.0)
+    insert_other_source_load_row(sqlite_engine, datetime(2026, 9, 5, 16), 31000.0)
 
     store.write(derived_hourly_load(1, datetime(2026, 9, 5, 16)))
 
@@ -225,6 +248,25 @@ def test_write_rejects_the_storage_time_column(store: HourlyActualLoadStore) -> 
 
     with pytest.raises(KeyError, match="'datetime'.*not the storage column 'time'"):
         store.write(stored_form)
+
+
+def test_rewriting_a_derived_hour_updates_its_load_in_place(store: HourlyActualLoadStore) -> None:
+    store.write(
+        pd.DataFrame(
+            {"datetime": ["2026-08-20 00:00", "2026-08-20 01:00"], "load_mw": [25000.0, 24000.0]}
+        )
+    )
+
+    store.write(pd.DataFrame({"datetime": ["2026-08-20 00:00"], "load_mw": [26800.0]}))
+
+    series = store.series(end=datetime(2026, 8, 21))
+    assert len(series) == 2
+    row_00 = series[series["datetime"] == pd.Timestamp("2026-08-20 00:00")].iloc[0]
+    assert row_00["load_mw"] == pytest.approx(26800.0)
+
+
+def test_writing_no_hours_writes_nothing(store: HourlyActualLoadStore) -> None:
+    assert store.write(pd.DataFrame(columns=["datetime", "load_mw"])) == 0
 
 
 def test_rerunning_a_tick_recomputes_the_recent_hours_to_the_same_load(
@@ -354,21 +396,9 @@ def _store_samples(engine: Engine, start: datetime, count: int) -> None:
 
 
 def _persisted_load(engine: Engine) -> dict[datetime, float]:
-    """Every stored nationwide row, whatever its source."""
-    stored = TimeSeriesRepository(engine, auto_init=False).fetch_load_range(subject="nationwide")
+    """Every stored nationwide derived hour."""
+    stored = derived_load_series(engine)
     return {
         hour.to_pydatetime(): load_mw
-        for hour, load_mw in zip(stored["time"], stored["load_mw"], strict=True)
+        for hour, load_mw in zip(stored["datetime"], stored["load_mw"], strict=True)
     }
-
-
-def _insert_other_source_row(engine: Engine, hour: datetime, load_mw: float) -> None:
-    """A row the store itself cannot write: same table, another derivation source."""
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
-                "VALUES (:time, 'nationwide', :load_mw, 'other_source')"
-            ),
-            {"time": to_storage_time(hour), "load_mw": load_mw},
-        )
