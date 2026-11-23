@@ -303,7 +303,7 @@ class TimeSeriesRepository:
         self.unit_generation_repo = TaipowerUnitGenerationRepository(
             engine=self.engine, auto_init=False
         )
-        self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
+        self.issued_forecast_store = IssuedForecastRepository(engine=self.engine, auto_init=False)
         self.hourly_actual_load_store = HourlyActualLoadStore(self.engine)
 
     def upsert_cwa_weather(
@@ -641,15 +641,15 @@ class TimeSeriesRepository:
 
     def insert_issued_forecast(self, forecast: IssuedForecast) -> bool:
         """Write an issued forecast once; ``False`` when its issue time already exists."""
-        return self.issued_forecast_repo.insert(forecast)
+        return self.issued_forecast_store.insert(forecast)
 
     def fetch_issued_forecast(self, issued_at: datetime) -> IssuedForecast | None:
         """Fetch the forecast issued at a Taiwan-local issue time."""
-        return self.issued_forecast_repo.fetch(issued_at)
+        return self.issued_forecast_store.fetch(issued_at)
 
     def fetch_latest_issued_forecast(self) -> IssuedForecast | None:
         """Fetch the forecast with the latest issue time, or ``None`` before the first issue."""
-        return self.issued_forecast_repo.fetch_latest()
+        return self.issued_forecast_store.fetch_latest()
 
     def fetch_track_record_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
         """Pair issued steps targeting the window with valid hourly observations.
