@@ -3,8 +3,9 @@
 The issue time is the schedule tick in Taiwan-local time and is the forecast's
 ``as_of``. It is never floored to the hour: load is filtered by its hourly
 timestamp rather than by when it was stored, so an issue time earlier than the
-data actually landed would break point-in-time. Only scheduled ticks issue; a
-manual run without a tick fails and writes nothing.
+data actually landed would break point-in-time. Only the run a tick launched
+issues; the asset refuses any run without a scheduled tick, so a manual run or a
+re-execution fails and writes nothing.
 
 This asset sits outside the task factory and depends only on the ingested
 inputs, never on ``{task}__model``: otherwise the tickless 00:00 training job
@@ -17,7 +18,6 @@ from dagster import (
     AssetExecutionContext,
     AssetKey,
     AssetSelection,
-    Config,
     Failure,
     MaterializeResult,
     MetadataValue,
@@ -33,7 +33,12 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
-from shiro_mlops.pipelines.execution_origin import tick_run_key
+from shiro_mlops.pipelines.execution_origin import (
+    WithoutTick,
+    run_as_of,
+    scheduled_tick,
+    tick_run_request,
+)
 from shiro_mlops.pipelines.schedules import (
     CWA_FORECAST_ASSET,
     CWA_OBSERVATION_ASSET,
@@ -62,16 +67,6 @@ ISSUED_FORECAST_JOB = "issued_forecast_job"
 ISSUED_FORECAST_SCHEDULE = "issued_forecast_schedule"
 ISSUED_FORECAST_TASK = DYNAMIC_HORIZON_FORECAST
 _MODEL_ASSET = TaskPipelineNames(ISSUED_FORECAST_TASK).model
-# Dagster 對排程 tick 產生的每個 run 加上此標籤（`DagsterRun.tags_for_schedule`）。
-SCHEDULE_NAME_TAG = "dagster/schedule_name"
-# 重新執行的 run（`DagsterInstance.create_reexecuted_run`）帶這兩個標籤，並沿用原 run 的標籤與設定。
-REEXECUTION_TAGS = ("dagster/parent_run_id", "dagster/root_run_id")
-
-
-class IssuedForecastConfig(Config):
-    """Set only by the schedule: the tick as a Taiwan-local ISO issue time."""
-
-    issued_at: str | None = None
 
 
 @asset(
@@ -85,15 +80,13 @@ class IssuedForecastConfig(Config):
         AssetKey(CWA_FORECAST_ASSET),
     ],
 )
-def issued_forecast(
-    context: AssetExecutionContext, config: IssuedForecastConfig
-) -> MaterializeResult:
+def issued_forecast(context: AssetExecutionContext) -> MaterializeResult:
     """Issue once per tick; fail without writing when no forecast can be produced.
 
     An issue time already on record succeeds without writing, so a run retried
     after its commit never overwrites what was issued.
     """
-    issued_at = _scheduled_issue_time(context, config)
+    issued_at = run_as_of(context, without_tick=WithoutTick.REFUSE)
     repository = getattr(context.resources, TIME_SERIES_REPO)
     if repository.fetch_issued_forecast(issued_at) is not None:
         return _issued_result(issued_at, already_issued=True)
@@ -116,32 +109,6 @@ def issued_forecast(
     )
     written = repository.insert_issued_forecast(forecast)
     return _issued_result(issued_at, already_issued=not written, forecast=forecast)
-
-
-def _scheduled_issue_time(context: AssetExecutionContext, config: IssuedForecastConfig) -> datetime:
-    """Only the run the schedule's tick launched carries an issue time that counts.
-
-    A re-execution copies that run's tags and issue time but runs later, so it
-    would issue at the original tick from load stored after it.
-    """
-    tags = context.run.tags
-    scheduled = tags.get(SCHEDULE_NAME_TAG) == ISSUED_FORECAST_SCHEDULE
-    if config.issued_at is None or not scheduled:
-        raise Failure(
-            description=(
-                f"{ISSUED_FORECAST_ASSET} issues only from {ISSUED_FORECAST_SCHEDULE} "
-                "scheduled ticks; a run without a scheduled tick writes nothing."
-            )
-        )
-    if any(tag in tags for tag in REEXECUTION_TAGS):
-        raise Failure(
-            description=(
-                f"{ISSUED_FORECAST_ASSET} is never re-executed: a re-executed run keeps the "
-                f"tick {config.issued_at} as as_of but would read load stored after it, "
-                "so it writes nothing."
-            )
-        )
-    return datetime.fromisoformat(config.issued_at)
 
 
 def _load_model() -> LoadedModel:
@@ -237,10 +204,6 @@ def issued_forecast_schedule(context: ScheduleEvaluationContext) -> RunRequest |
             f"No {_MODEL_ASSET} materialization yet; {ISSUED_FORECAST_SCHEDULE} waits for "
             "the first successful training run."
         )
-    issued_at = tick_run_key(context)
-    if issued_at is None:
+    if scheduled_tick(context) is None:
         return SkipReason("No scheduled tick to issue at; only scheduled ticks issue forecasts.")
-    return RunRequest(
-        run_key=issued_at,
-        run_config={"ops": {ISSUED_FORECAST_ASSET: {"config": {"issued_at": issued_at}}}},
-    )
+    return tick_run_request(context)
