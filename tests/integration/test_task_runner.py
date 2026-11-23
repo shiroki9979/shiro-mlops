@@ -526,16 +526,16 @@ def test_observed_prediction_reads_history_for_the_window_and_the_longest_horizo
     anomaly_model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = runtime.repository
+    store = runtime.cwa_weather
     load_reads = _record_load_reads(runtime, monkeypatch)
     weather_calls: list[dict] = []
-    fetch_weather_range = repository.fetch_weather_range
+    fetch_weather_range = store.fetch_weather_range
 
     def record_weather(**kwargs):
         weather_calls.append(kwargs)
         return fetch_weather_range(**kwargs)
 
-    monkeypatch.setattr(repository, "fetch_weather_range", record_weather)
+    monkeypatch.setattr(store, "fetch_weather_range", record_weather)
 
     predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
@@ -581,16 +581,14 @@ def test_observed_prediction_with_no_scorable_window_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without recent observations, an unscorable anchor window is unavailable rather than an empty result."""
-    repository = runtime.repository
-    fetch_weather_range = repository.fetch_weather_range
+    store = runtime.cwa_weather
+    fetch_weather_range = store.fetch_weather_range
     last_observation = ANCHOR - pd.Timedelta(hours=3)
 
     def observations_until_three_hours_before_anchor(**kwargs):
         return fetch_weather_range(**{**kwargs, "end_time": last_observation})
 
-    monkeypatch.setattr(
-        repository, "fetch_weather_range", observations_until_three_hours_before_anchor
-    )
+    monkeypatch.setattr(store, "fetch_weather_range", observations_until_three_hours_before_anchor)
 
     with pytest.raises(ObservedInputsIncompleteError, match="No complete observed window"):
         predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
