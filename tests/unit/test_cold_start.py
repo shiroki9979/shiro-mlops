@@ -223,7 +223,7 @@ def test_issuing_ignores_a_closed_accumulation_gate(
     cold_start = _cold_start(test_repo, dagster_instance, models_root)
 
     assert not cold_start.training.runs
-    assert cold_start.issuing(ISSUING_SCHEDULE).runs
+    assert cold_start.models.issuing(ISSUING_SCHEDULE).runs
 
 
 def test_issuing_skips_with_the_stage_reason_of_a_mismatch(
@@ -234,4 +234,4 @@ def test_issuing_skips_with_the_stage_reason_of_a_mismatch(
 
     cold_start = _cold_start(test_repo, dagster_instance, models_root)
 
-    assert cold_start.issuing(ISSUING_SCHEDULE).skip_reason == cold_start.reason
+    assert cold_start.models.issuing(ISSUING_SCHEDULE).skip_reason == cold_start.reason

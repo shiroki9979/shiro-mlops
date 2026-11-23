@@ -349,3 +349,49 @@ def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     assert f"Run {NAMES.training_job} once" in failure.description
     assert failure.metadata["issued_at"] == MetadataValue.text(ISSUED_AT.isoformat())
     assert repo.fetch_issued_forecast(ISSUED_AT) is None
+
+
+def _unreadable_load_store(*_args, **_kwargs):
+    raise RuntimeError("load store unreachable")
+
+
+def test_issuing_never_queries_the_accumulation_gate(
+    repo: TimeSeriesRepository,
+    dagster_instance,
+    trained: SavedModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issuing needs only the model directory, so a failing gate query cannot stop it."""
+    monkeypatch.setattr(
+        "shiro_mlops.pipelines.cold_start.check_training_readiness", _unreadable_load_store
+    )
+
+    result = _issue(repo, dagster_instance)
+
+    assert result.success
+    assert repo.fetch_issued_forecast(ISSUED_AT) is not None
+
+
+def test_no_model_on_either_side_fails_saying_there_is_no_model(
+    repo: TimeSeriesRepository, dagster_instance, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
+    _train_and_save(repo, n_estimators=20)
+    execution = issued_forecast_schedule.evaluate_tick(
+        build_schedule_context(instance=dagster_instance, scheduled_execution_time=TICK)
+    )
+    [request] = execution.run_requests
+    shutil.rmtree(model_directory(settings.models_dir, DYNAMIC_HORIZON_FORECAST))
+
+    result = _job(repo).execute_in_process(
+        run_config=request.run_config,
+        instance=dagster_instance,
+        tags=request.tags,
+        raise_on_error=False,
+    )
+
+    assert not result.success
+    description = _failure_description(result)
+    assert description.startswith(f"No {NAMES.model} materialization yet")
+    assert "valid hourly observations" not in description
+    assert repo.fetch_issued_forecast(ISSUED_AT) is None

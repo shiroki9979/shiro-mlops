@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 
-from dagster import AssetKey, DagsterInstance
+from dagster import AssetKey, DagsterInstance, RunRequest, SkipReason
 
 from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.tasks.accumulation import AccumulationOutcome, TrainingLoadReadiness
@@ -51,6 +51,12 @@ class ScheduleDecision:
     def runs(self) -> bool:
         return self.skip_reason is None
 
+    def run_or_skip(self, request: RunRequest | SkipReason) -> RunRequest | SkipReason:
+        """The tick's result: ``request`` when the schedule runs, else the skip reason."""
+        if self.skip_reason is not None:
+            return SkipReason(self.skip_reason)
+        return request
+
 
 @dataclass(frozen=True)
 class ModelPresence:
@@ -67,14 +73,7 @@ class ModelPresence:
 
     def issuing(self, schedule: str) -> ScheduleDecision:
         """Only the directory counts: issuing loads the model from it and never reads the record."""
-        if self.installed:
-            return ScheduleDecision()
-        if self.recorded:
-            return ScheduleDecision(_describe_mismatch(self))
-        return ScheduleDecision(
-            f"No {self.names.model} materialization yet; {schedule} waits for "
-            "the first successful training run."
-        )
+        return _needs_model(self, self.installed, schedule=schedule, training="training")
 
 
 @dataclass(frozen=True)
@@ -119,29 +118,32 @@ class ColdStart:
 
     @property
     def training(self) -> ScheduleDecision:
-        """Only the gate counts: retraining is itself the remedy for a mismatch."""
-        if not self.readiness.ready:
-            return ScheduleDecision(self.readiness.reason)
-        return ScheduleDecision()
+        return _gate_decision(self.readiness)
 
     @property
     def monitoring(self) -> ScheduleDecision:
         """The gate and the training record count; monitoring reads the record's metrics, never the directory."""
-        if not self.readiness.ready:
-            return ScheduleDecision(self.readiness.reason)
-        if self.models.recorded:
-            return ScheduleDecision()
-        if self.models.installed:
-            return ScheduleDecision(_describe_mismatch(self.models))
+        if not self.training.runs:
+            return self.training
         names = self.models.names
-        return ScheduleDecision(
-            f"No {names.model} materialization yet; {names.monitoring_schedule} waits for "
-            f"the first successful {names.training_job} run."
+        return _needs_model(
+            self.models,
+            self.models.recorded,
+            schedule=names.monitoring_schedule,
+            training=names.training_job,
         )
 
-    def issuing(self, schedule: str) -> ScheduleDecision:
-        """The gate never counts: a model already issued from keeps issuing while the gate is closed."""
-        return self.models.issuing(schedule)
+
+def _gate_decision(readiness: TrainingLoadReadiness) -> ScheduleDecision:
+    """Only the gate counts: retraining is itself the remedy for a mismatch."""
+    if not readiness.ready:
+        return ScheduleDecision(readiness.reason)
+    return ScheduleDecision()
+
+
+def read_training_decision(task: TaskDefinition, *, runtime: TaskRuntime) -> ScheduleDecision:
+    """Query only the gate, so an unreadable training record or model directory never stops training."""
+    return _gate_decision(check_training_readiness(task, runtime))
 
 
 def read_model_presence(
@@ -168,6 +170,20 @@ def read_cold_start(
     return ColdStart(
         models=read_model_presence(task.task_id, instance=instance, models_root=models_root),
         readiness=check_training_readiness(task, runtime),
+    )
+
+
+def _needs_model(
+    models: ModelPresence, has_needed_model: bool, *, schedule: str, training: str
+) -> ScheduleDecision:
+    """Run when the side the schedule's asset reads holds a model; otherwise say what is missing."""
+    if has_needed_model:
+        return ScheduleDecision()
+    if models.recorded or models.installed:
+        return ScheduleDecision(_describe_mismatch(models))
+    return ScheduleDecision(
+        f"No {models.names.model} materialization yet; {schedule} waits for "
+        f"the first successful {training} run."
     )
 
 

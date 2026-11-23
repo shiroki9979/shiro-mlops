@@ -189,3 +189,24 @@ def test_training_runs_whatever_the_model_state_once_accumulation_is_met(
     execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
 
     assert len(execution.run_requests) == 1
+
+
+def _unreadable(*_args, **_kwargs):
+    raise RuntimeError("cannot read")
+
+
+def test_training_reads_only_the_accumulation_gate(
+    test_repo: TimeSeriesRepository,
+    dagster_instance,
+    min_hours: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreadable training record or model directory cannot break the training tick."""
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    monkeypatch.setattr(dagster_instance, "get_latest_materialization_event", _unreadable)
+    monkeypatch.setattr("shiro_mlops.pipelines.cold_start.has_installed_model", _unreadable)
+
+    execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
+
+    assert execution.skip_message is None
+    assert len(execution.run_requests) == 1

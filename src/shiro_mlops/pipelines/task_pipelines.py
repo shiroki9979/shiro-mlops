@@ -35,7 +35,7 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
-from shiro_mlops.pipelines.cold_start import ColdStart, ScheduleDecision, read_cold_start
+from shiro_mlops.pipelines.cold_start import read_cold_start, read_training_decision
 from shiro_mlops.pipelines.schedules import (
     CWA_OBSERVATION_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
@@ -289,7 +289,8 @@ def _training_schedule(
         required_resource_keys={TIME_SERIES_REPO},
     )
     def training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-        return _run_or_skip(context, _cold_start(context, task).training)
+        decision = read_training_decision(task, runtime=_runtime(context))
+        return decision.run_or_skip(_tick_request(context))
 
     return training_schedule
 
@@ -306,7 +307,13 @@ def _monitoring_schedule(
         required_resource_keys={TIME_SERIES_REPO},
     )
     def monitoring_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-        return _run_or_skip(context, _cold_start(context, task).monitoring)
+        cold_start = read_cold_start(
+            task,
+            runtime=_runtime(context),
+            instance=context.instance,
+            models_root=settings.models_dir,
+        )
+        return cold_start.monitoring.run_or_skip(_tick_request(context))
 
     return monitoring_schedule
 
@@ -318,20 +325,7 @@ def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> Task
     return TaskRuntime(repository=getattr(context.resources, TIME_SERIES_REPO))
 
 
-def _cold_start(context: ScheduleEvaluationContext, task: TaskDefinition) -> ColdStart:
-    return read_cold_start(
-        task,
-        runtime=_runtime(context),
-        instance=context.instance,
-        models_root=settings.models_dir,
-    )
-
-
-def _run_or_skip(
-    context: ScheduleEvaluationContext, decision: ScheduleDecision
-) -> RunRequest | SkipReason:
-    if decision.skip_reason is not None:
-        return SkipReason(decision.skip_reason)
+def _tick_request(context: ScheduleEvaluationContext) -> RunRequest:
     return RunRequest(run_key=tick_run_key(context))
 
 
