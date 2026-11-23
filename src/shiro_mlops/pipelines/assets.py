@@ -48,7 +48,8 @@ from shiro_mlops.data.taipower_unit_generation import (
 )
 from shiro_mlops.features.feast_export import build_feast_feature_frames
 from shiro_mlops.pipelines.execution_origin import WithoutTick, run_as_of
-from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO, TaskPipelineNames
+from shiro_mlops.pipelines.task_names import TaskPipelineNames
+from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import training_data_from_table
 

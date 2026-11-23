@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 
 from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.tasks.accumulation import AccumulationOutcome
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import check_training_readiness
 from tests.helpers import (
@@ -58,6 +59,22 @@ def test_one_hour_short_of_the_threshold_is_not_ready(test_repo: TimeSeriesRepos
     assert "1 more hour" in readiness.reason
 
 
+def test_valid_hourly_observations_below_minimum_accumulation_name_the_gap(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    write_derived_load(test_repo.engine, derived_hourly_load(671, LAST_HOUR))
+
+    readiness = _readiness(test_repo)
+
+    assert readiness.outcome is AccumulationOutcome.BELOW_MINIMUM_ACCUMULATION
+    assert not readiness.ready
+    assert readiness.reason == (
+        "Insufficient hourly actual load for training: 671 valid hourly observations; "
+        "672 required (policies.min_training_hours). "
+        "1 more hour needed (at least 0.0 days of accumulation)."
+    )
+
+
 def test_threshold_reached_is_ready_and_reports_latest_hour(
     test_repo: TimeSeriesRepository,
 ) -> None:
@@ -68,6 +85,20 @@ def test_threshold_reached_is_ready_and_reports_latest_hour(
     assert readiness.ready
     assert readiness.valid_hours == 672
     assert readiness.latest_hour == LAST_HOUR
+
+
+def test_minimum_accumulation_reached_reports_valid_hourly_observations(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    write_derived_load(test_repo.engine, derived_hourly_load(672, LAST_HOUR))
+
+    readiness = _readiness(test_repo)
+
+    assert readiness.outcome is AccumulationOutcome.MINIMUM_ACCUMULATION_REACHED
+    assert readiness.ready
+    assert readiness.reason == (
+        "Hourly actual load ready for training: 672 valid hourly observations (>= 672)."
+    )
 
 
 def test_legacy_rows_block_training_even_when_threshold_is_met(tmp_path, monkeypatch) -> None:
@@ -89,6 +120,34 @@ def test_legacy_rows_block_training_even_when_threshold_is_met(tmp_path, monkeyp
     assert readiness.legacy_rows == 1
     assert "legacy" in readiness.reason
     assert "remove-legacy-d015046-load-rows" in readiness.reason
+
+
+@pytest.mark.parametrize(
+    ("valid_hours", "min_training_hours"),
+    [(3, 3), (3, 4)],
+    ids=["threshold-met", "threshold-also-unmet"],
+)
+def test_legacy_rows_take_precedence_over_minimum_accumulation(
+    tmp_path, monkeypatch, valid_hours: int, min_training_hours: int
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    try:
+        create_legacy_load_table(engine)
+        ensure_timescale_hypertables(engine)
+        repository = TimeSeriesRepository(engine=engine, auto_init=False)
+        write_derived_load(repository.engine, derived_hourly_load(valid_hours, LAST_HOUR))
+
+        override_task_policies(monkeypatch, min_training_hours=min_training_hours)
+        readiness = _readiness(repository)
+    finally:
+        engine.dispose()
+
+    assert readiness.outcome is AccumulationOutcome.BLOCKED_BY_LEGACY_ROWS
+    assert not readiness.ready
+    assert readiness.reason == (
+        "raw_taipower_load contains 1 legacy rows without a derivation source; "
+        "remove them before training (see docs/how-to/remove-legacy-d015046-load-rows.md)."
+    )
 
 
 @pytest.mark.parametrize("legacy_subject", ["nationwide", "north"])

@@ -1,6 +1,7 @@
 """Contract tests for generated task schedules: readiness from the task definition's policies."""
 
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -12,13 +13,22 @@ from shiro_mlops.pipelines.execution_origin import SCHEDULE_NAME_TAG, SCHEDULED_
 from shiro_mlops.pipelines.schedules import CWA_INGESTION_ASSETS, TAIPOWER_REALTIME_SNAPSHOT_ASSETS
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
-from tests.helpers import derived_hourly_load, selected_asset_names, task_jobs, write_derived_load
+from tests.helpers import (
+    derived_hourly_load,
+    install_model_double,
+    selected_asset_names,
+    task_jobs,
+    write_derived_load,
+)
 
 TICK = datetime(2026, 9, 27, 0, 0, tzinfo=ZoneInfo("Asia/Taipei"))
 LAST_HOUR = datetime(2026, 9, 26, 23, 0)
 # 由區域快照推算的資產；訓練與監控只能讀它寫入的資料表，不能執行它。
 DERIVATION_ASSET = "raw_taipower_load"
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
+
+# 監控排程讀 DATA_DIR 下的模型目錄；隔離後主機上的 data/models 不會影響判定。
+pytestmark = pytest.mark.usefixtures("isolated_models_dir")
 
 
 def _tick(schedule_name: str, repository: TimeSeriesRepository, instance):
@@ -163,3 +173,62 @@ def test_a_materialization_under_the_pre_factory_key_does_not_count(
     execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)
 
     assert execution.run_requests == []
+
+
+def test_monitoring_skips_as_a_mismatch_when_only_the_model_directory_has_a_model(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    """A rebuilt Dagster instance beside a kept data/models has no metrics for monitoring to read."""
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    install_model_double(isolated_models_dir)
+
+    execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)
+
+    assert execution.run_requests == []
+    assert "Training record and model directory disagree" in execution.skip_message
+    assert f"Run {NAMES.training_job} once" in execution.skip_message
+
+
+def test_monitoring_runs_when_only_the_training_record_has_a_model(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+) -> None:
+    """Monitoring reads the recorded metrics, never the model directory."""
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    dagster_instance.report_runless_asset_event(AssetMaterialization(NAMES.model))
+
+    execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)
+
+    assert len(execution.run_requests) == 1
+
+
+def test_training_runs_whatever_the_model_state_once_accumulation_is_met(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    """Retraining is the remedy for a mismatch, so the training schedule never waits on it."""
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    install_model_double(isolated_models_dir)
+
+    execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
+
+    assert len(execution.run_requests) == 1
+
+
+def _unreadable(*_args, **_kwargs):
+    raise RuntimeError("cannot read")
+
+
+def test_training_reads_only_the_accumulation_gate(
+    test_repo: TimeSeriesRepository,
+    dagster_instance,
+    min_hours: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreadable training record or model directory cannot break the training tick."""
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    monkeypatch.setattr(dagster_instance, "get_latest_materialization_event", _unreadable)
+    monkeypatch.setattr("shiro_mlops.pipelines.cold_start.has_installed_model", _unreadable)
+
+    execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
+
+    assert execution.skip_message is None
+    assert len(execution.run_requests) == 1

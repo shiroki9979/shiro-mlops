@@ -91,7 +91,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 
 | 函式 | 行為 |
 | :--- | :--- |
-| `check_training_readiness(task, runtime, *, as_of=None)` | 回傳累積摘要；傳入 `as_of` 時只計該時間以前的有效逐時負載，全表任何時間的 legacy 列仍阻擋訓練；未傳入時供排程 skip 與 smoke check 檢查目前累積量 |
+| `check_training_readiness(task, runtime, *, as_of=None)` | 回傳累積摘要，其 `outcome`（`AccumulationOutcome`）為三種結果之一：`BLOCKED_BY_LEGACY_ROWS`（有 `source IS NULL` 的舊列，不論有效逐時觀測是否已達門檻）、`BELOW_MINIMUM_ACCUMULATION`（有效逐時觀測未達最低累積）、`MINIMUM_ACCUMULATION_REACHED`（唯一可訓練的結果）；`ready` 與 `reason` 皆由 `outcome` 導出。傳入 `as_of` 時只計該時間以前的有效逐時負載，全表任何時間的 legacy 列仍阻擋訓練；未傳入時供排程 skip 與 smoke check 檢查目前累積量 |
 | `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`；讀取 `as_of` 以前的目標序列與同期觀測天氣，並以 `validation_fraction` 推導 `validation_start`。觀測天氣為加權天氣：各代表點在同一觀測整點皆有值才合成，任一點缺少的整點沒有加權值，交由任務類型既有的缺值規則處理 |
 | `train_task(task, runtime, *, as_of) -> Trained` | `load_training_data` 後交由 `fit_task` |
 | `fit_task(task, data) -> Trained` | 以已讀取且通過門檻的 `TrainingData` 交由任務類型訓練 |
@@ -122,5 +122,6 @@ serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是
 - `save_model(root, task_id, model) -> SavedModel`：回傳 `SavedModel(directory, sha256)`，`sha256` 取自暫存目錄（即安裝的同一組檔案）。模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗；僅程序於兩次 rename 之間中止時，任務於下次訓練成功前沒有模型，遺留的舊目錄 `.<task_id>.previous` 於下次保存（持排他鎖、安裝前）清除。每任務檔案鎖 `root/.<task_id>.lock` 保護交換與讀取：只有保存端（排他鎖）會建立鎖檔，且於首次安裝模型目錄前建立；讀取端（共享鎖）以唯讀模式開啟既有鎖檔、不建立鎖檔，因此 `root` 可唯讀掛載（本機 compose 的 API 即唯讀掛載）。交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
 - `load_model_with_sha256(root, task) -> LoadedModel | None`：在同一把共享鎖下讀取 `root/<task_id>` 並計算該目錄雜湊，回傳 `LoadedModel(model, sha256)`；交換須等鎖釋放，故載入的模型與雜湊必屬同一目錄版本，不會是半新半舊的組合。目錄不存在時回傳 `None`（任務尚未訓練；鎖檔是否存在皆同，舊版讀取端曾為未訓練任務建立鎖檔）；目錄存在而鎖檔不存在時再找一次鎖檔（涵蓋首次訓練恰於此時建立鎖檔並安裝目錄），仍不存在則拋 `MissingModelLockError`（該目錄非由 `save_model` 安裝，例如手動複製，重新訓練即取代）；既有 `model.joblib` 不載入。
 - `load_model(root, task) -> TaskModel | None`：同上，只回傳模型；替換期間只會載入完整的前一版或新模型。
+- `has_installed_model(root, task_id) -> bool`：以與 `load_model_with_sha256` 相同的規則（同一把共享鎖、鎖檔與目錄皆須存在）判斷任務有沒有可載入的模型，但不載入模型、不計算雜湊；非由 `save_model` 安裝的目錄（載入時會拋 `MissingModelLockError`）視為沒有模型。冷啟動階段（[Dagster 排程 §1](dagster-schedules.md)）以此判斷模型目錄。
 - 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）；`direct_classification` 同為 `model.txt`（二元分類 Booster 文字格式）與 `metadata.json`（格式版本、任務類型、完整 `[params]`、`max_lead_hours`、特徵名稱、氣象欄位）；`unsupervised_reconstruction` 為 `model.npz`（`coef_{i}`、`intercept_{i}` 各層權重與偏差，`scaler_mean`、`scaler_scale` 標準化參數；以 `allow_pickle=False` 讀取）與 `metadata.json`（格式版本、任務類型、激活函數、層數、`window_hours`、氣象欄位、特徵名稱、`threshold`），推論以 numpy 前向計算，不重建 sklearn 物件。
 - `src/` 不得 import `pickle` 或 `joblib`，由測試強制。

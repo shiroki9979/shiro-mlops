@@ -33,10 +33,30 @@
      | 資產 | `{task_id}__monitoring` | 經 runner `monitor_task` 以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新一列（僅 `source = 'regional_snapshot_sum'`），再由任務類型 `assess_health` 以任務設定 `[health]` 門檻判定；輸出 `task_id`、`status`（`HEALTHY`／`WARNING`）、`health_reason`、`metrics`、`training_rows`、`target_hours`（有效逐時目標觀測數）、`latest_target_time`、`latest_target_value`（目前任務的目標皆為逐時實際負載，單位 MW） |
      | job | `{task_id}__training_job` | selection 為 `{task_id}__features` 及其所有下游（model、monitoring，以及只掛在該任務的資產，例如 Feast 匯出） |
      | job | `{task_id}__monitoring_job` | selection 僅含 `{task_id}__monitoring`；model 輸出取自最近一次訓練的 I/O Manager 產物，不重跑讀取完整歷史的 features |
-     | 排程 | `{task_id}__training_schedule` | cron 取自 `[schedule].training`，時區 `Asia/Taipei`；最低累積未達時以 `SkipReason` 揭露差距 |
-     | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需 `{task_id}__model` 已有 materialization |
+     | 排程 | `{task_id}__training_schedule` | cron 取自 `[schedule].training`，時區 `Asia/Taipei`；只看最低累積，未達時以 `SkipReason` 揭露差距，不受模型狀態影響（見下方冷啟動階段） |
+     | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需訓練紀錄有模型（`{task_id}__model` 已有 materialization），不看模型目錄（見下方冷啟動階段） |
 
    - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）、`forecast_track_record`（見第 7 項）或 `forecast_view_export`（見第 8 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
+   - **冷啟動階段（`pipelines/cold_start.py`）**：`read_cold_start` 從三個輸入判定任務的階段與原因：最低累積的結果（見下方「最低累積」）、模型目錄（`DATA_DIR/models/{task_id}/` 有沒有由模型存放安裝的模型，規則同 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy) 的 `has_installed_model`）、訓練紀錄（`{task_id}__model` 有沒有 materialization）。只判斷兩邊有沒有模型：不載入模型、不比對雜湊（訓練先安裝模型目錄、再寫 materialization，比對雜湊會把每次訓練中間的空檔判成不一致）。五個階段為封閉集合，每個都帶原因：
+
+     | 階段 | 條件 | 原因 |
+     | :--- | :--- | :--- |
+     | 舊列阻擋（`BLOCKED_BY_LEGACY_ROWS`） | 兩邊都沒有模型，最低累積被 `source IS NULL` 的舊列擋下 | 最低累積的原因 |
+     | 累積中（`ACCUMULATING`） | 兩邊都沒有模型，有效逐時觀測未達最低累積 | 最低累積的原因 |
+     | 待首次訓練（`AWAITING_FIRST_TRAINING`） | 兩邊都沒有模型，已達最低累積 | 最低累積的原因，並說明下一次 `{task_id}__training_job` 會訓練第一個模型 |
+     | 已訓練（`TRAINED`） | 訓練紀錄與模型目錄都有模型 | 兩邊都有模型 |
+     | 紀錄與目錄不一致（`RECORD_DIRECTORY_MISMATCH`） | 只有一邊有模型（例如刪除 `dagster_home` volume 但保留 `data/models/`，或相反） | 點名缺少模型的一邊，處理方式為執行一次 `{task_id}__training_job` |
+
+     已有模型時，階段停在「已訓練」或「紀錄與目錄不一致」，即使最低累積之後又未通過（例如調高 `min_training_hours`，或舊列被寫回），因此階段不是單純的線性鏈。訓練、監控與發布排程「要不要執行、不執行的原因」都由此 module 給出，排程本身不查 materialization、模型目錄或最低累積；每個排程只看自己的資產實際會用到的那一邊。各排程也只讀自己需要的輸入：訓練排程以 `read_training_decision` 只查最低累積，讀不到訓練紀錄或模型目錄不影響訓練 tick；發布排程與發布資產以 `read_model_presence` 只讀訓練紀錄與模型目錄，不查負載資料表；監控排程以 `read_cold_start` 讀全部三個輸入。發布排程（第 6 項）只看模型目錄，不看最低累積，因此最低累積未通過時照常發布：
+
+     | 模型狀態 | 訓練排程 | 監控排程 | 發布排程 |
+     | :--- | :--- | :--- | :--- |
+     | 最低累積未通過（不論模型狀態） | 以最低累積的原因略過 | 以最低累積的原因略過 | 依下列模型狀態，不看最低累積 |
+     | 兩邊都沒有 | 執行 | 略過：`No {task_id}__model materialization yet; {task_id}__monitoring_schedule waits for the first successful {task_id}__training_job run.` | 略過：`No dynamic_horizon_forecast__model materialization yet; issued_forecast_schedule waits for the first successful training run.` |
+     | 兩邊都有 | 執行 | 執行 | 執行 |
+     | 只有訓練紀錄 | 執行 | 執行（監控資產從上次訓練的紀錄取 metrics，不讀模型目錄） | 以「紀錄與目錄不一致」的原因略過 |
+     | 只有模型目錄 | 執行（重新訓練即不一致的處理方式） | 以「紀錄與目錄不一致」的原因略過 | 執行（發布資產從模型目錄載入模型），MLflow 附註留空 |
+
    - **排程 run_key 與 as_of**：兩個排程以 `tick_run_request` 把 tick 的台灣本地時間 ISO 字串同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），同一 tick 重複評估不重跑；無 tick 的手動評估兩者都不帶。`{task_id}__features` 與 `{task_id}__monitoring` 以 run 的 as_of 呼叫 runner，沒有 tick 時退回現在：排程 tick 發起的 run 為該 tick（例如動態視界預報每日 00:00 的訓練固定以 00:00 為 as_of，不因排隊或執行延遲而後移），手動執行與重新執行的 run 為 run 建立時刻；資產沒有 tick 設定欄位。訓練 job 內所有資產共用同一 run 的 as_of，因此訓練 job 裡的 monitoring 與 features 用同一時刻。兩個 job 目前沒有重試政策。
    - **MLflow**：每個任務擁有獨立 experiment 與 registered model，名稱皆等於 `task_id`。每次訓練以 `{task_id}_training` 為 run 名稱記錄 metrics、攤平的 `[params]`（巢狀鍵以 `.` 連接，另含 `task_id`、`task_type`）與模型目錄（artifact path `model`），並以該 artifact URI 建立新的 model version（模型為原生檔案而非 MLflow logged model，ADR-0010）。MLflow 不可用時記錄警告、`run_id` 標為 `local_run`，已保存的模型仍有效。
    - **動態視界預報任務**：`dynamic_horizon_forecast__training_schedule` 為 `0 0 * * *`（`Asia/Taipei`，與舊版 `0 16 * * *` UTC 同一時刻），`dynamic_horizon_forecast__monitoring_schedule` 為 `0 * * * *`；健康門檻 `max_mape = 10.0`。
@@ -76,7 +96,7 @@
    - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，經 `time_series_repo` resource 交出的已發布預報 store（`issued_forecast_store`）寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。
    - **lineage**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，因此任務 job 不會帶出發布（見第 1 項邊界）。`issued_forecast_job` 不選取任何擷取資產。
    - **只有定時發布才算**：資產宣告沒有 tick 時拒絕（[執行來源與 as_of](#執行來源與-as_of)），退回現在等於在 tick 以外的時刻補發。只有排程 tick 發起的 run 以該 tick 發布；手動 materialize、在 launchpad 自填 tick 標籤的 run，以及重新執行的 run 皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過、不產生 run。隨需 `/predict` 不寫入。
-   - **無法產出**：尚無 `dynamic_horizon_forecast__model` materialization 時，排程以 `SkipReason` 略過。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入；模型目錄不存在時同樣以 `Failure` 結束。
+   - **無法產出**：排程與資產都以第 1 項的 `read_model_presence` 判斷有沒有模型可發布，只看模型目錄、不查最低累積。模型目錄沒有由模型存放安裝的模型時，排程以 `SkipReason` 略過：兩邊都沒有模型時為尚無 `dynamic_horizon_forecast__model` materialization 的原因，只有訓練紀錄時為「紀錄與目錄不一致」的原因。只有模型目錄時（例如刪除 `dagster_home` volume 但保留 `data/models/`）照常發布，MLflow 附註（`mlflow_model_version`）依 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的雜湊比對規則留空。模型目錄在 tick 之後、run 載入之前消失時，資產以 `Failure` 結束、description 與上述排程的略過原因相同（說明沒有模型，或紀錄與目錄不一致）並附 `issued_at` metadata，不寫入。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入。
    - **不設重試政策**：`issued_forecast` 資產與 `issued_forecast_job` 皆無重試政策；重新執行的 run 不寫入（見上）。理由見 [ADR-0013 §2.1](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#21-已發布預報) 的不補發與 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)。
    - **冪等性**：同一發布時刻已有紀錄（例如 commit 後崩潰被重跑）時不預報、不寫入、不覆寫，資產成功並以 metadata `already_issued = true` 標示；新寫入時 metadata 另記 `load_anchor`、`status`、`model_sha256` 與步數。
 7. **`forecast_track_record`（預報實績，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
@@ -103,4 +123,4 @@
 10. **本機冷啟動**：
     - 空資料庫啟動後，台電即時快照排程須先累積區域快照，且 `hourly_actual_load_job` 產出的有效逐時觀測達訓練最低累積；之後由操作人員依序 materialize CWA 觀測資產、CWA 預報資產與訓練工作；完成前 `/ready` 回傳 HTTP 503。
     - 不新增一次性 bootstrap sensor，也不等待每日訓練排程自然觸發。
-    - 操作人員以 `python -m shiro_mlops.pipelines.smoke_check`（`make smoke-check`）在 Dagster 容器內檢查排程註冊與啟用狀態（任務排程的期望 cron 由任務設定推導）、各任務訓練與監控 job 的 selection 邊界，以及每個任務的累積進度（`{task_id} load accumulation`）、新鮮度（`{task_id} load freshness`）與兩個任務排程下一次 tick 的結果，並檢查 `issued_forecast_schedule`（第 6 項）的註冊、啟用狀態、期望 cron 與下一次 tick 的結果（例如尚無模型時的略過原因）；此檢查唯讀，只評估排程函式，不啟動 run。發布排程未註冊或 cron 不符為 `FAIL`；已註冊但未開啟為 `WAIT`，因冷啟動期間首次訓練成功後才開啟。另檢查 `forecast_track_record_schedule`（第 7 項）的註冊、啟用狀態與期望 cron；未註冊、cron 不符或未開啟皆為 `FAIL`，比照擷取排程而非發布排程，因彙整不依賴模型，冷啟動時就與擷取排程一起開啟。`forecast_view_export_schedule`（第 8 項）比照預報實績排程：未註冊、cron 不符或未開啟皆為 `FAIL`。`--require-ready` 讓任一 `WAIT` 也回傳結束碼 `1`；`--task <task_id>` 保留擷取、發布、預報實績與匯出排程檢查，任務相關檢查只涵蓋該任務，未知任務為用法錯誤（結束碼 `2`）並列出已部署任務。操作步驟見 [冷啟動恢復指南](../how-to/recover-training-after-load-cold-start.md)。
+    - 操作人員以 `python -m shiro_mlops.pipelines.smoke_check`（`make smoke-check`）在 Dagster 容器內檢查排程註冊與啟用狀態（任務排程的期望 cron 由任務設定推導）、各任務訓練與監控 job 的 selection 邊界，以及每個任務的累積進度（`{task_id} load accumulation`）、新鮮度（`{task_id} load freshness`）、冷啟動階段（`{task_id} model`）與兩個任務排程下一次 tick 的結果，並檢查 `issued_forecast_schedule`（第 6 項）的註冊、啟用狀態、期望 cron 與下一次 tick 的結果（例如尚無模型時的略過原因）；此檢查唯讀，只評估排程函式，不啟動 run。發布排程未註冊或 cron 不符為 `FAIL`；已註冊但未開啟為 `WAIT`，因冷啟動期間首次訓練成功後才開啟。另檢查 `forecast_track_record_schedule`（第 7 項）的註冊、啟用狀態與期望 cron；未註冊、cron 不符或未開啟皆為 `FAIL`，比照擷取排程而非發布排程，因彙整不依賴模型，冷啟動時就與擷取排程一起開啟。`forecast_view_export_schedule`（第 8 項）比照預報實績排程：未註冊、cron 不符或未開啟皆為 `FAIL`。`{task_id} model` 讀第 1 項的冷啟動階段，與排程讀的是同一個判定，訊息為階段名稱加上階段原因：兩邊都沒有模型的三個階段為 `WAIT`，「已訓練」為 `PASS`，「紀錄與目錄不一致」為 `FAIL`（不需 `--require-ready` 即讓結束碼為 `1`），原因點名缺少的一邊與處理方式。讀不到 TimescaleDB 時，該任務的累積、新鮮度、冷啟動階段與兩個 tick 皆為 `FAIL`；只讀不到訓練紀錄或模型目錄時只有冷啟動階段那一行為 `FAIL`；兩者都不中斷其餘檢查。`--require-ready` 讓任一 `WAIT` 也回傳結束碼 `1`；`--task <task_id>` 保留擷取、發布、預報實績與匯出排程檢查，任務相關檢查只涵蓋該任務，未知任務為用法錯誤（結束碼 `2`）並列出已部署任務。操作步驟見 [冷啟動恢復指南](../how-to/recover-training-after-load-cold-start.md)。

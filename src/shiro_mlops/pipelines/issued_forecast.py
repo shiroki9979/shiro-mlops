@@ -18,6 +18,7 @@ from dagster import (
     AssetExecutionContext,
     AssetKey,
     AssetSelection,
+    DagsterInstance,
     Failure,
     MaterializeResult,
     MetadataValue,
@@ -33,6 +34,7 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
+from shiro_mlops.pipelines.cold_start import ScheduleDecision, read_model_presence
 from shiro_mlops.pipelines.execution_origin import (
     WithoutTick,
     run_as_of,
@@ -47,7 +49,6 @@ from shiro_mlops.pipelines.schedules import (
 from shiro_mlops.pipelines.task_pipelines import (
     MODEL_SHA256_METADATA,
     TIME_SERIES_REPO,
-    TaskPipelineNames,
     latest_recorded_model,
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
@@ -66,7 +67,6 @@ ISSUED_FORECAST_ASSET = "issued_forecast"
 ISSUED_FORECAST_JOB = "issued_forecast_job"
 ISSUED_FORECAST_SCHEDULE = "issued_forecast_schedule"
 ISSUED_FORECAST_TASK = DYNAMIC_HORIZON_FORECAST
-_MODEL_ASSET = TaskPipelineNames(ISSUED_FORECAST_TASK).model
 
 
 @asset(
@@ -91,8 +91,8 @@ def issued_forecast(context: AssetExecutionContext) -> MaterializeResult:
     store = repository.issued_forecast_store
     if store.fetch(issued_at) is not None:
         return _issued_result(issued_at, already_issued=True)
-    loaded = _load_model()
     runtime = TaskRuntime.from_composition_root(repository)
+    loaded = _load_model(context, issued_at)
     try:
         outcome = predict_task(
             deployed_task(ISSUED_FORECAST_TASK),
@@ -113,13 +113,30 @@ def issued_forecast(context: AssetExecutionContext) -> MaterializeResult:
     return _issued_result(issued_at, already_issued=not written, forecast=forecast)
 
 
-def _load_model() -> LoadedModel:
-    loaded = load_model_with_sha256(settings.models_dir, deployed_task(ISSUED_FORECAST_TASK))
-    if loaded is None:
-        raise Failure(
-            description=f"No trained {ISSUED_FORECAST_TASK} model under {settings.models_dir}."
-        )
-    return loaded
+def _load_model(context: AssetExecutionContext, issued_at: datetime) -> LoadedModel:
+    """Load only when issuing may run; otherwise fail with the issuing schedule's skip reason.
+
+    The decision is read again when loading finds nothing: the directory can vanish
+    between the decision and the load, and the second read names what is missing now.
+    """
+    decision = _issuing_decision(context.instance)
+    if decision.runs:
+        loaded = load_model_with_sha256(settings.models_dir, deployed_task(ISSUED_FORECAST_TASK))
+        if loaded is not None:
+            return loaded
+        decision = _issuing_decision(context.instance)
+    raise Failure(
+        description=decision.skip_reason
+        or f"{ISSUED_FORECAST_TASK} model changed while loading; the next tick loads it again.",
+        metadata=_issued_at_metadata(issued_at),
+    )
+
+
+def _issuing_decision(instance: DagsterInstance) -> ScheduleDecision:
+    """Model presence only: issuing never queries the accumulation gate or the load store for it."""
+    return read_model_presence(
+        ISSUED_FORECAST_TASK, instance=instance, models_root=settings.models_dir
+    ).issuing(ISSUED_FORECAST_SCHEDULE)
 
 
 def _mlflow_model_version_note(context: AssetExecutionContext, loaded_sha256: str) -> str | None:
@@ -200,12 +217,11 @@ issued_forecast_job = define_asset_job(
     description="Issue the dynamic horizon forecast at fifteen minutes past each hour",
 )
 def issued_forecast_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Each tick is its own issue time; nothing is issued before the first trained model."""
-    if latest_recorded_model(context.instance, ISSUED_FORECAST_TASK) is None:
-        return SkipReason(
-            f"No {_MODEL_ASSET} materialization yet; {ISSUED_FORECAST_SCHEDULE} waits for "
-            "the first successful training run."
-        )
+    """Each tick is its own issue time; only an installed model in the model directory issues."""
+    return _issuing_decision(context.instance).run_or_skip(_issue_request(context))
+
+
+def _issue_request(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
     if scheduled_tick(context) is None:
         return SkipReason("No scheduled tick to issue at; only scheduled ticks issue forecasts.")
     return tick_run_request(context)
