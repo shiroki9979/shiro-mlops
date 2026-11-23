@@ -2,14 +2,15 @@ import { type ComponentType, useId } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shiro-mlops/shared/ui/select'
 import { EMPTY_VALUE } from '@shiro-mlops/shared/i18n/format'
+import { emptyBecause, isNonEmpty, type NonEmptyArray, type QueryView, toQueryView } from '@shiro-mlops/shared/query-view'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
-import type { QueryParams } from '@/lib/api-client'
+import type { DataExplorerError, QueryParams } from '@/lib/api-client'
 import { isFlagOn } from '@/lib/data-explorer'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
-import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
+import { AggSchema, BucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { type ChartBrush, useChartBrush } from './chart-brush'
 import { ChartFieldPicker } from './chart-field-picker'
@@ -27,9 +28,6 @@ const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> 
   stackedArea: SeriesStackedAreaChart,
   status: SeriesStatusChart,
 }
-
-const INVALID_QUERY_STATUS = 422
-const DATABASE_UNAVAILABLE_STATUS = 503
 
 interface ExplorerChartCardProps {
   dataset: ExplorerDatasetConfig
@@ -58,7 +56,14 @@ export function ExplorerChartCard({
   const fields = selectedChartFields(chartSearch.fields, chart.fields)
   const prompt = missingFilterPrompt(chart, query, m)
   const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch, fields), !prompt)
-  const plotted = seriesQuery.data && !prompt ? plotSeries(seriesQuery.data.series, chart, m, locale) : []
+  const view = toQueryView(seriesQuery, {
+    policy: 'data-first',
+    settle: (data) => {
+      const series = plotSeries(data.series, chart, m, locale)
+      return isNonEmpty(series) ? series : emptyBecause('nothingToPlot')
+    },
+  })
+  const plotted = view.kind === 'content' && !prompt ? view.content : []
   const resolvedBucket = seriesQuery.data?.bucket
   const brush = useChartBrush((selection) => {
     if (resolvedBucket) onWindowChange(brushWindow(selection, resolvedBucket, dataset.cadenceSeconds))
@@ -124,7 +129,7 @@ export function ExplorerChartCard({
         {prompt ? (
           <p className="text-sm text-amber-200">{prompt}</p>
         ) : (
-          <ChartBody chart={chart} query={seriesQuery} plotted={plotted} brush={brush} text={chartText} />
+          <ChartBody chart={chart} view={view} brush={brush} text={chartText} />
         )}
       </CardContent>
     </Card>
@@ -133,16 +138,50 @@ export function ExplorerChartCard({
 
 interface ChartBodyStateProps {
   chart: ExplorerChartConfig
-  query: ReturnType<typeof useDatasetSeries>
-  plotted: PlottedSeries[]
+  view: QueryView<NonEmptyArray<PlottedSeries>, 'nothingToPlot', DataExplorerError>
   brush: ChartBrush
   text: Messages['explorer']['chart']
 }
 
-function ChartBody({ chart, query, plotted, brush, text }: ChartBodyStateProps) {
-  if (query.isLoading) return <p className="text-sm text-slate-400">{text.loading}</p>
-  if (query.isError) return <p className="text-sm text-rose-300">{seriesErrorMessage(query.error, text)}</p>
-  if (plotted.length === 0) return <p className="text-sm text-slate-300">{text.empty}</p>
+function ChartBody({ chart, view, brush, text }: ChartBodyStateProps) {
+  switch (view.kind) {
+    case 'loading':
+      return <p className="text-sm text-slate-400">{text.loading}</p>
+    // Only a missing required filter disables the series, and the card shows its prompt instead.
+    case 'disabled':
+      return null
+    case 'paused':
+    case 'error':
+      return <p className="text-sm text-rose-300">{seriesErrorMessage(view.error, text)}</p>
+    case 'empty':
+      return (
+        <>
+          {view.refreshFailed && <RefreshFailedNotice error={view.error} text={text} />}
+          <p className="text-sm text-slate-300">{text.empty}</p>
+        </>
+      )
+    case 'content':
+      return (
+        <>
+          {view.refreshFailed && <RefreshFailedNotice error={view.error} text={text} />}
+          <PlottedChart chart={chart} plotted={view.content} brush={brush} text={text} />
+        </>
+      )
+  }
+}
+
+function RefreshFailedNotice({ error, text }: { error: DataExplorerError | undefined; text: Messages['explorer']['chart'] }) {
+  return <p className="mb-2 text-xs text-rose-300">{text.refreshFailed(seriesErrorMessage(error, text))}</p>
+}
+
+interface PlottedChartProps {
+  chart: ExplorerChartConfig
+  plotted: NonEmptyArray<PlottedSeries>
+  brush: ChartBrush
+  text: Messages['explorer']['chart']
+}
+
+function PlottedChart({ chart, plotted, brush, text }: PlottedChartProps) {
   const Renderer = CHART_RENDERERS[chart.type]
   const bands: ChartBands | undefined = chart.markIncompleteBuckets ? bucketBands(plotted) : undefined
   const gaps = bands?.gaps ?? gapRanges(plotted)
@@ -242,19 +281,18 @@ function missingFilterPrompt(chart: ExplorerChartConfig, query: Record<string, s
   return m.explorer.chart.requiresFilter(explorerFieldLabel(required.filter, m), explorerFieldLabel(required.when, m))
 }
 
-function seriesErrorMessage(error: unknown, text: Messages['explorer']['chart']): string {
-  const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined
-  if (status === DATABASE_UNAVAILABLE_STATUS) return text.databaseUnavailable
-  if (status !== INVALID_QUERY_STATUS) return text.queryFailed
-  const suggested = suggestedBucket(error)
-  return suggested ? text.tooManyPoints(text.buckets[suggested]) : text.invalidQuery
-}
-
-function suggestedBucket(error: unknown): ResolvedBucket | undefined {
-  const data = typeof error === 'object' && error !== null && 'data' in error ? error.data : undefined
-  const detail = typeof data === 'object' && data !== null && 'detail' in data ? data.detail : undefined
-  const suggested = typeof detail === 'object' && detail !== null && 'suggested_bucket' in detail ? detail.suggested_bucket : undefined
-  const parsed = ResolvedBucketSchema.safeParse(suggested)
-  return parsed.success ? parsed.data : undefined
+// A read paused offline has no error, so it shows the generic failure.
+function seriesErrorMessage(error: DataExplorerError | undefined, text: Messages['explorer']['chart']): string {
+  if (!error) return text.queryFailed
+  switch (error.kind) {
+    case 'databaseUnavailable':
+      return text.databaseUnavailable
+    case 'invalidQuery':
+      return error.suggestedBucket ? text.tooManyPoints(text.buckets[error.suggestedBucket]) : text.invalidQuery
+    case 'cursorRejected':
+    case 'invalidResponse':
+    case 'other':
+      return text.queryFailed
+  }
 }
 

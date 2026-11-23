@@ -66,6 +66,7 @@ export const zhTW = {
       title: '資料來源狀態',
       loading: '載入資料來源狀態中...',
       error: '資料庫無法連線或狀態 API 不可用。',
+      refreshFailed: '資料來源狀態更新失敗，顯示先前的結果。',
       openExplorer: '在營運資料檢視器中開啟',
       explorerDisabled: '營運資料檢視器未啟用',
       legend: '可用性、資料新鮮度與資料完整度分別揭露是否有資料、資料是否過期，以及資料是否齊全。',
@@ -86,6 +87,7 @@ export const zhTW = {
     timeZoneNote: '時區：Asia/Taipei',
     loadingStatus: '載入資料集狀態中...',
     statusError: '無法取得資料集狀態。',
+    statusRefreshFailed: '資料集狀態更新失敗，以下為先前讀到的狀態。',
     navGroups: { power: '電力', weather: '氣象', audit: '審計' },
     datasets: {
       hourly_load: {
@@ -240,6 +242,7 @@ export const zhTW = {
       invalidFilters: '篩選條件無效，請確認時間範圍與欄位格式。',
       databaseUnavailable: '資料庫目前無法連線，請稍後再試。',
       queryFailed: '查詢失敗，請稍後再試。',
+      refreshFailed: (reason: string) => `更新失敗，以下仍是上次讀取的資料：${reason}`,
       backToFirstPage: '回到第一頁',
       detailLimitExceeded: (days: string) => `目前窗口超過明細上限 ${days} 天，請在圖上框選或縮小窗口以檢視明細`,
       empty: '查無符合資料，查詢成功但結果為空。',
@@ -264,6 +267,7 @@ export const zhTW = {
       loading: '載入圖表中...',
       empty: '查詢區間內沒有可繪製的資料。',
       queryFailed: '圖表查詢失敗，請稍後再試。',
+      refreshFailed: (reason: string) => `更新失敗，以下仍是上次讀取的圖：${reason}`,
       invalidQuery: '圖表參數無效，請確認時間範圍不超過 92 天且欄位正確。',
       databaseUnavailable: '資料庫目前無法連線，請稍後再試。',
       tooManyPoints: (bucket: string) => `資料點超過上限，建議改用「${bucket}」粒度。`,
@@ -281,6 +285,7 @@ export const zhTW = {
       loading: '載入小圖中...',
       empty: '沒有可繪製的資料。',
       failed: '小圖查詢失敗。',
+      refreshFailed: '小圖更新失敗，顯示先前的結果。',
       lineLabel: (dataset: string, range: string, fields: string, series: string) =>
         `${dataset}${range}走勢；欄位：${fields}；序列：${series}`,
       statusGridLabel: (dataset: string, range: string, summary: string) => `${dataset}${range}每小時狀態：${summary}`,

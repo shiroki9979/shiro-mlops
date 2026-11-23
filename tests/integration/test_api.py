@@ -1,7 +1,7 @@
 """Integration tests for FastAPI endpoints."""
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -485,6 +485,25 @@ def test_startup_builds_one_composition_root_for_explorer_and_served_tasks(
         f"Stale load anchor: latest actual load at {latest_hour.isoformat()}"
     )
     assert opened == [sqlite_engine]
+
+
+def test_health_fails_on_a_model_state_it_does_not_project() -> None:
+    """A model state without its own case must not pass for one of the known states."""
+
+    @dataclass(frozen=True)
+    class Unprojected:
+        pass
+
+    served = ServedTasks(
+        deployed_tasks(),
+        {DYNAMIC_HORIZON_FORECAST: Unprojected()},
+        runtime=_fake_runtime(),
+        clock=lambda: FRESH_REQUEST_TIME,
+    )
+    client = TestClient(create_app(repository=MagicMock(), served_tasks=served))
+
+    with pytest.raises(AssertionError, match="Unprojected"):
+        client.get("/health")
 
 
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:

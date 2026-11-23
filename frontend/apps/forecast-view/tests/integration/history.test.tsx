@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, within } from '@testing-library/react'
+import { onlineManager } from '@tanstack/react-query'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
 import { EMPTY_VALUE } from '@shiro-mlops/shared/i18n/format'
@@ -62,6 +63,7 @@ describe('Forecast View /history track record', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    onlineManager.setOnline(true)
   })
 
   it.each([
@@ -197,6 +199,55 @@ describe('Forecast View /history track record', () => {
 
     expect(await screen.findByText(text.staleHint)).toBeInTheDocument()
     expect(reads).toBe(2)
+  })
+
+  it('keeps the track record on screen when a later background read fails', async () => {
+    // Also fake intervals, so the test can fire the background read (see the stale hint test above).
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    setNow('2026-11-20T04:00:00Z')
+    let failedReads = 0
+    server.use(
+      http.get(TRACK_RECORD_URL, () => HttpResponse.json(TRACK_RECORD), { once: true }),
+      http.get(TRACK_RECORD_URL, () => {
+        failedReads += 1
+        return new HttpResponse(null, { status: 500 })
+      }),
+    )
+    const text = renderHistory()
+    await screen.findByRole('group', { name: text.metrics.lead24Mape })
+
+    await act(async () => {
+      vi.advanceTimersByTime(BACKGROUND_REFRESH_MS)
+      await vi.waitFor(() => expect(failedReads).toBe(1))
+      // React Query hands the failed result to the page on a later macrotask.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(screen.getByRole('group', { name: text.metrics.lead24Mape })).toBeInTheDocument()
+    expect(screen.queryByText(text.loadError)).not.toBeInTheDocument()
+  })
+
+  it('shows the neutral error while offline before the first read, then the track record once back online', async () => {
+    let reads = 0
+    server.use(
+      http.get(TRACK_RECORD_URL, () => {
+        reads += 1
+        return HttpResponse.json(TRACK_RECORD)
+      }),
+    )
+    onlineManager.setOnline(false)
+    const text = renderHistory()
+
+    expect(await screen.findByText(text.loadError)).toBeInTheDocument()
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull()
+    expect(reads).toBe(0)
+
+    act(() => onlineManager.setOnline(true))
+
+    expect(await screen.findByRole('group', { name: text.metrics.lead24Mape })).toBeInTheDocument()
+    expect(screen.queryByText(text.loadError)).not.toBeInTheDocument()
+    expect(reads).toBe(1)
   })
 
   it('shows no stale hint in the error state', async () => {

@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache, reduce
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, assert_never
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, create_model
@@ -21,9 +21,13 @@ from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
 from shiro_mlops.service.served_tasks import (
+    Loaded,
+    LoadFailed,
+    ServedModel,
     ServedTasks,
     ServingFailedError,
     ServingUnavailableError,
+    Untrained,
 )
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import (
@@ -196,21 +200,13 @@ TaskPredictionResponse = reduce(
 @routes.get("/health", response_model=HealthResponse)
 def health_check(served: Served) -> HealthResponse:
     """Check API and per-task model health status."""
-    statuses = served.model_status()
+    tasks = {task_id: _model_health(model) for task_id, model in served.served_models().items()}
     return HealthResponse(
         status="ok",
         version=__version__,
         environment=settings.ENVIRONMENT,
-        model_loaded=statuses[DYNAMIC_HORIZON_FORECAST].model_loaded,
-        tasks={
-            task_id: TaskModelHealth(
-                task_type=status.task_type,
-                model_loaded=status.model_loaded,
-                model_sha256=status.model_sha256,
-                reason=status.reason,
-            )
-            for task_id, status in statuses.items()
-        },
+        model_loaded=tasks[DYNAMIC_HORIZON_FORECAST].model_loaded,
+        tasks=tasks,
         data_explorer_enabled=is_data_explorer_enabled(),
     )
 
@@ -260,6 +256,23 @@ def predict_for_task(
         mode=outcome.mode,
         predictions=_prediction_rows(outcome),
     )
+
+
+def _model_health(model: ServedModel) -> TaskModelHealth:
+    match model.state:
+        case Loaded(sha256=sha256):
+            return TaskModelHealth(
+                task_type=model.task_type, model_loaded=True, model_sha256=sha256, reason=None
+            )
+        case Untrained() | LoadFailed() as missing:
+            return TaskModelHealth(
+                task_type=model.task_type,
+                model_loaded=False,
+                model_sha256=None,
+                reason=missing.reason,
+            )
+        case unprojected:
+            assert_never(unprojected)
 
 
 def _task_or_404(served: ServedTasks, task_id: str) -> TaskDefinition:
