@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import PositiveInt, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 if TYPE_CHECKING:
     from shiro_mlops.data.cwa_client import CWALocation
@@ -130,11 +131,19 @@ class Settings(BaseSettings):
     # 專案只裝 psycopg2-binary，不指名 driver 則升級後連 TimescaleDB 會 ModuleNotFoundError
     @property
     def timescale_uri(self) -> str:
-        """Return the PostgreSQL/TimescaleDB connection URI."""
-        return (
-            f"postgresql+psycopg2://{self.TIMESCALE_USER}:{self.TIMESCALE_PASSWORD}@"
-            f"{self.TIMESCALE_HOST}:{self.TIMESCALE_PORT}/{self.TIMESCALE_DB}"
-        )
+        """Return the PostgreSQL/TimescaleDB connection URI.
+
+        ``URL.create`` escapes the credentials, so a password holding ``@`` or ``%``
+        still renders a URI that parses back to the same password and host.
+        """
+        return URL.create(
+            drivername="postgresql+psycopg2",
+            username=self.TIMESCALE_USER,
+            password=self.TIMESCALE_PASSWORD,
+            host=self.TIMESCALE_HOST,
+            port=self.TIMESCALE_PORT,
+            database=self.TIMESCALE_DB,
+        ).render_as_string(hide_password=False)
 
 
 settings = Settings()
