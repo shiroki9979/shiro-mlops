@@ -1,8 +1,8 @@
 """The CWA weather store: canonical station observations and township forecast vintages.
 
-One observation batch, header and station rows, is written in one transaction, and so
-is every product of one forecast ingestion run. Callers pass and receive Taiwan-local
-instants; the stored aware UTC form stays inside this module.
+One observation batch, its header and station rows, is written in one transaction, and
+so is every product of one forecast ingestion run. Callers pass and receive
+observation, issue and validity instants in Taiwan-local time.
 """
 
 from dataclasses import dataclass
