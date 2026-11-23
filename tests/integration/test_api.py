@@ -634,7 +634,7 @@ def test_anomaly_task_reports_a_database_outage_instead_of_missing_weather(
     def unavailable(**_: object) -> pd.DataFrame:
         raise OperationalError("SELECT", {}, Exception("connection refused"))
 
-    monkeypatch.setattr(test_repo, "fetch_cwa_station_observations", unavailable)
+    monkeypatch.setattr(test_repo.cwa_weather_store, "fetch_cwa_station_observations", unavailable)
 
     response = serve_anomaly_task().post(
         f"/tasks/{ANOMALY_TASK}/predict", json={"horizon_hours": 1}
