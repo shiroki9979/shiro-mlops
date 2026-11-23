@@ -27,7 +27,7 @@ export type ExplorerGroupOption = keyof Messages['explorer']['chart']['groupOpti
 export interface ExplorerChartConfig {
   type: ExplorerChartType
   seriesApiPath: string
-  // Default `fields`; a `fields` value already in the URL takes precedence.
+  // Default `fields`; URL `fields` among `fieldOptions` (or, without them, these) take precedence.
   fields: ExplorerFieldKey[]
   // Group key whose values pick a colour from the central palette; others use series order.
   colorBy?: { group: string; palette: CategoryPaletteKey }

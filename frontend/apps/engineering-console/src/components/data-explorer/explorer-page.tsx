@@ -14,7 +14,7 @@ import { useExplorerQuery } from './use-explorer-query'
 
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const explorer = useExplorerQuery(dataset)
-  const { list, state } = explorer
+  const { list, series, state } = explorer
   const statusQuery = useDatasetStatus()
   const refetchSeries = useRefetchDatasetSeries()
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null)
@@ -61,14 +61,13 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         onWindowChange={explorer.setWindow}
         onFilterChange={explorer.setFilter}
       />
-      {dataset.chart && (
+      {dataset.chart && state.chart && series && (
         <ExplorerChartCard
           dataset={dataset}
           chart={dataset.chart}
-          window={state.window}
-          filters={state.filters}
-          chartSearch={state.chart}
-          onSettingChange={explorer.setChartSetting}
+          settings={state.chart}
+          series={series}
+          onChartChange={explorer.setChart}
           onWindowChange={explorer.setWindow}
         />
       )}

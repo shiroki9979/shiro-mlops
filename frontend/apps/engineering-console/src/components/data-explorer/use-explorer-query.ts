@@ -7,15 +7,16 @@ import type { ExplorerWindow } from '@/lib/explorer-window'
 import type { ExplorerDatasetConfig, ExplorerFieldKey } from './catalog'
 import {
   backToFirstPage,
-  changeChartSetting,
+  changeChart,
   changeFilter,
   changeWindow,
-  type ChartSearchKey,
+  type ChartSettings,
   type ExplorerQueryState,
   isWithinDetailLimit,
   listRequest,
   nextPage,
   parseExplorerQuery,
+  seriesRequest,
   toExplorerSearch,
 } from './explorer-query-state'
 
@@ -41,6 +42,8 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
 
   return {
     state,
+    listRequest: request,
+    series: seriesRequest(dataset, state),
     list,
     setStart: (value: string) => navigateTo(changeWindow(dataset, state, { start: value })),
     setEnd: (value: string) => navigateTo(changeWindow(dataset, state, { end: value })),
@@ -51,8 +54,7 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
       if (cursor && isWithinDetailLimit(state)) navigateTo(nextPage(state, cursor))
     },
     restartFromFirstPage,
-    setChartSetting: (key: ChartSearchKey, value: string | string[] | undefined) =>
-      navigateTo(changeChartSetting(state, key, value)),
+    setChart: (patch: Partial<ChartSettings>) => navigateTo(changeChart(dataset, state, patch)),
     refetchList: () => {
       if (request) void list.refetch()
     },
