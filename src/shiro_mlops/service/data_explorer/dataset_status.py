@@ -74,7 +74,7 @@ def _earliest(db: ExplorerDb, dataset: Dataset, window: TimeWindow) -> datetime 
     clauses, params = db.time_window(dataset.time_column, window)
     row = db.fetch_one(
         f"SELECT MIN({dataset.time_column}) AS earliest "
-        f"FROM {dataset.table} WHERE {' AND '.join(clauses)}",
+        f"FROM {dataset.relation} WHERE {' AND '.join(clauses)}",
         params,
     )
     if row is None or row["earliest"] is None:
@@ -83,9 +83,9 @@ def _earliest(db: ExplorerDb, dataset: Dataset, window: TimeWindow) -> datetime 
 
 
 def _newest_instant_count(db: ExplorerDb, dataset: Dataset) -> int:
-    column, table = dataset.time_column, dataset.table
+    column, relation = dataset.time_column, dataset.relation
     count = db.scalar(
-        f"SELECT COUNT(*) FROM {table} WHERE {column} = (SELECT MAX({column}) FROM {table})"
+        f"SELECT COUNT(*) FROM {relation} WHERE {column} = (SELECT MAX({column}) FROM {relation})"
     )
     return int(count or 0)
 
@@ -99,7 +99,7 @@ def _latest_row(db: ExplorerDb, source: FreshnessSource) -> Row | None:
     order = sort_order(source.order or (source.source_column,))
     return db.fetch_one(
         f"SELECT {source.source_column} AS source_at, {source.ingested_column} AS ingested_at "
-        f"FROM {source.table} {where}ORDER BY {order} LIMIT 1",
+        f"FROM {source.relation} {where}ORDER BY {order} LIMIT 1",
         params,
     )
 

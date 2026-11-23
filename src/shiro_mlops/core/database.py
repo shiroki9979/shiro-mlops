@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 # ADR-0009 之前全台負載借用氣象代表點名稱保存；只用於辨識待遷移的舊值。
 LEGACY_NATIONWIDE_SUBJECT = "Taipei"
 
-CWA_HEADER_TABLES = ("raw_cwa_observation_batch", "raw_cwa_forecast_release")
+CWA_OBSERVATION_BATCH_TABLE = "raw_cwa_observation_batch"
+CWA_FORECAST_RELEASE_TABLE = "raw_cwa_forecast_release"
+CWA_HEADER_TABLES = (CWA_OBSERVATION_BATCH_TABLE, CWA_FORECAST_RELEASE_TABLE)
 LEGACY_CWA_HEADER_STATUS_COLUMN = "status"
 
 # DDL 隨套件安裝，不依賴 repo 目錄結構：API 映像只含 src/（#112）。
@@ -200,8 +202,11 @@ def _drop_cwa_header_status_columns(engine: Engine) -> None:
     The missing list is the only record of CWA ingestion completeness; a stored status
     could contradict it. Neither header table is a hypertable, so a plain ``DROP COLUMN``
     works on SQLite and PostgreSQL alike. Tables already without the column are skipped,
-    which keeps every restart safe to repeat.
+    which keeps every restart safe to repeat. The API and Dagster both run this at
+    startup, so on PostgreSQL the drop is ``IF EXISTS``: the column may vanish between
+    inspection and drop. SQLite has no ``DROP COLUMN IF EXISTS``.
     """
+    if_exists = "" if engine.dialect.name == "sqlite" else "IF EXISTS "
     inspector = inspect(engine)
     for table in CWA_HEADER_TABLES:
         columns = {column["name"] for column in inspector.get_columns(table)}
@@ -209,7 +214,9 @@ def _drop_cwa_header_status_columns(engine: Engine) -> None:
             continue
         with engine.begin() as connection:
             connection.execute(
-                text(f"ALTER TABLE {table} DROP COLUMN {LEGACY_CWA_HEADER_STATUS_COLUMN}")
+                text(
+                    f"ALTER TABLE {table} DROP COLUMN {if_exists}{LEGACY_CWA_HEADER_STATUS_COLUMN}"
+                )
             )
         logger.warning(
             "Dropped %s.%s; CWA ingestion completeness now derives from the missing list.",
@@ -283,20 +290,22 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
     if dialect == "sqlite":
         statements = convert_timescale_ddl_to_sqlite(get_timescale_init_ddl())
         _execute_sql_statements(db_engine, statements)
-        _isolate_legacy_cwa_weather(db_engine)
-        _add_taipower_load_source_column(db_engine)
-        _migrate_taipower_load_subject(db_engine)
-        _drop_cwa_header_status_columns(db_engine)
+        _run_schema_migrations(db_engine)
         return
 
     # PostgreSQL / TimescaleDB
     ddl = get_timescale_init_ddl()
     _execute_sql_statements(db_engine, split_sql_statements(ddl))
-    _isolate_legacy_cwa_weather(db_engine)
-    _add_taipower_load_source_column(db_engine)
-    _migrate_taipower_load_subject(db_engine)
-    _drop_cwa_header_status_columns(db_engine)
+    _run_schema_migrations(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
+
+
+def _run_schema_migrations(engine: Engine) -> None:
+    """Upgrade an existing schema in order; each step is a no-op once applied."""
+    _isolate_legacy_cwa_weather(engine)
+    _add_taipower_load_source_column(engine)
+    _migrate_taipower_load_subject(engine)
+    _drop_cwa_header_status_columns(engine)
 
 
 def init_db(engine: Engine | None = None, sql_path: Path | None = None) -> None:

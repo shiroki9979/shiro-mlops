@@ -4,10 +4,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import patch
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+from shiro_mlops.core import database
 from shiro_mlops.core.database import ensure_timescale_hypertables
 
 OBSERVATION_BATCH_TABLE = "raw_cwa_observation_batch"
@@ -62,6 +64,21 @@ def assert_header_status_is_dropped_repeatably(engine: Engine) -> None:
             }
             assert upgraded_rows[table] == kept_row, table
             assert rerun_rows[table] == kept_row, table
+
+
+def assert_header_status_drop_survives_a_concurrent_upgrade(engine: Engine) -> None:
+    """API 與 Dagster 同時啟動：後者檢視時仍見 status 欄，前者已先移除；後者的升級不得失敗。"""
+    with _legacy_header_rows(engine):
+        stale = inspect(engine)
+        for table in CWA_HEADER_TABLES:
+            assert LEGACY_STATUS_COLUMN in [column["name"] for column in stale.get_columns(table)]
+        ensure_timescale_hypertables(engine)
+
+        with patch.object(database, "inspect", return_value=stale):
+            ensure_timescale_hypertables(engine)
+
+        for table in CWA_HEADER_TABLES:
+            assert LEGACY_STATUS_COLUMN not in header_columns(engine, table), table
 
 
 @contextmanager

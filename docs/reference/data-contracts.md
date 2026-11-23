@@ -82,9 +82,9 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
   2. `raw_cwa_observation_batch`:
      - 每次逐時觀測 API 成功回應保存一筆批次 header；完整來源回應僅在此保存一次，不複製到各測站觀測列。
      - `fetched_at` (TIMESTAMPTZ, NOT NULL)：實際開始擷取時間，為批次識別。
-     - `missing_station_ids` (JSONB, NOT NULL)：未出現在成功回應中的 allowlist 測站編號，為批次完整度的唯一事實：空陣列即完整，非空即不完整。header 不保存完整度欄位；批次的 `complete`／`incomplete` 由此清單推導，判定與兩個字面值只定義於 `shiro_mlops.data.cwa_client`，批次建立時不接受完整度。
+     - `missing_station_ids` (JSONB, NOT NULL)：未出現在成功回應中的 allowlist 測站編號，為批次完整度的唯一事實：空陣列即完整，非空即不完整。header 不保存完整度欄位；批次的 `complete`／`incomplete` 由此清單推導，判定與兩個字面值只由 CWA 擷取模組 `shiro_mlops.data.cwa_client` 擁有，以兩種形式提供：由清單推導的 Python 函式，與以清單欄位為參數的 SQL 運算式；Data Explorer 讀取 header 時使用 SQL 形式，不另行定義判定。批次建立時不接受完整度。
      - `raw_payload` (JSONB, NOT NULL)：完整成功回應。
-     - **完整度欄位遷移**：舊資料庫的 header 帶有 `status` 欄。服務啟動時的 schema 升級移除此欄，其他欄位與資料列不變；已移除時不做任何事，可安全重跑。此表不是 hypertable。
+     - **完整度欄位遷移**：舊資料庫的 header 帶有 `status` 欄。服務啟動時的 schema 升級移除此欄，其他欄位與資料列不變；已移除時不做任何事，可安全重跑；API 與 Dagster 同時啟動時，PostgreSQL 以 `DROP COLUMN IF EXISTS` 移除，後執行者不因欄位已被移除而失敗。此表不是 hypertable。
      - **Constraint**: `PRIMARY KEY (fetched_at)`。
   3. `raw_cwa_station_observation`:
      - `observed_at` (TIMESTAMPTZ, NOT NULL)：來源 `ObsTime/DateTime`，寫入前轉為 UTC。

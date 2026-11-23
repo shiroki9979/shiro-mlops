@@ -104,22 +104,26 @@ def _persist_cwa_ingestion(
 def test_audit_status_reports_the_newest_header_missing_ids(
     client: TestClient, test_repo: TimeSeriesRepository
 ) -> None:
-    """觀測缺站、預報缺 geocode 時，status 列出缺漏 id。"""
+    """較舊與較新的表頭缺漏不同時，status 只列出最新表頭的缺漏 id。"""
+    older = datetime(2026, 9, 20, 12)
+    _persist_cwa_ingestion(
+        test_repo, older, missing_station_ids=("467490",), missing_geocodes=("63000050",)
+    )
     _persist_cwa_ingestion(
         test_repo,
-        datetime(2026, 9, 20, 12),
-        missing_station_ids=("467490",),
-        missing_geocodes=("63000050",),
+        older + timedelta(hours=1),
+        missing_station_ids=("467441",),
+        missing_geocodes=("64000000",),
     )
 
     statuses = _status(client)
 
     for dataset_id in ("cwa_observations", "cwa_observation_audits"):
         assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == ["467490"]
+        assert statuses[dataset_id]["missing_identifiers"] == ["467441"]
     for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
         assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == ["63000050"]
+        assert statuses[dataset_id]["missing_identifiers"] == ["64000000"]
 
 
 @pytest.mark.parametrize(

@@ -438,7 +438,7 @@ def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -
         engine.dispose()
 
 
-def test_fresh_schema_judges_cwa_header_completeness_by_missing_list_only(tmp_path) -> None:
+def test_fresh_schema_has_no_cwa_header_status_column(tmp_path) -> None:
     """New CWA batch and release headers carry the missing list without a status column."""
     from shiro_mlops.core.database import ensure_timescale_hypertables
 

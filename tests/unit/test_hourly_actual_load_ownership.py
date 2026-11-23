@@ -86,7 +86,7 @@ def test_derived_source_value_is_spelled_once_in_the_store() -> None:
         ('def migrate():\n    "ALTER TABLE raw_taipower_load ADD COLUMN source"', ["migrate"]),
         ('message = "reads raw_taipower_load via the store"', []),
         ('message = "raw_taipower_load contains 3 legacy rows"', []),
-        ('HOURLY_LOAD = Dataset(table="raw_taipower_load")', []),
+        ('HOURLY_LOAD = Dataset(relation="raw_taipower_load")', []),
         ("# SELECT time FROM raw_taipower_load", []),
         ('q = "SELECT time FROM raw_taipower_load_archive"', []),
     ],

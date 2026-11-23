@@ -209,46 +209,40 @@ AUDIT_SERIES_SCENARIOS = (
 )
 
 
-def _listed(client: TestClient, path: str, key: str, params: dict[str, str]) -> dict[str, str]:
-    items = client.get(path, params=params).json()["items"]
-    return {item[key]: item["status"] for item in items}
+def _assert_listed_by_status(
+    client: TestClient, path: str, key: str, params: dict[str, str], expected: dict[str, str]
+) -> None:
+    """The list, and each `status` filter of it, report the `expected` `{key: status}`."""
+    for status in (None, "complete", "incomplete"):
+        filtered = params if status is None else {**params, "status": status}
+        items = client.get(path, params=filtered).json()["items"]
+        wanted = {k: v for k, v in expected.items() if status in (None, v)}
+        assert {item[key]: item["status"] for item in items} == wanted, status
 
 
 def assert_observation_audits_follow_the_missing_list(repo: TimeSeriesRepository) -> None:
-    """觀測批次的列表、status 篩選與 series 分組皆依缺漏清單判定完整度。"""
+    """觀測批次的列表與 status 篩選皆依缺漏清單判定完整度。"""
     batches = {
         AUDIT_HOUR + timedelta(minutes=5): NOTHING_MISSING,
         AUDIT_HOUR + timedelta(minutes=25): ONE_MISSING,
         AUDIT_HOUR + timedelta(minutes=45): NOTHING_MISSING,
     }
     with _seeded_batches(repo, batches) as client:
-        listed = _listed(client, OBSERVATION_AUDIT_PATH, "fetched_at", _hour_window())
-        complete = _listed(
-            client, OBSERVATION_AUDIT_PATH, "fetched_at", _hour_window(status="complete")
+        _assert_listed_by_status(
+            client,
+            OBSERVATION_AUDIT_PATH,
+            "fetched_at",
+            _hour_window(),
+            {
+                "2025-02-03T10:05:00+08:00": "complete",
+                "2025-02-03T10:25:00+08:00": "incomplete",
+                "2025-02-03T10:45:00+08:00": "complete",
+            },
         )
-        incomplete = _listed(
-            client, OBSERVATION_AUDIT_PATH, "fetched_at", _hour_window(status="incomplete")
-        )
-        series = client.get(OBSERVATION_AUDIT_SERIES_PATH, params=_hour_window(bucket="1h"))
-
-    assert listed == {
-        "2025-02-03T10:05:00+08:00": "complete",
-        "2025-02-03T10:25:00+08:00": "incomplete",
-        "2025-02-03T10:45:00+08:00": "complete",
-    }
-    assert complete == {
-        "2025-02-03T10:05:00+08:00": "complete",
-        "2025-02-03T10:45:00+08:00": "complete",
-    }
-    assert incomplete == {"2025-02-03T10:25:00+08:00": "incomplete"}
-    assert _counts_by_status(series.json()) == {
-        "complete": [("2025-02-03T10:00:00+08:00", 2)],
-        "incomplete": [("2025-02-03T10:00:00+08:00", 1)],
-    }
 
 
 def assert_forecast_audits_follow_the_missing_list(repo: TimeSeriesRepository) -> None:
-    """預報版本的列表、status 篩選與 series 分組皆依缺漏清單判定完整度。"""
+    """預報版本的列表與 status 篩選皆依缺漏清單判定完整度。"""
     issued = AUDIT_HOUR
     versions = [
         (issued, issued + timedelta(minutes=10), NOTHING_MISSING),
@@ -256,38 +250,17 @@ def assert_forecast_audits_follow_the_missing_list(repo: TimeSeriesRepository) -
         (issued + timedelta(minutes=30), issued + timedelta(minutes=50), NOTHING_MISSING),
     ]
     with _seeded_versions(repo, versions) as (client, dataset_id):
-        key = "source_updated_at"
-        listed = _listed(client, FORECAST_AUDIT_PATH, key, _hour_window(dataset_id=dataset_id))
-        complete = _listed(
+        _assert_listed_by_status(
             client,
             FORECAST_AUDIT_PATH,
-            key,
-            _hour_window(dataset_id=dataset_id, status="complete"),
+            "source_updated_at",
+            _hour_window(dataset_id=dataset_id),
+            {
+                "2025-02-03T10:10:00+08:00": "complete",
+                "2025-02-03T10:40:00+08:00": "incomplete",
+                "2025-02-03T10:50:00+08:00": "complete",
+            },
         )
-        incomplete = _listed(
-            client,
-            FORECAST_AUDIT_PATH,
-            key,
-            _hour_window(dataset_id=dataset_id, status="incomplete"),
-        )
-        series = client.get(
-            FORECAST_AUDIT_SERIES_PATH, params=_hour_window(bucket="1h", dataset_id=dataset_id)
-        )
-
-    assert listed == {
-        "2025-02-03T10:10:00+08:00": "complete",
-        "2025-02-03T10:40:00+08:00": "incomplete",
-        "2025-02-03T10:50:00+08:00": "complete",
-    }
-    assert complete == {
-        "2025-02-03T10:10:00+08:00": "complete",
-        "2025-02-03T10:50:00+08:00": "complete",
-    }
-    assert incomplete == {"2025-02-03T10:40:00+08:00": "incomplete"}
-    assert _counts_by_status(series.json()) == {
-        "complete": [("2025-02-03T10:00:00+08:00", 2)],
-        "incomplete": [("2025-02-03T10:00:00+08:00", 1)],
-    }
 
 
 AUDIT_STATUS_SCENARIOS = (

@@ -8,6 +8,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from defusedxml.common import DefusedXmlException
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from shiro_mlops.core.config import Settings
@@ -21,6 +22,10 @@ from shiro_mlops.data.cwa_client import (
     parse_observation_batch,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
+from tests.scenarios.cwa_ingestion_status import (
+    COMPLETENESS_CASES,
+    assert_python_and_sql_judge_alike,
+)
 
 
 def _observation_payload() -> dict:
@@ -283,6 +288,14 @@ def test_observation_batch_completeness_follows_its_missing_station_ids(
     )
 
     assert batch.status == status
+
+
+@pytest.mark.parametrize(("missing_station_ids", "status"), COMPLETENESS_CASES)
+def test_stored_batch_completeness_reads_the_same_in_sql_as_in_python(
+    sqlite_engine: Engine, missing_station_ids: tuple[str, ...], status: str
+) -> None:
+    """Data Explorer 以 SQL 判讀的完整度與擷取端 Python 推導一致。"""
+    assert_python_and_sql_judge_alike(sqlite_engine, missing_station_ids, status)
 
 
 def test_observation_batch_cannot_be_built_with_its_own_completeness() -> None:

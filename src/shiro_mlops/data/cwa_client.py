@@ -58,9 +58,19 @@ CWA_INGESTION_COMPLETE: CWAIngestionStatus = "complete"
 CWA_INGESTION_INCOMPLETE: CWAIngestionStatus = "incomplete"
 
 
-def _ingestion_status(missing: tuple[str, ...]) -> CWAIngestionStatus:
+def cwa_ingestion_status(missing: tuple[str, ...]) -> CWAIngestionStatus:
     """A CWA ingestion is complete exactly when its missing list is empty."""
     return CWA_INGESTION_INCOMPLETE if missing else CWA_INGESTION_COMPLETE
+
+
+# WHY-NOT(cwa_ingestion_status_sql): an array-length function is `json_array_length` on
+# SQLite but `jsonb_array_length` on PostgreSQL; both render an empty JSON array as `[]`.
+def cwa_ingestion_status_sql(ids_column: str) -> str:
+    """`cwa_ingestion_status` as a SQL expression over a stored JSON missing-list column."""
+    return (
+        f"CASE WHEN CAST({ids_column} AS TEXT) = '[]' "
+        f"THEN '{CWA_INGESTION_COMPLETE}' ELSE '{CWA_INGESTION_INCOMPLETE}' END"
+    )
 
 
 _CWA_FORECAST_FILE_API = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
@@ -99,7 +109,7 @@ class CWAObservationBatch:
     observations: tuple[CWAStationObservation, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "status", _ingestion_status(self.missing_station_ids))
+        object.__setattr__(self, "status", cwa_ingestion_status(self.missing_station_ids))
 
 
 @dataclass(frozen=True)
@@ -136,7 +146,7 @@ class CWAForecastRelease:
     forecasts: tuple[CWATownshipForecast, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "status", _ingestion_status(self.missing_geocodes))
+        object.__setattr__(self, "status", cwa_ingestion_status(self.missing_geocodes))
 
 
 def _normalize_location_name(name: str) -> str:
