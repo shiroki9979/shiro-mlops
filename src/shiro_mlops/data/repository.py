@@ -28,7 +28,6 @@ from shiro_mlops.data.cwa_client import (
 )
 from shiro_mlops.data.forecast_track_record import ForecastTrackRecordStore
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
-from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload
 from shiro_mlops.data.taipower_regional_supply_demand_repository import (
@@ -289,7 +288,7 @@ class TimeSeriesRepository:
         self.unit_generation_store = TaipowerUnitGenerationRepository(
             engine=self.engine, auto_init=False
         )
-        self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
+        self.issued_forecast_store = IssuedForecastRepository(engine=self.engine, auto_init=False)
         self.hourly_actual_load_store = HourlyActualLoadStore(self.engine)
         self.forecast_track_record_store = ForecastTrackRecordStore(self.engine)
 
@@ -585,18 +584,6 @@ class TimeSeriesRepository:
                 "created_at",
             ]
         ]
-
-    def insert_issued_forecast(self, forecast: IssuedForecast) -> bool:
-        """Write an issued forecast once; ``False`` when its issue time already exists."""
-        return self.issued_forecast_repo.insert(forecast)
-
-    def fetch_issued_forecast(self, issued_at: datetime) -> IssuedForecast | None:
-        """Fetch the forecast issued at a Taiwan-local issue time."""
-        return self.issued_forecast_repo.fetch(issued_at)
-
-    def fetch_latest_issued_forecast(self) -> IssuedForecast | None:
-        """Fetch the forecast with the latest issue time, or ``None`` before the first issue."""
-        return self.issued_forecast_repo.fetch_latest()
 
 
 __all__ = [

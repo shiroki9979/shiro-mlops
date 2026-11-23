@@ -24,7 +24,7 @@ def _issue(
     status: str = "normal",
 ) -> None:
     """Issue a forecast whose step for each target hour predicts 30000 MW plus its index."""
-    repo.insert_issued_forecast(
+    repo.issued_forecast_store.insert(
         IssuedForecast(
             issued_at=issued_at,
             load_anchor=issued_at.replace(minute=0) - timedelta(hours=1),
