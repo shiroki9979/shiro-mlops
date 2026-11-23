@@ -117,12 +117,17 @@ class ObservedInputsIncompleteError(TaskUnavailableError):
 
 
 @dataclass(frozen=True)
-class Readiness:
-    """Whether a task can serve a full-horizon prediction now, and in which forecast mode."""
+class Ready:
+    """The task can serve a full-horizon prediction now, in this forecast mode."""
 
-    ready: bool
-    mode: ForecastMode | None = None
-    reason: str | None = None
+    mode: ForecastMode
+
+
+@dataclass(frozen=True)
+class InputsUnavailable:
+    """The inputs cannot support a prediction now; like 無法產出 (GLOSSARY), not a forecast mode."""
+
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -278,15 +283,15 @@ def monitor_task(
 
 def check_task_ready(
     task: TaskDefinition, model: TaskModel, runtime: TaskRuntime, *, as_of: datetime
-) -> Readiness:
+) -> Ready | InputsUnavailable:
     """Whether a fresh load anchor and full-horizon weather are available to the model."""
     request = _readiness_request(task, runtime, as_of)
     try:
         data, weather = _prepare_prediction(request)
         weather = request.weather_path.probe(model, data, weather)
     except TaskUnavailableError as error:
-        return Readiness(ready=False, reason=str(error))
-    return Readiness(ready=True, mode=weather.mode)
+        return InputsUnavailable(str(error))
+    return Ready(weather.mode)
 
 
 def predict_task(

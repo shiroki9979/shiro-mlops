@@ -3,9 +3,13 @@
 Each task's model is loaded once into its state, keeping the sha256 of the directory
 version it was read from. ``served_models`` hands callers that state itself, not flags derived from it.
 Without a model, the state's ``reason`` is the only source of the text that model
-state, readiness and prediction report. Failures come back as two kinds:
-``ServingUnavailableError`` (no model, or inputs that cannot support a prediction right
-now) and ``ServingFailedError`` (anything unexpected).
+state, readiness and prediction report. Readiness is the closed ``ReadinessState``
+union, handed to callers as it is, never as flags. ``_classify`` decides what an error
+that escapes the runner means. ``predict_task`` raises the runner's refusal, so a
+refused prediction passes through it; ``check_task_ready`` returns its own refusal as
+``InputsUnavailable``, so from readiness ``_classify`` sees only persistence and
+unexpected errors. Readiness returns the verdict as a state; prediction raises it as
+``ServingUnavailableError`` (also raised without a model) or ``ServingFailedError``.
 """
 
 from __future__ import annotations
@@ -14,17 +18,18 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Self
+from typing import ClassVar, Self, assert_never
 
 import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import UnknownTaskError
 from shiro_mlops.tasks.model_store import load_model_with_sha256
 from shiro_mlops.tasks.runner import (
+    InputsUnavailable,
     PredictionOutcome,
+    Ready,
     TaskRuntime,
     TaskUnavailableError,
     check_task_ready,
@@ -64,13 +69,13 @@ class ServedModel:
 
 
 @dataclass(frozen=True)
-class ServingReadiness:
-    """Whether a task can serve a full-horizon prediction now, and in which forecast mode."""
+class Failed:
+    """An unexpected error stopped the readiness check or prediction; its traceback is logged."""
 
-    ready: bool
-    model_loaded: bool
-    mode: ForecastMode | None = None
-    reason: str | None = None
+    reason: str
+
+
+ReadinessState = Untrained | LoadFailed | InputsUnavailable | Failed | Ready
 
 
 class ServingUnavailableError(RuntimeError):
@@ -127,20 +132,16 @@ class ServedTasks:
             for task_id, task in self._tasks.items()
         }
 
-    def readiness(self, task_id: str) -> ServingReadiness:
+    def readiness(self, task_id: str) -> ReadinessState:
         state = self._state(task_id)
         if not isinstance(state, Loaded):
-            return ServingReadiness(ready=False, model_loaded=False, reason=state.reason)
+            return state
         try:
-            readiness = check_task_ready(
+            return check_task_ready(
                 self.task(task_id), state.model, self._runtime, as_of=self._clock()
             )
         except Exception as error:
-            logger.exception("Readiness check failed for task %s", task_id)
-            return ServingReadiness(ready=False, model_loaded=True, reason=str(error))
-        return ServingReadiness(
-            ready=readiness.ready, model_loaded=True, mode=readiness.mode, reason=readiness.reason
-        )
+            return _classify(error, activity="Readiness check", task_id=task_id)
 
     def predict(self, task_id: str, *, horizon_hours: int) -> PredictionOutcome:
         state = self._state(task_id)
@@ -154,16 +155,34 @@ class ServedTasks:
                 as_of=self._clock(),
                 horizon_hours=horizon_hours,
             )
-        except TaskUnavailableError as error:
-            raise ServingUnavailableError(str(error)) from error
-        except SQLAlchemyError as error:
-            raise ServingUnavailableError(f"Persistence unavailable: {error}") from error
         except Exception as error:
-            logger.exception("Prediction failed for task %s", task_id)
-            raise ServingFailedError(f"Prediction error: {error}") from error
+            match _classify(error, activity="Prediction", task_id=task_id):
+                case InputsUnavailable(reason=reason):
+                    raise ServingUnavailableError(reason) from error
+                case Failed(reason=reason):
+                    raise ServingFailedError(f"Prediction error: {reason}") from error
+                case unraised:
+                    assert_never(unraised)
 
     def _state(self, task_id: str) -> ModelState:
         return self._models.get(self.task(task_id).task_id, Untrained())
+
+
+def _classify(error: Exception, *, activity: str, task_id: str) -> InputsUnavailable | Failed:
+    """What an error that escaped the runner means.
+
+    A runner refusal or unreachable persistence leaves the inputs unavailable; anything
+    else failed, and only then is the traceback logged. Only ``predict_task`` lets a
+    refusal escape: ``check_task_ready`` returns its own as ``InputsUnavailable``.
+    """
+    match error:
+        case TaskUnavailableError():
+            return InputsUnavailable(str(error))
+        case SQLAlchemyError():
+            return InputsUnavailable(f"Persistence unavailable: {error}")
+        case _:
+            logger.error("%s failed for task %s", activity, task_id, exc_info=error)
+            return Failed(str(error))
 
 
 def _load_state(root: Path, task: TaskDefinition) -> ModelState:

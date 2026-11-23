@@ -9,13 +9,16 @@ import pytest
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.tasks import runner
 from shiro_mlops.tasks.definition import TaskDefinition, WeightedReferencePoint
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import (
+    InputsUnavailable,
     InsufficientLoadHistoryError,
     MissingLoadHistoryError,
     ObservedInputsIncompleteError,
+    Ready,
     StaleLoadAnchorError,
     TaskNotReady,
     TaskRuntime,
@@ -305,8 +308,7 @@ def test_stale_load_anchor_refuses_prediction_and_readiness(
         predict_task(task, model, runtime, as_of=STALE_AS_OF, horizon_hours=HORIZON_HOURS)
 
     readiness = check_task_ready(task, model, runtime, as_of=STALE_AS_OF)
-    assert not readiness.ready
-    assert readiness.mode is None
+    assert isinstance(readiness, InputsUnavailable)
     assert "Stale load anchor" in readiness.reason
 
 
@@ -321,7 +323,7 @@ def test_missing_forecast_degrades_to_previous_day_observations(
     assert {source["temperature"]["Taipei"]["source"] for source in outcome.weather_sources} == {
         "previous_day_observation"
     }
-    assert check_task_ready(task, model, runtime, as_of=FRESH_AS_OF).mode == "degraded"
+    assert check_task_ready(task, model, runtime, as_of=FRESH_AS_OF) == Ready(ForecastMode.DEGRADED)
 
 
 def test_fresh_forecast_keeps_normal_mode(
@@ -383,7 +385,7 @@ def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
 
     readiness = check_task_ready(task, model, runtime, as_of=FRESH_AS_OF)
 
-    assert readiness.ready
+    assert readiness == Ready(ForecastMode.DEGRADED)
     assert requested_horizons == [168]
 
 
@@ -436,8 +438,7 @@ def test_missing_load_hour_in_the_lookback_refuses_prediction_and_readiness(
         )
 
     readiness = check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF)
-    assert not readiness.ready
-    assert readiness.mode is None
+    assert isinstance(readiness, InputsUnavailable)
     assert "168-hour window" in readiness.reason
 
 
@@ -462,9 +463,11 @@ def test_missing_load_hour_in_the_lookback_refuses_before_reading_weather(
             as_of=FRESH_AS_OF,
             horizon_hours=HORIZON_HOURS,
         )
-    assert not check_task_ready(
-        task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF
-    ).ready
+    readiness = check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == InputsUnavailable(
+        "Only 167 nationwide load hours in the 168-hour window ending at anchor "
+        f"{ANCHOR.isoformat()}; 168 required."
+    )
 
     assert weather_reads == []
 
@@ -480,7 +483,8 @@ def test_missing_load_hour_before_the_lookback_still_predicts(
     )
 
     assert len(outcome.predictions) == HORIZON_HOURS
-    assert check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF).ready
+    readiness = check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == Ready(ForecastMode.DEGRADED)
 
 
 def test_subject_without_history_raises_missing_load_history(
@@ -528,8 +532,8 @@ def test_observed_prediction_scores_window_end_hours_up_to_the_anchor(
     assert outcome.weather_sources[-1]["temperature"] == {
         "Taipei": {"source": "station_observation", "observed_at": ANCHOR.isoformat()}
     }
-    assert check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF).mode == (
-        "normal"
+    assert check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF) == Ready(
+        ForecastMode.NORMAL
     )
 
 
@@ -566,7 +570,7 @@ def test_observed_prediction_still_refuses_a_stale_load_anchor(
         predict_task(anomaly_task, anomaly_model, runtime, as_of=STALE_AS_OF, horizon_hours=1)
 
     readiness = check_task_ready(anomaly_task, anomaly_model, runtime, as_of=STALE_AS_OF)
-    assert not readiness.ready
+    assert isinstance(readiness, InputsUnavailable)
     assert "Stale load anchor" in readiness.reason
 
 
@@ -584,7 +588,12 @@ def test_observed_prediction_without_observations_is_unavailable(
     with pytest.raises(WeatherUnavailableError, match="No observed weather"):
         predict_task(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
-    assert not check_task_ready(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF).ready
+    history_start = ANCHOR - pd.Timedelta(hours=24 + 168)
+    readiness = check_task_ready(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == InputsUnavailable(
+        f"No observed weather at Kaohsiung between {history_start.isoformat()} "
+        f"and {ANCHOR.isoformat()}."
+    )
 
 
 def test_observed_prediction_with_no_scorable_window_is_unavailable(
@@ -607,7 +616,7 @@ def test_observed_prediction_with_no_scorable_window_is_unavailable(
         predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
     readiness = check_task_ready(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF)
-    assert not readiness.ready
+    assert isinstance(readiness, InputsUnavailable)
     assert "No complete observed window" in readiness.reason
 
 
@@ -743,7 +752,9 @@ def test_one_stale_reference_point_degrades_the_whole_forecast(
     sources = outcome.weather_sources[0]["temperature"]
     assert sources["Taipei"]["source"] == "three_day"
     assert sources["Kaohsiung"]["source"] == "previous_day_observation"
-    assert check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF).mode == "degraded"
+    assert check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF) == Ready(
+        ForecastMode.DEGRADED
+    )
 
 
 def test_reference_point_without_any_fallback_makes_the_forecast_unavailable(
@@ -757,7 +768,11 @@ def test_reference_point_without_any_fallback_makes_the_forecast_unavailable(
         predict_task(
             _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
         )
-    assert not check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF).ready
+    first_forecast_hour = ANCHOR + pd.Timedelta(hours=1)
+    readiness = check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == InputsUnavailable(
+        f"Kaohsiung: No weather coverage for {first_forecast_hour.isoformat()} temperature"
+    )
 
 
 def test_first_reference_point_without_coverage_in_order_is_the_one_named(
