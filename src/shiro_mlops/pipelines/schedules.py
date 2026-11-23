@@ -4,9 +4,6 @@ Per-task training and monitoring jobs and schedules come from the asset factory
 in ``pipelines/task_pipelines.py``.
 """
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
 from dagster import (
     AssetSelection,
     Backoff,
@@ -17,10 +14,10 @@ from dagster import (
     define_asset_job,
     schedule,
 )
-from dagster_shared.check import CheckError
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.taipower_supply_demand import resolve_snapshot_observed_at
+from shiro_mlops.pipelines.execution_origin import scheduled_tick, tick_run_key
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -39,26 +36,6 @@ CWA_OBSERVATION_ASSET = "raw_cwa_station_observation"
 CWA_FORECAST_ASSET = "raw_cwa_township_forecast"
 CWA_INGESTION_ASSETS = (CWA_OBSERVATION_ASSET, CWA_FORECAST_ASSET)
 HOURLY_ACTUAL_LOAD_ASSET = "raw_taipower_load"
-
-
-def tick_run_key(context: ScheduleEvaluationContext) -> str | None:
-    """Deduplicate repeated evaluations of the same tick with a run key."""
-    tick = _scheduled_tick(context)
-    if tick is None:
-        return None
-    return _to_taiwan_local(tick).isoformat(timespec="seconds")
-
-
-def _scheduled_tick(context: ScheduleEvaluationContext) -> datetime | None:
-    """Return the tick time, or None for a manual evaluation built without one.
-
-    Dagster raises CheckError on access instead of returning None when no tick was
-    set, so a plain ``is None`` check never runs.
-    """
-    try:
-        return context.scheduled_execution_time
-    except CheckError:
-        return None
 
 
 cwa_observation_job = define_asset_job(
@@ -107,19 +84,6 @@ def build_taipower_supply_demand_snapshot_job(
 taipower_supply_demand_snapshot_job = build_taipower_supply_demand_snapshot_job()
 
 
-def _to_taiwan_local(scheduled_execution_time: datetime) -> datetime:
-    """Convert a schedule tick to naive Taiwan-local time."""
-    if scheduled_execution_time.tzinfo is None:
-        return scheduled_execution_time
-    return scheduled_execution_time.astimezone(ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
-
-
-def _taiwan_tick_iso(scheduled_execution_time: datetime) -> str:
-    """將排程 tick 正規化為台灣本地時間的十分快照觀測 slot，與 asset 解析 config 同一規則。"""
-    local_tick = _to_taiwan_local(scheduled_execution_time)
-    return resolve_snapshot_observed_at(local_tick).isoformat(timespec="seconds")
-
-
 @schedule(
     job=taipower_supply_demand_snapshot_job,
     cron_schedule="*/10 * * * *",
@@ -132,10 +96,10 @@ def taipower_supply_demand_snapshot_schedule(
 
     無 tick 的手動評估不帶 run key 與 observed_at；各快照資產以自己的抓取起始時間決定 slot。
     """
-    tick = _scheduled_tick(context)
+    tick = scheduled_tick(context)
     if tick is None:
         return RunRequest()
-    observed_at = _taiwan_tick_iso(tick)
+    observed_at = resolve_snapshot_observed_at(tick).isoformat(timespec="seconds")
     ops_config = {
         asset_name: {"config": {"observed_at": observed_at}}
         for asset_name in TAIPOWER_REALTIME_SNAPSHOT_ASSETS
