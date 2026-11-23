@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { onlineManager } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { createAppRouter } from '@/router'
 import { server } from '@/mocks/server'
@@ -182,6 +183,20 @@ describe('Data Explorer routes', () => {
     }, { timeout: status === 503 ? 2500 : 1000 })
   })
 
+  it('reports a list body that breaks the schema as a failed query without retrying', async () => {
+    const requests: URL[] = []
+    server.use(http.get('*/data/power/load', ({ request }) => {
+      requests.push(new URL(request.url))
+      return HttpResponse.json({ timezone: 'Asia/Taipei', items: 'not rows' })
+    }))
+
+    renderPath('/data/power/load?cursor=old')
+
+    expect(await screen.findByText(results.queryFailed)).toBeInTheDocument()
+    expect(requests).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: results.backToFirstPage })).not.toBeInTheDocument()
+  })
+
   it.each([
     ['/data/power/load', 'subject=nationwide', 'subject', 'nationwide'],
     ['/data/weather/forecasts', 'dataset_id=F-D0047-089&issued_at=2026-09-09T08%3A00%3A00%2B08%3A00', 'issued_at', '2026-09-09T08:00:00+08:00'],
@@ -347,6 +362,10 @@ describe('Data Explorer routes', () => {
 })
 
 describe('Monitoring Data Source Status', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true)
+  })
+
   it('uses the shared status contract and deep-links into Data Explorer', async () => {
     renderPath('/monitoring')
     await waitFor(() => {
@@ -378,6 +397,43 @@ describe('Monitoring Data Source Status', () => {
       expect(screen.getAllByText(m.monitoring.sources.explorerDisabled).length).toBeGreaterThan(0)
     })
     expect(screen.queryByText(m.monitoring.sources.openExplorer)).not.toBeInTheDocument()
+  })
+
+  it('keeps the data sources and notes the failed refresh when a later status read fails', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    const main = await screen.findByRole('main')
+    await within(main).findByRole('heading', { name: m.explorer.datasetStatus.title })
+
+    let failedReads = 0
+    server.use(
+      http.get('*/data/status', () => {
+        failedReads += 1
+        return new HttpResponse(null, { status: 503 })
+      }),
+    )
+    await user.click(within(main).getByRole('button', { name: m.common.refresh }))
+    // The refetch and its one retry.
+    await waitFor(() => expect(failedReads).toBe(2), { timeout: 3000 })
+
+    await user.click(screen.getByRole('link', { name: m.nav.monitoring }))
+
+    expect(await screen.findByText(m.monitoring.sources.refreshFailed)).toBeInTheDocument()
+    expect(screen.getAllByText(m.monitoring.sources.openExplorer).length).toBeGreaterThan(0)
+    expect(screen.queryByText(m.monitoring.sources.error)).not.toBeInTheDocument()
+  })
+
+  it('shows the read failure while offline, then reads the sources once back online', async () => {
+    onlineManager.setOnline(false)
+    renderPath('/monitoring')
+
+    expect(await screen.findByText(m.monitoring.sources.error)).toBeInTheDocument()
+    expect(screen.queryByText(m.monitoring.sources.loading)).not.toBeInTheDocument()
+
+    act(() => onlineManager.setOnline(true))
+
+    expect((await screen.findAllByText(m.monitoring.sources.openExplorer)).length).toBeGreaterThan(0)
+    expect(screen.queryByText(m.monitoring.sources.error)).not.toBeInTheDocument()
   })
 })
 
@@ -547,5 +603,54 @@ describe('Data Explorer table', () => {
     const table = await screen.findByRole('table')
 
     expect(within(table).getByRole('cell', { name: label })).toBeInTheDocument()
+  })
+})
+
+describe('Data Explorer list query states', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true)
+  })
+
+  function refresh(user: ReturnType<typeof userEvent.setup>) {
+    return user.click(within(screen.getByRole('main')).getByRole('button', { name: m.common.refresh }))
+  }
+
+  it('keeps the shown rows and names the failure when a refresh fails', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    await screen.findByText('32,100.5')
+    server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'bad filters' }, { status: 422 })))
+
+    await refresh(user)
+
+    expect(await screen.findByText(results.refreshFailed(results.invalidFilters))).toBeInTheDocument()
+    expect(screen.getByText('32,100.5')).toBeInTheDocument()
+  })
+
+  it('offers cursor recovery over the kept rows when refreshing a later page is rejected', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    await screen.findByText('32,100.5')
+    await user.click(screen.getByText(m.common.nextPage))
+    await screen.findByText('30,100')
+    server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'Incompatible cursor version' }, { status: 400 })))
+
+    await refresh(user)
+
+    expect(await screen.findByText(results.refreshFailed(results.cursorRejected))).toBeInTheDocument()
+    expect(screen.getByText('30,100')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: results.backToFirstPage })).toBeInTheDocument()
+  })
+
+  it('shows the query failure instead of an empty result while offline, then reads once back online', async () => {
+    onlineManager.setOnline(false)
+    renderPath('/data/power/load')
+
+    expect(await screen.findByText(results.queryFailed)).toBeInTheDocument()
+    expect(screen.queryByText(results.empty)).not.toBeInTheDocument()
+
+    act(() => onlineManager.setOnline(true))
+
+    expect(await screen.findByText('32,100.5')).toBeInTheDocument()
   })
 })

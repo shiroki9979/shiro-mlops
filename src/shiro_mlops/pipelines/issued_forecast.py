@@ -88,14 +88,16 @@ def issued_forecast(context: AssetExecutionContext) -> MaterializeResult:
     """
     issued_at = run_as_of(context, without_tick=WithoutTick.REFUSE)
     repository = getattr(context.resources, TIME_SERIES_REPO)
-    if repository.fetch_issued_forecast(issued_at) is not None:
+    store = repository.issued_forecast_store
+    if store.fetch(issued_at) is not None:
         return _issued_result(issued_at, already_issued=True)
     loaded = _load_model()
+    runtime = TaskRuntime.from_composition_root(repository)
     try:
         outcome = predict_task(
             deployed_task(ISSUED_FORECAST_TASK),
             loaded.model,
-            TaskRuntime(repository=repository),
+            runtime,
             as_of=issued_at,
             horizon_hours=MAX_HORIZON_HOURS,
         )
@@ -107,7 +109,7 @@ def issued_forecast(context: AssetExecutionContext) -> MaterializeResult:
         loaded,
         mlflow_model_version=_mlflow_model_version_note(context, loaded.sha256),
     )
-    written = repository.insert_issued_forecast(forecast)
+    written = store.insert(forecast)
     return _issued_result(issued_at, already_issued=not written, forecast=forecast)
 
 
@@ -175,7 +177,7 @@ def _issued_result(
     if forecast is not None and not already_issued:
         metadata |= {
             "load_anchor": MetadataValue.text(forecast.load_anchor.isoformat()),
-            "status": MetadataValue.text(forecast.status),
+            "status": MetadataValue.text(forecast.status.value),
             MODEL_SHA256_METADATA: MetadataValue.text(forecast.model_sha256),
             "steps": MetadataValue.int(len(forecast.steps)),
         }

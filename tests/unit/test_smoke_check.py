@@ -11,6 +11,7 @@ from dagster import (
     ScheduleDefinition,
     define_asset_job,
 )
+from sqlalchemy import create_engine
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import all_assets, defs
@@ -199,20 +200,17 @@ def test_stalled_accumulation_fails(
     assert exit_code(results, require_ready=False) == 1
 
 
-def test_unreachable_store_fails_instead_of_raising(dagster_instance) -> None:
-    class UnreachableStore:
-        def accumulation(self, at_or_before=None, *, subject: str):
-            raise ConnectionError("TimescaleDB unreachable")
+def test_unreachable_store_fails_instead_of_raising(dagster_instance, tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'missing' / 'database.db'}")
+    unreachable = TimeSeriesRepository(engine=engine, auto_init=False)
 
-    class UnreachableRepository:
-        hourly_actual_load_store = UnreachableStore()
-
-    results = check_downstream_readiness(
-        Deployment(defs, UnreachableRepository(), dagster_instance, NOW)
-    )
+    try:
+        results = check_downstream_readiness(Deployment(defs, unreachable, dagster_instance, NOW))
+    finally:
+        engine.dispose()
 
     assert {result.status for result in results} == {CheckStatus.FAIL}
-    assert "TimescaleDB unreachable" in results[0].detail
+    assert "unable to open database file" in results[0].detail
 
 
 def test_fresh_instance_has_no_running_schedules(dagster_instance: DagsterInstance) -> None:

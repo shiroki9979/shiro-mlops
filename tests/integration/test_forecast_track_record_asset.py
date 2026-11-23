@@ -36,7 +36,7 @@ CUTOFF = datetime(2026, 11, 20, 10, 0)
 
 
 def _issue(repo: TimeSeriesRepository, issued_at: datetime, target_hours: list[datetime]) -> None:
-    repo.insert_issued_forecast(
+    repo.issued_forecast_store.insert(
         IssuedForecast(
             issued_at=issued_at,
             load_anchor=issued_at.replace(minute=0) - timedelta(hours=1),
@@ -146,17 +146,21 @@ def test_a_run_without_a_scheduled_tick_cuts_off_at_the_hour_it_was_created(
 
 
 class _FirstFetchFails:
-    """The repository behind a brief database outage that ends before the retry."""
+    """The track record store behind a brief database outage that ends before the retry."""
 
     def __init__(self, repo: TimeSeriesRepository) -> None:
-        self._repo = repo
+        self._store = repo.forecast_track_record_store
         self.windows: list[TrackRecordWindow] = []
 
-    def fetch_track_record_pairs(self, window: TrackRecordWindow):
+    @property
+    def forecast_track_record_store(self) -> "_FirstFetchFails":
+        return self
+
+    def fetch_pairs(self, window: TrackRecordWindow):
         self.windows.append(window)
         if len(self.windows) == 1:
             raise ConnectionError("database briefly unreachable")
-        return self._repo.fetch_track_record_pairs(window)
+        return self._store.fetch_pairs(window)
 
 
 @pytest.mark.parametrize(

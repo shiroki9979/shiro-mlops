@@ -1,5 +1,6 @@
 import { formatDateTime } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
+import { toQueryView } from '@shiro-mlops/shared/query-view'
 import { Skeleton } from '@shiro-mlops/shared/ui/skeleton'
 import { Lead24SeriesChart } from './lead-24-series-chart'
 import { LeadTimeCurve } from './lead-time-curve'
@@ -13,10 +14,18 @@ import type { ForecastTrackRecord } from '@/schemas/published'
 // Data already loaded wins over a failed background read.
 export function TrackRecordContent() {
   const m = useMessages()
-  const { data, isError } = useForecastTrackRecord()
-  if (data) return <TrackRecord trackRecord={data} />
-  if (isError) return <p className="text-sm text-slate-400">{m.history.loadError}</p>
-  return <TrackRecordSkeleton />
+  const view = toQueryView(useForecastTrackRecord(), { policy: 'data-first' })
+  switch (view.kind) {
+    case 'loading':
+      return <TrackRecordSkeleton />
+    // A browser offline before the first read shows the same neutral error as a failed one.
+    case 'error':
+    case 'paused':
+    case 'disabled':
+      return <p className="text-sm text-slate-400">{m.history.loadError}</p>
+    case 'content':
+      return <TrackRecord trackRecord={view.content} />
+  }
 }
 
 function TrackRecord({ trackRecord }: { trackRecord: ForecastTrackRecord }) {

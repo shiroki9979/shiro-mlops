@@ -22,7 +22,12 @@ from shiro_mlops.tasks.runner import (
     train_task,
 )
 from sqlalchemy import create_engine
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
+from tests.helpers import (
+    canonical_observation_batch,
+    hourly_load_with_weather,
+    task_runtime,
+    write_derived_load,
+)
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 HOURS = 24 * 21
@@ -50,10 +55,10 @@ def test_repo(tmp_path: Path) -> TimeSeriesRepository:
 def runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
-    return TaskRuntime(repository=test_repo)
+    return task_runtime(test_repo)
 
 
 def test_write_and_read_snapshot_round_trip_trains_identical_model(
@@ -101,10 +106,10 @@ def test_snapshot_round_trip_with_staggered_load_and_weather_gaps_trains_identic
     gapped_load = load[load["datetime"] != hour_n].reset_index(drop=True)
     gapped_weather = weather[weather["datetime"] != hour_n_plus_1].reset_index(drop=True)
     write_derived_load(test_repo.engine, gapped_load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(gapped_weather.assign(location="Taipei"))
     )
-    gapped_runtime = TaskRuntime(repository=test_repo)
+    gapped_runtime = task_runtime(test_repo)
     snapshots_dir = tmp_path / "snapshots"
 
     write_snapshot(task, gapped_runtime, AS_OF, snapshots_dir=snapshots_dir)
@@ -173,6 +178,7 @@ def test_write_snapshot_propagates_task_not_ready_when_below_minimum_accumulatio
 def test_snapshot_cli_writes_parquet_at_default_relative_layout(
     task: TaskDefinition,
     runtime: TaskRuntime,
+    test_repo: TimeSeriesRepository,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,7 +187,7 @@ def test_snapshot_cli_writes_parquet_at_default_relative_layout(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(snapshot_mod, "deployed_task", lambda task_id: task)
-    monkeypatch.setattr(snapshot_mod, "TimeSeriesRepository", lambda: runtime.repository)
+    monkeypatch.setattr(snapshot_mod, "TimeSeriesRepository", lambda: test_repo)
 
     exit_code = snapshot_main([task.task_id, "--as-of", "2026-09-20T23:30:00"])
 
@@ -217,8 +223,10 @@ def three_point_runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     write_derived_load(test_repo.engine, load)
     for offset, location in enumerate(THREE_POINTS):
         shifted = weather.assign(temperature=weather["temperature"] + offset, location=location)
-        test_repo.upsert_cwa_observation_batch(canonical_observation_batch(shifted))
-    return TaskRuntime(repository=test_repo)
+        test_repo.cwa_weather_store.upsert_cwa_observation_batch(
+            canonical_observation_batch(shifted)
+        )
+    return task_runtime(test_repo)
 
 
 def test_weather_variants_of_one_as_of_are_frozen_side_by_side(
@@ -304,6 +312,7 @@ def test_snapshot_cli_freezes_a_weather_variant(
     task: TaskDefinition,
     weighted_task: TaskDefinition,
     three_point_runtime: TaskRuntime,
+    test_repo: TimeSeriesRepository,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,9 +320,7 @@ def test_snapshot_cli_freezes_a_weather_variant(
     import lab.snapshot as snapshot_mod
 
     monkeypatch.setattr(snapshot_mod, "deployed_task", lambda task_id: task)
-    monkeypatch.setattr(
-        snapshot_mod, "TimeSeriesRepository", lambda: three_point_runtime.repository
-    )
+    monkeypatch.setattr(snapshot_mod, "TimeSeriesRepository", lambda: test_repo)
     snapshots_dir = tmp_path / "snapshots"
 
     exit_code = snapshot_main(

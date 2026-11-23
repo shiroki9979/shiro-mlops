@@ -24,6 +24,7 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     CWASource,
 )
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load import ONE_HOUR
 from shiro_mlops.data.hourly_actual_load_store import (
     HourlyActualLoadStore,
@@ -80,8 +81,8 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
     """Asset: canonical CWA station observation batch."""
     source: CWASource = getattr(context.resources, CWA_SOURCE)
     batch = source.fetch_observation_batch(locations=settings.cwa_locations)
-    repository = getattr(context.resources, TIME_SERIES_REPO)
-    persisted = repository.upsert_cwa_observation_batch(batch)
+    store: CWAWeatherStore = getattr(context.resources, TIME_SERIES_REPO).cwa_weather_store
+    persisted = store.upsert_cwa_observation_batch(batch)
     context.log.info("Persisted %s canonical CWA station observations.", persisted)
     if batch.status != "complete":
         missing = ", ".join(batch.missing_station_ids)
@@ -98,7 +99,7 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
 def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecastRelease]:
     """Asset: canonical CWA township forecast releases for three-day and weekly products."""
     source: CWASource = getattr(context.resources, CWA_SOURCE)
-    repository = getattr(context.resources, TIME_SERIES_REPO)
+    store: CWAWeatherStore = getattr(context.resources, TIME_SERIES_REPO).cwa_weather_store
     releases: list[CWAForecastRelease] = []
     missing: dict[str, tuple[str, ...]] = {}
     for dataset_id in ("F-D0047-089", "F-D0047-091"):
@@ -106,7 +107,7 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
         releases.append(release)
         if release.status != "complete":
             missing[dataset_id] = release.missing_geocodes
-    repository.upsert_cwa_forecast_releases(releases)
+    store.upsert_cwa_forecast_releases(releases)
     if missing:
         details = "; ".join(
             f"{dataset}: {', '.join(values)}" for dataset, values in missing.items()
@@ -141,7 +142,7 @@ def raw_taipower_supply_demand_snapshot(
         snapshot.observed_at.isoformat(),
         snapshot.curr_load_wan_kw,
     )
-    getattr(context.resources, TIME_SERIES_REPO).upsert_supply_demand_snapshot(snapshot)
+    getattr(context.resources, TIME_SERIES_REPO).supply_demand_store.upsert(snapshot)
     return snapshot
 
 
@@ -165,7 +166,7 @@ def raw_taipower_regional_supply_demand_snapshot(
         len(snapshots),
         snapshots[0].observed_at.isoformat(),
     )
-    getattr(context.resources, TIME_SERIES_REPO).upsert_regional_supply_demand_snapshots(snapshots)
+    getattr(context.resources, TIME_SERIES_REPO).regional_supply_demand_store.upsert(snapshots)
     return snapshots
 
 
@@ -231,7 +232,7 @@ def raw_taipower_unit_generation_snapshot(
         len(snapshots),
         snapshots[0].observed_at.isoformat(),
     )
-    getattr(context.resources, TIME_SERIES_REPO).upsert_unit_generation_snapshots(snapshots)
+    getattr(context.resources, TIME_SERIES_REPO).unit_generation_store.upsert(snapshots)
     return snapshots
 
 

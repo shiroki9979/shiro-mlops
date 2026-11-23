@@ -75,9 +75,9 @@ def forecast_view_export(
     context: AssetExecutionContext, track_record: dict | None
 ) -> MaterializeResult:
     """Before the first issue or the first compilation, the export still writes both files."""
-    repository = getattr(context.resources, TIME_SERIES_REPO)
+    store = getattr(context.resources, TIME_SERIES_REPO).issued_forecast_store
     publisher: ForecastViewPublisher = getattr(context.resources, FORECAST_VIEW_PUBLISHER)
-    forecast = latest_issued_forecast_document(repository.fetch_latest_issued_forecast())
+    forecast = latest_issued_forecast_document(store.fetch_latest())
     record = forecast_track_record_document(
         _uncompiled_track_record(context) if track_record is None else track_record
     )

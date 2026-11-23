@@ -102,7 +102,7 @@ def test_without_s3_settings_the_export_writes_only_the_local_directory(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, mocker
 ) -> None:
     boto3_client = mocker.patch("boto3.client")
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
     result = _export(test_repo, tmp_path, dagster_instance)
 
@@ -145,7 +145,7 @@ def _expect_upload(stubber: Stubber, data_dir: Path, name: str) -> None:
 def test_with_a_bucket_set_the_export_uploads_the_local_files_to_the_published_prefix(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
     # 先以純地端匯出產生期望的位元組，再讓上傳端比對同一份內容。
     _export(test_repo, tmp_path, dagster_instance)
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
@@ -166,7 +166,7 @@ def test_a_failed_upload_fails_the_export_after_the_local_directory_is_current(
 ) -> None:
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
     stubber.add_client_error("put_object", service_error_code="AccessDenied", http_status_code=403)
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
     with stubber:
         result = _export(test_repo, tmp_path, dagster_instance, publisher, raise_on_error=False)
@@ -185,7 +185,7 @@ def test_latest_forecast_publishes_only_issue_time_target_hours_and_predicted_lo
 
     No run status, load anchor, weather value, weather source or model version is published.
     """
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
     _export(test_repo, tmp_path, dagster_instance)
 
@@ -201,8 +201,8 @@ def test_latest_forecast_publishes_only_issue_time_target_hours_and_predicted_lo
 def test_the_latest_issue_time_wins_over_earlier_issues(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT))
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT - timedelta(hours=1)))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT - timedelta(hours=1)))
 
     result = _export(test_repo, tmp_path, dagster_instance)
 
@@ -246,7 +246,7 @@ def test_before_the_track_record_first_compiles_the_export_still_publishes_the_f
     run was created: the export schedule carries no tick, so a scheduled run falls back to
     now just as a manual one does.
     """
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
     for name in (LATEST_ISSUED_FORECAST_FILE, FORECAST_TRACK_RECORD_FILE):
         stubber.add_response(
@@ -292,7 +292,7 @@ def test_track_record_publishes_its_public_fields_and_cutoff(
     for day in range(8):
         issued_at = datetime(2026, 11, 12, 9, 15) + timedelta(days=day)
         anchor = issued_at.replace(minute=0) - timedelta(hours=1)
-        test_repo.insert_issued_forecast(
+        test_repo.issued_forecast_store.insert(
             IssuedForecast(
                 issued_at=issued_at,
                 load_anchor=anchor,
@@ -336,9 +336,9 @@ def test_track_record_publishes_its_public_fields_and_cutoff(
 def test_each_export_overwrites_the_same_file_names(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT))
     _export(test_repo, tmp_path, dagster_instance)
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT + timedelta(hours=1)))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT + timedelta(hours=1)))
 
     _export(test_repo, tmp_path, dagster_instance)
 

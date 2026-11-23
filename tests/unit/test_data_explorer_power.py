@@ -38,10 +38,8 @@ def test_national_reader_converts_mw_and_preserves_nullable_fields(
     """全台供需 reader 必須以 MW 為主顯示，並保留契約允許的空值與萬瓩欄位。"""
     observed = datetime(2026, 9, 5, 17, 30)
     _freeze_clock(monkeypatch, observed + timedelta(hours=1))
-    test_repo.upsert_supply_demand_snapshot(
-        supply_demand_snapshot(observed - timedelta(minutes=20))
-    )
-    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed))
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot(observed - timedelta(minutes=20)))
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot(observed))
 
     page = DatasetLister(test_repo.engine, NATIONAL_SUPPLY_DEMAND).list(
         {"start": rfc3339(observed - timedelta(hours=1)), "end": rfc3339(observed)}
@@ -82,7 +80,7 @@ def test_regional_reader_marks_incomplete_slots_and_filters_completeness(
             raw_payload={"區域": "北部"},
         )
     )
-    test_repo.upsert_regional_supply_demand_snapshots(rows)
+    test_repo.regional_supply_demand_store.upsert(rows)
     reader = DatasetLister(test_repo.engine, REGIONAL_SUPPLY_DEMAND)
     params = {"start": rfc3339(complete_slot), "end": rfc3339(observed), "limit": "50"}
 
@@ -110,7 +108,7 @@ def test_unit_generation_reader_preserves_zero_and_nullable_fields(
 ) -> None:
     """機組零發電必須保留，契約允許空值不得被當成缺失。"""
     observed = datetime(2026, 9, 5, 17, 10)
-    test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
+    test_repo.unit_generation_store.upsert(unit_generation_snapshots(observed))
     reader = DatasetLister(test_repo.engine, UNIT_GENERATION)
     window = {
         "start": rfc3339(observed - timedelta(hours=1)),

@@ -2,6 +2,7 @@ import { useHealth } from '@/hooks/use-health'
 import { Badge } from '@shiro-mlops/shared/ui/badge'
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { LocaleSwitcher } from '@shiro-mlops/shared/i18n/locale-switcher'
+import { toQueryView } from '@shiro-mlops/shared/query-view'
 import {
   Activity,
   AlertTriangle,
@@ -14,7 +15,10 @@ import { useState } from 'react'
 import { useMessages } from '@/i18n/messages'
 
 export function Header() {
-  const { data: health, isLoading, isError, refetch, isFetching } = useHealth()
+  const healthQuery = useHealth()
+  const { refetch, isFetching } = healthQuery
+  // The badge states the API's condition now, so a failed or offline read outranks the last response
+  const healthView = toQueryView(healthQuery, { policy: 'error-first' })
   const [isDark, setIsDark] = useState(true)
   const m = useMessages()
 
@@ -36,20 +40,29 @@ export function Header() {
 
       <div className="flex items-center gap-3">
         {/* Backend health status badge */}
-        {isLoading ? (
+        {healthView.kind === 'content' ? (
+          healthView.content.model_loaded ? (
+            <Badge variant="success" className="gap-1.5 py-1">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              <span>
+                {m.header.apiHealthy(healthView.content.environment, healthView.content.version)}
+              </span>
+            </Badge>
+          ) : (
+            <Badge variant="destructive" className="gap-1.5 py-1">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>{m.header.modelNotLoaded}</span>
+            </Badge>
+          )
+        ) : healthView.kind === 'error' || healthView.kind === 'paused' ? (
+          <Badge variant="destructive" className="gap-1.5 py-1">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span>{m.header.apiUnreachable}</span>
+          </Badge>
+        ) : (
           <Badge variant="secondary" className="gap-1.5 py-1">
             <Activity className="h-3.5 w-3.5 animate-spin text-slate-400" />
             <span>{m.header.checkingHealth}</span>
-          </Badge>
-        ) : isError || !health?.model_loaded ? (
-          <Badge variant="destructive" className="gap-1.5 py-1">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            <span>{isError ? m.header.apiUnreachable : m.header.modelNotLoaded}</span>
-          </Badge>
-        ) : (
-          <Badge variant="success" className="gap-1.5 py-1">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            <span>{m.header.apiHealthy(health.environment, health.version)}</span>
           </Badge>
         )}
 

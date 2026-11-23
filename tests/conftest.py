@@ -151,7 +151,7 @@ def populated_repo(
     """Create and populate TimeSeriesRepository with fixture data."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
     write_derived_load(repo.engine, taipower_raw_df)
-    repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    repo.cwa_weather_store.upsert_cwa_observation_batch(cwa_observation_batch)
     return repo
 
 
