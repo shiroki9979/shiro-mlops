@@ -17,7 +17,7 @@ from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.timefmt import (
     format_taiwan_time,
     now_taiwan,
-    parse_api_time,
+    parse_request_time,
 )
 
 if TYPE_CHECKING:
@@ -106,9 +106,9 @@ def resolve_window(
     """Require a bounded window and reject ranges that exceed the dataset maximum."""
     clock = now_taiwan()
     try:
-        parsed_end = parse_api_time(end) if end is not None else clock
+        parsed_end = parse_request_time(end) if end is not None else clock
         parsed_start = (
-            parse_api_time(start) if start is not None else parsed_end - timedelta(hours=24)
+            parse_request_time(start) if start is not None else parsed_end - timedelta(hours=24)
         )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ExplorerQueryError("start and end must be valid RFC 3339 timestamps") from exc
@@ -140,12 +140,25 @@ def list_request_params(dataset: Dataset) -> frozenset[str]:
 def declared_params(
     query: Mapping[str, str], accepted: Collection[str], endpoint: str
 ) -> dict[str, str]:
-    """Reject every parameter outside `accepted`, even one sent empty, then drop the empty
-    values: an empty declared parameter reads as not given."""
+    """Reject every parameter outside `accepted`, even one sent empty, and every value
+    holding a control character, then drop the empty values: an empty declared parameter
+    reads as not given."""
     unknown = sorted(set(query) - set(accepted))
     if unknown:
         raise ExplorerQueryError(f"unsupported {endpoint} parameters: {', '.join(unknown)}")
+    for key, value in query.items():
+        if isinstance(value, str) and has_control_characters(value):
+            raise ExplorerQueryError(f"{key} must not contain control characters")
     return {key: value for key, value in query.items() if value != ""}
+
+
+def has_control_characters(value: str) -> bool:
+    """Whether text holds a C0 control character or DEL; none is ever a stored identifier.
+
+    PostgreSQL rejects NUL in a bound string with a plain ``ValueError`` that no handler
+    maps, so the request would end as a 500 instead of a refusal.
+    """
+    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
 def list_params(dataset: Dataset, query: Mapping[str, str]) -> dict[str, str]:

@@ -6,9 +6,9 @@ from collections.abc import Callable
 from typing import Any
 
 from shiro_mlops.service.data_explorer.cursor import CursorError, encode_cursor
-from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.query import ExplorerQuery, has_control_characters
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
-from shiro_mlops.service.data_explorer.timefmt import parse_api_storage_time
+from shiro_mlops.service.data_explorer.timefmt import parse_request_storage_time
 from shiro_mlops.service.data_explorer.values import format_row_time
 
 RowFetcher = Callable[[ExplorerQuery, dict[str, Any] | None, int], list[dict[str, Any]]]
@@ -90,10 +90,10 @@ def sql_cursor_key(
     for column in columns:
         value = key.get(column)
         # raw_cursor_key only emits strings; anything else was not issued by this service.
-        if not isinstance(value, str):
+        if not isinstance(value, str) or has_control_characters(value):
             raise CursorError("Invalid cursor key")
         try:
-            converted[column] = parse_api_storage_time(value) if column in instants else value
+            converted[column] = parse_request_storage_time(value) if column in instants else value
         except (TypeError, ValueError, OverflowError) as exc:
             raise CursorError("Invalid cursor key") from exc
     return converted

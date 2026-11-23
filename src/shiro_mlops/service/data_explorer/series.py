@@ -327,7 +327,12 @@ class SeriesReader:
         groups = request.group_columns
         by_key: dict[tuple[str, ...], list[dict[str, Any]]] = {key: [] for key in keys}
         for row in rows:
-            by_key[self._group_key(row, groups)].append(row)
+            # WHY-NOT by_key: a row whose group the keys read did not see is dropped, not
+            # indexed blindly. Keys and points are two reads, and an ingestion committing
+            # between them adds a group the bucket and point limits were never checked for.
+            key_rows = by_key.get(self._group_key(row, groups))
+            if key_rows is not None:
+                key_rows.append(row)
         expected = self._fill_slots(request.window, bucket)
         series = []
         for index, name in enumerate(request.fields):
@@ -393,13 +398,17 @@ def expected_bucket_starts(
 ) -> list[datetime]:
     """Every bucket start a fixed-cadence dataset should produce inside the window.
 
-    `raw` follows the dataset cadence from the first slot at or after `start`; `1h` and
-    `1d` start at the bucket containing `start`, so partial edge buckets are included.
+    `raw` follows the dataset cadence from the first slot at or after `start`. `1h` and
+    `1d` start at the bucket holding that first slot, so a partial edge bucket is included
+    exactly when one of its slots is inside the window: hourly data from 10:30 has no slot
+    in the 10:00 bucket, and expecting it would report a gap that the list does not.
     """
-    start = pd.Timestamp(window.start)
+    first_slot = pd.Timestamp(window.start).ceil(cadence)
+    if first_slot > pd.Timestamp(window.end):
+        return []
     if bucket is Bucket.RAW:
-        first, frequency = start.ceil(cadence), pd.Timedelta(cadence)
+        first, frequency = first_slot, pd.Timedelta(cadence)
     else:
         frequency = BUCKET_FREQUENCY[bucket]
-        first = start.floor(frequency)
+        first = first_slot.floor(frequency)
     return [ts.to_pydatetime() for ts in pd.date_range(first, window.end, freq=frequency)]
