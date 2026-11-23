@@ -42,6 +42,7 @@ from shiro_mlops.service.data_explorer.datasets import Dataset
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.model_store import model_directory, save_model
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -206,6 +207,24 @@ def derived_hourly_load(hours: int, last_hour: datetime) -> pd.DataFrame:
     """Build contiguous derived hourly load ending at ``last_hour`` with HH:00 timestamps."""
     times = pd.date_range(end=last_hour, periods=hours, freq="h")
     return pd.DataFrame({"datetime": times, "load_mw": [30000.0 + i for i in range(hours)]})
+
+
+class _ModelFilesDouble:
+    """A task model whose saved files stand in for a trained one; presence checks never load it."""
+
+    def save(self, directory: Path) -> None:
+        directory.mkdir(parents=True)
+        (directory / "model.txt").write_text("trained", encoding="utf-8")
+
+
+def install_model_double(root: Path, task_id: str = DYNAMIC_HORIZON_FORECAST) -> None:
+    """Install a model directory through the model store, as training would, without training."""
+    save_model(root, task_id, _ModelFilesDouble())
+
+
+def hand_copied_model_double(root: Path, task_id: str = DYNAMIC_HORIZON_FORECAST) -> None:
+    """Write a model directory the model store did not install."""
+    _ModelFilesDouble().save(model_directory(root, task_id))
 
 
 def write_derived_load(

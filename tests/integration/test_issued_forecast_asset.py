@@ -1,5 +1,6 @@
 """Issuing a forecast end to end: schedule tick, Dagster job, runner and the issued-forecast store."""
 
+import shutil
 from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -23,7 +24,7 @@ from shiro_mlops.pipelines.task_pipelines import (
     TaskPipelineNames,
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.model_store import SavedModel, save_model
+from shiro_mlops.tasks.model_store import SavedModel, model_directory, save_model
 from shiro_mlops.tasks.runner import TaskRuntime, train_task
 from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
@@ -307,4 +308,44 @@ def test_hand_launched_run_with_an_issue_time_but_no_tick_issues_nothing(
 
     assert not result.success
     assert "scheduled tick" in _failure_description(result)
+    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+
+
+def test_model_directory_without_a_training_record_issues_with_an_empty_mlflow_note(
+    repo: TimeSeriesRepository, dagster_instance, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rebuilt Dagster instance lost the record, but data/models still holds the trained model."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
+    saved = _train_and_save(repo, n_estimators=20)
+
+    result = _issue(repo, dagster_instance)
+
+    assert result.success
+    issued = repo.fetch_issued_forecast(ISSUED_AT)
+    assert issued is not None
+    assert issued.model_sha256 == saved.sha256
+    assert issued.mlflow_model_version is None
+
+
+def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
+    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel
+) -> None:
+    execution = issued_forecast_schedule.evaluate_tick(
+        build_schedule_context(instance=dagster_instance, scheduled_execution_time=TICK)
+    )
+    [request] = execution.run_requests
+    shutil.rmtree(model_directory(settings.models_dir, DYNAMIC_HORIZON_FORECAST))
+
+    result = _job(repo).execute_in_process(
+        run_config=request.run_config,
+        instance=dagster_instance,
+        tags=request.tags,
+        raise_on_error=False,
+    )
+
+    assert not result.success
+    failure = _failure(result)
+    assert "Training record and model directory disagree" in failure.description
+    assert f"Run {NAMES.training_job} once" in failure.description
+    assert failure.metadata["issued_at"] == MetadataValue.text(ISSUED_AT.isoformat())
     assert repo.fetch_issued_forecast(ISSUED_AT) is None

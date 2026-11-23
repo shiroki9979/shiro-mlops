@@ -7,13 +7,17 @@ import pytest
 from dagster import AssetMaterialization
 
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.pipelines.cold_start import ColdStartStage, read_cold_start
+from shiro_mlops.pipelines.cold_start import ColdStartStage, read_cold_start, read_model_presence
 from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.model_store import save_model
 from shiro_mlops.tasks.runner import TaskRuntime
 from shiro_mlops.tasks.types import get_task_type
-from tests.helpers import derived_hourly_load, write_derived_load
+from tests.helpers import (
+    derived_hourly_load,
+    hand_copied_model_double,
+    install_model_double,
+    write_derived_load,
+)
 
 LAST_HOUR = datetime(2026, 9, 26, 23, 0)
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
@@ -42,18 +46,6 @@ def test_below_minimum_accumulation_without_a_model_is_accumulating(
 
     assert cold_start.stage is ColdStartStage.ACCUMULATING
     assert "23 valid hourly observations" in cold_start.reason
-
-
-class _SavedModel:
-    """A model double; presence never loads it, so only its files matter."""
-
-    def save(self, directory: Path) -> None:
-        directory.mkdir(parents=True)
-        (directory / "model.txt").write_text("trained", encoding="utf-8")
-
-
-def _install(models_root: Path) -> None:
-    save_model(models_root, DYNAMIC_HORIZON_FORECAST, _SavedModel())
 
 
 def _record(instance) -> None:
@@ -94,7 +86,7 @@ def test_a_model_on_both_sides_is_trained_and_monitored(
     test_repo: TimeSeriesRepository, dagster_instance, models_root: Path, min_hours: int
 ) -> None:
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
-    _install(models_root)
+    install_model_double(models_root)
     _record(dagster_instance)
 
     cold_start = _cold_start(test_repo, dagster_instance, models_root)
@@ -123,7 +115,7 @@ def test_an_installed_model_without_a_record_is_a_mismatch_that_skips_monitoring
     test_repo: TimeSeriesRepository, dagster_instance, models_root: Path, min_hours: int
 ) -> None:
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
-    _install(models_root)
+    install_model_double(models_root)
 
     cold_start = _cold_start(test_repo, dagster_instance, models_root)
 
@@ -139,7 +131,7 @@ def test_a_hand_copied_model_directory_does_not_count_as_a_model(
 ) -> None:
     """The store refuses to load a directory it did not install, so presence must agree."""
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
-    _SavedModel().save(models_root / DYNAMIC_HORIZON_FORECAST)
+    hand_copied_model_double(models_root)
     _record(dagster_instance)
 
     cold_start = _cold_start(test_repo, dagster_instance, models_root)
@@ -153,7 +145,7 @@ def test_a_trained_task_whose_gate_closes_again_stays_trained_but_skips_training
 ) -> None:
     """Raising min_training_hours after training: both schedules skip for the accumulation reason."""
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours - 1, LAST_HOUR))
-    _install(models_root)
+    install_model_double(models_root)
     _record(dagster_instance)
 
     cold_start = _cold_start(test_repo, dagster_instance, models_root)
@@ -171,7 +163,7 @@ def test_stage_is_read_without_loading_the_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
-    _install(models_root)
+    install_model_double(models_root)
     _record(dagster_instance)
     task_type = get_task_type(deployed_task(DYNAMIC_HORIZON_FORECAST).task_type)
 
@@ -181,3 +173,65 @@ def test_stage_is_read_without_loading_the_model(
     monkeypatch.setattr(task_type, "load", refuse_to_load)
 
     assert _cold_start(test_repo, dagster_instance, models_root).stage is ColdStartStage.TRAINED
+
+
+ISSUING_SCHEDULE = "issued_forecast_schedule"
+
+
+def _presence(instance, models_root: Path):
+    return read_model_presence(DYNAMIC_HORIZON_FORECAST, instance=instance, models_root=models_root)
+
+
+def test_issuing_without_a_model_on_either_side_waits_for_the_first_training(
+    dagster_instance, models_root: Path
+) -> None:
+    decision = _presence(dagster_instance, models_root).issuing(ISSUING_SCHEDULE)
+
+    assert decision.skip_reason == (
+        f"No {NAMES.model} materialization yet; {ISSUING_SCHEDULE} waits for "
+        "the first successful training run."
+    )
+
+
+def test_issuing_runs_from_an_installed_model_even_without_a_training_record(
+    dagster_instance, models_root: Path
+) -> None:
+    """The issued forecast loads from the directory, so a rebuilt Dagster instance must not stop it."""
+    install_model_double(models_root)
+
+    assert _presence(dagster_instance, models_root).issuing(ISSUING_SCHEDULE).runs
+
+
+def test_issuing_skips_a_training_record_whose_model_directory_is_gone(
+    dagster_instance, models_root: Path
+) -> None:
+    _record(dagster_instance)
+
+    decision = _presence(dagster_instance, models_root).issuing(ISSUING_SCHEDULE)
+
+    assert "Training record and model directory disagree" in decision.skip_reason
+    assert f"Run {NAMES.training_job} once" in decision.skip_reason
+
+
+def test_issuing_ignores_a_closed_accumulation_gate(
+    test_repo: TimeSeriesRepository, dagster_instance, models_root: Path, min_hours: int
+) -> None:
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours - 1, LAST_HOUR))
+    install_model_double(models_root)
+    _record(dagster_instance)
+
+    cold_start = _cold_start(test_repo, dagster_instance, models_root)
+
+    assert not cold_start.training.runs
+    assert cold_start.issuing(ISSUING_SCHEDULE).runs
+
+
+def test_issuing_skips_with_the_stage_reason_of_a_mismatch(
+    test_repo: TimeSeriesRepository, dagster_instance, models_root: Path, min_hours: int
+) -> None:
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    _record(dagster_instance)
+
+    cold_start = _cold_start(test_repo, dagster_instance, models_root)
+
+    assert cold_start.issuing(ISSUING_SCHEDULE).skip_reason == cold_start.reason

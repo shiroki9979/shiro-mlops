@@ -12,8 +12,13 @@ from shiro_mlops.pipelines.definitions import defs
 from shiro_mlops.pipelines.schedules import CWA_INGESTION_ASSETS, TAIPOWER_REALTIME_SNAPSHOT_ASSETS
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
-from shiro_mlops.tasks.model_store import save_model
-from tests.helpers import derived_hourly_load, selected_asset_names, task_jobs, write_derived_load
+from tests.helpers import (
+    derived_hourly_load,
+    install_model_double,
+    selected_asset_names,
+    task_jobs,
+    write_derived_load,
+)
 
 TICK = datetime(2026, 9, 27, 0, 0, tzinfo=ZoneInfo("Asia/Taipei"))
 LAST_HOUR = datetime(2026, 9, 26, 23, 0)
@@ -23,12 +28,6 @@ NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 
 # 監控排程讀 DATA_DIR 下的模型目錄；隔離後主機上的 data/models 不會影響判定。
 pytestmark = pytest.mark.usefixtures("isolated_models_dir")
-
-
-class _SavedModel:
-    def save(self, directory: Path) -> None:
-        directory.mkdir(parents=True)
-        (directory / "model.txt").write_text("trained", encoding="utf-8")
 
 
 def _tick(schedule_name: str, repository: TimeSeriesRepository, instance):
@@ -159,7 +158,7 @@ def test_monitoring_skips_as_a_mismatch_when_only_the_model_directory_has_a_mode
 ) -> None:
     """A rebuilt Dagster instance beside a kept data/models has no metrics for monitoring to read."""
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
-    save_model(isolated_models_dir, DYNAMIC_HORIZON_FORECAST, _SavedModel())
+    install_model_double(isolated_models_dir)
 
     execution = _tick(NAMES.monitoring_schedule, test_repo, dagster_instance)
 
@@ -185,7 +184,7 @@ def test_training_runs_whatever_the_model_state_once_accumulation_is_met(
 ) -> None:
     """Retraining is the remedy for a mismatch, so the training schedule never waits on it."""
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
-    save_model(isolated_models_dir, DYNAMIC_HORIZON_FORECAST, _SavedModel())
+    install_model_double(isolated_models_dir)
 
     execution = _tick(NAMES.training_schedule, test_repo, dagster_instance)
 

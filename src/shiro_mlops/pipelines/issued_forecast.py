@@ -33,13 +33,13 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
+from shiro_mlops.pipelines.cold_start import ColdStart, read_cold_start, read_model_presence
 from shiro_mlops.pipelines.schedules import (
     CWA_FORECAST_ASSET,
     CWA_OBSERVATION_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
     tick_run_key,
 )
-from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.pipelines.task_pipelines import (
     MODEL_SHA256_METADATA,
     TIME_SERIES_REPO,
@@ -61,7 +61,6 @@ ISSUED_FORECAST_ASSET = "issued_forecast"
 ISSUED_FORECAST_JOB = "issued_forecast_job"
 ISSUED_FORECAST_SCHEDULE = "issued_forecast_schedule"
 ISSUED_FORECAST_TASK = DYNAMIC_HORIZON_FORECAST
-_MODEL_ASSET = TaskPipelineNames(ISSUED_FORECAST_TASK).model
 # Dagster 對排程 tick 產生的每個 run 加上此標籤（`DagsterRun.tags_for_schedule`）。
 SCHEDULE_NAME_TAG = "dagster/schedule_name"
 # 重新執行的 run（`DagsterInstance.create_reexecuted_run`）帶這兩個標籤，並沿用原 run 的標籤與設定。
@@ -97,12 +96,13 @@ def issued_forecast(
     repository = getattr(context.resources, TIME_SERIES_REPO)
     if repository.fetch_issued_forecast(issued_at) is not None:
         return _issued_result(issued_at, already_issued=True)
-    loaded = _load_model()
+    runtime = TaskRuntime(repository=repository)
+    loaded = _load_model(context, runtime, issued_at)
     try:
         outcome = predict_task(
             deployed_task(ISSUED_FORECAST_TASK),
             loaded.model,
-            TaskRuntime(repository=repository),
+            runtime,
             as_of=issued_at,
             horizon_hours=MAX_HORIZON_HOURS,
         )
@@ -144,13 +144,31 @@ def _scheduled_issue_time(context: AssetExecutionContext, config: IssuedForecast
     return datetime.fromisoformat(config.issued_at)
 
 
-def _load_model() -> LoadedModel:
-    loaded = load_model_with_sha256(settings.models_dir, deployed_task(ISSUED_FORECAST_TASK))
-    if loaded is None:
-        raise Failure(
-            description=f"No trained {ISSUED_FORECAST_TASK} model under {settings.models_dir}."
-        )
-    return loaded
+def _load_model(
+    context: AssetExecutionContext, runtime: TaskRuntime, issued_at: datetime
+) -> LoadedModel:
+    """Load only when the cold-start stage lets issuing run; otherwise fail with the stage reason.
+
+    The stage is read again when loading finds nothing: the directory can vanish
+    between the decision and the load, and the second read names what is missing now.
+    """
+    task = deployed_task(ISSUED_FORECAST_TASK)
+    cold_start = _cold_start(context, runtime)
+    if cold_start.issuing(ISSUED_FORECAST_SCHEDULE).runs:
+        loaded = load_model_with_sha256(settings.models_dir, task)
+        if loaded is not None:
+            return loaded
+        cold_start = _cold_start(context, runtime)
+    raise Failure(description=cold_start.reason, metadata=_issued_at_metadata(issued_at))
+
+
+def _cold_start(context: AssetExecutionContext, runtime: TaskRuntime) -> ColdStart:
+    return read_cold_start(
+        deployed_task(ISSUED_FORECAST_TASK),
+        runtime=runtime,
+        instance=context.instance,
+        models_root=settings.models_dir,
+    )
 
 
 def _mlflow_model_version_note(context: AssetExecutionContext, loaded_sha256: str) -> str | None:
@@ -231,12 +249,12 @@ issued_forecast_job = define_asset_job(
     description="Issue the dynamic horizon forecast at fifteen minutes past each hour",
 )
 def issued_forecast_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Each tick is its own issue time; nothing is issued before the first trained model."""
-    if latest_recorded_model(context.instance, ISSUED_FORECAST_TASK) is None:
-        return SkipReason(
-            f"No {_MODEL_ASSET} materialization yet; {ISSUED_FORECAST_SCHEDULE} waits for "
-            "the first successful training run."
-        )
+    """Each tick is its own issue time; only an installed model in the model directory issues."""
+    decision = read_model_presence(
+        ISSUED_FORECAST_TASK, instance=context.instance, models_root=settings.models_dir
+    ).issuing(ISSUED_FORECAST_SCHEDULE)
+    if decision.skip_reason is not None:
+        return SkipReason(decision.skip_reason)
     issued_at = tick_run_key(context)
     if issued_at is None:
         return SkipReason("No scheduled tick to issue at; only scheduled ticks issue forecasts.")

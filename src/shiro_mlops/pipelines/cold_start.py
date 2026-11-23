@@ -65,10 +65,21 @@ class ModelPresence:
     recorded: bool
     installed: bool
 
+    def issuing(self, schedule: str) -> ScheduleDecision:
+        """Only the directory counts: issuing loads the model from it and never reads the record."""
+        if self.installed:
+            return ScheduleDecision()
+        if self.recorded:
+            return ScheduleDecision(_describe_mismatch(self))
+        return ScheduleDecision(
+            f"No {self.names.model} materialization yet; {schedule} waits for "
+            "the first successful training run."
+        )
+
 
 @dataclass(frozen=True)
 class ColdStart:
-    """A task's cold-start stage, its reason, and the training and monitoring decisions."""
+    """A task's cold-start stage, its reason, and each schedule's decision."""
 
     models: ModelPresence
     readiness: TrainingLoadReadiness
@@ -127,6 +138,10 @@ class ColdStart:
             f"No {names.model} materialization yet; {names.monitoring_schedule} waits for "
             f"the first successful {names.training_job} run."
         )
+
+    def issuing(self, schedule: str) -> ScheduleDecision:
+        """The gate never counts: a model already issued from keeps issuing while the gate is closed."""
+        return self.models.issuing(schedule)
 
 
 def read_model_presence(
