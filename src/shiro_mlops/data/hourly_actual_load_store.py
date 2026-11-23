@@ -2,8 +2,9 @@
 
 Elsewhere in ``src/``, ``scripts/`` and ``lab/`` only schema init and migration, the Data
 Explorer's declarative hourly load dataset and the forecast track-record join in
-``TimeSeriesRepository.fetch_track_record_pairs`` touch the table; the last two select
-the derived rows by binding ``REGIONAL_SNAPSHOT_SUM_SOURCE`` from this module.
+``ForecastTrackRecordStore.fetch_pairs`` (``src/shiro_mlops/data/forecast_track_record.py``)
+touch the table; the last two select the derived rows by binding
+``REGIONAL_SNAPSHOT_SUM_SOURCE`` from this module.
 Every row this store writes carries the derived source, and every derived hour it reads
 selects only that source, so d015046-era rows (NULL source) and other sources never
 mix into the derived series. Two reads look past the source: the accumulation counts
