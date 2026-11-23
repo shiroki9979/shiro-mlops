@@ -43,6 +43,17 @@ class StubService:
         # A list is served in order, one response per request, then its last item repeats.
         self.routes = routes
         self.base_url = ""
+        # Paths answered 403 unless the request's Host header is one of `allowed_hosts`,
+        # as MLflow 3 answers its API (but not /health) for a host it was not told to serve.
+        self.host_checked_paths: frozenset[str] = frozenset()
+        self.allowed_hosts: frozenset[str] = frozenset()
+        self.seen_hosts: list[tuple[str, str]] = []
+
+    def respond_to(self, path: str, host: str) -> Response:
+        self.seen_hosts.append((path, host))
+        if path in self.host_checked_paths and host not in self.allowed_hosts:
+            return Response(403, b"Invalid Host header", "text/plain")
+        return self.respond(path)
 
     def respond(self, path: str) -> Response:
         route = self.routes.get(path, Response(404, b"not found", "text/plain"))
@@ -54,7 +65,7 @@ class StubService:
 def _serve(stub: StubService) -> Iterator[StubService]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            response = stub.respond(self.path)
+            response = stub.respond_to(self.path, self.headers.get("Host", ""))
             self.send_response(response.status)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(response.body)))
@@ -85,9 +96,21 @@ def api() -> Iterator[StubService]:
     )
 
 
+MLFLOW_API_PATH = "/api/2.0/mlflow/experiments/search?max_results=1"
+COMPOSE_MLFLOW_HOST = "mlflow:5000"
+
+
 @pytest.fixture
 def mlflow() -> Iterator[StubService]:
-    yield from _serve(StubService({"/health": Response(200, b"OK", "text/plain")}))
+    stub = StubService(
+        {
+            "/health": Response(200, b"OK", "text/plain"),
+            MLFLOW_API_PATH: _json(200, {"experiments": []}),
+        }
+    )
+    stub.host_checked_paths = frozenset({MLFLOW_API_PATH})
+    stub.allowed_hosts = frozenset({COMPOSE_MLFLOW_HOST})
+    yield from _serve(stub)
 
 
 def _run(
@@ -172,7 +195,8 @@ def test_every_check_still_failing_at_the_deadline_is_listed(api, mlflow, capsys
     )
 
     assert exit_code == 1
-    [data_status, mlflow_health] = _failure_lines(output)
+    [data_status, mlflow_health, mlflow_api] = _failure_lines(output)
+    assert mlflow_api.startswith("- MLflow tracking API as mlflow:5000: cannot reach")
     assert data_status == "- API /data/status: HTTP 500, expected 200"
     assert mlflow_health.startswith("- MLflow /health: cannot reach http://127.0.0.1:9/health")
 
@@ -186,3 +210,45 @@ def test_not_ready_without_a_reason_fails(api, mlflow, capsys) -> None:
     assert _failure_lines(output) == [
         "- API /ready: reason is None with HTTP 503, expected a non-empty string"
     ]
+
+
+def test_mlflow_api_is_asked_under_the_host_name_the_other_containers_use(
+    api, mlflow, capsys
+) -> None:
+    exit_code, _ = _run(api, mlflow, capsys)
+
+    assert exit_code == 0
+    assert (MLFLOW_API_PATH, COMPOSE_MLFLOW_HOST) in mlflow.seen_hosts
+
+
+def test_mlflow_refusing_the_compose_host_name_fails_though_health_answers(
+    api, mlflow, capsys
+) -> None:
+    """MLflow 3 serves /health to any host, so health alone passes while tracking is refused."""
+    mlflow.allowed_hosts = frozenset({"localhost:5001", "127.0.0.1:5001"})
+
+    exit_code, output = _run(api, mlflow, capsys)
+
+    assert exit_code == 1
+    assert _failure_lines(output) == [
+        "- MLflow tracking API as mlflow:5000: HTTP 403, expected 200"
+    ]
+
+
+def test_the_in_network_mlflow_host_can_be_named(api, mlflow, capsys) -> None:
+    mlflow.allowed_hosts = frozenset({"tracking:5000"})
+
+    exit_code, _ = _run(api, mlflow, capsys, "--mlflow-internal-host", "tracking:5000")
+
+    assert exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "host", ["", "has space:5000", "mlflow:5000\r\nX-Injected: 1", "http://mlflow"]
+)
+def test_an_internal_host_that_is_not_a_host_header_value_is_an_argument_error(
+    api, mlflow, capsys, host
+) -> None:
+    exit_code, _ = _run(api, mlflow, capsys, "--mlflow-internal-host", host)
+
+    assert exit_code == 2

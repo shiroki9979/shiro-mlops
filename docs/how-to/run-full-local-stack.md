@@ -93,7 +93,7 @@ make backend-smoke-ci
 4. 執行 `make smoke-check ARGS="--require-ready --task dynamic_horizon_forecast"`，確認 `dynamic_horizon_forecast load accumulation` 為 `PASS` 後啟動 `dynamic_horizon_forecast__training_job`；訓練與推論只讀已入庫的 canonical tables，不會自行呼叫外部台電或 CWA API。累積不足時 `dynamic_horizon_forecast__features` 會明確失敗且不產出模型。
 5. 訓練完成後執行 `docker compose -f docker/docker-compose.yml restart api`，讓 API 載入新產生的任務模型目錄 `data/models/dynamic_horizon_forecast/`（LightGBM 原生文字格式與 JSON metadata）。既有的 `data/model.joblib` 已失效且不再載入，首次重新訓練前 `/ready` 維持 `not_ready`。
 6. 執行 `curl -i http://localhost:8000/ready`，確認回傳 HTTP 200 及 `normal` 或 `degraded` mode。
-7. 至 `http://localhost:5001` 的 experiment `dynamic_horizon_forecast` 檢視最新模型參數與評估指標；Model Registry 的 `dynamic_horizon_forecast` 每次訓練新增一個 version。
+7. 至 `http://localhost:5001` 的 experiment `dynamic_horizon_forecast` 檢視最新模型參數與評估指標；Model Registry 的 `dynamic_horizon_forecast` 每次訓練新增一個 version。該次 run 的 Artifacts 分頁應列出 `model/` 下的模型檔；模型檔經 MLflow server 寫入 `mlflow_artifacts` volume。以舊版映像建立的 experiment 仍記著容器內的本機路徑，其後續 run 的模型檔不會出現在這裡，需要時在 MLflow UI 刪除該 experiment 後重新訓練。
 
 在上述資料與模型尚未備妥前，`/health` 仍回傳 HTTP 200，但 `/ready` 與 `/predict` 會明確回報尚未就緒。
 
