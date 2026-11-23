@@ -1,7 +1,7 @@
 # ADR-0016：儲存庫改為公開，不升級付費方案
 
 > - Created: 2026-11-22
-> - Last Updated: 2026-11-22
+> - Last Updated: 2026-11-23
 > - Author: Bo-Xue Huang
 > - Status: 已接受
 > - Related: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)、[GitHub Rulesets](../reference/github-rulesets.md)、[GitHub 儲存庫設定](../reference/github-repository-settings.md)、[Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)
@@ -29,7 +29,7 @@
 ### 2.1 歷史與個人資訊
 
 - **不改寫歷史**：歷史照現狀公開。GitHub 會保留每個 PR 的 `refs/pull/<n>/head`，改寫歷史也清不掉舊 commit，而且需要 force push，會與 `non_fast_forward` 規則衝突。
-- **之後不再外洩 email**：之後的 commit 一律使用 GitHub noreply email，帳號另外開啟「Block command line pushes that expose my email」。
+- **email 不隱藏**：維護者的 commit email 照現狀公開，之後的 commit 也不要求改用 GitHub noreply email。
 - **著作人姓名**：LICENSE、`pyproject.toml` 與 ADR 都使用維護者的姓名 Bo-Xue Huang。
 
 ### 2.2 授權與貢獻
@@ -79,3 +79,4 @@
 
 - 決策經 2026-11-22 的設計訪談定案。公開與設定的人工步驟追蹤於 [GitHub #281](https://github.com/shiroki9979/shiro-mlops/issues/281)。
 - GitHub 方案與公開後行為的事實取自 GitHub 定價頁與 GitHub 官方文件，包括 repository visibility、fork PR 的 secrets 與 `GITHUB_TOKEN` 權限、自架 runner 的安全建議。查閱日期為 2026-11-22。
+- 2026-11-23：維護者決定暫不隱藏 commit email，§2.1 原本「之後的 commit 一律使用 noreply email」改為「email 不隱藏」。歷史裡的 email 本來就無法移除，這項修訂只影響之後的 commit；日後要改為隱藏時，更新 §2.1 與[GitHub 儲存庫設定 §4](../reference/github-repository-settings.md#4-維護者帳號)。

@@ -1,7 +1,7 @@
 # GitHub 儲存庫設定
 
 - 建立日期：2026-11-22
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 ---
@@ -52,10 +52,12 @@ fork PR 的 workflow 執行時：
 
 ## 4. 維護者帳號
 
-以下設定在維護者個人帳號上，不屬於儲存庫，但會決定公開歷史中出現的 email：
+commit email 不隱藏（[ADR-0016 §2.1](../adr/0016-make-repository-public.md#21-歷史與個人資訊)）：
 
-- **commit email**：本機 git 的 `user.email` 使用 GitHub noreply 地址 `92085403+shiroki9979@users.noreply.github.com`。
-- **email 隱私**：**Settings → Emails** 勾選 **Keep my email addresses private** 與 **Block command line pushes that expose my email**。
+- **不要求 noreply 地址**：本機 git 的 `user.email` 不要求改用 GitHub noreply 地址。用個人 email 做的 commit，推上去後就隨歷史公開。
+- **email 隱私設定不在本文件管理範圍**：**Settings → Emails** 的 **Keep my email addresses private** 與 **Block command line pushes that expose my email** 屬於維護者個人帳號，本文件不規定它們要開或關。
+
+要改為隱藏時，把 `user.email` 設成 `92085403+shiroki9979@users.noreply.github.com`，並勾選上面兩個選項，同時更新本節與 ADR-0016 §2.1。
 
 ## 5. 維護方式
 
