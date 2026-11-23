@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@/mocks/server'
-import { apiClient } from '@/lib/api-client'
+import { apiClient, type DataExplorerError } from '@/lib/api-client'
 
 const LIST_PATH = '/data/power/load'
 const SERIES_PATH = '/data/power/load/series'
@@ -48,5 +48,31 @@ describe.each([
     const error = await failureOf(read())
 
     expect(error).toMatchObject({ kind: 'other' })
+  })
+})
+
+describe('Data Explorer invalidQuery suggested bucket', () => {
+  it.each([
+    ['a resolved bucket', { message: 'too many points', suggested_bucket: '1d' }, '1d'],
+    ['null', { message: 'too many points', suggested_bucket: null }, undefined],
+    ['auto, which is not a resolved bucket', { message: 'too many points', suggested_bucket: 'auto' }, undefined],
+    ['an unknown bucket', { message: 'too many points', suggested_bucket: '1w' }, undefined],
+    ['missing', 'Unknown query parameter: bucket', undefined],
+  ])('reads a 422 suggested_bucket that is %s', async (_case, detail, suggestedBucket) => {
+    server.use(http.get(`*${SERIES_PATH}`, () => HttpResponse.json({ detail }, { status: 422 })))
+
+    const error = await failureOf(apiClient.getDataSeries(SERIES_PATH))
+
+    expect(error).toMatchObject({ kind: 'invalidQuery' })
+    expect((error as DataExplorerError).suggestedBucket).toBe(suggestedBucket)
+  })
+
+  it('leaves the suggested bucket empty on kinds other than invalidQuery', async () => {
+    server.use(http.get(`*${SERIES_PATH}`, () => HttpResponse.json({ detail: { suggested_bucket: '1d' } }, { status: 503 })))
+
+    const error = await failureOf(apiClient.getDataSeries(SERIES_PATH))
+
+    expect(error).toMatchObject({ kind: 'databaseUnavailable' })
+    expect((error as DataExplorerError).suggestedBucket).toBeUndefined()
   })
 })
