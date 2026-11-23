@@ -143,7 +143,7 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class Deployment:
-    """One deployment under check: its code, Dagster instance, and load store at ``now``."""
+    """One deployment under check at ``now``: its code, composition root, and Dagster instance."""
 
     defs: Definitions
     repository: TimeSeriesRepository
