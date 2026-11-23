@@ -25,8 +25,13 @@ from shiro_mlops.pipelines.task_pipelines import (
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import SavedModel, model_directory, save_model
-from shiro_mlops.tasks.runner import TaskRuntime, train_task
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
+from shiro_mlops.tasks.runner import train_task
+from tests.helpers import (
+    canonical_observation_batch,
+    hourly_load_with_weather,
+    task_runtime,
+    write_derived_load,
+)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 LOAD_ANCHOR = datetime(2026, 11, 20, 9, 0)
@@ -45,7 +50,7 @@ MLFLOW_VERSION = "7"
 def repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     load, weather = hourly_load_with_weather(HOURS, LOAD_ANCHOR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     return test_repo
@@ -78,7 +83,7 @@ def _train_and_save(repo: TimeSeriesRepository, *, n_estimators: int) -> SavedMo
         ),
         policies=shipped.policies.model_copy(update={"min_training_hours": HOURS}),
     )
-    model = train_task(task, TaskRuntime(repository=repo), as_of=ISSUED_AT).model
+    model = train_task(task, task_runtime(repo), as_of=ISSUED_AT).model
     return save_model(settings.models_dir, DYNAMIC_HORIZON_FORECAST, model)
 
 
@@ -134,7 +139,7 @@ def test_scheduled_tick_issues_the_168_hour_forecast_from_the_loaded_model(
     result = _issue(repo, dagster_instance)
 
     assert result.success
-    issued = repo.fetch_issued_forecast(ISSUED_AT)
+    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
     assert issued is not None
     assert issued.issued_at == ISSUED_AT
     assert issued.load_anchor == LOAD_ANCHOR
@@ -152,7 +157,7 @@ def test_issuing_the_same_tick_again_keeps_the_first_record(
     repo: TimeSeriesRepository, dagster_instance, trained: SavedModel
 ) -> None:
     _issue(repo, dagster_instance)
-    first = repo.fetch_issued_forecast(ISSUED_AT)
+    first = repo.issued_forecast_store.fetch(ISSUED_AT)
     # 同一 tick 重跑前模型已換新；保存內容仍須是第一次發布的那份。
     assert _train_and_save(repo, n_estimators=10).sha256 != trained.sha256
 
@@ -160,7 +165,7 @@ def test_issuing_the_same_tick_again_keeps_the_first_record(
 
     assert result.success
     assert _materialization_metadata(result)["already_issued"] is True
-    assert repo.fetch_issued_forecast(ISSUED_AT) == first
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) == first
 
 
 @pytest.mark.parametrize(
@@ -199,7 +204,7 @@ def test_forecast_the_runner_cannot_produce_fails_the_issue_and_records_nothing(
     failure = _failure(result)
     assert reason in failure.description
     assert failure.metadata["issued_at"] == MetadataValue.text(issued_at.isoformat())
-    assert issuing_repo.fetch_issued_forecast(issued_at) is None
+    assert issuing_repo.issued_forecast_store.fetch(issued_at) is None
 
 
 @pytest.mark.parametrize(
@@ -221,7 +226,7 @@ def test_re_executed_scheduled_run_fails_and_issues_nothing(
 
     assert not result.success
     assert "re-execut" in _failure_description(result)
-    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
 
 
 def test_issuing_never_calls_mlflow_and_reads_the_note_from_the_materialization(
@@ -240,7 +245,7 @@ def test_issuing_never_calls_mlflow_and_reads_the_note_from_the_materialization(
     result = _issue(repo, dagster_instance)
 
     assert result.success
-    issued = repo.fetch_issued_forecast(ISSUED_AT)
+    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
     assert issued is not None
     assert issued.model_sha256 == trained.sha256
     assert issued.mlflow_model_version == MLFLOW_VERSION
@@ -278,7 +283,7 @@ def test_mlflow_note_stays_empty_unless_the_latest_materialization_names_the_loa
     result = _issue(repo, dagster_instance)
 
     assert result.success
-    issued = repo.fetch_issued_forecast(ISSUED_AT)
+    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
     assert issued is not None
     assert issued.model_sha256 == trained.sha256
     assert issued.mlflow_model_version is None
@@ -291,7 +296,7 @@ def test_manual_run_without_a_tick_fails_and_issues_nothing(
 
     assert not result.success
     assert "scheduled tick" in _failure_description(result)
-    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
 
 
 def test_hand_launched_run_with_an_issue_time_but_no_tick_issues_nothing(
@@ -308,7 +313,7 @@ def test_hand_launched_run_with_an_issue_time_but_no_tick_issues_nothing(
 
     assert not result.success
     assert "scheduled tick" in _failure_description(result)
-    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
 
 
 def test_model_directory_without_a_training_record_issues_with_an_empty_mlflow_note(
@@ -321,7 +326,7 @@ def test_model_directory_without_a_training_record_issues_with_an_empty_mlflow_n
     result = _issue(repo, dagster_instance)
 
     assert result.success
-    issued = repo.fetch_issued_forecast(ISSUED_AT)
+    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
     assert issued is not None
     assert issued.model_sha256 == saved.sha256
     assert issued.mlflow_model_version is None
@@ -348,7 +353,7 @@ def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     assert "Training record and model directory disagree" in failure.description
     assert f"Run {NAMES.training_job} once" in failure.description
     assert failure.metadata["issued_at"] == MetadataValue.text(ISSUED_AT.isoformat())
-    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
 
 
 def _unreadable_load_store(*_args, **_kwargs):
@@ -369,7 +374,7 @@ def test_issuing_never_queries_the_accumulation_gate(
     result = _issue(repo, dagster_instance)
 
     assert result.success
-    assert repo.fetch_issued_forecast(ISSUED_AT) is not None
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is not None
 
 
 def test_no_model_on_either_side_fails_saying_there_is_no_model(
@@ -394,4 +399,4 @@ def test_no_model_on_either_side_fails_saying_there_is_no_model(
     description = _failure_description(result)
     assert description.startswith(f"No {NAMES.model} materialization yet")
     assert "valid hourly observations" not in description
-    assert repo.fetch_issued_forecast(ISSUED_AT) is None
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None

@@ -95,9 +95,10 @@ def issued_forecast(
     """
     issued_at = _scheduled_issue_time(context, config)
     repository = getattr(context.resources, TIME_SERIES_REPO)
-    if repository.fetch_issued_forecast(issued_at) is not None:
+    store = repository.issued_forecast_store
+    if store.fetch(issued_at) is not None:
         return _issued_result(issued_at, already_issued=True)
-    runtime = TaskRuntime(repository=repository)
+    runtime = TaskRuntime.from_composition_root(repository)
     loaded = _load_model(context, issued_at)
     try:
         outcome = predict_task(
@@ -115,7 +116,7 @@ def issued_forecast(
         loaded,
         mlflow_model_version=_mlflow_model_version_note(context, loaded.sha256),
     )
-    written = repository.insert_issued_forecast(forecast)
+    written = store.insert(forecast)
     return _issued_result(issued_at, already_issued=not written, forecast=forecast)
 
 

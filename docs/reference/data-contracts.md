@@ -36,8 +36,9 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 `F-D0047-089`／`F-D0047-091` 縣市 `Geocode`：`Taipei: 466920 / 63000000`、
 `Taichung: 467490 / 66000000`、`Kaohsiung: 467441 / 64000000`。
 
-allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 引用氣象代表點，
-再由目錄取得其 `station_id` 與 `geocode`；測站編號與鄉鎮代碼不得寫死於目錄以外的程式碼。
+allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代表點，載入時由目錄取得其
+`station_id` 與 `geocode`；觀測天氣讀取與天氣解析只收解析出的代表點，不再查目錄。
+測站編號與鄉鎮代碼不得寫死於目錄以外的程式碼。
 動態視界預報目前使用氣象代表點 `Taipei`；引用不存在的 alias 時直接失敗。
 
 ### 2.1 氣象署逐時測站觀測
@@ -75,7 +76,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
      - **預測對象遷移**：ADR-0009 之前的資料庫以 `location = 'Taipei'` 保存全台負載。服務啟動時的 schema 升級在單一交易內將 `location` 改名為 `subject`，並把 `Taipei` 列改為 `nationwide`；已遷移的資料庫重跑時不改動任何列。新建資料庫直接採 `subject`。升級順序見[遷移全台負載預測對象](../how-to/migrate-load-subject-to-nationwide.md)。
      - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。既有資料庫升級時只補上可為 `NULL` 的 `source`，不改寫或刪除任何列；`source IS NULL` 即 d015046 時期資料列。清除與補上 `NOT NULL` 由操作人員依[移除 d015046 時期舊負載資料列](../how-to/remove-legacy-d015046-load-rows.md)執行後，才開啟 `hourly_actual_load_schedule`。
-     - **存取**：由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`）擁有。寫入的每一列由 store 固定帶推算來源；推算序列以台灣本地半開窗 `[start, end)` 讀取，最新推算小時、推算序列與累積盤點都只含推算來源的列，舊列只計入累積盤點的 `legacy_rows`。排程推算以 upsert 更新重算的小時；區間補推只寫入尚無任何列（不論來源）的小時，由 `ON CONFLICT DO NOTHING` 保證不覆寫既有列。推算來源常數 `REGIONAL_SNAPSHOT_SUM_SOURCE` 只在 store 定義。store 以外只有 schema 初始化與遷移、營運資料檢視器的逐時負載資料集定義與預報實績 join（`TimeSeriesRepository.fetch_track_record_pairs`）讀寫此表，後兩者以 store 的常數綁定口徑條件；`tests/unit/test_hourly_actual_load_ownership.py` 掃描 `src/`、`scripts/` 與 `lab/` 檢查此邊界。
+     - **存取**：由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`）擁有。寫入的每一列由 store 固定帶推算來源；推算序列以台灣本地半開窗 `[start, end)` 讀取，最新推算小時、推算序列與累積盤點都只含推算來源的列，舊列只計入累積盤點的 `legacy_rows`。排程推算以 upsert 更新重算的小時；區間補推只寫入尚無任何列（不論來源）的小時，由 `ON CONFLICT DO NOTHING` 保證不覆寫既有列。推算來源常數 `REGIONAL_SNAPSHOT_SUM_SOURCE` 只在 store 定義。store 以外只有 schema 初始化與遷移、營運資料檢視器的逐時負載資料集定義與預報實績 join（`src/shiro_mlops/data/forecast_track_record.py` 的 `ForecastTrackRecordStore.fetch_pairs`）讀寫此表，後兩者以 store 的常數綁定口徑條件；`tests/unit/test_hourly_actual_load_ownership.py` 掃描 `src/`、`scripts/` 與 `lab/` 檢查此邊界。
      - **Constraint**: `PRIMARY KEY (time, subject)`
      - **Hypertable**: `create_hypertable('raw_taipower_load', 'time')`
   2. `raw_cwa_observation_batch`:

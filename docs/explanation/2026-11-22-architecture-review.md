@@ -2,9 +2,9 @@
 # 架構檢視：module 加深候選紀錄（2026-11-22）
 
 - 建立日期：2026-11-22
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 3 已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228) 實作（2026-11-22）；候選 5 已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；其餘 4 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
+- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 3 已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228) 實作（2026-11-22）；候選 5 已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；候選 8 已由 [#233](https://github.com/shiroki9979/shiro-mlops/issues/233) 實作（2026-11-23）；其餘 3 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
 - 檢視基準：`45f4b8e9d004e5e316c96d79086b71a9dd0dbebd`
 - 前次檢視：[2026-09-27 架構檢視](2026-09-27-architecture-review.md)
 
@@ -24,7 +24,7 @@
 | 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)）；已實作（2026-11-22） |
 | 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 下次新增擷取來源或修改 asset 的 fetch 時（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)）；已實作（2026-11-22） |
 | 7. 已發布預報擁有預報步與提前時數 | Worth exploring | 提前時數只有一份定義 | 下次修改提前時數或已發布預報的欄位契約時（[#232](https://github.com/shiroki9979/shiro-mlops/issues/232)） |
-| 8. TimeSeriesRepository 收斂為 composition root | Worth exploring | 刪除 12 個 pass-through 方法 | 候選 2、3 完成後（[#233](https://github.com/shiroki9979/shiro-mlops/issues/233)） |
+| 8. TimeSeriesRepository 收斂為 composition root | Worth exploring | 刪除 12 個 pass-through 方法 | 候選 2、3 完成後（[#233](https://github.com/shiroki9979/shiro-mlops/issues/233)）；已實作（2026-11-23，子 issue [#311](https://github.com/shiroki9979/shiro-mlops/issues/311)–[#316](https://github.com/shiroki9979/shiro-mlops/issues/316)） |
 
 優先建議候選 1：它是唯一正在產出錯誤結果的候選，依賴類別為 in-process，成本最低。
 次選候選 4：M9 的 series 端點會為 8 個資料集再寫一次資料集知識，應在開工前完成。
@@ -111,6 +111,7 @@ After ：所有 store 與營運資料檢視器 → 儲存時刻 module〔台灣�
 > **狀態（2026-11-22）**：已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228)（子 issue [#298](https://github.com/shiroki9979/shiro-mlops/issues/298)、[#300](https://github.com/shiroki9979/shiro-mlops/issues/300)–[#303](https://github.com/shiroki9979/shiro-mlops/issues/303)）實作。[hourly_actual_load_store.py](../../src/shiro_mlops/data/hourly_actual_load_store.py) 的 `HourlyActualLoadStore` 擁有 `raw_taipower_load` 與推算來源常數：寫入內建推算來源，以台灣本地半開窗讀推算序列，並提供最新推算小時、累積盤點、依排程推算，以及以 `ON CONFLICT DO NOTHING` 寫入、不覆寫任何既有列的區間補推；`TimeSeriesRepository` 的負載方法已刪除，asset、補推腳本與 runner 只呼叫 store。
 > 與本節方向的差異：營運資料檢視器已由候選 4 改為宣告式資料集定義，維持原樣，只改由 store 匯入口徑常數；預報實績 join 跨已發布預報與負載兩張表，留在 repository，以同一常數綁參數。runner 要含終點的序列，由 runner 在一處把終點換成下一小時再交給 store 的半開窗；`with_datetime_column` 仍供天氣與 Feast 匯出使用。
 > 本節指向的程式位置（`fetch_load_range`、`_valid_hourly_load`、`hourly_load.py`、`catalog.py`、`completeness.py`、各自切出的窄 Protocol 等）記錄檢視基準當時的狀態，僅供歷史參考；現行契約見 [data-contracts.md](../reference/data-contracts.md) §3 與 [ml-tasks.md](../reference/ml-tasks.md)。
+> **狀態（2026-11-23）**：「預報實績 join 留在 repository」一句記錄 #228 完成當時的狀態；[#313](https://github.com/shiroki9979/shiro-mlops/issues/313) 已把這個 join 移入 [forecast_track_record.py](../../src/shiro_mlops/data/forecast_track_record.py) 的 `ForecastTrackRecordStore`，`TimeSeriesRepository` 只交出這個 store。
 
 ### 現況與證據
 
@@ -264,6 +265,10 @@ After ：pipeline → 已發布預報 module〔由預測建立／預報步篩選
 
 ## 候選 8：TimeSeriesRepository 收斂為 composition root
 
+> **狀態（2026-11-23）**：已由 [#233](https://github.com/shiroki9979/shiro-mlops/issues/233)（子 issue [#311](https://github.com/shiroki9979/shiro-mlops/issues/311)–[#316](https://github.com/shiroki9979/shiro-mlops/issues/316)）實作。[repository.py](../../src/shiro_mlops/data/repository.py) 的 `TimeSeriesRepository` 沒有讀寫方法，只建立一個 engine、做一次可關閉的 schema init，並交出各概念 store：全台逐時實際負載、CWA 天氣（[cwa_weather_store.py](../../src/shiro_mlops/data/cwa_weather_store.py)，以 `CWALocation` 作輸入、不讀全域 settings）、台電三個快照、已發布預報，以及預報實績配對（[forecast_track_record.py](../../src/shiro_mlops/data/forecast_track_record.py) 的 `ForecastTrackRecordStore`）。repository module 不再 re-export 各 store 類別。runner 的 `TaskRuntime` 只持有全台逐時實際負載與 CWA 天氣兩個 store，`ServedTasks` 改收 `TaskRuntime`，營運資料檢視器只取用 engine；API 啟動仍只建立一次 composition root。
+> 與本節方向的差異：類別名 `TimeSeriesRepository` 與 Dagster resource key `time_series_repo` 不改，避免牽動約 30 處建構呼叫與 56 個測試檔；台電快照與已發布預報的 store 沿用既有類別名，方法縮為 `upsert`／`fetch`／`insert`／`fetch_latest` 等，CWA 天氣 store 沿用原方法名。
+> 本節指向的程式位置（22 個 public 方法、`upsert_cwa_weather`、`resolve_weather` 以 `object` 標註的參數等）記錄檢視基準當時的狀態，僅供歷史參考；現行契約見 [data-contracts.md](../reference/data-contracts.md) §3 與 [ml-tasks.md](../reference/ml-tasks.md) §3。
+
 ### 現況與證據
 
 [repository.py](../../src/shiro_mlops/data/repository.py) 是本期變動最多的檔案，因為負載、CWA 觀測、CWA 預報選版、跨 store 配對與四個 sibling store 都放在這裡。
@@ -292,6 +297,7 @@ After ：composition root〔一個 engine、一次 schema init〕→ 交出 stor
 
 - **訓練表自帶天氣識別（Speculative）**：只重跑 `{task_id}__model` 而任務設定的代表點或權重已改時，可能以舊的加權天氣訓練；實務上 features 與 model 一起跑，風險低。lab 快照已檢查天氣識別。
 - **CWA 天氣讀取詞彙**：`fetch_weather_range` 讀全域 `settings.cwa_locations` 做 alias 與測站互轉；canonical 欄名到特徵欄名的對映出現在三處，預報產品 id 與角色出現在四處。證據補充於 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)，仍等其觸發條件。
+  **狀態（2026-11-23）**：讀全域 settings 一句記錄檢視基準當時的狀態；[#315](https://github.com/shiroki9979/shiro-mlops/issues/315) 已讓 `fetch_weather_range` 直接收 `CWALocation`，CWA 天氣 store 不再讀全域 settings。欄名對映與預報產品詞彙的重複仍在，照舊等 #102。
 - **死碼**：`cwa_client._parse_cwa_observations_payload` 與 `CWAClient.forecast_url` 在 src 與 tests 都沒有呼叫端，可直接刪除。
 - **用語**：`direct_classification` 的 `lead_hours` 自負載起點起算，與 GLOSSARY「提前時數」不同，目前只是命名風險。
 

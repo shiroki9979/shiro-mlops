@@ -36,7 +36,7 @@ from shiro_mlops.tasks.deployed import (
     deployed_task,
     deployed_tasks,
 )
-from shiro_mlops.tasks.runner import PredictionOutcome
+from shiro_mlops.tasks.runner import PredictionOutcome, TaskRuntime
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import WeatherEchoingItem
 
@@ -331,18 +331,21 @@ def create_app(
 ) -> FastAPI:
     """Build the API; whatever is not injected is set up at startup from settings.
 
-    Inject ``repository`` together with ``served_tasks``: injected alone,
-    ``served_tasks`` reads through its own repository while the Data Explorer
-    gets the one startup builds. Invalid task definitions fail startup.
+    ``repository`` is the composition root: the Data Explorer reads its engine
+    and served tasks built at startup read its two task stores. Inject it
+    together with ``served_tasks``: injected alone, ``served_tasks`` reads
+    through its own stores while the Data Explorer gets the root startup
+    builds. Invalid task definitions fail startup.
     """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        app.state.repository = repository or _startup_repository()
+        root = repository or _startup_repository()
+        app.state.repository = root
         app.state.served_tasks = served_tasks or ServedTasks.load(
             deployed_tasks(),
             settings.models_dir,
-            repository=app.state.repository,
+            runtime=TaskRuntime.from_composition_root(root),
             clock=taiwan_now,
         )
         yield
@@ -354,7 +357,7 @@ def create_app(
     )
     # WHY-NOT(repository): 注入的 repository 與 served_tasks 都在建構時放入 app.state，不等 lifespan。
     # 未進入 lifespan 的 TestClient 也會呼叫端點；改等 lifespan 時，get_served_tasks
-    # 與營運資料檢視器的 _repository 讀 app.state 會拋 AttributeError。
+    # 與營運資料檢視器的 _engine 讀 app.state 會拋 AttributeError。
     if repository is not None:
         app.state.repository = repository
     if served_tasks is not None:

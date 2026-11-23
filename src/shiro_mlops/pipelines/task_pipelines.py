@@ -322,7 +322,7 @@ def _monitoring_schedule(
 
 
 def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> TaskRuntime:
-    return TaskRuntime(repository=getattr(context.resources, TIME_SERIES_REPO))
+    return TaskRuntime.from_composition_root(getattr(context.resources, TIME_SERIES_REPO))
 
 
 def _tick_request(context: ScheduleEvaluationContext) -> RunRequest:

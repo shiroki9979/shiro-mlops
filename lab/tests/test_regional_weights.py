@@ -98,7 +98,7 @@ def test_cli_reads_stored_snapshots_and_prints_snapshot_arguments(
     engine = create_engine(f"sqlite:///{tmp_path / 'weights.db'}")
     ensure_timescale_hypertables(engine)
     repository = TimeSeriesRepository(engine=engine)
-    repository.upsert_regional_supply_demand_snapshots(_sample(START, (500.0, 300.0, 150.0, 50.0)))
+    repository.regional_supply_demand_store.upsert(_sample(START, (500.0, 300.0, 150.0, 50.0)))
     monkeypatch.setattr("lab.regional_weights.TimeSeriesRepository", lambda: repository)
 
     exit_code = weights_main(

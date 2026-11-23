@@ -10,12 +10,12 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.cold_start import ColdStartStage, read_cold_start, read_model_presence
 from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.runner import TaskRuntime
 from shiro_mlops.tasks.types import get_task_type
 from tests.helpers import (
     derived_hourly_load,
     hand_copied_model_double,
     install_model_double,
+    task_runtime,
     write_derived_load,
 )
 
@@ -31,7 +31,7 @@ def models_root(tmp_path: Path) -> Path:
 def _cold_start(repository: TimeSeriesRepository, instance, models_root: Path):
     return read_cold_start(
         deployed_task(DYNAMIC_HORIZON_FORECAST),
-        runtime=TaskRuntime(repository=repository),
+        runtime=task_runtime(repository),
         instance=instance,
         models_root=models_root,
     )

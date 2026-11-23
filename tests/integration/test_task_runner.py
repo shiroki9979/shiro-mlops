@@ -30,7 +30,12 @@ from shiro_mlops.tasks.runner import (
     training_table,
 )
 from shiro_mlops.tasks.types.base import HealthStatus, TaskModel
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
+from tests.helpers import (
+    canonical_observation_batch,
+    hourly_load_with_weather,
+    task_runtime,
+    write_derived_load,
+)
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 ANCHOR = pd.Timestamp(LAST_HOUR)
@@ -55,15 +60,24 @@ def task() -> TaskDefinition:
 def runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
-    return TaskRuntime(repository=test_repo)
+    return task_runtime(test_repo)
 
 
 @pytest.fixture
 def model(task: TaskDefinition, runtime: TaskRuntime) -> TaskModel:
     return train_task(task, runtime, as_of=FRESH_AS_OF).model
+
+
+def test_runtime_from_the_composition_root_reads_the_roots_two_stores(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    runtime = TaskRuntime.from_composition_root(test_repo)
+
+    assert runtime.hourly_actual_load is test_repo.hourly_actual_load_store
+    assert runtime.cwa_weather is test_repo.cwa_weather_store
 
 
 def _fresh_forecast_release() -> CWAForecastRelease:
@@ -193,10 +207,10 @@ def test_training_table_round_trip_preserves_weather_on_load_missing_hours(
     gapped_load = load[load["datetime"] != hour_n].reset_index(drop=True)
     gapped_weather = weather[weather["datetime"] != hour_n_plus_1].reset_index(drop=True)
     write_derived_load(test_repo.engine, gapped_load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(gapped_weather.assign(location="Taipei"))
     )
-    gapped_runtime = TaskRuntime(repository=test_repo)
+    gapped_runtime = task_runtime(test_repo)
 
     direct = load_training_data(task, gapped_runtime, as_of=FRESH_AS_OF)
     table = training_table(direct)
@@ -314,7 +328,7 @@ def test_missing_forecast_degrades_to_previous_day_observations(
 def test_fresh_forecast_keeps_normal_mode(
     task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
 ) -> None:
-    runtime.repository.upsert_cwa_forecast_release(_fresh_forecast_release())
+    runtime.cwa_weather.upsert_cwa_forecast_releases([_fresh_forecast_release()])
 
     outcome = predict_task(task, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS)
 
@@ -387,10 +401,10 @@ def _runtime_missing_load_hour(
     """Persist the 21-day fixture without the actual load of one ``missing`` hour."""
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     write_derived_load(repository.engine, load[load["datetime"] != missing])
-    repository.upsert_cwa_observation_batch(
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
-    return TaskRuntime(repository=repository)
+    return task_runtime(repository)
 
 
 @pytest.mark.parametrize(
@@ -526,16 +540,16 @@ def test_observed_prediction_reads_history_for_the_window_and_the_longest_horizo
     anomaly_model: TaskModel,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = runtime.repository
+    store = runtime.cwa_weather
     load_reads = _record_load_reads(runtime, monkeypatch)
     weather_calls: list[dict] = []
-    fetch_weather_range = repository.fetch_weather_range
+    fetch_weather_range = store.fetch_weather_range
 
     def record_weather(**kwargs):
         weather_calls.append(kwargs)
         return fetch_weather_range(**kwargs)
 
-    monkeypatch.setattr(repository, "fetch_weather_range", record_weather)
+    monkeypatch.setattr(store, "fetch_weather_range", record_weather)
 
     predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
@@ -581,16 +595,14 @@ def test_observed_prediction_with_no_scorable_window_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without recent observations, an unscorable anchor window is unavailable rather than an empty result."""
-    repository = runtime.repository
-    fetch_weather_range = repository.fetch_weather_range
+    store = runtime.cwa_weather
+    fetch_weather_range = store.fetch_weather_range
     last_observation = ANCHOR - pd.Timedelta(hours=3)
 
     def observations_until_three_hours_before_anchor(**kwargs):
         return fetch_weather_range(**{**kwargs, "end_time": last_observation})
 
-    monkeypatch.setattr(
-        repository, "fetch_weather_range", observations_until_three_hours_before_anchor
-    )
+    monkeypatch.setattr(store, "fetch_weather_range", observations_until_three_hours_before_anchor)
 
     with pytest.raises(ObservedInputsIncompleteError, match="No complete observed window"):
         predict_task(anomaly_task, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
@@ -627,7 +639,7 @@ def _observe(runtime: TaskRuntime, name: str, *, skip: pd.Timestamp | None = Non
     )
     if skip is not None:
         shifted = shifted[shifted["datetime"] != skip]
-    runtime.repository.upsert_cwa_observation_batch(canonical_observation_batch(shifted))
+    runtime.cwa_weather.upsert_cwa_observation_batch(canonical_observation_batch(shifted))
 
 
 def _release_for(*names: str) -> CWAForecastRelease:
@@ -703,7 +715,7 @@ def test_weighted_forecast_combines_every_point_and_reports_each_source(
 ) -> None:
     for name in OFFSETS:
         _observe(runtime, name)
-    runtime.repository.upsert_cwa_forecast_release(_release_for(*GEOCODES))
+    runtime.cwa_weather.upsert_cwa_forecast_releases([_release_for(*GEOCODES)])
 
     outcome = predict_task(
         _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
@@ -722,7 +734,7 @@ def test_one_stale_reference_point_degrades_the_whole_forecast(
 ) -> None:
     for name in OFFSETS:
         _observe(runtime, name)
-    runtime.repository.upsert_cwa_forecast_release(_release_for("Taipei", "Taichung"))
+    runtime.cwa_weather.upsert_cwa_forecast_releases([_release_for("Taipei", "Taichung")])
 
     outcome = predict_task(
         _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
@@ -740,7 +752,7 @@ def test_reference_point_without_any_fallback_makes_the_forecast_unavailable(
 ) -> None:
     """No forecast and no observation at Kaohsiung: refuse rather than drop it and reweight."""
     _observe(runtime, "Taichung")
-    runtime.repository.upsert_cwa_forecast_release(_release_for("Taipei", "Taichung"))
+    runtime.cwa_weather.upsert_cwa_forecast_releases([_release_for("Taipei", "Taichung")])
 
     with pytest.raises(WeatherUnavailableError, match="Kaohsiung"):
         predict_task(
@@ -753,7 +765,7 @@ def test_first_reference_point_without_coverage_in_order_is_the_one_named(
     task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
 ) -> None:
     """Taichung and Kaohsiung both lack coverage; the refusal names Taichung, listed first."""
-    runtime.repository.upsert_cwa_forecast_release(_release_for("Taipei"))
+    runtime.cwa_weather.upsert_cwa_forecast_releases([_release_for("Taipei")])
 
     with pytest.raises(WeatherUnavailableError, match=r"^Taichung: No weather coverage for "):
         predict_task(
