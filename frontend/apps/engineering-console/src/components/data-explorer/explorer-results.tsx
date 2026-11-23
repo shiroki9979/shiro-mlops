@@ -1,6 +1,7 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
 import { type Messages, useMessages } from '@/i18n/messages'
+import type { DataExplorerError, DataExplorerErrorKind } from '@/lib/api-client'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { ExplorerGapList } from './explorer-gap-list'
@@ -9,8 +10,7 @@ import { ExplorerTable } from './explorer-table'
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
   data?: ListEnvelope
-  error: unknown
-  isError: boolean
+  error: DataExplorerError | null
   isLoading: boolean
   canRestart: boolean
   detailLimitExceeded: boolean
@@ -19,33 +19,24 @@ interface ExplorerResultsProps {
   onRestart: () => void
 }
 
-const CURSOR_REJECTED_STATUS = 400
-const INVALID_FILTERS_STATUS = 422
-const DATABASE_UNAVAILABLE_STATUS = 503
-
-function errorStatus(error: unknown): unknown {
-  return typeof error === 'object' && error !== null && 'status' in error
-    ? error.status
-    : undefined
-}
-
-function isCursorRejected(error: unknown): boolean {
-  return errorStatus(error) === CURSOR_REJECTED_STATUS
-}
-
-function listErrorMessage(error: unknown, resultsText: Messages['explorer']['results']): string {
-  const status = errorStatus(error)
-  if (status === CURSOR_REJECTED_STATUS) return resultsText.cursorRejected
-  if (status === INVALID_FILTERS_STATUS) return resultsText.invalidFilters
-  if (status === DATABASE_UNAVAILABLE_STATUS) return resultsText.databaseUnavailable
-  return resultsText.queryFailed
+function listErrorMessage(kind: DataExplorerErrorKind, resultsText: Messages['explorer']['results']): string {
+  switch (kind) {
+    case 'cursorRejected':
+      return resultsText.cursorRejected
+    case 'invalidQuery':
+      return resultsText.invalidFilters
+    case 'databaseUnavailable':
+      return resultsText.databaseUnavailable
+    case 'invalidResponse':
+    case 'other':
+      return resultsText.queryFailed
+  }
 }
 
 export function ExplorerResults({
   dataset,
   data,
   error,
-  isError,
   isLoading,
   canRestart,
   detailLimitExceeded,
@@ -62,10 +53,10 @@ export function ExplorerResults({
           <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
         ) : isLoading ? (
           <p className="text-xs text-slate-500">{resultsText.loading}</p>
-        ) : isError ? (
+        ) : error ? (
           <div>
-            <p className="text-xs text-rose-300">{listErrorMessage(error, resultsText)}</p>
-            {canRestart && isCursorRejected(error) && (
+            <p className="text-xs text-rose-300">{listErrorMessage(error.kind, resultsText)}</p>
+            {canRestart && error.kind === 'cursorRejected' && (
               <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </div>
