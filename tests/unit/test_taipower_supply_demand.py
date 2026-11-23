@@ -11,7 +11,6 @@ from shiro_mlops.data.taipower_supply_demand import (
     floor_to_ten_minutes,
     parse_roc_datetime,
     parse_supply_demand_payload,
-    resolve_manual_observed_at,
 )
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
@@ -28,15 +27,8 @@ def test_parse_roc_date_only() -> None:
 
 
 def test_floor_to_ten_minutes() -> None:
-    """手動 materialize 的觀測時間應向下取整至 10 分鐘 slot。"""
+    """run 的 as_of 向下取整至 10 分鐘觀測 slot。"""
     assert floor_to_ten_minutes(datetime(2026, 9, 5, 17, 37, 42)) == datetime(2026, 9, 5, 17, 30, 0)
-
-
-def test_resolve_manual_observed_at_floors_provided_now() -> None:
-    """手動觀測 slot 應對提供的時間向下取整。"""
-    assert resolve_manual_observed_at(datetime(2026, 9, 5, 17, 37, 42)) == datetime(
-        2026, 9, 5, 17, 30, 0
-    )
 
 
 def test_parse_supply_demand_payload_keeps_wan_kw_and_source_publish_time() -> None:
