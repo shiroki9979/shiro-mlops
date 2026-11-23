@@ -38,6 +38,10 @@ from shiro_mlops.tasks.types.base import WeatherEchoingItem
 
 logger = logging.getLogger(__name__)
 WEATHER_SOURCES_FIELD = "weather_sources"
+FORECAST_MODE_DESCRIPTION = (
+    "Forecast operating mode: normal, or degraded when any weather value was filled "
+    "by an observation substitute"
+)
 
 
 def _served_task() -> TaskDefinition:
@@ -77,7 +81,10 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     status: str
-    mode: ForecastMode | None = None
+    mode: ForecastMode | None = Field(
+        default=None,
+        description=f"{FORECAST_MODE_DESCRIPTION}, of a prediction made now; null when not ready",
+    )
     model_loaded: bool
     reason: str | None = None
 
@@ -149,7 +156,7 @@ class PredictionResponse(BaseModel):
     status: str = "success"
     horizon_hours: int
     subject: str = Field(description="Prediction subject whose load is forecast")
-    mode: ForecastMode
+    mode: ForecastMode = Field(description=FORECAST_MODE_DESCRIPTION)
     predictions: list[PredictionItem]
 
 
@@ -159,9 +166,7 @@ class TaskPredictionEnvelope(BaseModel):
     status: str = "success"
     task_id: str
     subject: str = Field(description="Prediction subject of the task")
-    mode: ForecastMode = Field(
-        description="Weather quality behind the predictions: normal or degraded"
-    )
+    mode: ForecastMode = Field(description=FORECAST_MODE_DESCRIPTION)
 
 
 @cache

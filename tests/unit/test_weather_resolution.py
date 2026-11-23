@@ -539,6 +539,21 @@ def test_substitute_source_serializes_only_its_kind(kind: WeatherSourceKind) -> 
     assert WeatherValueSource.substitute(kind).as_dict() == {"source": kind.value}
 
 
+@pytest.mark.parametrize(
+    "kind",
+    [
+        WeatherSourceKind.THREE_DAY,
+        WeatherSourceKind.WEEKLY,
+        WeatherSourceKind.STATION_OBSERVATION,
+    ],
+)
+def test_substitute_source_rejects_a_kind_that_is_not_a_substitute(
+    kind: WeatherSourceKind,
+) -> None:
+    with pytest.raises(ValueError, match="not a substitute"):
+        WeatherValueSource.substitute(kind)
+
+
 def test_observed_source_serializes_the_observation_time() -> None:
     source = WeatherValueSource.observed(pd.Timestamp("2026-08-20 12:00"))
 

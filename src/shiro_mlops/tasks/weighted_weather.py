@@ -44,12 +44,7 @@ class WeightedWeather:
     @property
     def mode(self) -> ForecastMode:
         """The forecast mode the sources at every reference point imply (ADR-0012)."""
-        return forecast_mode(
-            source
-            for hour in self.sources
-            for by_alias in hour.values()
-            for source in by_alias.values()
-        )
+        return forecast_mode(self.sources)
 
 
 @dataclass(frozen=True)

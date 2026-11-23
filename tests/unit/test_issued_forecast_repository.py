@@ -117,6 +117,15 @@ def test_issued_forecast_status_is_a_forecast_mode() -> None:
     assert _issued_forecast().status is ForecastMode.DEGRADED
 
 
+def test_reading_an_issued_forecast_returns_its_status_as_a_forecast_mode(
+    sqlite_engine: Engine,
+) -> None:
+    repository = IssuedForecastRepository(engine=sqlite_engine)
+    repository.insert(_issued_forecast())
+
+    assert repository.fetch(ISSUED_AT).status is ForecastMode.DEGRADED
+
+
 def test_reading_an_issued_forecast_with_an_unknown_status_is_rejected(
     sqlite_engine: Engine,
 ) -> None:

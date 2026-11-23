@@ -694,8 +694,15 @@ def test_openapi_describes_mode_as_the_forecast_mode_enum() -> None:
     schemas = app.openapi()["components"]["schemas"]
     forecast_mode = "#/components/schemas/ForecastMode"
 
+    task_responses = {
+        schema["properties"]["task_id"].get("const"): name
+        for name, schema in schemas.items()
+        if name.endswith("TaskPredictionResponse")
+    }
+
+    assert set(task_responses) == set(deployed_tasks())
     assert schemas["ForecastMode"]["enum"] == ["normal", "degraded"]
-    for name in ("PredictionResponse", "LoadPatternAnomalyTaskPredictionResponse"):
+    for name in ("PredictionResponse", *task_responses.values()):
         assert schemas[name]["properties"]["mode"]["$ref"] == forecast_mode
         assert "mode" in schemas[name]["required"]
     ready_mode = schemas["ReadyResponse"]["properties"]["mode"]

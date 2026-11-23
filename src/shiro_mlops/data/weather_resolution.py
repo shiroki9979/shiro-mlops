@@ -5,11 +5,11 @@ exactly when some value it used is a substitute, so callers derive the mode from
 the sources and never store or recompute it themselves.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Self
+from typing import NamedTuple, Self, TypeAlias
 
 import pandas as pd
 
@@ -34,7 +34,6 @@ FORECAST_FIELDS = {
 DEFAULT_RESOLUTION_FIELDS = (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
 NON_INTERPOLATED_FORECAST_FIELDS = {"wind_direction"}
 FORECAST_STALE_AFTER = timedelta(hours=7)
-FORECAST_DATASET_IDS = ("F-D0047-089", "F-D0047-091")
 
 
 def forecast_is_stale(issued_at: datetime, as_of: datetime) -> bool:
@@ -65,16 +64,33 @@ class WeatherSourceKind(StrEnum):
         Station observations feed observed-weather tasks as the real input, not a
         substitute, so they never degrade.
         """
-        return self in _SUBSTITUTE_KINDS
+        return _KIND_SHAPES[self].is_substitute
+
+    @property
+    def fields(self) -> tuple[str, ...]:
+        """The provenance fields a source of this kind carries, and no others."""
+        return _KIND_SHAPES[self].fields
 
 
-_SUBSTITUTE_KINDS = frozenset(
-    {WeatherSourceKind.PREVIOUS_DAY_OBSERVATION, WeatherSourceKind.CLIMATOLOGY}
-)
-_FORECAST_KINDS = frozenset({WeatherSourceKind.THREE_DAY, WeatherSourceKind.WEEKLY})
+class _KindShape(NamedTuple):
+    fields: tuple[str, ...]
+    is_substitute: bool
+
+
 _VERSION_FIELDS = ("dataset_id", "issued_at", "source_updated_at")
 _OBSERVATION_FIELDS = ("observed_at",)
 _OPTIONAL_FIELDS = (*_VERSION_FIELDS, *_OBSERVATION_FIELDS)
+_KIND_SHAPES = {
+    WeatherSourceKind.THREE_DAY: _KindShape(_VERSION_FIELDS, is_substitute=False),
+    WeatherSourceKind.WEEKLY: _KindShape(_VERSION_FIELDS, is_substitute=False),
+    WeatherSourceKind.PREVIOUS_DAY_OBSERVATION: _KindShape((), is_substitute=True),
+    WeatherSourceKind.CLIMATOLOGY: _KindShape((), is_substitute=True),
+    WeatherSourceKind.STATION_OBSERVATION: _KindShape(_OBSERVATION_FIELDS, is_substitute=False),
+}
+FORECAST_DATASET_KINDS = {
+    "F-D0047-089": WeatherSourceKind.THREE_DAY,
+    "F-D0047-091": WeatherSourceKind.WEEKLY,
+}
 
 
 @dataclass(frozen=True)
@@ -94,12 +110,7 @@ class WeatherValueSource:
     def __post_init__(self) -> None:
         if not isinstance(self.kind, WeatherSourceKind):
             raise ValueError(f"Weather source kind must be a WeatherSourceKind: {self.kind!r}")
-        if self.kind in _FORECAST_KINDS:
-            required = _VERSION_FIELDS
-        elif self.kind is WeatherSourceKind.STATION_OBSERVATION:
-            required = _OBSERVATION_FIELDS
-        else:
-            required = ()
+        required = self.kind.fields
         present = [name for name in _OPTIONAL_FIELDS if getattr(self, name) is not None]
         if present != list(required):
             raise ValueError(
@@ -119,6 +130,8 @@ class WeatherValueSource:
     @classmethod
     def substitute(cls, kind: WeatherSourceKind) -> Self:
         """A substitute value standing in for a missing forecast."""
+        if not kind.is_substitute:
+            raise ValueError(f"A {kind.value} source is not a substitute")
         return cls(kind)
 
     @classmethod
@@ -136,9 +149,24 @@ class WeatherValueSource:
         return result
 
 
-def forecast_mode(sources: Iterable[WeatherValueSource]) -> ForecastMode:
-    """Degraded when any value came from a substitute, otherwise normal."""
-    if any(source.kind.is_substitute for source in sources):
+SourceTree: TypeAlias = "WeatherValueSource | Mapping[str, SourceTree] | Iterable[SourceTree]"
+
+
+def _leaves(sources: SourceTree) -> Iterable[WeatherValueSource]:
+    if isinstance(sources, WeatherValueSource):
+        yield sources
+        return
+    for nested in sources.values() if isinstance(sources, Mapping) else sources:
+        yield from _leaves(nested)
+
+
+def forecast_mode(sources: SourceTree) -> ForecastMode:
+    """Degraded when any value came from a substitute, otherwise normal.
+
+    ``sources`` may nest sources in sequences and mappings, such as hour → field
+    → source or hour → field → reference point → source; every source counts.
+    """
+    if any(source.kind.is_substitute for source in _leaves(sources)):
         return ForecastMode.DEGRADED
     return ForecastMode.NORMAL
 
@@ -157,9 +185,7 @@ class WeatherResolution:
     @property
     def mode(self) -> ForecastMode:
         """The forecast mode these sources imply."""
-        return forecast_mode(
-            source for point_sources in self.sources for source in point_sources.values()
-        )
+        return forecast_mode(self.sources)
 
 
 def _as_timestamp(value: datetime | str | pd.Timestamp) -> pd.Timestamp:
@@ -253,16 +279,16 @@ def _fallback_from_observations(
 
 
 def _resolve_value(
-    datasets: dict[str, pd.DataFrame],
+    datasets: dict[WeatherSourceKind, pd.DataFrame],
     observations: pd.DataFrame,
     moment: pd.Timestamp,
     column: str,
 ) -> tuple[object, WeatherValueSource | None]:
     """One hour's value of ``column`` and its source, or no source when nothing covers it."""
-    value, row = _point_value(datasets["F-D0047-089"], moment, column)
+    value, row = _point_value(datasets[WeatherSourceKind.THREE_DAY], moment, column)
     if value is not None:
         return value, WeatherValueSource.forecast(WeatherSourceKind.THREE_DAY, row)
-    value, row = _interval_value(datasets["F-D0047-091"], moment, column)
+    value, row = _interval_value(datasets[WeatherSourceKind.WEEKLY], moment, column)
     if value is not None:
         return value, WeatherValueSource.forecast(WeatherSourceKind.WEEKLY, row)
     value, substitute = _fallback_from_observations(observations, moment, column)
@@ -314,12 +340,12 @@ def resolve_weather(
         station_id=reference_point.station_id,
     )
     datasets = {
-        dataset_id: (
+        kind: (
             forecasts[forecasts["dataset_id"] == dataset_id]
             if "dataset_id" in forecasts.columns
             else pd.DataFrame()
         )
-        for dataset_id in FORECAST_DATASET_IDS
+        for dataset_id, kind in FORECAST_DATASET_KINDS.items()
     }
     rows: list[dict[str, object]] = []
     sources: list[dict[str, WeatherValueSource]] = []

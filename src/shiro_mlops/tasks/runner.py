@@ -3,10 +3,11 @@
 The runner owns I/O and the shared components (ADR-0009): the minimum
 accumulation gate, bounded data retrieval, the stale load anchor rule, and
 weather resolution with degradation; the forecast mode is never set here but
-derived from the weather sources (``data/weather_resolution.py``). The prediction input gate
-(``tasks/prediction_inputs.py``) judges the frames it reads before any task type
-sees them; task types only ever receive in-memory frames. Every time-dependent
-decision takes an explicit ``as_of`` in Taiwan-local naive time.
+derived from the weather sources (``src/shiro_mlops/data/weather_resolution.py``).
+The prediction input gate (``src/shiro_mlops/tasks/prediction_inputs.py``) judges
+the frames it reads before any task type sees them; task types only ever receive
+in-memory frames. Every time-dependent decision takes an explicit ``as_of`` in
+Taiwan-local naive time.
 """
 
 from __future__ import annotations
