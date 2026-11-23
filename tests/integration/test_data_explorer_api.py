@@ -268,7 +268,7 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     status = client.get("/data/status")
     assert status.status_code == 200
     load_status = next(item for item in status.json()["datasets"] if item["id"] == "hourly_load")
-    assert load_status["availability"] == "available"
+    assert load_status["kind"] == "populated"
     assert load_status["freshness"] == "fresh"
     assert load_status["latest_source_at"].endswith("+08:00")
     assert load_status["ingestion_age_seconds"] is not None
@@ -483,9 +483,9 @@ def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_c
         for item in client.get("/data/status").json()["datasets"]
         if item["id"] == "national_supply_demand"
     )
-    assert status["availability"] == "available"
+    assert status["kind"] == "populated"
     assert status["completeness"] == "incomplete"
-    assert status["missing_slot_count"] == 1
+    assert len(status["missing_identifiers"]) == 1
 
 
 def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
@@ -608,7 +608,6 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
         if item["id"] == "unit_generation"
     )
     assert status["completeness"] == "complete"
-    assert status["record_count"] == 4
 
 
 _POWER_LIST_PATHS = (

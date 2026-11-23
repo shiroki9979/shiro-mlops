@@ -1,24 +1,27 @@
 import { z } from 'zod'
 
-export const DatasetStatusSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  availability: z.enum(['available', 'empty']),
-  freshness: z.enum(['fresh', 'warning', 'unknown']),
-  completeness: z.enum(['complete', 'incomplete', 'unknown']),
-  overall: z.enum(['healthy', 'warning', 'unknown']),
-  latest_source_at: z.string().nullable().optional(),
-  latest_ingested_at: z.string().nullable().optional(),
-  ingestion_age_seconds: z.number().nullable().optional(),
-  source_age_seconds: z.number().nullable().optional(),
-  missing_identifiers: z.array(z.string()).default([]),
-  missing_slot_count: z.number().default(0),
-  record_count: z.number().nullable().optional(),
-  latest_release_stale: z.boolean().nullable().optional(),
-  href: z.string(),
-})
+const datasetIdentity = { id: z.string(), label: z.string(), href: z.string() }
+
+// A dataset with no ingested rows is `empty`; freshness and completeness exist only once it has rows.
+export const DatasetStatusSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('empty'), ...datasetIdentity, overall: z.literal('warning') }),
+  z.object({
+    kind: z.literal('populated'),
+    ...datasetIdentity,
+    freshness: z.enum(['fresh', 'warning']),
+    completeness: z.enum(['complete', 'incomplete']),
+    overall: z.enum(['healthy', 'warning']),
+    latest_source_at: z.string(),
+    latest_ingested_at: z.string(),
+    ingestion_age_seconds: z.number(),
+    source_age_seconds: z.number(),
+    missing_identifiers: z.array(z.string()),
+    latest_release_stale: z.boolean().nullable(),
+  }),
+])
 
 export type DatasetStatus = z.infer<typeof DatasetStatusSchema>
+export type PopulatedDatasetStatus = Extract<DatasetStatus, { kind: 'populated' }>
 
 export const StatusResponseSchema = z.object({
   timezone: z.literal('Asia/Taipei'),

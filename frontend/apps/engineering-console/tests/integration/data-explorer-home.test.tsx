@@ -21,6 +21,40 @@ afterEach(() => {
 })
 
 describe('Data Explorer home dataset status', () => {
+  it('shows an empty dataset as no data, without freshness, completeness or timestamps', async () => {
+    server.use(
+      http.get('*/data/status', () =>
+        HttpResponse.json({
+          timezone: 'Asia/Taipei',
+          datasets: [{ kind: 'empty', id: 'hourly_load', label: loadLabel, overall: 'warning', href: '/data/power/load' }],
+        }),
+      ),
+    )
+
+    renderPath('/data')
+
+    const card = (await screen.findByRole('heading', { name: loadLabel })).closest('div.rounded-xl') as HTMLElement
+    expect(within(card).getByText(m.status.overall.warning)).toBeInTheDocument()
+    expect(within(card).getByText(m.status.empty)).toBeInTheDocument()
+    expect(within(card).queryByText(new RegExp(m.status.freshnessLabel))).not.toBeInTheDocument()
+    expect(within(card).queryByText(new RegExp(m.status.completenessLabel))).not.toBeInTheDocument()
+    expect(within(card).queryByText(/最新來源時間|最新入庫時間|經過時間/)).not.toBeInTheDocument()
+    expect(within(card).getByRole('link', { name: m.explorer.statusCard.openDetails })).toBeInTheDocument()
+  })
+
+  it('shows a populated dataset by its overall, freshness and completeness only', async () => {
+    renderPath('/data')
+
+    const card = (await screen.findByRole('heading', { name: loadLabel })).closest('div.rounded-xl') as HTMLElement
+    expect(within(card).getByText(m.status.overall.warning)).toBeInTheDocument()
+    expect(within(card).getByText(m.common.labeled(m.status.freshnessLabel, m.status.freshness.fresh))).toBeInTheDocument()
+    expect(
+      within(card).getByText(m.common.labeled(m.status.completenessLabel, m.status.completeness.incomplete)),
+    ).toBeInTheDocument()
+    expect(within(card).queryByText(m.status.empty)).not.toBeInTheDocument()
+    expect(within(card).getByText(m.explorer.statusCard.ingestionAge('120'))).toBeInTheDocument()
+  })
+
   it('keeps the status cards and notes the failed refresh when a later status read fails', async () => {
     const user = userEvent.setup()
     renderPath('/data/power/load')
@@ -56,14 +90,16 @@ describe('Data Explorer home dataset status', () => {
             {
               id: 'hourly_load',
               label: loadLabel,
-              availability: 'available',
+              kind: 'populated',
               freshness: 'fresh',
               completeness: 'complete',
               overall: 'healthy',
               latest_source_at: '2026-09-09T20:00:00+08:00',
               latest_ingested_at: '2026-09-09T20:01:00+08:00',
+              ingestion_age_seconds: 120,
+              source_age_seconds: 180,
               missing_identifiers: [],
-              missing_slot_count: 0,
+              latest_release_stale: null,
               href: '/data/power/load',
             },
           ],

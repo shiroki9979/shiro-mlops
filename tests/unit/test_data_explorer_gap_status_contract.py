@@ -218,17 +218,17 @@ def test_missing_slots_run_ascending_from_the_window_start_to_the_last_due_slot(
 
 
 @pytest.mark.parametrize("dataset", DATASETS.values(), ids=lambda dataset: dataset.id)
-def test_an_empty_dataset_reports_its_definition_and_unknown_completeness(
+def test_an_empty_dataset_reports_only_its_definition_and_a_warning(
     sqlite_engine: Engine, dataset: Dataset
 ) -> None:
     statuses = DatasetQuery(sqlite_engine).status(datetime(2026, 9, 20, 12)).datasets
     status = next(item for item in statuses if item.id == dataset.id)
 
     assert [item.id for item in statuses] == list(DATASETS)
-    assert (status.label, status.href) == (dataset.label, dataset.href)
-    assert (status.availability, status.completeness, status.overall) == (
-        "empty",
-        "unknown",
-        "warning",
-    )
-    assert status.missing_identifiers == []
+    assert status.model_dump() == {
+        "kind": "empty",
+        "id": dataset.id,
+        "label": dataset.label,
+        "overall": "warning",
+        "href": dataset.href,
+    }

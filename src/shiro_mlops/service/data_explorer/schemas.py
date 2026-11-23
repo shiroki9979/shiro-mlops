@@ -2,43 +2,50 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from shiro_mlops.service.data_explorer.status import (
-    Availability,
-    Completeness,
-    FreshnessState,
-    Overall,
-)
+from shiro_mlops.service.data_explorer.status import Completeness, FreshnessState, Overall
 
 
-class DatasetStatus(BaseModel):
-    """Explainable operational status for one domain dataset."""
+class EmptyDatasetStatus(BaseModel):
+    """A dataset with no ingested rows: freshness and completeness are not judged."""
 
+    kind: Literal["empty"] = "empty"
     id: str
     label: str
-    availability: Availability
+    overall: Literal["warning"] = "warning"
+    href: str
+
+
+class PopulatedDatasetStatus(BaseModel):
+    """Explainable operational status for one dataset that has rows."""
+
+    kind: Literal["populated"] = "populated"
+    id: str
+    label: str
     freshness: FreshnessState
     completeness: Completeness
     overall: Overall
-    latest_source_at: str | None = None
-    latest_ingested_at: str | None = None
-    ingestion_age_seconds: int | None = None
-    source_age_seconds: int | None = None
-    missing_identifiers: list[str] = Field(default_factory=list)
-    missing_slot_count: int = 0
-    record_count: int | None = None
+    latest_source_at: str
+    latest_ingested_at: str
+    ingestion_age_seconds: int
+    source_age_seconds: int
+    missing_identifiers: list[str]
     latest_release_stale: bool | None = Field(
         default=None,
         description=(
-            "Whether the dataset's newest release was issued more than seven hours ago. "
+            "Whether the dataset's newest release was issued more than seven hours ago; "
+            "null for a dataset that does not flag stale releases. "
             "A coarse dataset-level signal; it does not decide whether a single prediction "
             "request degrades, which depends on the version supplying each weather value."
         ),
     )
     href: str
+
+
+DatasetStatus = Annotated[EmptyDatasetStatus | PopulatedDatasetStatus, Field(discriminator="kind")]
 
 
 class StatusResponse(BaseModel):

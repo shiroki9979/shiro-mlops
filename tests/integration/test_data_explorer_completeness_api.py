@@ -73,7 +73,6 @@ def test_regional_completeness_lists_only_absent_allowlisted_regions(
         (rfc3339(complete), "東部"): [],
     }
     assert regional["missing_identifiers"] == ["南部", "東部"]
-    assert regional["missing_slot_count"] == 2
 
 
 def _persist_cwa_ingestion(
@@ -215,7 +214,6 @@ def test_observation_status_without_an_audit_header_is_complete(
 
     observations = _status(client)["cwa_observations"]
 
-    assert observations["availability"] == "available"
+    assert observations["kind"] == "populated"
     assert observations["completeness"] == "complete"
     assert observations["missing_identifiers"] == []
-    assert observations["missing_slot_count"] == 0

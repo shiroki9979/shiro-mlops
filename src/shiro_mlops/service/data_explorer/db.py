@@ -59,7 +59,3 @@ class ExplorerDb:
     def fetch_one(self, query: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         rows = self.fetch(query, params)
         return rows[0] if rows else None
-
-    def scalar(self, query: str) -> Any:
-        with self.engine.connect() as conn:
-            return conn.execute(text(query)).scalar()

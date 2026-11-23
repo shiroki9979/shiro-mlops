@@ -8,12 +8,8 @@ import pytest
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import FORECAST_STALE_AFTER
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
-from shiro_mlops.service.data_explorer.schemas import DatasetStatus
-from shiro_mlops.service.data_explorer.status import (
-    DatasetFreshness,
-    derive_overall,
-    evaluate_freshness,
-)
+from shiro_mlops.service.data_explorer.schemas import StatusResponse
+from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
 from tests.helpers import (
     derived_hourly_load,
     forecast_release,
@@ -73,7 +69,6 @@ def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
     load = next(dataset for dataset in status.datasets if dataset.id == "hourly_load")
 
     assert load.completeness == "complete"
-    assert load.missing_slot_count == 0
     assert load.missing_identifiers == []
 
 
@@ -88,7 +83,7 @@ def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_la
     national = next(item for item in status.datasets if item.id == "national_supply_demand")
 
     assert national.completeness == "incomplete"
-    assert national.missing_slot_count == 143
+    assert len(national.missing_identifiers) == 143
     assert national.missing_identifiers[0] == "2026-09-04T17:40:00+08:00"
     assert national.missing_identifiers[-1] == "2026-09-05T17:20:00+08:00"
 
@@ -119,27 +114,26 @@ def test_freshness_uses_dataset_cadence_and_two_missed_cycles() -> None:
     assert stale.source_age_seconds == 3 * 3600
 
 
-def test_freshness_unknown_when_timestamps_missing() -> None:
-    """沒有來源或入庫時間時 freshness 必須是 unknown。"""
-    result = evaluate_freshness(
-        cadence_seconds=3600,
-        as_of=datetime(2026, 8, 20, 14, 0),
-        latest_source_at=None,
-        latest_ingested_at=None,
-    )
-    assert result == DatasetFreshness("unknown", None, None)
+def test_overall_severity_maps_stale_or_incomplete_data_to_warning() -> None:
+    """過期或不完整為 warning，兩者皆無才是 healthy。"""
+    assert derive_overall("warning", "complete") == "warning"
+    assert derive_overall("fresh", "incomplete") == "warning"
+    assert derive_overall("fresh", "complete") == "healthy"
 
 
-def test_overall_severity_maps_availability_and_warnings() -> None:
-    """過期、不完整或空資料為 warning。"""
-    assert derive_overall("empty", "unknown", "unknown") == "warning"
-    assert derive_overall("available", "warning", "complete") == "warning"
-    assert derive_overall("available", "fresh", "incomplete") == "warning"
-    assert derive_overall("available", "fresh", "complete") == "healthy"
+def test_status_contract_has_an_empty_and_a_populated_shape() -> None:
+    """無資料只帶識別、連結與 warning；新鮮度與完整度只存在於有資料的形狀，且沒有 unknown。"""
+    shapes = StatusResponse.model_json_schema()["$defs"]
+    empty = shapes["EmptyDatasetStatus"]["properties"]
+    populated = shapes["PopulatedDatasetStatus"]
 
-
-def test_status_contract_has_no_value_for_a_failed_read() -> None:
-    """讀取失敗以 HTTP 503 回報，不是一種資料集狀態。"""
-    properties = DatasetStatus.model_json_schema()["properties"]
-    assert properties["availability"]["enum"] == ["available", "empty"]
-    assert properties["overall"]["enum"] == ["healthy", "warning", "unknown"]
+    assert set(empty) == {"kind", "id", "label", "overall", "href"}
+    assert (empty["kind"]["const"], empty["overall"]["const"]) == ("empty", "warning")
+    assert populated["properties"]["kind"]["const"] == "populated"
+    assert populated["properties"]["freshness"]["enum"] == ["fresh", "warning"]
+    assert populated["properties"]["completeness"]["enum"] == ["complete", "incomplete"]
+    assert populated["properties"]["overall"]["enum"] == ["healthy", "warning"]
+    assert set(populated["properties"]) - set(populated["required"]) == {
+        "kind",
+        "latest_release_stale",
+    }
