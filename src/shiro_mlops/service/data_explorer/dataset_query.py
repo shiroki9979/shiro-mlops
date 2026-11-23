@@ -125,7 +125,7 @@ class DatasetQuery:
             [*clauses, *filter_clauses], cursor, dataset.sort
         )
         sql = (
-            f"SELECT {', '.join(dataset.list_columns)} FROM {dataset.table} "
+            f"SELECT {', '.join(dataset.list_columns)} FROM {dataset.relation} "
             f"WHERE {where} ORDER BY {order} LIMIT :limit"
         )
         return self.db.fetch(sql, {**params, **filter_params, **cursor_params, "limit": limit})

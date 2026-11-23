@@ -1,4 +1,4 @@
-"""CWA audit series HTTP scenarios shared by the SQLite suite and the opt-in TimescaleDB run."""
+"""CWA audit list and series HTTP scenarios shared by the SQLite suite and the opt-in TimescaleDB run."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,22 +16,25 @@ from shiro_mlops.service.data_explorer.query import TimeWindow
 from tests.helpers import rfc3339
 from tests.scenarios.data_explorer_series import series_client
 
-OBSERVATION_AUDIT_SERIES_PATH = "/data/audits/cwa-observations/series"
-FORECAST_AUDIT_SERIES_PATH = "/data/audits/cwa-forecasts/series"
+OBSERVATION_AUDIT_PATH = "/data/audits/cwa-observations"
+FORECAST_AUDIT_PATH = "/data/audits/cwa-forecasts"
+OBSERVATION_AUDIT_SERIES_PATH = f"{OBSERVATION_AUDIT_PATH}/series"
+FORECAST_AUDIT_SERIES_PATH = f"{FORECAST_AUDIT_PATH}/series"
 AUDIT_HOUR = datetime(2025, 2, 3, 10, 0)
+NOTHING_MISSING: tuple[str, ...] = ()
+ONE_MISSING = ("missing-id",)
 
 
 @contextmanager
 def _seeded_batches(
-    repo: TimeSeriesRepository, batches: dict[datetime, str]
+    repo: TimeSeriesRepository, batches: dict[datetime, tuple[str, ...]]
 ) -> Iterator[TestClient]:
-    """Seed observation batch headers keyed by fetch time and remove them afterwards."""
-    for fetched_at, status in batches.items():
+    """Seed observation batch headers `{fetched_at: missing_station_ids}`; remove them afterwards."""
+    for fetched_at, missing_station_ids in batches.items():
         repo.cwa_weather_store.upsert_cwa_observation_batch(
             CWAObservationBatch(
                 fetched_at=fetched_at,
-                status=status,
-                missing_station_ids=(),
+                missing_station_ids=missing_station_ids,
                 raw_payload={},
                 observations=(),
             )
@@ -53,9 +56,9 @@ def _delete_batches_between(repo: TimeSeriesRepository, first: datetime, last: d
 
 @contextmanager
 def _seeded_versions(
-    repo: TimeSeriesRepository, versions: list[tuple[datetime, datetime, str]]
+    repo: TimeSeriesRepository, versions: list[tuple[datetime, datetime, tuple[str, ...]]]
 ) -> Iterator[tuple[TestClient, str]]:
-    """Seed forecast versions `(issued_at, source_updated_at, status)` under a unique dataset."""
+    """Seed versions `(issued_at, source_updated_at, missing_geocodes)` under a unique dataset."""
     dataset_id = f"T-{uuid4().hex[:10]}"
     repo.cwa_weather_store.upsert_cwa_forecast_releases(
         [
@@ -64,12 +67,11 @@ def _seeded_versions(
                 issued_at=pd.Timestamp(issued_at),
                 source_updated_at=pd.Timestamp(updated_at),
                 fetched_at=updated_at,
-                status=status,
-                missing_geocodes=(),
+                missing_geocodes=missing_geocodes,
                 raw_payload={},
                 forecasts=(),
             )
-            for issued_at, updated_at, status in versions
+            for issued_at, updated_at, missing_geocodes in versions
         ]
     )
     try:
@@ -101,9 +103,9 @@ def _counts_by_status(body: dict) -> dict[str, list[tuple[str, float | None]]]:
 def assert_observation_batches_counted_per_status(repo: TimeSeriesRepository) -> None:
     """同一個 1h bucket 內有 2 個 complete 與 1 個 incomplete 批次時，計數分別是 2 與 1。"""
     batches = {
-        AUDIT_HOUR + timedelta(minutes=5, microseconds=120): "complete",
-        AUDIT_HOUR + timedelta(minutes=25, microseconds=340): "incomplete",
-        AUDIT_HOUR + timedelta(minutes=45, microseconds=560): "complete",
+        AUDIT_HOUR + timedelta(minutes=5, microseconds=120): NOTHING_MISSING,
+        AUDIT_HOUR + timedelta(minutes=25, microseconds=340): ONE_MISSING,
+        AUDIT_HOUR + timedelta(minutes=45, microseconds=560): NOTHING_MISSING,
     }
     with _seeded_batches(repo, batches) as client:
         response = client.get(OBSERVATION_AUDIT_SERIES_PATH, params=_hour_window(bucket="1h"))
@@ -125,9 +127,9 @@ def assert_forecast_versions_counted_per_status(repo: TimeSeriesRepository) -> N
     """同一個 1h bucket 內有 2 個 complete 與 1 個 incomplete 版本時，計數分別是 2 與 1。"""
     issued = AUDIT_HOUR
     versions = [
-        (issued, issued + timedelta(minutes=10), "complete"),
-        (issued, issued + timedelta(minutes=40), "incomplete"),
-        (issued + timedelta(minutes=30), issued + timedelta(minutes=50), "complete"),
+        (issued, issued + timedelta(minutes=10), NOTHING_MISSING),
+        (issued, issued + timedelta(minutes=40), ONE_MISSING),
+        (issued + timedelta(minutes=30), issued + timedelta(minutes=50), NOTHING_MISSING),
     ]
     with _seeded_versions(repo, versions) as (client, dataset_id):
         response = client.get(
@@ -149,8 +151,8 @@ def assert_raw_audit_bucket_has_one_point_per_version(repo: TimeSeriesRepository
     """raw 粒度時每個版本各是一個點，即使兩個版本的 issued_at 相同。"""
     issued = AUDIT_HOUR
     versions = [
-        (issued, issued + timedelta(minutes=10), "complete"),
-        (issued, issued + timedelta(minutes=40), "complete"),
+        (issued, issued + timedelta(minutes=10), NOTHING_MISSING),
+        (issued, issued + timedelta(minutes=40), NOTHING_MISSING),
     ]
     with _seeded_versions(repo, versions) as (client, dataset_id):
         response = client.get(
@@ -167,8 +169,8 @@ def assert_raw_audit_bucket_has_one_point_per_version(repo: TimeSeriesRepository
 def assert_audit_series_has_no_gap_fill(repo: TimeSeriesRepository) -> None:
     """audit 不補值：窗口內沒有批次的小時不出現在 series。"""
     batches = {
-        AUDIT_HOUR + timedelta(minutes=5): "complete",
-        AUDIT_HOUR + timedelta(hours=2, minutes=5): "complete",
+        AUDIT_HOUR + timedelta(minutes=5): NOTHING_MISSING,
+        AUDIT_HOUR + timedelta(hours=2, minutes=5): NOTHING_MISSING,
     }
     with _seeded_batches(repo, batches) as client:
         response = client.get(
@@ -188,7 +190,7 @@ def assert_audit_series_has_no_gap_fill(repo: TimeSeriesRepository) -> None:
 def assert_audit_series_rejects_fields_and_agg(repo: TimeSeriesRepository) -> None:
     """audit series 不接受 fields 與 agg，帶了就回 422。"""
     window = _hour_window()
-    with _seeded_batches(repo, {AUDIT_HOUR + timedelta(minutes=5): "complete"}) as client:
+    with _seeded_batches(repo, {AUDIT_HOUR + timedelta(minutes=5): NOTHING_MISSING}) as client:
         statuses = [
             client.get(path, params={**window, **extra}).status_code
             for path in (OBSERVATION_AUDIT_SERIES_PATH, FORECAST_AUDIT_SERIES_PATH)
@@ -204,4 +206,64 @@ AUDIT_SERIES_SCENARIOS = (
     assert_raw_audit_bucket_has_one_point_per_version,
     assert_audit_series_has_no_gap_fill,
     assert_audit_series_rejects_fields_and_agg,
+)
+
+
+def _assert_listed_by_status(
+    client: TestClient, path: str, key: str, params: dict[str, str], expected: dict[str, str]
+) -> None:
+    """The list, and each `status` filter of it, report the `expected` `{key: status}`."""
+    for status in (None, "complete", "incomplete"):
+        filtered = params if status is None else {**params, "status": status}
+        items = client.get(path, params=filtered).json()["items"]
+        wanted = {k: v for k, v in expected.items() if status in (None, v)}
+        assert {item[key]: item["status"] for item in items} == wanted, status
+
+
+def assert_observation_audits_follow_the_missing_list(repo: TimeSeriesRepository) -> None:
+    """觀測批次的列表與 status 篩選皆依缺漏清單判定完整度。"""
+    batches = {
+        AUDIT_HOUR + timedelta(minutes=5): NOTHING_MISSING,
+        AUDIT_HOUR + timedelta(minutes=25): ONE_MISSING,
+        AUDIT_HOUR + timedelta(minutes=45): NOTHING_MISSING,
+    }
+    with _seeded_batches(repo, batches) as client:
+        _assert_listed_by_status(
+            client,
+            OBSERVATION_AUDIT_PATH,
+            "fetched_at",
+            _hour_window(),
+            {
+                "2025-02-03T10:05:00+08:00": "complete",
+                "2025-02-03T10:25:00+08:00": "incomplete",
+                "2025-02-03T10:45:00+08:00": "complete",
+            },
+        )
+
+
+def assert_forecast_audits_follow_the_missing_list(repo: TimeSeriesRepository) -> None:
+    """預報版本的列表與 status 篩選皆依缺漏清單判定完整度。"""
+    issued = AUDIT_HOUR
+    versions = [
+        (issued, issued + timedelta(minutes=10), NOTHING_MISSING),
+        (issued, issued + timedelta(minutes=40), ONE_MISSING),
+        (issued + timedelta(minutes=30), issued + timedelta(minutes=50), NOTHING_MISSING),
+    ]
+    with _seeded_versions(repo, versions) as (client, dataset_id):
+        _assert_listed_by_status(
+            client,
+            FORECAST_AUDIT_PATH,
+            "source_updated_at",
+            _hour_window(dataset_id=dataset_id),
+            {
+                "2025-02-03T10:10:00+08:00": "complete",
+                "2025-02-03T10:40:00+08:00": "incomplete",
+                "2025-02-03T10:50:00+08:00": "complete",
+            },
+        )
+
+
+AUDIT_STATUS_SCENARIOS = (
+    assert_observation_audits_follow_the_missing_list,
+    assert_forecast_audits_follow_the_missing_list,
 )

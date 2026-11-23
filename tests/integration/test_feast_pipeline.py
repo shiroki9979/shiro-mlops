@@ -321,7 +321,6 @@ def test_full_dagster_mlops_pipeline_materialization(
     """Verify full Dagster pipeline executes end-to-end from ingestion to monitoring offline and fast."""
     observation_batch = CWAObservationBatch(
         fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
-        status="complete",
         observations=tuple(
             CWAStationObservation(
                 observed_at=row.datetime.to_pydatetime(),

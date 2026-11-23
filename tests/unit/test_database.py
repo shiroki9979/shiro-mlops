@@ -25,6 +25,10 @@ from tests.helpers import (
     derived_load_series,
     write_derived_load,
 )
+from tests.scenarios.cwa_header_upgrade import (
+    assert_header_status_is_dropped_repeatably,
+    header_columns,
+)
 
 
 def test_settings_timescaledb_defaults():
@@ -430,6 +434,45 @@ def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -
             pytest.raises(RuntimeError, match="Cannot inspect raw_taipower_load schema"),
         ):
             ensure_timescale_hypertables(engine)
+    finally:
+        engine.dispose()
+
+
+def test_fresh_schema_has_no_cwa_header_status_column(tmp_path) -> None:
+    """New CWA batch and release headers carry the missing list without a status column."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_cwa_headers.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        assert header_columns(engine, "raw_cwa_observation_batch") == [
+            "fetched_at",
+            "missing_station_ids",
+            "raw_payload",
+            "created_at",
+        ]
+        assert header_columns(engine, "raw_cwa_forecast_release") == [
+            "dataset_id",
+            "issued_at",
+            "source_updated_at",
+            "fetched_at",
+            "missing_geocodes",
+            "raw_payload",
+            "created_at",
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_existing_cwa_headers_lose_status_column_repeatably(tmp_path) -> None:
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy_cwa_headers.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        assert_header_status_is_dropped_repeatably(engine)
     finally:
         engine.dispose()
 

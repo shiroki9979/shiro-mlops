@@ -43,7 +43,6 @@ SELECT create_hypertable(
 -- 3. Canonical CWA observation batches and typed station observations
 CREATE TABLE IF NOT EXISTS raw_cwa_observation_batch (
     fetched_at TIMESTAMPTZ NOT NULL,
-    status VARCHAR(16) NOT NULL,
     missing_station_ids JSONB NOT NULL,
     raw_payload JSONB NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -79,7 +78,6 @@ CREATE TABLE IF NOT EXISTS raw_cwa_forecast_release (
     issued_at TIMESTAMPTZ NOT NULL,
     source_updated_at TIMESTAMPTZ NOT NULL,
     fetched_at TIMESTAMPTZ NOT NULL,
-    status VARCHAR(16) NOT NULL,
     missing_geocodes JSONB NOT NULL,
     raw_payload JSONB NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),

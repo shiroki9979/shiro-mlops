@@ -68,7 +68,7 @@ class GapScan:
         member = policy.members.column if policy.members is not None else None
         columns = dataset.time_column if member is None else f"{dataset.time_column}, {member}"
         rows = self.db.fetch(
-            f"SELECT DISTINCT {columns} FROM {dataset.table} "
+            f"SELECT DISTINCT {columns} FROM {dataset.relation} "
             f"WHERE {' AND '.join([*clauses, *scope_clauses])}",
             {**params, **scope_params},
         )

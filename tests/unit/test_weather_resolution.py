@@ -173,7 +173,6 @@ def test_resolver_falls_back_to_latest_release_holding_the_reference_point(
         point = replace(township_forecast(datetime(2026, 8, 20, 23), temperature), geocode=geocode)
         return replace(
             forecast_release(issued_at, (point,)),
-            status="complete" if complete else "incomplete",
             missing_geocodes=() if complete else ("some-other-geocode",),
         )
 

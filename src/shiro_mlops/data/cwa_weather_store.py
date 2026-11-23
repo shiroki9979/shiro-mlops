@@ -250,7 +250,6 @@ class CWAWeatherStore:
         """Persist one canonical CWA observation batch and its typed children atomically."""
         header = {
             "fetched_at": to_storage_time(batch.fetched_at),
-            "status": batch.status,
             "missing_station_ids": serialize_raw_payload(list(batch.missing_station_ids)),
             "raw_payload": serialize_raw_payload(batch.raw_payload),
         }
@@ -272,10 +271,9 @@ class CWAWeatherStore:
         header_stmt = text(
             """
             INSERT INTO raw_cwa_observation_batch
-                (fetched_at, status, missing_station_ids, raw_payload)
-            VALUES (:fetched_at, :status, :missing_station_ids, :raw_payload)
+                (fetched_at, missing_station_ids, raw_payload)
+            VALUES (:fetched_at, :missing_station_ids, :raw_payload)
             ON CONFLICT (fetched_at) DO UPDATE SET
-                status = EXCLUDED.status,
                 missing_station_ids = EXCLUDED.missing_station_ids,
                 raw_payload = EXCLUDED.raw_payload
             """
@@ -366,7 +364,6 @@ class CWAWeatherStore:
             "issued_at": to_storage_time(release.issued_at),
             "source_updated_at": to_storage_time(release.source_updated_at),
             "fetched_at": to_storage_time(release.fetched_at),
-            "status": release.status,
             "missing_geocodes": serialize_raw_payload(list(release.missing_geocodes)),
             "raw_payload": serialize_raw_payload(release.raw_payload),
         }
@@ -393,14 +390,13 @@ class CWAWeatherStore:
             """
             INSERT INTO raw_cwa_forecast_release (
                 dataset_id, issued_at, source_updated_at, fetched_at,
-                status, missing_geocodes, raw_payload
+                missing_geocodes, raw_payload
             ) VALUES (
                 :dataset_id, :issued_at, :source_updated_at, :fetched_at,
-                :status, :missing_geocodes, :raw_payload
+                :missing_geocodes, :raw_payload
             )
             ON CONFLICT (dataset_id, issued_at, source_updated_at) DO UPDATE SET
                 fetched_at = EXCLUDED.fetched_at,
-                status = EXCLUDED.status,
                 missing_geocodes = EXCLUDED.missing_geocodes,
                 raw_payload = EXCLUDED.raw_payload
             """

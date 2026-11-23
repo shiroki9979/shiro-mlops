@@ -1,6 +1,6 @@
 """Declarative Data Explorer dataset definitions: one `Dataset` value per 資料集.
 
-A dataset states its table, time column, keyset sort, filters, projection, gap and status
+A dataset states its relation, time column, keyset sort, filters, projection, gap and status
 policies once; the list, cursor, series and status seams derive their SQL, bound filters,
 accepted parameters and missing slots from it, so a filter declared here cannot be
 silently dropped by one of them.
@@ -144,10 +144,11 @@ class GapPolicy:
 class FreshnessSource:
     """Where status reads a dataset's newest source and ingestion instants.
 
-    `order` is the newest-first ordering that picks the row, `source_column` alone if empty.
+    `relation` is what the read selects from, as in `Dataset.relation`. `order` is the
+    newest-first ordering that picks the row, `source_column` alone if empty.
     """
 
-    table: str
+    relation: str
     source_column: str
     ingested_column: str = "created_at"
     order: tuple[str, ...] = ()
@@ -187,23 +188,19 @@ class AlwaysComplete:
 class AuditHeader:
     """The newest audit header a dataset's completeness is read from.
 
-    `status_column` holds the header's audit status; `incomplete_status` is its value for
-    a header that judged its batch or release incomplete.
+    `ids_column` holds the header's missing identifiers, the only record of whether its
+    batch or release is complete.
     """
 
     table: str
     order: tuple[str, ...]
     ids_column: str
-    status_column: str
-    incomplete_status: str
-    incomplete_placeholder: str
 
 
 @dataclass(frozen=True)
 class LatestAudit:
     """Status completeness: the newest audit header's missing identifiers.
 
-    A header marked incomplete without naming any reports `incomplete_placeholder`.
     `flags_stale_release` adds the serving hint that the newest release is stale.
     """
 
@@ -235,13 +232,15 @@ class VersionResolver(Protocol):
 class Dataset:
     """Everything the explorer knows about one dataset.
 
-    `sort` is the newest-first keyset; its first column is `time_column`, and every sort
+    `relation` is what every list, series and gap read selects from: a table name, or a
+    parenthesised derived relation with an alias when a column is judged rather than
+    stored. `sort` is the newest-first keyset; its first column is `time_column`, and every sort
     column holding an instant is in `instant_columns` so cursors carry it at microsecond
     precision. `list_columns` is the list SELECT, which must include every sort column.
     `project` turns one page of rows into response items, and `gaps` declares which slots
     the list reports missing. `status_policy` and `freshness` declare how `GET /data/status`
     judges completeness and where it reads the newest row (by default the dataset's own
-    table and time column). `series` declares the chart series endpoint, and `resolve_version`
+    relation and time column). `series` declares the chart series endpoint, and `resolve_version`
     resolves the forecast version both list and series read. Inconsistent declarations
     raise `ValueError`.
     """
@@ -252,7 +251,7 @@ class Dataset:
     # SYNC(frontend/apps/engineering-console/src/components/data-explorer/catalog.ts): maxDays and cadenceSeconds per dataset.
     cadence: timedelta
     max_days: int
-    table: str
+    relation: str
     time_column: str
     sort: tuple[str, ...]
     instant_columns: frozenset[str]
@@ -287,7 +286,9 @@ class Dataset:
     def freshness_source(self) -> FreshnessSource:
         if self.freshness is not None:
             return self.freshness
-        return FreshnessSource(table=self.table, source_column=self.time_column, pinned=self.pinned)
+        return FreshnessSource(
+            relation=self.relation, source_column=self.time_column, pinned=self.pinned
+        )
 
     def series_clauses(self, db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
         """Pinned clauses plus the present filters the series endpoint accepts."""
