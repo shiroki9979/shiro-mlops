@@ -7,10 +7,11 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
-from dagster import Definitions, RetryPolicy, build_schedule_context
+from dagster import Definitions, RetryPolicy
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.taipower_supply_demand import floor_to_ten_minutes
 from shiro_mlops.pipelines.assets import (
     TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE,
     TAIPOWER_SUPPLY_DEMAND_SOURCE,
@@ -23,10 +24,11 @@ from shiro_mlops.pipelines.schedules import (
     build_taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
-from tests.helpers import FIXTURES_DIR, FixtureSource
+from tests.helpers import FIXTURES_DIR, FixtureSource, scheduled_run_tags
 
 SCHEDULED_EXECUTION_TIME = datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
 OBSERVED_SLOT = datetime(2026, 9, 5, 17, 30)
+REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
 
 
 @dataclass(frozen=True)
@@ -60,11 +62,28 @@ def _fixture_sources(*, unit_fail_first: float = 0) -> SnapshotSources:
     )
 
 
-def _build_schedule_run_request():
-    context = build_schedule_context(scheduled_execution_time=SCHEDULED_EXECUTION_TIME)
-    evaluation = taipower_supply_demand_snapshot_schedule.evaluate_tick(context)
-    assert evaluation.run_requests is not None
-    return evaluation.run_requests[0]
+def _scheduled_tags() -> dict[str, str]:
+    return scheduled_run_tags(taipower_supply_demand_snapshot_schedule, SCHEDULED_EXECUTION_TIME)
+
+
+def _creation_slot(instance, run_id: str) -> datetime:
+    """The ten-minute slot, in Taiwan-local time, in which Dagster created the run."""
+    created = instance.get_run_record_by_id(run_id).create_timestamp
+    return floor_to_ten_minutes(created.astimezone(ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None))
+
+
+def _slots_written(repo: TimeSeriesRepository, slot: datetime) -> dict[str, int]:
+    """How many rows each of the three snapshots holds at ``slot``."""
+    national = repo.fetch_supply_demand_snapshot(slot)
+    return {
+        "national": 0 if national is None else 1,
+        "regional": len(repo.fetch_regional_supply_demand_snapshots(slot)),
+        "unit": len(repo.fetch_unit_generation_snapshots(slot)),
+    }
+
+
+ALL_THREE = {"national": 1, "regional": 4, "unit": 4}
+NONE_OF_THEM = {"national": 0, "regional": 0, "unit": 0}
 
 
 def _build_realtime_job_def(
@@ -95,20 +114,19 @@ def _build_failure_case(repo: TimeSeriesRepository, *, unit_fail_first: float):
     job_def = _build_realtime_job_def(
         repo, sources, retry_policy=RetryPolicy(max_retries=2, delay=0)
     )
-    return _build_schedule_run_request(), sources, job_def
+    return sources, job_def
 
 
 def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     test_repo: TimeSeriesRepository,
+    dagster_instance,
 ) -> None:
     """排程觸發 job 應將同一個 tick 注入三來源，重跑時各自冪等更新相同快照。"""
     slot = OBSERVED_SLOT
-    run_req = _build_schedule_run_request()
-
     sources = _fixture_sources()
     job_def = _build_realtime_job_def(test_repo, sources)
 
-    res = job_def.execute_in_process(run_config=run_req.run_config)
+    res = job_def.execute_in_process(tags=_scheduled_tags(), instance=dagster_instance)
 
     assert res.success
 
@@ -134,7 +152,7 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     sources.regional.payload = sources.regional.payload.replace("1091.7", "1300.0")
     sources.unit.payload["aaData"][0]["淨發電量(MW)"] = "700.0"
 
-    res2 = job_def.execute_in_process(run_config=run_req.run_config)
+    res2 = job_def.execute_in_process(tags=_scheduled_tags(), instance=dagster_instance)
 
     assert res2.success
 
@@ -171,12 +189,13 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
 
 def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
     test_repo: TimeSeriesRepository,
+    dagster_instance,
 ) -> None:
     """任一來源暫時性失敗時，應依政策有限重試並成功完成 run。"""
     slot = OBSERVED_SLOT
-    run_req, sources, job_def = _build_failure_case(test_repo, unit_fail_first=1)
+    sources, job_def = _build_failure_case(test_repo, unit_fail_first=1)
 
-    res = job_def.execute_in_process(run_config=run_req.run_config)
+    res = job_def.execute_in_process(tags=_scheduled_tags(), instance=dagster_instance)
 
     assert res.success
     # 驗證機組來源確實依 job 重試政策重試（共呼叫 2 次）
@@ -191,14 +210,14 @@ def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
 
 def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_write(
     test_repo: TimeSeriesRepository,
+    dagster_instance,
 ) -> None:
     """任一來源持續失敗耗盡重試時，run 失敗且該來源不得寫入資料。"""
     slot = OBSERVED_SLOT
-    run_req, sources, job_def = _build_failure_case(test_repo, unit_fail_first=math.inf)
+    sources, job_def = _build_failure_case(test_repo, unit_fail_first=math.inf)
 
     res = job_def.execute_in_process(
-        run_config=run_req.run_config,
-        raise_on_error=False,
+        tags=_scheduled_tags(), instance=dagster_instance, raise_on_error=False
     )
 
     assert not res.success
@@ -207,3 +226,24 @@ def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_
 
     # 驗證失敗的機組來源絕對不寫入任何資料
     assert len(test_repo.fetch_unit_generation_snapshots(slot)) == 0
+
+
+@pytest.mark.parametrize(
+    "run_tags",
+    [
+        pytest.param({}, id="manual-run"),
+        pytest.param({**_scheduled_tags(), **REEXECUTION}, id="re-execution-of-the-tick-run"),
+    ],
+)
+def test_a_run_without_a_scheduled_tick_writes_all_three_into_its_creation_slot(
+    run_tags: dict[str, str], test_repo: TimeSeriesRepository, dagster_instance
+) -> None:
+    """台電即時 API 只回傳當下的值，重新執行不得把它寫進原 tick 的 slot。"""
+    job_def = _build_realtime_job_def(test_repo, _fixture_sources())
+
+    result = job_def.execute_in_process(tags=run_tags, instance=dagster_instance)
+
+    assert result.success
+    assert _slots_written(test_repo, OBSERVED_SLOT) == NONE_OF_THEM
+    slot = _creation_slot(dagster_instance, result.run_id)
+    assert _slots_written(test_repo, slot) == ALL_THREE

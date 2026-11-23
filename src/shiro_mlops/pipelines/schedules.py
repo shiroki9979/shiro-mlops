@@ -16,8 +16,7 @@ from dagster import (
 )
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
-from shiro_mlops.data.taipower_supply_demand import resolve_snapshot_observed_at
-from shiro_mlops.pipelines.execution_origin import scheduled_tick, tick_run_key
+from shiro_mlops.pipelines.execution_origin import tick_run_key, tick_run_request
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -92,22 +91,8 @@ taipower_supply_demand_snapshot_job = build_taipower_supply_demand_snapshot_job(
 def taipower_supply_demand_snapshot_schedule(
     context: ScheduleEvaluationContext,
 ) -> RunRequest:
-    """每十分鐘 materialize 全部即時快照，並共用同一個 observed_at。
-
-    無 tick 的手動評估不帶 run key 與 observed_at；各快照資產以自己的抓取起始時間決定 slot。
-    """
-    tick = scheduled_tick(context)
-    if tick is None:
-        return RunRequest()
-    observed_at = resolve_snapshot_observed_at(tick).isoformat(timespec="seconds")
-    ops_config = {
-        asset_name: {"config": {"observed_at": observed_at}}
-        for asset_name in TAIPOWER_REALTIME_SNAPSHOT_ASSETS
-    }
-    return RunRequest(
-        run_key=observed_at,
-        run_config={"ops": ops_config},
-    )
+    """每十分鐘 materialize 全部即時快照；三者從同一個 run 的 as_of 取整出同一個觀測 slot。"""
+    return tick_run_request(context)
 
 
 # 全台逐時實際負載推算（只讀區域快照資料表，不呼叫台電外部 API）
