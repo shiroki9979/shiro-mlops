@@ -57,7 +57,7 @@ def test_repository_initialization(sqlite_engine: Engine):
 def test_repository_hands_out_a_cwa_weather_store_on_its_engine(
     sqlite_engine: Engine, cwa_observation_batch: CWAObservationBatch
 ) -> None:
-    """Weather written through the facade's store is what any store on that engine reads."""
+    """Weather written through the composition root's store is what any store on that engine reads."""
     store = TimeSeriesRepository(engine=sqlite_engine).cwa_weather_store
 
     store.upsert_cwa_observation_batch(cwa_observation_batch)
