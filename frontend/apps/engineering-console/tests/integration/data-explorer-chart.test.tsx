@@ -1,7 +1,8 @@
 import { cloneElement, type ReactElement } from 'react'
-import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { onlineManager } from '@tanstack/react-query'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
 import { createAppRouter } from '@/router'
@@ -254,5 +255,40 @@ describe('Data Explorer chart card', () => {
     renderPath(`/data/power/load?${WINDOW}&bucket=raw`)
 
     expect(await screen.findByText(chart.tooManyPoints(chart.buckets['1d']))).toBeInTheDocument()
+  })
+})
+
+describe('Data Explorer chart card query states', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true)
+  })
+
+  it('keeps the drawn chart and names the failure when a refresh fails', async () => {
+    captureRequests()
+    const user = userEvent.setup()
+    renderPath(`/data/power/load?${WINDOW}`)
+    const figure = await screen.findByRole('figure')
+    await within(figure).findByText(chart.brushHint)
+    server.use(http.get('*/data/power/load/series', () => HttpResponse.json({ detail: 'bad fields' }, { status: 422 })))
+
+    await user.click(within(screen.getByRole('main')).getByRole('button', { name: m.common.refresh }))
+
+    expect(await within(figure).findByText(chart.refreshFailed(chart.invalidQuery))).toBeInTheDocument()
+    expect(within(figure).getByText(chart.brushHint)).toBeInTheDocument()
+    expect(figure.querySelectorAll('.recharts-line-dots circle').length).toBeGreaterThan(0)
+  })
+
+  it('shows the chart query failure instead of an empty chart while offline, then reads once back online', async () => {
+    captureRequests()
+    onlineManager.setOnline(false)
+    renderPath(`/data/power/load?${WINDOW}`)
+    const figure = await screen.findByRole('figure')
+
+    expect(await within(figure).findByText(chart.queryFailed)).toBeInTheDocument()
+    expect(within(figure).queryByText(chart.empty)).not.toBeInTheDocument()
+
+    act(() => onlineManager.setOnline(true))
+
+    expect(await within(figure).findByText(chart.brushHint)).toBeInTheDocument()
   })
 })

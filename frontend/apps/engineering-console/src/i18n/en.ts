@@ -243,6 +243,7 @@ export const en: Messages = {
       invalidFilters: 'Invalid filters. Check the time range and field formats.',
       databaseUnavailable: 'The database is currently unreachable. Try again later.',
       queryFailed: 'Query failed. Try again later.',
+      refreshFailed: (reason) => `Refresh failed; showing the last data read. ${reason}`,
       backToFirstPage: 'Back to first page',
       detailLimitExceeded: (days) =>
         `The window exceeds the ${days}-day detail limit. Brush a range on the chart or narrow the window to see rows.`,
@@ -268,6 +269,7 @@ export const en: Messages = {
       loading: 'Loading chart...',
       empty: 'No data to plot in the query window.',
       queryFailed: 'Chart query failed. Try again later.',
+      refreshFailed: (reason) => `Refresh failed; showing the last chart read. ${reason}`,
       invalidQuery: 'Invalid chart settings. Keep the window within 92 days and check the fields.',
       databaseUnavailable: 'The database is unavailable. Try again later.',
       tooManyPoints: (bucket: string) => `Too many points; switch to the "${bucket}" granularity.`,

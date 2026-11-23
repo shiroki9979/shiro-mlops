@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { onlineManager } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { createAppRouter } from '@/router'
 import { server } from '@/mocks/server'
@@ -547,5 +548,54 @@ describe('Data Explorer table', () => {
     const table = await screen.findByRole('table')
 
     expect(within(table).getByRole('cell', { name: label })).toBeInTheDocument()
+  })
+})
+
+describe('Data Explorer list query states', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true)
+  })
+
+  function refresh(user: ReturnType<typeof userEvent.setup>) {
+    return user.click(within(screen.getByRole('main')).getByRole('button', { name: m.common.refresh }))
+  }
+
+  it('keeps the shown rows and names the failure when a refresh fails', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    await screen.findByText('32,100.5')
+    server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'bad filters' }, { status: 422 })))
+
+    await refresh(user)
+
+    expect(await screen.findByText(results.refreshFailed(results.invalidFilters))).toBeInTheDocument()
+    expect(screen.getByText('32,100.5')).toBeInTheDocument()
+  })
+
+  it('offers cursor recovery over the kept rows when refreshing a later page is rejected', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    await screen.findByText('32,100.5')
+    await user.click(screen.getByText(m.common.nextPage))
+    await screen.findByText('30,100')
+    server.use(http.get('*/data/power/load', () => HttpResponse.json({ detail: 'Incompatible cursor version' }, { status: 400 })))
+
+    await refresh(user)
+
+    expect(await screen.findByText(results.refreshFailed(results.cursorRejected))).toBeInTheDocument()
+    expect(screen.getByText('30,100')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: results.backToFirstPage })).toBeInTheDocument()
+  })
+
+  it('shows the query failure instead of an empty result while offline, then reads once back online', async () => {
+    onlineManager.setOnline(false)
+    renderPath('/data/power/load')
+
+    expect(await screen.findByText(results.queryFailed)).toBeInTheDocument()
+    expect(screen.queryByText(results.empty)).not.toBeInTheDocument()
+
+    act(() => onlineManager.setOnline(true))
+
+    expect(await screen.findByText('32,100.5')).toBeInTheDocument()
   })
 })
