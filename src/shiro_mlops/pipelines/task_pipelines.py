@@ -34,13 +34,10 @@ from dagster import (
 )
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.pipelines.cold_start import read_cold_start, read_training_decision
-from shiro_mlops.pipelines.schedules import (
-    CWA_OBSERVATION_ASSET,
-    HOURLY_ACTUAL_LOAD_ASSET,
-    tick_run_key,
-)
+from shiro_mlops.pipelines.execution_origin import WithoutTick, run_as_of, tick_run_request
+from shiro_mlops.pipelines.schedules import CWA_OBSERVATION_ASSET, HOURLY_ACTUAL_LOAD_ASSET
 from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.pipelines.tracking import log_training_run
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
@@ -128,7 +125,11 @@ def _features_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDef
     def features(context: AssetExecutionContext) -> Output[pd.DataFrame]:
         """Read and gate training data once; the model asset trains from this table."""
         try:
-            data = load_training_data(task, _runtime(context), as_of=taiwan_now())
+            data = load_training_data(
+                task,
+                _runtime(context),
+                as_of=run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW),
+            )
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         table = training_table(data)
@@ -235,7 +236,12 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
     def monitoring(context: AssetExecutionContext, model: dict) -> dict:
         """Hourly report: bounded reads only, so the full history is never re-read."""
         try:
-            report = monitor_task(task, _runtime(context), model["metrics"], as_of=taiwan_now())
+            report = monitor_task(
+                task,
+                _runtime(context),
+                model["metrics"],
+                as_of=run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW),
+            )
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         context.log.info(
@@ -290,7 +296,7 @@ def _training_schedule(
     )
     def training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
         decision = read_training_decision(task, runtime=_runtime(context))
-        return decision.run_or_skip(_tick_request(context))
+        return decision.run_or_skip(tick_run_request(context))
 
     return training_schedule
 
@@ -313,7 +319,7 @@ def _monitoring_schedule(
             instance=context.instance,
             models_root=settings.models_dir,
         )
-        return cold_start.monitoring.run_or_skip(_tick_request(context))
+        return cold_start.monitoring.run_or_skip(tick_run_request(context))
 
     return monitoring_schedule
 
@@ -323,10 +329,6 @@ def _monitoring_schedule(
 
 def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> TaskRuntime:
     return TaskRuntime.from_composition_root(getattr(context.resources, TIME_SERIES_REPO))
-
-
-def _tick_request(context: ScheduleEvaluationContext) -> RunRequest:
-    return RunRequest(run_key=tick_run_key(context))
 
 
 def _not_ready_failure(readiness: TrainingLoadReadiness) -> Failure:

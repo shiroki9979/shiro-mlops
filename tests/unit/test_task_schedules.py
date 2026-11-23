@@ -9,6 +9,7 @@ from dagster import AssetMaterialization, Definitions, build_schedule_context
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import defs
+from shiro_mlops.pipelines.execution_origin import SCHEDULE_NAME_TAG, SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.schedules import CWA_INGESTION_ASSETS, TAIPOWER_REALTIME_SNAPSHOT_ASSETS
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
@@ -95,18 +96,39 @@ def test_training_triggers_once_accumulation_is_sufficient(
     assert [request.run_key for request in execution.run_requests] == ["2026-09-27T00:00:00"]
 
 
-def test_training_without_tick_time_requests_an_undeduplicated_run(
-    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+@pytest.mark.parametrize("schedule_name", [NAMES.training_schedule, NAMES.monitoring_schedule])
+def test_task_schedules_tag_the_run_with_their_taiwan_local_tick(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, schedule_name: str
+) -> None:
+    """The tick reaches features and monitoring as a run tag, never as config an operator could type in."""
+    write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    dagster_instance.report_runless_asset_event(AssetMaterialization(NAMES.model))
+
+    [request] = _tick(schedule_name, test_repo, dagster_instance).run_requests
+
+    assert request.run_key == "2026-09-27T00:00:00"
+    assert request.tags == {
+        SCHEDULE_NAME_TAG: schedule_name,
+        SCHEDULED_TICK_TAG: "2026-09-27T00:00:00",
+    }
+    assert not request.run_config
+
+
+@pytest.mark.parametrize("schedule_name", [NAMES.training_schedule, NAMES.monitoring_schedule])
+def test_task_schedules_without_tick_time_request_an_untagged_undeduplicated_run(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, schedule_name: str
 ) -> None:
     """Manual schedule evaluation has no tick for run-key deduplication and must still succeed."""
     write_derived_load(test_repo.engine, derived_hourly_load(min_hours, LAST_HOUR))
+    dagster_instance.report_runless_asset_event(AssetMaterialization(NAMES.model))
     context = build_schedule_context(
         instance=dagster_instance, resources={"time_series_repo": test_repo}
     )
 
-    execution = _schedule(NAMES.training_schedule).evaluate_tick(context)
+    [request] = _schedule(schedule_name).evaluate_tick(context).run_requests
 
-    assert [request.run_key for request in execution.run_requests] == [None]
+    assert request.run_key is None
+    assert SCHEDULED_TICK_TAG not in request.tags
 
 
 def test_monitoring_skips_until_a_model_has_been_trained(

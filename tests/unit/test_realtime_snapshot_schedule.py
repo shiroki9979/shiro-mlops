@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from dagster import build_schedule_context
 
+from shiro_mlops.pipelines.execution_origin import SCHEDULE_NAME_TAG, SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.schedules import (
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
     taipower_supply_demand_snapshot_job,
@@ -33,33 +34,31 @@ def test_realtime_job_registers_limited_op_retry_policy() -> None:
     assert policy.delay == 10
 
 
-def test_realtime_schedule_cron_and_shared_tick_config() -> None:
-    """排程應每 10 分鐘觸發，並對三資產注入相同 observed_at。"""
+def test_realtime_schedule_runs_every_ten_minutes_in_taiwan_time() -> None:
     assert taipower_supply_demand_snapshot_schedule.cron_schedule == "*/10 * * * *"
     assert taipower_supply_demand_snapshot_schedule.execution_timezone == "Asia/Taipei"
 
+
+def test_realtime_schedule_tags_the_run_with_its_taiwan_local_tick() -> None:
+    """三個快照從同一個 run 標籤取得 tick，不再各自帶 observed_at 設定。"""
     context = build_schedule_context(
-        scheduled_execution_time=datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo("Asia/Taipei"))
+        scheduled_execution_time=datetime(2026, 9, 5, 9, 30, tzinfo=ZoneInfo("UTC"))
     )
-    execution = taipower_supply_demand_snapshot_schedule.evaluate_tick(context)
-    assert execution.run_requests is not None
-    assert len(execution.run_requests) == 1
+    [request] = taipower_supply_demand_snapshot_schedule.evaluate_tick(context).run_requests
 
-    request = execution.run_requests[0]
     assert request.run_key == "2026-09-05T17:30:00"
-    ops_config = request.run_config["ops"]
-    observed_values = {
-        ops_config[asset_name]["config"]["observed_at"]
-        for asset_name in TAIPOWER_REALTIME_SNAPSHOT_ASSETS
+    assert request.tags == {
+        SCHEDULE_NAME_TAG: "taipower_supply_demand_snapshot_schedule",
+        SCHEDULED_TICK_TAG: "2026-09-05T17:30:00",
     }
-    assert observed_values == {"2026-09-05T17:30:00"}
+    assert not request.run_config
 
 
-def test_realtime_schedule_without_tick_time_requests_an_unkeyed_unconfigured_run() -> None:
-    """Manual evaluation without a tick requests a run with no run key and no shared observed_at."""
+def test_realtime_schedule_without_tick_time_requests_an_unkeyed_untagged_run() -> None:
+    """無 tick 的評估不帶 run key 與 tick 標籤；三個快照退回 run 建立時刻的 slot。"""
     execution = taipower_supply_demand_snapshot_schedule.evaluate_tick(build_schedule_context())
 
-    assert execution.run_requests is not None
-    request = execution.run_requests[0]
+    [request] = execution.run_requests
     assert request.run_key is None
-    assert request.run_config == {}
+    assert SCHEDULED_TICK_TAG not in request.tags
+    assert not request.run_config

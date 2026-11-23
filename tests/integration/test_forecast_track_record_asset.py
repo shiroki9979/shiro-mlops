@@ -5,20 +5,33 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
-from dagster import AssetKey, build_input_context, materialize
+from dagster import (
+    AssetKey,
+    build_input_context,
+    materialize,
+)
 
 from shiro_mlops.core.io_managers import get_parquet_io_manager
+from shiro_mlops.data.forecast_track_record import TrackRecordWindow
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.pipelines.execution_origin import SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.forecast_track_record import (
     FORECAST_TRACK_RECORD_ASSET,
     forecast_track_record,
+    forecast_track_record_schedule,
 )
-from tests.helpers import write_derived_load
+from tests.helpers import (
+    REEXECUTION,
+    job_retrying_once_at_once,
+    run_creation_time,
+    scheduled_run_tags,
+    write_derived_load,
+)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # 排程 tick 為 10:25，統計截至時刻取整點 10:00。
-TICK = "2026-11-20T10:25:00"
+TICK = datetime(2026, 11, 20, 10, 25, tzinfo=TAIPEI)
 CUTOFF = datetime(2026, 11, 20, 10, 0)
 
 
@@ -50,19 +63,21 @@ def _observe(repo: TimeSeriesRepository, hours: list[datetime]) -> None:
     )
 
 
-def _compile(repo: TimeSeriesRepository, tmp_path, instance, *, tick: str | None = TICK):
-    run_config = (
-        {"ops": {FORECAST_TRACK_RECORD_ASSET: {"config": {"scheduled_at": tick}}}}
-        if tick is not None
-        else None
-    )
+def _scheduled_tags() -> dict[str, str]:
+    return scheduled_run_tags(forecast_track_record_schedule, TICK)
+
+
+def _compile(
+    repo: TimeSeriesRepository, tmp_path, instance, run_tags: dict[str, str] | None = None
+):
+    """Compile in a run tagged ``run_tags``; by default the run the 10:25 tick launches."""
     return materialize(
         [forecast_track_record],
         resources={
             "time_series_repo": repo,
             "io_manager": get_parquet_io_manager(data_dir=tmp_path),
         },
-        run_config=run_config,
+        tags=_scheduled_tags() if run_tags is None else run_tags,
         instance=instance,
     )
 
@@ -108,18 +123,71 @@ def test_scheduled_run_counts_up_to_the_tick_hour_and_below_7_days_stores_no_met
     }
 
 
-def test_manual_run_cuts_off_at_the_current_hour(
-    test_repo: TimeSeriesRepository, tmp_path, dagster_instance
+@pytest.mark.parametrize(
+    "run_tags",
+    [
+        pytest.param({}, id="manual"),
+        pytest.param({SCHEDULED_TICK_TAG: "2026-11-20T10:25:00"}, id="tick-tag-typed-by-hand"),
+        pytest.param({**_scheduled_tags(), **REEXECUTION}, id="re-execution-of-the-tick-run"),
+    ],
+)
+def test_a_run_without_a_scheduled_tick_cuts_off_at_the_hour_it_was_created(
+    test_repo: TimeSeriesRepository, tmp_path, dagster_instance, run_tags: dict[str, str]
 ) -> None:
-    def current_hour() -> datetime:
-        return datetime.now(TAIPEI).replace(tzinfo=None, minute=0, second=0, microsecond=0)
-
-    before = current_hour()
-    result = _compile(test_repo, tmp_path, dagster_instance, tick=None)
-    after = current_hour()
+    """A re-execution runs later than its tick; an earlier cutoff would replace the latest record."""
+    result = _compile(test_repo, tmp_path, dagster_instance, run_tags)
 
     assert result.success
-    assert datetime.fromisoformat(_artifact(tmp_path)["cutoff"]) in {before, after}
+    cutoff = datetime.fromisoformat(_artifact(tmp_path)["cutoff"])
+    assert cutoff == run_creation_time(dagster_instance, result.run_id).replace(
+        minute=0, second=0, microsecond=0
+    )
+    assert cutoff != CUTOFF
+
+
+class _FirstFetchFails:
+    """The track record store behind a brief database outage that ends before the retry."""
+
+    def __init__(self, repo: TimeSeriesRepository) -> None:
+        self._store = repo.forecast_track_record_store
+        self.windows: list[TrackRecordWindow] = []
+
+    @property
+    def forecast_track_record_store(self) -> "_FirstFetchFails":
+        return self
+
+    def fetch_pairs(self, window: TrackRecordWindow):
+        self.windows.append(window)
+        if len(self.windows) == 1:
+            raise ConnectionError("database briefly unreachable")
+        return self._store.fetch_pairs(window)
+
+
+@pytest.mark.parametrize(
+    "run_tags",
+    [pytest.param(None, id="scheduled"), pytest.param({}, id="manual")],
+)
+def test_a_retry_in_the_same_run_compiles_the_same_window(
+    test_repo: TimeSeriesRepository, tmp_path, dagster_instance, run_tags: dict[str, str] | None
+) -> None:
+    flaky = _FirstFetchFails(test_repo)
+    # 正式 job 每次重試間隔六十秒；此處只改為立即重試，資產與 run 標籤與排程 run 相同。
+    job = job_retrying_once_at_once(
+        forecast_track_record,
+        resources={
+            "time_series_repo": flaky,
+            "io_manager": get_parquet_io_manager(data_dir=tmp_path),
+        },
+    )
+
+    result = job.execute_in_process(
+        instance=dagster_instance, tags=_scheduled_tags() if run_tags is None else run_tags
+    )
+
+    assert result.success
+    first, retried = flaky.windows
+    assert retried == first
+    assert datetime.fromisoformat(_artifact(tmp_path)["cutoff"]) == first.end
 
 
 def test_window_spans_the_720_target_hours_before_the_cutoff(

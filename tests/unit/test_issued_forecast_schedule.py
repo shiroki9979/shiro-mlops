@@ -8,6 +8,7 @@ import pytest
 from dagster import AssetKey, AssetMaterialization, build_schedule_context
 
 from shiro_mlops.pipelines.definitions import defs
+from shiro_mlops.pipelines.execution_origin import SCHEDULE_NAME_TAG, SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.issued_forecast import (
     ISSUED_FORECAST_ASSET,
     issued_forecast,
@@ -65,15 +66,18 @@ def test_schedule_skips_until_the_forecast_model_has_been_trained(dagster_instan
 def test_schedule_tick_becomes_the_taiwan_local_issue_time(
     dagster_instance, isolated_models_dir: Path
 ) -> None:
+    """The tick reaches the asset as a run tag, never as config an operator could type in."""
     _train(dagster_instance, isolated_models_dir)
 
     execution = _evaluate(dagster_instance)
 
     [request] = execution.run_requests
     assert request.run_key == "2026-11-20T10:15:00"
-    assert request.run_config == {
-        "ops": {ISSUED_FORECAST_ASSET: {"config": {"issued_at": "2026-11-20T10:15:00"}}}
+    assert request.tags == {
+        SCHEDULE_NAME_TAG: "issued_forecast_schedule",
+        SCHEDULED_TICK_TAG: "2026-11-20T10:15:00",
     }
+    assert not request.run_config
 
 
 def test_schedule_evaluated_without_a_tick_requests_nothing(

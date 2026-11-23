@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.pipelines.execution_origin import SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.issued_forecast import (
     ISSUED_FORECAST_ASSET,
     ISSUED_FORECAST_JOB,
@@ -304,10 +305,8 @@ def test_hand_launched_run_with_an_issue_time_but_no_tick_issues_nothing(
 ) -> None:
     """Typing an issue time into the launchpad is not a scheduled issue; nothing is backfilled."""
     result = _job(repo).execute_in_process(
-        run_config={
-            "ops": {ISSUED_FORECAST_ASSET: {"config": {"issued_at": ISSUED_AT.isoformat()}}}
-        },
         instance=dagster_instance,
+        tags={SCHEDULED_TICK_TAG: ISSUED_AT.isoformat()},
         raise_on_error=False,
     )
 
