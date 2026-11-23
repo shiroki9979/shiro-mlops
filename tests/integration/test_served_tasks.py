@@ -14,7 +14,9 @@ from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.service.served_tasks import (
+    Failed,
     Loaded,
     LoadFailed,
     ServedModel,
@@ -25,7 +27,7 @@ from shiro_mlops.service.served_tasks import (
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, UnknownTaskError, deployed_task
 from shiro_mlops.tasks.model_store import model_directory, save_model
-from shiro_mlops.tasks.runner import TaskRuntime
+from shiro_mlops.tasks.runner import InputsUnavailable, Ready, TaskRuntime
 from shiro_mlops.tasks.types.base import TaskModel
 from tests.helpers import (
     canonical_observation_batch,
@@ -78,7 +80,7 @@ def test_a_loaded_model_is_ready_and_predicts_the_requested_horizon(
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
     outcome = served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
 
-    assert (readiness.ready, readiness.model_loaded, readiness.mode) == (True, True, "degraded")
+    assert readiness == Ready(ForecastMode.DEGRADED)
     assert outcome.mode == "degraded"
     assert outcome.predictions["datetime"].tolist() == list(
         pd.date_range(LAST_HOUR + pd.Timedelta(hours=1), periods=3, freq="h")
@@ -94,9 +96,7 @@ def test_an_untrained_task_is_not_ready_and_refuses_to_predict(
     with pytest.raises(ServingUnavailableError, match=UNTRAINED_REASON):
         served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
 
-    assert not readiness.ready
-    assert not readiness.model_loaded
-    assert readiness.reason == UNTRAINED_REASON
+    assert readiness == Untrained()
     model = served.served_models()[DYNAMIC_HORIZON_FORECAST]
     assert model == ServedModel(deployed_task(DYNAMIC_HORIZON_FORECAST).task_type, Untrained())
     assert model.state.reason == UNTRAINED_REASON
@@ -125,7 +125,7 @@ def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
     load_failure = models[broken.task_id].state
     assert isinstance(load_failure, LoadFailed)
     assert load_failure.reason.startswith(failed)
-    assert served.readiness(broken.task_id).reason == load_failure.reason
+    assert served.readiness(broken.task_id) == load_failure
     with pytest.raises(ServingUnavailableError, match=f"^{failed}"):
         served.predict(broken.task_id, horizon_hours=3)
     loaded = models[other.task_id].state
@@ -172,7 +172,7 @@ def test_a_fresh_forecast_keeps_the_task_ready_and_predicting_in_normal_mode(
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
     outcome = served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
 
-    assert (readiness.ready, readiness.mode) == (True, "normal")
+    assert readiness == Ready(ForecastMode.NORMAL)
     assert outcome.mode == "normal"
     assert outcome.weather["temperature"].tolist() == [30.0] * 3
 
@@ -190,7 +190,7 @@ def test_a_stale_load_anchor_makes_the_task_unavailable(
     with pytest.raises(ServingUnavailableError, match="^Stale load anchor"):
         served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
 
-    assert (readiness.ready, readiness.model_loaded) == (False, True)
+    assert isinstance(readiness, InputsUnavailable)
     assert readiness.reason.startswith("Stale load anchor")
 
 
@@ -210,17 +210,16 @@ def test_unreachable_persistence_makes_the_task_unavailable(fitted_task_model: T
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
     with pytest.raises(
         ServingUnavailableError, match="^Persistence unavailable: .*connection refused"
-    ):
+    ) as refused:
         served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
 
-    assert (readiness.ready, readiness.model_loaded) == (False, True)
-    assert "connection refused" in readiness.reason
+    assert readiness == InputsUnavailable(str(refused.value))
 
 
 def test_unexpected_errors_fail_with_their_traceback_logged(
     fitted_task_model: TaskModel, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Readiness reports an unexpected error as not ready; prediction fails with it."""
+    """Readiness reports an unexpected error as a failed check; prediction fails with it."""
     served = _serving(fitted_task_model, _broken_runtime(RuntimeError("feature column mismatch")))
 
     with caplog.at_level("ERROR"):
@@ -228,7 +227,7 @@ def test_unexpected_errors_fail_with_their_traceback_logged(
         with pytest.raises(ServingFailedError, match="^Prediction error: feature column mismatch$"):
             served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
 
-    assert (readiness.ready, readiness.reason) == (False, "feature column mismatch")
+    assert readiness == Failed("feature column mismatch")
     logged = [record for record in caplog.records if record.exc_info]
     assert len(logged) == 2
     assert all(DYNAMIC_HORIZON_FORECAST in record.getMessage() for record in logged)

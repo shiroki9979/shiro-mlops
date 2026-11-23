@@ -10,6 +10,7 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import deployed_task
 from shiro_mlops.tasks.runner import (
+    InputsUnavailable,
     InsufficientLoadHistoryError,
     StaleLoadAnchorError,
     TaskNotReady,
@@ -139,7 +140,7 @@ def test_threshold_window_without_enough_load_history_is_unavailable(
         predict_task(task, model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS)
 
     readiness = check_task_ready(task, model, runtime, as_of=FRESH_AS_OF)
-    assert not readiness.ready
+    assert isinstance(readiness, InputsUnavailable)
     assert "168-hour window" in readiness.reason
 
 

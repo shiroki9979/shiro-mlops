@@ -21,6 +21,7 @@ from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
 from shiro_mlops.service.served_tasks import (
+    Failed,
     Loaded,
     LoadFailed,
     ServedModel,
@@ -36,7 +37,7 @@ from shiro_mlops.tasks.deployed import (
     deployed_task,
     deployed_tasks,
 )
-from shiro_mlops.tasks.runner import PredictionOutcome, TaskRuntime
+from shiro_mlops.tasks.runner import InputsUnavailable, PredictionOutcome, Ready, TaskRuntime
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import WeatherEchoingItem
 
@@ -283,13 +284,19 @@ def _task_or_404(served: ServedTasks, task_id: str) -> TaskDefinition:
 
 
 def _readiness(served: ServedTasks, task_id: str) -> ReadyResponse:
-    readiness = served.readiness(task_id)
-    if not readiness.ready:
-        return _not_ready(model_loaded=readiness.model_loaded, reason=readiness.reason)
-    return ReadyResponse(status="ready", mode=readiness.mode, model_loaded=True)
+    """A failed readiness check answers 503 like any other not-ready state, never 500."""
+    match served.readiness(task_id):
+        case Ready(mode=mode):
+            return ReadyResponse(status="ready", mode=mode, model_loaded=True)
+        case Untrained() | LoadFailed() as missing:
+            return _not_ready(model_loaded=False, reason=missing.reason)
+        case InputsUnavailable() | Failed() as unserved:
+            return _not_ready(model_loaded=True, reason=unserved.reason)
+        case unprojected:
+            assert_never(unprojected)
 
 
-def _not_ready(*, model_loaded: bool, reason: str | None) -> JSONResponse:
+def _not_ready(*, model_loaded: bool, reason: str) -> JSONResponse:
     response = ReadyResponse(status="not_ready", model_loaded=model_loaded, reason=reason)
     return JSONResponse(status_code=503, content=response.model_dump())
 

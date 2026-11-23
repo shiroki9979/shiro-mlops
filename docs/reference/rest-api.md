@@ -53,6 +53,18 @@
 - **路徑**：`GET /tasks/{task_id}/ready`；`GET /ready` 為動態視界預報任務 `dynamic_horizon_forecast` 的別名，回應與 `GET /tasks/dynamic_horizon_forecast/ready` 相同。
 - **未知任務**：`task_id` 不在已部署任務設定中時回傳 HTTP 404。
 - **回應 Body**：`status`（`ready` 或 `not_ready`）、`mode`、`model_loaded`（該任務）、`reason`。`mode` 在 OpenAPI 為 `ForecastMode` enum（`normal`、`degraded`）或 `null`；未就緒時為 `null`。
+- **就緒狀態與回應的對應**：一個已部署任務的就緒狀態是封閉的六態，由 `ServedTasks.readiness` 原樣交給 HTTP adapter，只在 adapter 投影成下表的欄位與狀態碼。
+
+  | 就緒狀態 | HTTP | `status` | `mode` | `model_loaded` | `reason` |
+  | :--- | :--- | :--- | :--- | :--- | :--- |
+  | 未訓練 | 503 | `not_ready` | `null` | `false` | `Model is not loaded or trained yet.` |
+  | 載入失敗 | 503 | `not_ready` | `null` | `false` | `Model failed to load: <例外類型>: <訊息>` |
+  | 輸入不可用 | 503 | `not_ready` | `null` | `true` | runner 拒絕的訊息（`TaskUnavailableError`，例如負載起點過舊）；持久層不可用（SQLAlchemy 錯誤）時為 `Persistence unavailable: <訊息>` |
+  | 檢查失敗 | 503 | `not_ready` | `null` | `true` | 非預期錯誤的訊息 |
+  | 就緒（正常） | 200 | `ready` | `normal` | `true` | `null` |
+  | 就緒（降級） | 200 | `ready` | `degraded` | `true` | `null` |
+
+- **例外分類**：就緒檢查與預測（[§4](#4-通用任務推論) 的錯誤對應）共用同一條規則。runner 的拒絕與持久層不可用歸為輸入不可用，不記 traceback；持久層不可用時 `reason` 與該任務 `/predict` 的 `detail` 同為 `Persistence unavailable: <訊息>`。其他非預期錯誤記下 traceback 後歸為失敗。兩者只差在 HTTP 對映：就緒檢查的失敗回傳 HTTP 503 `not_ready`（traceback 寫入日誌），不回 500；預測的失敗回傳 HTTP 500。
 - **語意**：模型已載入、負載起點未過舊，且預報天氣任務的正常或降級氣象來源可涵蓋完整 168 小時時回傳 HTTP 200；body 必須揭露 `mode: normal` 或 `mode: degraded`。模型或必要資料不足、或負載起點過舊時回傳 HTTP 503，並列出未就緒原因。
 - **觀測天氣任務**（任務類型 `requirements().weather` 為 `OBSERVED`，例如 `load_pattern_anomaly`）：不讀預報、不降級；模型已載入、負載起點未過舊，且錨點結束小時有完整的負載與測站觀測評分窗時回傳 HTTP 200 與 `mode: normal`，否則回傳 HTTP 503。
 - **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過任務設定 `[policies].stale_anchor_max_lag_hours`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。

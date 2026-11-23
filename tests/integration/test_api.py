@@ -374,6 +374,28 @@ def test_unexpected_task_errors_answer_not_ready_and_500() -> None:
     assert predict.json()["detail"] == "Prediction error: feature column mismatch"
 
 
+def test_unreachable_persistence_gives_ready_and_predict_one_reason_and_no_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An outage is an expected unavailability: both endpoints say the same, with nothing to debug."""
+    runtime = _fake_runtime()
+    runtime.hourly_actual_load.latest_observation.side_effect = OperationalError(
+        "SELECT 1", {}, Exception("connection refused")
+    )
+    client = _client({DYNAMIC_HORIZON_FORECAST: MagicMock()}, runtime)
+
+    with caplog.at_level("DEBUG"):
+        ready = client.get("/ready")
+        predict = client.post("/predict", json={"horizon_hours": 1})
+
+    assert ready.status_code == predict.status_code == 503
+    assert ready.json()["status"] == "not_ready"
+    assert ready.json()["reason"].startswith("Persistence unavailable: ")
+    assert "connection refused" in ready.json()["reason"]
+    assert ready.json()["reason"] == predict.json()["detail"]
+    assert not [record for record in caplog.records if record.exc_info]
+
+
 def test_task_ready_matches_the_ready_alias(
     fitted_task_model: TaskModel,
     taipower_raw_df: pd.DataFrame,
@@ -504,6 +526,25 @@ def test_health_fails_on_a_model_state_it_does_not_project() -> None:
 
     with pytest.raises(AssertionError, match="Unprojected"):
         client.get("/health")
+
+
+def test_ready_fails_on_a_readiness_state_it_does_not_project() -> None:
+    """A readiness state without its own case must not pass for one of the known states."""
+
+    @dataclass(frozen=True)
+    class Unprojected:
+        pass
+
+    served = ServedTasks(
+        deployed_tasks(),
+        {DYNAMIC_HORIZON_FORECAST: Unprojected()},
+        runtime=_fake_runtime(),
+        clock=lambda: FRESH_REQUEST_TIME,
+    )
+    client = TestClient(create_app(repository=MagicMock(), served_tasks=served))
+
+    with pytest.raises(AssertionError, match="Unprojected"):
+        client.get("/ready")
 
 
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
