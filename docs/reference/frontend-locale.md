@@ -1,7 +1,7 @@
 # 前端語系與格式
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-20
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 6 節拆出。
@@ -24,7 +24,7 @@
 | 類別 | 範圍 |
 | :--- | :--- |
 | 經字典翻譯 | UI 字串、錯誤與空狀態訊息、Data Explorer 欄名與布林值、API 狀態 enum（`overall`、`availability`、`freshness`、`completeness`、audit `status`） |
-| 維持原值 | 區域名、測站編號、機組名稱、`dataset_id` 等資料內容值；篩選 placeholder 中的合法輸入值；後端 `ApiError` 訊息（`detail`）；CSV 表頭與內容；請求參數與 cursor |
+| 維持原值 | 區域名、測站編號、機組名稱、`dataset_id` 等資料內容值；篩選 placeholder 中的合法輸入值；後端 `ApiError` 訊息（`detail`）與回應不符 schema 的 `InvalidResponseError` 訊息；CSV 表頭與內容；請求參數與 cursor |
 
 `GET /data/status` 回傳的 `label` 不直接顯示；前端以 dataset `id` 查字典，僅在 id 不在 catalog 時回退為 `label`。
 
