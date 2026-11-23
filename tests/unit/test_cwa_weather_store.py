@@ -8,9 +8,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.data.cwa_client import CWAObservationBatch
+from shiro_mlops.data.cwa_client import CWALocation, CWAObservationBatch
 from shiro_mlops.data.cwa_weather_store import FORECAST_ROW_COLUMNS, CWAWeatherStore
 from tests.helpers import canonical_observation_batch
+
+TAIPEI = CWALocation("Taipei", "466920", "63000000")
 
 
 @pytest.fixture
@@ -53,7 +55,7 @@ def test_observation_batch_is_read_back_as_reference_point_weather(
     affected = store.upsert_cwa_observation_batch(cwa_observation_batch)
     assert affected == len(cwa_obs_df)
 
-    fetched_df = store.fetch_weather_range(reference_point="Taipei")
+    fetched_df = store.fetch_weather_range(reference_point=TAIPEI)
     assert len(fetched_df) == len(cwa_obs_df)
     assert "time" in fetched_df.columns
     assert "location" in fetched_df.columns
@@ -70,29 +72,33 @@ def test_fetch_weather_range_keeps_canonical_station_identity(
     """Training source rows retain StationId so strict gap handling is selected."""
     store.upsert_cwa_observation_batch(cwa_observation_batch)
 
-    weather = store.fetch_weather_range(reference_point="Taipei")
+    weather = store.fetch_weather_range(reference_point=TAIPEI)
 
     assert set(weather["station_id"]) == {"466920"}
 
 
-def test_fetch_weather_range_uses_configured_taipei_station(
+def test_reference_point_weather_reads_the_given_location_outside_the_ingestion_catalog(
     store: CWAWeatherStore,
     cwa_observation_batch,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        settings,
-        "CWA_LOCATION_ALLOWLIST",
-        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    """The station and the alias both come from the reference point passed in."""
+    hualien = CWALocation("Hualien", "466990", "10015000")
+    assert hualien.alias not in settings.cwa_locations
+    hualien_observation = replace(
+        cwa_observation_batch.observations[0], station_id=hualien.station_id
     )
-    observation = replace(cwa_observation_batch.observations[0], station_id="999999")
-    store.upsert_cwa_observation_batch(replace(cwa_observation_batch, observations=(observation,)))
+    store.upsert_cwa_observation_batch(
+        replace(
+            cwa_observation_batch,
+            observations=(*cwa_observation_batch.observations, hualien_observation),
+        )
+    )
 
-    weather = store.fetch_weather_range(reference_point="Taipei")
+    weather = store.fetch_weather_range(reference_point=hualien)
 
-    assert len(weather) == 1
-    assert weather.iloc[0]["station_id"] == "999999"
-    assert weather.iloc[0]["location"] == "Taipei"
+    assert list(weather["station_id"]) == ["466990"]
+    assert list(weather["location"]) == ["Hualien"]
+    assert weather.iloc[0]["temperature"] == pytest.approx(27.8)
 
 
 def test_observation_batch_upsert_updates_an_observed_station_hour(store: CWAWeatherStore):
@@ -121,7 +127,7 @@ def test_observation_batch_upsert_updates_an_observed_station_hour(store: CWAWea
     )
     store.upsert_cwa_observation_batch(canonical_observation_batch(updated_df))
 
-    fetched_df = store.fetch_weather_range(reference_point="Taipei")
+    fetched_df = store.fetch_weather_range(reference_point=TAIPEI)
     assert len(fetched_df) == 1
     assert fetched_df.iloc[0]["temperature"] == pytest.approx(29.5)
     assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(75.0)
@@ -156,7 +162,7 @@ def test_observation_batch_upsert_preserves_non_null_fields_on_partial_update(
     )
     store.upsert_cwa_observation_batch(canonical_observation_batch(partial_df))
 
-    fetched_df = store.fetch_weather_range(reference_point="Taipei")
+    fetched_df = store.fetch_weather_range(reference_point=TAIPEI)
     assert len(fetched_df) == 1
     assert fetched_df.iloc[0]["temperature"] == pytest.approx(31.0)
     # Relative humidity preserved from initial insert
@@ -192,7 +198,7 @@ def test_fetch_weather_range_filters_and_sorting(store: CWAWeatherStore):
     filtered_df = store.fetch_weather_range(
         start_time="2026-08-20 01:00:00",
         end_time="2026-08-20 04:00:00",
-        reference_point="Taipei",
+        reference_point=TAIPEI,
     )
     assert len(filtered_df) == 1
     assert filtered_df.iloc[0]["temperature"] == pytest.approx(26.9)
@@ -209,12 +215,12 @@ def test_fetch_weather_range_propagates_database_errors(
     monkeypatch.setattr(store, "fetch_cwa_station_observations", unavailable)
 
     with pytest.raises(OperationalError):
-        store.fetch_weather_range(reference_point="Taipei")
+        store.fetch_weather_range(reference_point=TAIPEI)
 
 
 def test_fetch_empty_results_schema(store: CWAWeatherStore):
     """Verify the weather fetch on empty tables returns an empty DataFrame with typed columns."""
-    weather_df = store.fetch_weather_range()
+    weather_df = store.fetch_weather_range(reference_point=TAIPEI)
     assert weather_df.empty
     assert "time" in weather_df.columns
     assert "location" in weather_df.columns

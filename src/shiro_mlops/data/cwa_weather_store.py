@@ -13,7 +13,6 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import LOCATION_COL, RELATIVE_HUMIDITY_COL, TEMPERATURE_COL
 from shiro_mlops.core.storage_time import (
     from_storage_time,
@@ -23,8 +22,8 @@ from shiro_mlops.core.storage_time import (
 )
 from shiro_mlops.data.cwa_client import (
     CWAForecastRelease,
+    CWALocation,
     CWAObservationBatch,
-    resolve_cwa_location,
 )
 from shiro_mlops.data.repository_utils import serialize_raw_payload
 
@@ -238,7 +237,11 @@ def _forecast_rows_in_taiwan_time(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 class CWAWeatherStore:
-    """Canonical CWA station observations and township forecast vintages."""
+    """Canonical CWA station observations and township forecast vintages.
+
+    The reference point weather read takes its station and alias from the ``CWALocation``
+    passed in; the store never consults the global CWA ingestion catalog.
+    """
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
@@ -466,36 +469,32 @@ class CWAWeatherStore:
 
     def fetch_weather_range(
         self,
+        *,
+        reference_point: CWALocation,
         start_time: datetime | str | None = None,
         end_time: datetime | str | None = None,
-        reference_point: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch historical CWA station observations for one weather reference point.
+        """Fetch historical CWA station observations of one weather reference point.
 
         Parameters
         ----------
+        reference_point : CWALocation
+            The weather reference point whose station is read; the result's
+            ``location`` column carries its alias.
         start_time : datetime | str | None
             Start of time filter range (inclusive).
         end_time : datetime | str | None
             End of time filter range (inclusive).
-        reference_point : str | None
-            Optional weather reference point alias from the CWA ingestion catalog;
-            the result's ``location`` column carries that alias.
 
         Returns
         -------
         pd.DataFrame
             Sorted DataFrame of weather observation records.
         """
-        station_id = (
-            resolve_cwa_location(settings.cwa_locations, reference_point).station_id
-            if reference_point is not None
-            else None
-        )
         canonical = self.fetch_cwa_station_observations(
             start_time=start_time,
             end_time=end_time,
-            station_id=station_id,
+            station_id=reference_point.station_id,
         )
         result = canonical.rename(
             columns={
@@ -504,10 +503,7 @@ class CWAWeatherStore:
                 "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
             }
         )
-        aliases_by_station = {
-            value.station_id: value.alias for value in settings.cwa_locations.values()
-        }
-        result[LOCATION_COL] = result["station_id"].map(aliases_by_station)
+        result[LOCATION_COL] = reference_point.alias
         if result.empty:
             result["time"] = pd.to_datetime(result["time"])
         return result[
