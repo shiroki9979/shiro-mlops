@@ -752,6 +752,18 @@ def test_reference_point_without_any_fallback_makes_the_forecast_unavailable(
     assert not check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF).ready
 
 
+def test_first_reference_point_without_coverage_in_order_is_the_one_named(
+    task: TaskDefinition, runtime: TaskRuntime, model: TaskModel
+) -> None:
+    """Taichung and Kaohsiung both lack coverage; the refusal names Taichung, listed first."""
+    runtime.cwa_weather.upsert_cwa_forecast_releases([_release_for("Taipei")])
+
+    with pytest.raises(WeatherUnavailableError, match=r"^Taichung: No weather coverage for "):
+        predict_task(
+            _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
+        )
+
+
 def test_observed_prediction_weights_every_point_and_reports_each_observation(
     anomaly_task: TaskDefinition, runtime: TaskRuntime, anomaly_model: TaskModel
 ) -> None:

@@ -143,7 +143,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - 每個發布時刻一列，由 `issued_forecast_job`（[Dagster 排程](dagster-schedules.md)）寫入；隨需 `/predict` 不寫入。一般資料表，非 hypertable。
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：發布時刻，即排程 tick 時刻與預報的 `as_of`，不取整點（例如 `10:15`）。
      - `load_anchor` (TIMESTAMPTZ, NOT NULL)：負載起點，即遞迴預報起算的最新實際負載小時。
-     - `status` (VARCHAR(16), NOT NULL)：運行狀態 `normal`／`degraded`，即預報當時的天氣解析模式（§3.3）。
+     - `status` (VARCHAR(16), NOT NULL)：預報運行狀態（[GLOSSARY](../../GLOSSARY.md) §3）`normal`／`degraded`，由預報當時各天氣數值的來源推導（§3.3）。資料庫不設 CHECK 約束；`IssuedForecast` 建構時以 `ForecastMode` 驗證，寫入與讀出遇到其他值皆拒絕（`ValueError`）。
      - `model_sha256` (VARCHAR(64), NOT NULL)：模型版本識別，發布時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)），不依賴 MLflow。
      - `mlflow_model_version` (VARCHAR(64))：MLflow 版本附註，可為 `NULL`；只作參考，模型版本以 `model_sha256` 為準。發布時從 Dagster instance 讀 `dynamic_horizon_forecast__model` 最新一次 materialization 的 metadata（[Dagster 排程](dagster-schedules.md)）：只有其 `model_sha256` 等於本次實際載入模型的雜湊時，才填入其 `mlflow_model_version`；雜湊不符（例如訓練恰在載入模型後完成）、缺少 metadata 或 MLflow 版本為空時為 `NULL`（寧缺勿錯）。不另呼叫 MLflow，附註的有無不影響是否發布。
      - **Constraint**: `PRIMARY KEY (issued_at)`；只新增、沒有更新路徑。同一發布時刻已存在時以 `ON CONFLICT (issued_at) DO NOTHING` 略過，header 與步數皆不改動。
