@@ -4,10 +4,12 @@ Each task's model is loaded once into its state, keeping the sha256 of the direc
 version it was read from. ``served_models`` hands callers that state itself, not flags derived from it.
 Without a model, the state's ``reason`` is the only source of the text that model
 state, readiness and prediction report. Readiness is the closed ``ReadinessState``
-union, handed to callers as it is, never as flags. ``_classify`` is the one rule for
-what an error means to both readiness and prediction: readiness returns its verdict as
-a state, prediction raises it as ``ServingUnavailableError`` (also raised without a
-model) or ``ServingFailedError``.
+union, handed to callers as it is, never as flags. ``_classify`` decides what an error
+that escapes the runner means. ``predict_task`` raises the runner's refusal, so a
+refused prediction passes through it; ``check_task_ready`` returns its own refusal as
+``InputsUnavailable``, so from readiness ``_classify`` sees only persistence and
+unexpected errors. Readiness returns the verdict as a state; prediction raises it as
+``ServingUnavailableError`` (also raised without a model) or ``ServingFailedError``.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Self
+from typing import ClassVar, Self, assert_never
 
 import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
@@ -154,20 +156,24 @@ class ServedTasks:
                 horizon_hours=horizon_hours,
             )
         except Exception as error:
-            verdict = _classify(error, activity="Prediction", task_id=task_id)
-            if isinstance(verdict, InputsUnavailable):
-                raise ServingUnavailableError(verdict.reason) from error
-            raise ServingFailedError(f"Prediction error: {verdict.reason}") from error
+            match _classify(error, activity="Prediction", task_id=task_id):
+                case InputsUnavailable(reason=reason):
+                    raise ServingUnavailableError(reason) from error
+                case Failed(reason=reason):
+                    raise ServingFailedError(f"Prediction error: {reason}") from error
+                case unraised:
+                    assert_never(unraised)
 
     def _state(self, task_id: str) -> ModelState:
         return self._models.get(self.task(task_id).task_id, Untrained())
 
 
 def _classify(error: Exception, *, activity: str, task_id: str) -> InputsUnavailable | Failed:
-    """What an error means, to readiness and prediction alike.
+    """What an error that escaped the runner means.
 
     A runner refusal or unreachable persistence leaves the inputs unavailable; anything
-    else failed, and only then is the traceback logged.
+    else failed, and only then is the traceback logged. Only ``predict_task`` lets a
+    refusal escape: ``check_task_ready`` returns its own as ``InputsUnavailable``.
     """
     match error:
         case TaskUnavailableError():

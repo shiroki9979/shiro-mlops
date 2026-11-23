@@ -385,7 +385,7 @@ def test_forecast_task_readiness_resolves_weather_for_the_full_horizon(
 
     readiness = check_task_ready(task, model, runtime, as_of=FRESH_AS_OF)
 
-    assert isinstance(readiness, Ready)
+    assert readiness == Ready(ForecastMode.DEGRADED)
     assert requested_horizons == [168]
 
 
@@ -463,9 +463,10 @@ def test_missing_load_hour_in_the_lookback_refuses_before_reading_weather(
             as_of=FRESH_AS_OF,
             horizon_hours=HORIZON_HOURS,
         )
-    assert isinstance(
-        check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF),
-        InputsUnavailable,
+    readiness = check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == InputsUnavailable(
+        "Only 167 nationwide load hours in the 168-hour window ending at anchor "
+        f"{ANCHOR.isoformat()}; 168 required."
     )
 
     assert weather_reads == []
@@ -482,9 +483,8 @@ def test_missing_load_hour_before_the_lookback_still_predicts(
     )
 
     assert len(outcome.predictions) == HORIZON_HOURS
-    assert isinstance(
-        check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF), Ready
-    )
+    readiness = check_task_ready(task_trainable_with_one_gap, model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == Ready(ForecastMode.DEGRADED)
 
 
 def test_subject_without_history_raises_missing_load_history(
@@ -588,8 +588,11 @@ def test_observed_prediction_without_observations_is_unavailable(
     with pytest.raises(WeatherUnavailableError, match="No observed weather"):
         predict_task(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF, horizon_hours=1)
 
-    assert isinstance(
-        check_task_ready(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF), InputsUnavailable
+    history_start = ANCHOR - pd.Timedelta(hours=24 + 168)
+    readiness = check_task_ready(elsewhere, anomaly_model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == InputsUnavailable(
+        f"No observed weather at Kaohsiung between {history_start.isoformat()} "
+        f"and {ANCHOR.isoformat()}."
     )
 
 
@@ -765,8 +768,10 @@ def test_reference_point_without_any_fallback_makes_the_forecast_unavailable(
         predict_task(
             _weighted(task), model, runtime, as_of=FRESH_AS_OF, horizon_hours=HORIZON_HOURS
         )
-    assert isinstance(
-        check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF), InputsUnavailable
+    first_forecast_hour = ANCHOR + pd.Timedelta(hours=1)
+    readiness = check_task_ready(_weighted(task), model, runtime, as_of=FRESH_AS_OF)
+    assert readiness == InputsUnavailable(
+        f"Kaohsiung: No weather coverage for {first_forecast_hour.isoformat()} temperature"
     )
 
 
