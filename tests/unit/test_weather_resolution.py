@@ -11,6 +11,7 @@ from shiro_mlops.core.config import Settings, settings
 from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import (
+    WeatherCoverageError,
     WeatherSourceKind,
     WeatherValueSource,
     resolve_weather,
@@ -372,13 +373,14 @@ def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
     repository.fetch_cwa_station_observations.return_value = pd.DataFrame()
     as_of = datetime(2026, 8, 20, 12)
 
-    resolve_weather(
-        repository,
-        reference_point=TAIPEI,
-        start_time=datetime(2026, 8, 20, 13),
-        horizon_hours=24,
-        as_of=as_of,
-    )
+    with pytest.raises(WeatherCoverageError):
+        resolve_weather(
+            repository,
+            reference_point=TAIPEI,
+            start_time=datetime(2026, 8, 20, 13),
+            horizon_hours=24,
+            as_of=as_of,
+        )
 
     assert repository.fetch_cwa_station_observations.call_args.kwargs["end_time"] == as_of
     assert repository.fetch_cwa_forecast_rows.call_args.kwargs["source_updated_before"] == as_of
@@ -411,16 +413,34 @@ def test_resolver_does_not_interpolate_wind_direction() -> None:
     )
     repository.fetch_cwa_station_observations.return_value = pd.DataFrame()
 
-    result = resolve_weather(
-        repository,
-        reference_point=TAIPEI,
-        start_time=datetime(2026, 8, 20, 13),
-        horizon_hours=1,
-        as_of=datetime(2026, 8, 20, 11),
-        fields=("wind_direction",),
-    )
+    with pytest.raises(
+        WeatherCoverageError,
+        match=r"^Taipei: No weather coverage for 2026-08-20T13:00:00 wind_direction$",
+    ):
+        resolve_weather(
+            repository,
+            reference_point=TAIPEI,
+            start_time=datetime(2026, 8, 20, 13),
+            horizon_hours=1,
+            as_of=datetime(2026, 8, 20, 11),
+            fields=("wind_direction",),
+        )
 
-    assert result.mode == "unavailable"
+
+@pytest.mark.parametrize("horizon_hours", [0, -1])
+def test_resolver_rejects_a_horizon_shorter_than_one_hour(horizon_hours: int) -> None:
+    """An empty horizon is a caller contract error, not a lack of weather coverage."""
+    repository = MagicMock()
+
+    with pytest.raises(ValueError, match="horizon_hours"):
+        resolve_weather(
+            repository,
+            reference_point=TAIPEI,
+            start_time=datetime(2026, 8, 20, 13),
+            horizon_hours=horizon_hours,
+        )
+
+    repository.fetch_cwa_forecast_rows.assert_not_called()
 
 
 def test_resolver_reads_forecasts_and_observations_of_the_weather_reference_point() -> None:

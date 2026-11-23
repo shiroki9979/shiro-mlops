@@ -3,8 +3,8 @@
 The runner owns weighting as a shared component (ADR-0009), so task types keep
 receiving a single ``datetime`` + weather fields frame. Each value is the weighted
 sum over all reference points at the same hour; an hour any point lacks has no
-weighted value, and a point with no forecast nor fallback makes the whole
-resolution unavailable rather than being dropped and the rest reweighted.
+weighted value. Forecast resolutions only exist complete: a point with no forecast
+nor fallback is refused upstream, never dropped with the rest reweighted.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ class WeightedWeather:
     dataframe: pd.DataFrame
     sources: tuple[PointSources, ...]
     mode: WeatherResolutionMode
-    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,13 +89,8 @@ def weighted_resolution(
 ) -> WeightedWeather:
     """Combine per-point forecast resolutions over the same hours into weighted weather.
 
-    Degraded at any point degrades the whole result; a point that cannot cover
-    the horizon makes it unavailable, naming that point.
+    Degraded at any point degrades the whole result.
     """
-    for point in points:
-        if point.resolution.mode == "unavailable" or point.resolution.dataframe.empty:
-            reason = point.resolution.reason or "Weather coverage is unavailable."
-            return WeightedWeather(pd.DataFrame(), (), "unavailable", f"{point.alias}: {reason}")
     hours = pd.to_datetime(points[0].resolution.dataframe[DATETIME_COL]).to_numpy()
     for point in points[1:]:
         # 逐列相加前確認各點解析的是同一組小時，避免不同小時的值被靜默相加。

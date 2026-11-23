@@ -28,6 +28,7 @@ from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stal
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import (
+    WeatherCoverageError,
     WeatherResolutionMode,
     WeatherValueSource,
     resolve_weather,
@@ -396,29 +397,33 @@ def _fresh_load_anchor(
 def _resolve_future_weather(
     request: _ServingRequest, _history_start: pd.Timestamp, anchor: pd.Timestamp
 ) -> WeightedWeather:
-    """Forecasts (or degraded fallbacks) for the hours after the anchor at every reference point."""
+    """Forecasts (or degraded fallbacks) for the hours after the anchor at every reference point.
+
+    The one place a reference point's lack of weather coverage becomes the task's
+    ``WeatherUnavailableError``, so ``data/`` never depends on the task layer.
+    """
     if request.horizon_hours is None:
         raise ValueError("Forecast-weather prediction needs an explicit horizon_hours")
     fields = request.task.weather.fields
-    resolutions = [
-        PointResolution(
-            point.location.alias,
-            point.weight,
-            resolve_weather(
-                request.repository,
-                reference_point=point.location,
-                start_time=anchor + timedelta(hours=1),
-                horizon_hours=request.horizon_hours,
-                as_of=request.as_of,
-                fields=fields,
-            ),
-        )
-        for point in request.task.weather.reference_points
-    ]
-    weather = weighted_resolution(resolutions, fields)
-    if weather.mode == "unavailable" or weather.dataframe.empty:
-        raise WeatherUnavailableError(weather.reason or "Weather coverage is unavailable.")
-    return weather
+    try:
+        resolutions = [
+            PointResolution(
+                point.location.alias,
+                point.weight,
+                resolve_weather(
+                    request.repository,
+                    reference_point=point.location,
+                    start_time=anchor + timedelta(hours=1),
+                    horizon_hours=request.horizon_hours,
+                    as_of=request.as_of,
+                    fields=fields,
+                ),
+            )
+            for point in request.task.weather.reference_points
+        ]
+    except WeatherCoverageError as error:
+        raise WeatherUnavailableError(str(error)) from error
+    return weighted_resolution(resolutions, fields)
 
 
 def _observed_weather_until(

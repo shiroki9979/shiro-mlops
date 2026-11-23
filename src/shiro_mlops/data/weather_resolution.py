@@ -27,7 +27,7 @@ FORECAST_FIELDS = {
 }
 DEFAULT_RESOLUTION_FIELDS = (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
 NON_INTERPOLATED_FORECAST_FIELDS = {"wind_direction"}
-WeatherResolutionMode = Literal["normal", "degraded", "unavailable"]
+WeatherResolutionMode = Literal["normal", "degraded"]
 FORECAST_STALE_AFTER = timedelta(hours=7)
 FORECAST_DATASET_IDS = ("F-D0047-089", "F-D0047-091")
 
@@ -124,14 +124,17 @@ class WeatherValueSource:
         return result
 
 
+class WeatherCoverageError(Exception):
+    """A weather reference point has neither a fresh forecast nor a substitute for some value."""
+
+
 @dataclass(frozen=True)
 class WeatherResolution:
-    """Hourly weather values and each field's source."""
+    """Every hour's value of every field and its source; only exists when nothing is missing."""
 
     dataframe: pd.DataFrame
     sources: tuple[dict[str, WeatherValueSource], ...]
     mode: WeatherResolutionMode
-    reason: str | None = None
 
 
 def _as_timestamp(value: datetime | str | pd.Timestamp) -> pd.Timestamp:
@@ -259,11 +262,16 @@ def resolve_weather(
     hour and field takes, in order, a fresh three-day value, a fresh weekly value,
     the previous-day observation, then climatology; freshness is judged by the
     forecast version that supplies the value. Only observation fills degrade.
+
+    Raises ``WeatherCoverageError`` naming the reference point at the first value
+    none of these covers, and ``ValueError`` when ``horizon_hours`` is below one.
     """
+    if horizon_hours < 1:
+        raise ValueError(f"horizon_hours must be at least 1, got {horizon_hours}")
     start = _as_timestamp(start_time)
     cutoff = _as_timestamp(as_of or start)
     moments = [start + timedelta(hours=index) for index in range(horizon_hours)]
-    end = moments[-1] if moments else start
+    end = moments[-1]
     forecasts = _fresh_rows(
         repository.fetch_cwa_forecast_rows(
             geocode=reference_point.geocode,
@@ -299,11 +307,9 @@ def resolve_weather(
                 datasets, observations, moment, FORECAST_FIELDS[output_name]
             )
             if source is None:
-                return WeatherResolution(
-                    dataframe=pd.DataFrame(),
-                    sources=tuple(sources),
-                    mode="unavailable",
-                    reason=f"No weather coverage for {moment.isoformat()} {output_name}",
+                raise WeatherCoverageError(
+                    f"{reference_point.alias}: No weather coverage for "
+                    f"{moment.isoformat()} {output_name}"
                 )
             degraded = degraded or source.kind.is_substitute
             output[output_name] = value

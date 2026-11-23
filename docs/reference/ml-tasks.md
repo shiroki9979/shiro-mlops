@@ -80,7 +80,7 @@
 不在關卡內的規則：
 
 - **負載起點過舊**：屬於 runner 依請求時刻挑選起點的那一步（`StaleLoadAnchorError`）；沒有任何負載時的 `MissingLoadHistoryError` 亦同。
-- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。runner 的順序為：挑選並檢查負載起點、讀取 lookback 內負載、以 `require_load_coverage` 判定負載（不足時不讀天氣）、取得天氣、交給 `admit_prediction_inputs`。因此負載與天氣同時不足時回報負載不足。天氣取得結果為不可用（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，取得步驟直接以其原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`，不進入關卡。
+- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。runner 的順序為：挑選並檢查負載起點、讀取 lookback 內負載、以 `require_load_coverage` 判定負載（不足時不讀天氣）、取得天氣、交給 `admit_prediction_inputs`。因此負載與天氣同時不足時回報負載不足。天氣無法取得（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，取得步驟直接以其原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`，不進入關卡。
 - **`OBSERVED` 任務的天氣與時間窗完整性**：由任務類型組窗後判定；runner 的 readiness probe 與 `ObservedInputsIncompleteError` 照舊。
 
 拒絕沿用 `TaskUnavailableError` 子類別；`TaskUnavailableError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError` 定義於關卡模組，`tasks/runner.py` 重新匯出，既有匯入路徑與 API 的 503 對應不變。
@@ -107,6 +107,8 @@ serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是
 `OBSERVED` 任務的 serving 路徑：負載起點過舊檢查照常適用；天氣改讀同一區間 `[anchor - lookback_hours, anchor]` 的測站觀測（加權規則同 `load_training_data`），不讀預報也不降級，`mode` 固定 `normal`。區間內沒有任何觀測時拋 `WeatherUnavailableError`；任務類型未能評分任何請求的結束小時（負載或天氣缺口）時拋 `ObservedInputsIncompleteError`。`PredictionOutcome.weather` 與 `weather_sources` 對齊至每個被評分的結束小時，取該小時以前最新一筆觀測，來源為 `station_observation` 並附 `observed_at`。
 
 天氣數值的來源：預報天氣路徑（`resolve_weather`）、觀測天氣路徑與加權天氣（`tasks/weighted_weather.py`）逐值傳遞 `data/weather_resolution.py` 的 `WeatherValueSource`，不自行組來源字串。來源種類 `WeatherSourceKind` 是封閉集合：`three_day`、`weekly`（預報，帶產生該值的預報版本 `dataset_id`、`issued_at`、`source_updated_at`）、`previous_day_observation`、`climatology`（替代來源，不帶欄位）、`station_observation`（測站觀測，帶 `observed_at`）；只有兩種替代來源的 `is_substitute` 為真。欄位與種類不符的來源在建構時即拋 `ValueError`。`predict_task` 把來源以 `as_dict()` 序列化為 `PredictionOutcome.weather_sources`，即 API `weather_sources` 的 JSON 形狀（[REST API §3](rest-api.md#3-隨需動態視界負載預報)）。
+
+預報天氣的無覆蓋只以拒絕表達：`resolve_weather` 遇到某代表點某小時的某欄位既沒有七小時內的預報版本、也沒有替代來源時，拋 `WeatherCoverageError`，訊息為 `"{代表點}: No weather coverage for {時刻} {欄位}"`；解析結果 `WeatherResolution` 只在每小時、每欄位皆有值時存在，`mode` 只有 `normal`、`degraded` 兩值（`PredictionOutcome.mode`、`Readiness.mode` 同）。`horizon_hours < 1` 屬呼叫端違反介面契約，拋一般的 `ValueError`。runner 依任務設定的代表點順序逐點解析，第一個無覆蓋的代表點即中止；`_resolve_future_weather` 是唯一把 `WeatherCoverageError` 轉成 `WeatherUnavailableError`（同一訊息）的地方，`data/` 不依賴 `tasks/`。加權天氣只接收完整的解析結果，不處理無覆蓋。
 
 ## 4. 模型保存（`tasks/model_store.py`）
 
