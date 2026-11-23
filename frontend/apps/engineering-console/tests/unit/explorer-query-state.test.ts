@@ -196,6 +196,39 @@ it('applies the same rules to a chart change as to a deep link', () => {
   expect(changeChart(observationAudits, state, { agg: 'max', bucket: '1h' }).chart).toMatchObject({ agg: 'avg', bucket: '1h' })
 })
 
+it('clears agg when the raw bucket is chosen', () => {
+  const state = parseExplorerQuery(load, { ...WITHIN_LIMIT, bucket: '1h', agg: 'max' }, DEFAULT_WINDOW)
+
+  const raw = changeChart(load, state, { bucket: 'raw' })
+  expect(raw.chart).toStrictEqual({ bucket: 'raw', groupBy: undefined, fields: ['load_mw'] })
+  expect(toExplorerSearch(load, raw)).toEqual({ ...WITHIN_LIMIT, bucket: 'raw' })
+})
+
+it('drops the URL agg under the raw bucket', () => {
+  const state = parseExplorerQuery(load, { ...WITHIN_LIMIT, bucket: 'raw', agg: 'max' }, DEFAULT_WINDOW)
+
+  expect(state.chart).toStrictEqual({ bucket: 'raw', groupBy: undefined, fields: ['load_mw'] })
+})
+
+it('starts from the default agg when switching from raw back to an hourly bucket', () => {
+  const raw = parseExplorerQuery(load, { ...WITHIN_LIMIT, bucket: 'raw', agg: 'max' }, DEFAULT_WINDOW)
+
+  const hourly = changeChart(load, raw, { bucket: '1h' })
+  expect(hourly.chart).toEqual({ ...LOAD_CHART, bucket: '1h', agg: 'avg' })
+  expect(toExplorerSearch(load, hourly)).toEqual({ ...WITHIN_LIMIT, bucket: '1h' })
+})
+
+it('keeps the chosen agg under the auto bucket', () => {
+  const state = parseExplorerQuery(load, { ...WITHIN_LIMIT, bucket: '1h', agg: 'max' }, DEFAULT_WINDOW)
+
+  const auto = changeChart(load, state, { bucket: 'auto' })
+  expect(auto.chart).toEqual({ ...LOAD_CHART, agg: 'max' })
+  expect(seriesRequest(load, auto)).toEqual({
+    kind: 'ready',
+    params: { ...WITHIN_LIMIT, fields: ['load_mw'], agg: 'max' },
+  })
+})
+
 it('resolves the default chart settings of a grouped chart', () => {
   expect(parseExplorerQuery(units, {}, DEFAULT_WINDOW).chart).toEqual({
     bucket: 'auto',
@@ -263,6 +296,15 @@ it('requests chart settings that differ from the defaults', () => {
   expect(seriesRequest(units, state)).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, fields: ['net_generation_mw'], bucket: '1d', agg: 'min', group_by: 'none' },
+  })
+})
+
+it('requests no agg under the raw bucket', () => {
+  const state = parseExplorerQuery(units, { ...WITHIN_LIMIT, bucket: 'raw', agg: 'min', group_by: 'none' }, DEFAULT_WINDOW)
+
+  expect(seriesRequest(units, state)).toEqual({
+    kind: 'ready',
+    params: { ...WITHIN_LIMIT, fields: ['net_generation_mw'], bucket: 'raw', group_by: 'none' },
   })
 })
 

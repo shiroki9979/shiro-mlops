@@ -10,7 +10,7 @@ import {
   changeChart,
   changeFilter,
   changeWindow,
-  type ChartSettings,
+  type ChartSettingsPatch,
   type ExplorerQueryState,
   isWithinDetailLimit,
   listRequest,
@@ -54,7 +54,7 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
       if (cursor && isWithinDetailLimit(state)) navigateTo(nextPage(state, cursor))
     },
     restartFromFirstPage,
-    setChart: (patch: Partial<ChartSettings>) => navigateTo(changeChart(dataset, state, patch)),
+    setChart: (patch: ChartSettingsPatch) => navigateTo(changeChart(dataset, state, patch)),
     refetchList: () => {
       if (request) void list.refetch()
     },

@@ -5,13 +5,21 @@ import type { ExplorerChartConfig, ExplorerDatasetConfig, ExplorerFieldKey, Expl
 import { MAX_CHART_UNITS } from './chart-fields'
 
 const DEFAULT_BUCKET = BucketSchema.options[0]
-const DEFAULT_AGG = AggSchema.options[0]
+export const DEFAULT_AGG = AggSchema.options[0]
 
 // Chart settings live in the URL beside the window but never reach the list request or its cursor.
 // They hold resolved values: a URL value that is invalid or does not apply to the chart reads as
 // the default, and a setting equal to its default stays out of the URL. A count chart never
-// sends `agg` and a chart without `groupOptions` never sends `group_by`.
-export interface ChartSettings {
+// sends `agg` and a chart without `groupOptions` never sends `group_by`. An explicit `raw` bucket
+// has no agg, so a shared link never carries one that does not apply; `auto` keeps it because the
+// server may resolve `auto` to an aggregating bucket.
+export type ChartSettings = Omit<ChartChoices, 'bucket' | 'agg'> &
+  ({ bucket: 'raw'; agg?: never } | { bucket: Exclude<Bucket, 'raw'>; agg: Agg })
+
+// What the chart card's selects can ask for; `changeChart` resolves it like a deep link.
+export type ChartSettingsPatch = Partial<ChartChoices>
+
+interface ChartChoices {
   bucket: Bucket
   agg: Agg
   groupBy: ExplorerGroupOption | undefined
@@ -109,7 +117,7 @@ export function backToFirstPage(state: ListableQueryState): ExplorerQueryState<F
 export function changeChart<Rows extends ExplorerRows>(
   dataset: ExplorerDatasetConfig,
   state: ExplorerQueryState<Rows>,
-  patch: Partial<ChartSettings>,
+  patch: ChartSettingsPatch,
 ): ExplorerQueryState<Rows> {
   if (!dataset.chart || !state.chart) return state
   return { ...state, chart: resolveChart(dataset.chart, { ...state.chart, ...patch }) }
@@ -195,19 +203,19 @@ function searchText(value: unknown): string | undefined {
 
 interface RawChartSettings {
   bucket: unknown
-  agg: unknown
+  agg?: unknown
   groupBy: unknown
   fields: unknown
 }
 
 function resolveChart(chart: ExplorerChartConfig, raw: RawChartSettings): ChartSettings {
   const groupOptions = chart.groupOptions
-  return {
-    bucket: optionOr(raw.bucket, BucketSchema.options, DEFAULT_BUCKET),
-    agg: chart.measure === 'count' ? DEFAULT_AGG : optionOr(raw.agg, AggSchema.options, DEFAULT_AGG),
-    groupBy: groupOptions ? optionOr(raw.groupBy, groupOptions, groupOptions[0]) : undefined,
-    fields: resolveFields(chart, raw.fields),
-  }
+  const groupBy = groupOptions ? optionOr(raw.groupBy, groupOptions, groupOptions[0]) : undefined
+  const fields = resolveFields(chart, raw.fields)
+  const bucket = optionOr(raw.bucket, BucketSchema.options, DEFAULT_BUCKET)
+  if (bucket === 'raw') return { bucket, groupBy, fields }
+  const agg = chart.measure === 'count' ? DEFAULT_AGG : optionOr(raw.agg, AggSchema.options, DEFAULT_AGG)
+  return { bucket, agg, groupBy, fields }
 }
 
 // The URL holds one field as text and several as an array. Only fields the chart offers count,
