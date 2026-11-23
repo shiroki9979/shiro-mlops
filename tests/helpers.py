@@ -11,7 +11,15 @@ from zoneinfo import ZoneInfo
 import httpx
 import numpy as np
 import pandas as pd
-from dagster import ScheduleDefinition, build_schedule_context
+from dagster import (
+    AssetsDefinition,
+    Definitions,
+    JobDefinition,
+    RetryPolicy,
+    ScheduleDefinition,
+    build_schedule_context,
+    define_asset_job,
+)
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -325,6 +333,21 @@ def scheduled_run_tags(
 
 # Dagster 重新執行 run 時加上的標籤；與原 run 複製過來的標籤合併即為重新執行的 run。
 REEXECUTION = dict.fromkeys(REEXECUTION_TAGS, "tick-run")
+
+
+def job_retrying_once_at_once(asset: AssetsDefinition, resources: dict[str, Any]) -> JobDefinition:
+    """A job materializing ``asset`` that retries a failed op once, without waiting."""
+    return Definitions(
+        assets=[asset],
+        jobs=[
+            define_asset_job(
+                "retrying_once_at_once",
+                selection=[asset.key],
+                op_retry_policy=RetryPolicy(max_retries=1),
+            )
+        ],
+        resources=resources,
+    ).resolve_job_def("retrying_once_at_once")
 
 
 def run_creation_time(instance, run_id: str) -> datetime:

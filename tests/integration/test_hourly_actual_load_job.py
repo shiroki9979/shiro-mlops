@@ -16,9 +16,7 @@ from dagster import (
     DagsterInstance,
     Definitions,
     ExecuteInProcessResult,
-    RetryPolicy,
     build_schedule_context,
-    define_asset_job,
 )
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
@@ -32,6 +30,7 @@ from tests.helpers import (
     REEXECUTION,
     derived_hourly_load,
     derived_load_series,
+    job_retrying_once_at_once,
     regional_supply_demand_snapshots,
     run_creation_time,
     scheduled_run_tags,
@@ -217,17 +216,9 @@ def test_a_retry_in_the_same_run_derives_the_same_window(
 ) -> None:
     flaky = _FirstDerivationFails(test_repo.hourly_actual_load_store)
     # 正式 job 不設重試；此處只加上立即重試，資產與 run 標籤與排程 run 相同。
-    job = Definitions(
-        assets=[raw_taipower_load],
-        jobs=[
-            define_asset_job(
-                "hourly_load_retrying_at_once",
-                selection=["raw_taipower_load"],
-                op_retry_policy=RetryPolicy(max_retries=1),
-            )
-        ],
-        resources={"time_series_repo": _Repository(flaky)},
-    ).resolve_job_def("hourly_load_retrying_at_once")
+    job = job_retrying_once_at_once(
+        raw_taipower_load, resources={"time_series_repo": _Repository(flaky)}
+    )
     tags = scheduled_run_tags(hourly_actual_load_schedule, TICK) if scheduled else {}
 
     result = job.execute_in_process(instance=dagster_instance, tags=tags)
