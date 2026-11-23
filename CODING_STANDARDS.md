@@ -18,7 +18,7 @@
 
 ## 前端
 
-- **查詢畫面狀態經共用 module**：讀取遠端資料的元件經 `@shiro-mlops/shared/query-view` 的 `toQueryView` 取得畫面狀態，只宣告資料優先或錯誤優先與空判定；不自行讀 `isLoading`、`isError`、`fetchStatus` 等查詢旗標決定畫面，也不把載入中旗標當 props 傳給子元件。
+- **查詢畫面狀態經共用 module**：讀取遠端資料的元件經 `@shiro-mlops/shared/query-view` 的 `toQueryView` 取得畫面狀態，只宣告資料優先或錯誤優先與空判定；不自行讀 `isLoading`、`isError`、`fetchStatus` 等查詢旗標決定畫面，也不把載入中旗標當 props 傳給子元件。操作控制項不屬畫面狀態，可直接讀旗標，例如 Refresh 按鈕依 `isFetching` 停用與轉圈。hook 若設 `notifyOnChangeProps`，清單須含 `...QUERY_VIEW_FIELDS`，否則畫面狀態漏掉它依賴的變化。
 
 ## 技術債
 

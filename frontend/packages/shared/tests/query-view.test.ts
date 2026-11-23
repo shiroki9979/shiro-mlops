@@ -71,12 +71,11 @@ describe('toQueryView when a later read fails over loaded data', () => {
   const error = new Error('503')
   const refetchFailed = { status: 'error', fetchStatus: 'idle', data: { rows: [1, 2] }, error } as const
 
-  it('keeps a data-first page on its data and flags the failed refresh', () => {
-    expect(toQueryView(refetchFailed, { policy: 'data-first' })).toEqual({
-      kind: 'content',
-      content: { rows: [1, 2] },
-      refreshFailed: true,
-    })
+  it('keeps a data-first page on its data and hands it the failure of the refresh', () => {
+    const view = toQueryView(refetchFailed, { policy: 'data-first' })
+
+    expect(view).toEqual({ kind: 'content', content: { rows: [1, 2] }, refreshFailed: true, error })
+    expect(view.kind === 'content' && view.refreshFailed && view.error).toBe(error)
   })
 
   it('turns an error-first page to the failure despite the data', () => {
@@ -88,12 +87,11 @@ describe('toQueryView when a later read fails over loaded data', () => {
 describe('toQueryView when a later read is paused offline over loaded data', () => {
   const refetchPaused = { status: 'success', fetchStatus: 'paused', data: { rows: [1, 2] }, error: null } as const
 
-  it('keeps a data-first page on its data and flags the refresh as failed', () => {
-    expect(toQueryView(refetchPaused, { policy: 'data-first' })).toEqual({
-      kind: 'content',
-      content: { rows: [1, 2] },
-      refreshFailed: true,
-    })
+  it('keeps a data-first page on its data and flags the refresh as failed, with no failure to hand over', () => {
+    const view = toQueryView(refetchPaused, { policy: 'data-first' })
+
+    expect(view).toEqual({ kind: 'content', content: { rows: [1, 2] }, refreshFailed: true, error: undefined })
+    expect(view.kind === 'content' && view.refreshFailed && view.error).toBeUndefined()
   })
 
   it('turns an error-first page to paused despite the data', () => {
@@ -127,12 +125,14 @@ describe('toQueryView with the page judging what counts as empty', () => {
     expect(view).toEqual({ kind: 'content', content: { firstRow: 7, rows: [7, 8] }, refreshFailed: false })
   })
 
-  it('keeps a data-first page on its empty state and flags the failed refresh', () => {
+  it('keeps a data-first page on its empty state and hands it the failure of the refresh', () => {
     const listing: Listing = { published: true, rows: [] }
-    const query = { status: 'error', fetchStatus: 'idle', data: listing, error: new Error('503') } as const
+    const error = new Error('503')
+    const query = { status: 'error', fetchStatus: 'idle', data: listing, error } as const
 
     const view = toQueryView(query, { policy: 'data-first', settle: settleListing })
 
-    expect(view).toEqual({ kind: 'empty', reason: 'noRows', refreshFailed: true })
+    expect(view).toEqual({ kind: 'empty', reason: 'noRows', refreshFailed: true, error })
+    expect(view.kind === 'empty' && view.refreshFailed && view.error).toBe(error)
   })
 })

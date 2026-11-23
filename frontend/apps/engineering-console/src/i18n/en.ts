@@ -68,6 +68,7 @@ export const en: Messages = {
       title: 'Data Source Status',
       loading: 'Loading data source status...',
       error: 'Database unreachable or status API unavailable.',
+      refreshFailed: 'Data source status refresh failed; showing the earlier result.',
       openExplorer: 'Open in Data Explorer',
       explorerDisabled: 'Data Explorer disabled',
       legend:

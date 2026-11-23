@@ -69,7 +69,7 @@
 - **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
 - **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
 - **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。
-- **Monitoring 調整**：Monitoring 以 Data Source Status 摘要顯示 availability、freshness 與 completeness，並連結至 Data Explorer 對應資料集；不再提供 Feature Store Snapshot。
+- **Monitoring 調整**：Monitoring 以 Data Source Status 摘要顯示 availability、freshness 與 completeness，並連結至 Data Explorer 對應資料集；不再提供 Feature Store Snapshot。讀取失敗與離線比照 Data Explorer 首頁的資料集狀態：已有資料時重新讀取失敗保留摘要並加一行更新失敗提示（字典鍵 `monitoring.sources.refreshFailed`），尚無資料或離線時顯示讀取失敗訊息。
 
 ## 7. 狀態、存取與失敗契約
 
