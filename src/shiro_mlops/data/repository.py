@@ -31,17 +31,12 @@ from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload
-from shiro_mlops.data.taipower_regional_supply_demand import (
-    TaipowerRegionalSupplyDemandSnapshot,
-)
 from shiro_mlops.data.taipower_regional_supply_demand_repository import (
     TaipowerRegionalSupplyDemandRepository,
 )
-from shiro_mlops.data.taipower_supply_demand import TaipowerSupplyDemandSnapshot
 from shiro_mlops.data.taipower_supply_demand_repository import (
     TaipowerSupplyDemandRepository,
 )
-from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationSnapshot
 from shiro_mlops.data.taipower_unit_generation_repository import (
     TaipowerUnitGenerationRepository,
 )
@@ -285,13 +280,13 @@ class TimeSeriesRepository:
         if auto_init:
             ensure_timescale_hypertables(self.engine)
 
-        self.supply_demand_repo = TaipowerSupplyDemandRepository(
+        self.supply_demand_store = TaipowerSupplyDemandRepository(
             engine=self.engine, auto_init=False
         )
-        self.regional_supply_demand_repo = TaipowerRegionalSupplyDemandRepository(
+        self.regional_supply_demand_store = TaipowerRegionalSupplyDemandRepository(
             engine=self.engine, auto_init=False
         )
-        self.unit_generation_repo = TaipowerUnitGenerationRepository(
+        self.unit_generation_store = TaipowerUnitGenerationRepository(
             engine=self.engine, auto_init=False
         )
         self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
@@ -590,46 +585,6 @@ class TimeSeriesRepository:
                 "created_at",
             ]
         ]
-
-    def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
-        """Upsert a Taipower supply-demand snapshot keyed by observed_at."""
-        return self.supply_demand_repo.upsert(snapshot)
-
-    def fetch_supply_demand_snapshot(
-        self, observed_at: datetime
-    ) -> TaipowerSupplyDemandSnapshot | None:
-        """Fetch a supply-demand snapshot by Taiwan-local observation slot."""
-        return self.supply_demand_repo.fetch(observed_at)
-
-    def upsert_regional_supply_demand_snapshots(
-        self, snapshots: list[TaipowerRegionalSupplyDemandSnapshot]
-    ) -> int:
-        """Upsert regional supply-demand snapshots keyed by (observed_at, region)."""
-        return self.regional_supply_demand_repo.upsert(snapshots)
-
-    def fetch_regional_supply_demand_snapshots(
-        self, observed_at: datetime
-    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
-        """Fetch regional snapshots for a Taiwan-local observation slot."""
-        return self.regional_supply_demand_repo.fetch(observed_at)
-
-    def fetch_regional_supply_demand_snapshots_by_source_time(
-        self, start_time: datetime, end_time: datetime
-    ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
-        """Fetch regional snapshots whose Taiwan-local source_time is in [start, end)."""
-        return self.regional_supply_demand_repo.fetch_by_source_time(start_time, end_time)
-
-    def upsert_unit_generation_snapshots(
-        self, snapshots: list[TaipowerUnitGenerationSnapshot]
-    ) -> int:
-        """Upsert unit net-generation snapshots keyed by identity and observed_at."""
-        return self.unit_generation_repo.upsert(snapshots)
-
-    def fetch_unit_generation_snapshots(
-        self, observed_at: datetime
-    ) -> list[TaipowerUnitGenerationSnapshot]:
-        """Fetch unit net-generation snapshots for a Taiwan-local observation slot."""
-        return self.unit_generation_repo.fetch(observed_at)
 
     def insert_issued_forecast(self, forecast: IssuedForecast) -> bool:
         """Write an issued forecast once; ``False`` when its issue time already exists."""

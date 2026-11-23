@@ -80,7 +80,7 @@ def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_la
 ) -> None:
     """全國供需目錄的 24 小時窗含起點：恰好早一天的快照撐開窗，中間的 10 分鐘 slot 皆列為缺漏。"""
     for observed_at in (datetime(2026, 9, 4, 17, 30), datetime(2026, 9, 5, 17, 30)):
-        test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed_at))
+        test_repo.supply_demand_store.upsert(supply_demand_snapshot(observed_at))
 
     status = DatasetQuery(test_repo.engine).status(datetime(2026, 9, 5, 17, 35))
     national = next(item for item in status.datasets if item.id == "national_supply_demand")
