@@ -21,7 +21,6 @@ from shiro_mlops.data.weather_resolution import (
     WeatherValueSource,
 )
 
-# 每個預報小時：天氣欄位 → 氣象代表點別名 → 該點該欄位的來源。
 PointSources = Mapping[str, Mapping[str, WeatherValueSource]]
 SerializedPointSources = dict[str, dict[str, dict[str, str]]]
 
