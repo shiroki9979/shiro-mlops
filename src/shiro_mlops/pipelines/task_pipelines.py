@@ -35,7 +35,7 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
-from shiro_mlops.pipelines.execution_origin import tick_run_key
+from shiro_mlops.pipelines.execution_origin import tick_run_request
 from shiro_mlops.pipelines.schedules import CWA_OBSERVATION_ASSET, HOURLY_ACTUAL_LOAD_ASSET
 from shiro_mlops.pipelines.tracking import log_training_run
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
@@ -323,7 +323,7 @@ def _training_schedule(
         readiness = _schedule_readiness(context, task)
         if not readiness.ready:
             return SkipReason(readiness.reason)
-        return RunRequest(run_key=tick_run_key(context))
+        return tick_run_request(context)
 
     return training_schedule
 
@@ -350,7 +350,7 @@ def _monitoring_schedule(
             return SkipReason(readiness.reason)
         if context.instance.get_latest_materialization_event(AssetKey(names.model)) is None:
             return SkipReason(no_model_reason)
-        return RunRequest(run_key=tick_run_key(context))
+        return tick_run_request(context)
 
     return monitoring_schedule
 
