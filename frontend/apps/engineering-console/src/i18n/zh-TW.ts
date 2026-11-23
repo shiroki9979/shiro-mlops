@@ -66,6 +66,7 @@ export const zhTW = {
       title: '資料來源狀態',
       loading: '載入資料來源狀態中...',
       error: '資料庫無法連線或狀態 API 不可用。',
+      refreshFailed: '資料來源狀態更新失敗，顯示先前的結果。',
       openExplorer: '在營運資料檢視器中開啟',
       explorerDisabled: '營運資料檢視器未啟用',
       legend: '可用性、資料新鮮度與資料完整度分別揭露是否有資料、資料是否過期，以及資料是否齊全。',

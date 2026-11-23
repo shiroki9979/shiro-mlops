@@ -61,10 +61,8 @@ export function ExplorerResults({
     policy: 'data-first',
     settle: (page) => (isNonEmpty(page.items) ? { ...page, items: page.items } : emptyBecause('noRows')),
   })
-  const refreshFailed = (view.kind === 'content' || view.kind === 'empty') && view.refreshFailed
-  const readFailed = view.kind === 'error' || view.kind === 'paused' || refreshFailed
-  // Over kept rows the view carries no error, so the notice classifies the query's own; paused has none.
-  const failure = view.kind === 'error' ? view.error : list.error
+  const failedRefresh = (view.kind === 'content' || view.kind === 'empty') && view.refreshFailed ? view : undefined
+  const readError = view.kind === 'error' || view.kind === 'paused' ? view.error : failedRefresh?.error
 
   return (
     <Card>
@@ -73,8 +71,8 @@ export function ExplorerResults({
           <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
         ) : (
           <>
-            {refreshFailed && (
-              <p className="mb-4 text-xs text-rose-300">{resultsText.refreshFailed(listErrorMessage(failure, resultsText))}</p>
+            {failedRefresh && (
+              <p className="mb-4 text-xs text-rose-300">{resultsText.refreshFailed(listErrorMessage(failedRefresh.error, resultsText))}</p>
             )}
             <ResultsBody
               view={view}
@@ -84,7 +82,7 @@ export function ExplorerResults({
               onSelect={onSelect}
               onNextPage={onNextPage}
             />
-            {canRestart && readFailed && isCursorRejected(failure) && (
+            {canRestart && isCursorRejected(readError) && (
               <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </>
@@ -114,7 +112,7 @@ function ResultsBody({ view, dataset, text, nextPageText, onSelect, onNextPage }
       return null
     case 'paused':
     case 'error':
-      return <p className="text-xs text-rose-300">{listErrorMessage(view.kind === 'error' ? view.error : undefined, text)}</p>
+      return <p className="text-xs text-rose-300">{listErrorMessage(view.error, text)}</p>
     case 'empty':
       return <p className="text-xs text-slate-500">{text.empty}</p>
     case 'content': {

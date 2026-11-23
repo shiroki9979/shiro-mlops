@@ -348,6 +348,10 @@ describe('Data Explorer routes', () => {
 })
 
 describe('Monitoring Data Source Status', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true)
+  })
+
   it('uses the shared status contract and deep-links into Data Explorer', async () => {
     renderPath('/monitoring')
     await waitFor(() => {
@@ -379,6 +383,43 @@ describe('Monitoring Data Source Status', () => {
       expect(screen.getAllByText(m.monitoring.sources.explorerDisabled).length).toBeGreaterThan(0)
     })
     expect(screen.queryByText(m.monitoring.sources.openExplorer)).not.toBeInTheDocument()
+  })
+
+  it('keeps the data sources and notes the failed refresh when a later status read fails', async () => {
+    const user = userEvent.setup()
+    renderPath('/data/power/load')
+    const main = await screen.findByRole('main')
+    await within(main).findByRole('heading', { name: m.explorer.datasetStatus.title })
+
+    let failedReads = 0
+    server.use(
+      http.get('*/data/status', () => {
+        failedReads += 1
+        return new HttpResponse(null, { status: 503 })
+      }),
+    )
+    await user.click(within(main).getByRole('button', { name: m.common.refresh }))
+    // The refetch and its one retry.
+    await waitFor(() => expect(failedReads).toBe(2), { timeout: 3000 })
+
+    await user.click(screen.getByRole('link', { name: m.nav.monitoring }))
+
+    expect(await screen.findByText(m.monitoring.sources.refreshFailed)).toBeInTheDocument()
+    expect(screen.getAllByText(m.monitoring.sources.openExplorer).length).toBeGreaterThan(0)
+    expect(screen.queryByText(m.monitoring.sources.error)).not.toBeInTheDocument()
+  })
+
+  it('shows the read failure while offline, then reads the sources once back online', async () => {
+    onlineManager.setOnline(false)
+    renderPath('/monitoring')
+
+    expect(await screen.findByText(m.monitoring.sources.error)).toBeInTheDocument()
+    expect(screen.queryByText(m.monitoring.sources.loading)).not.toBeInTheDocument()
+
+    act(() => onlineManager.setOnline(true))
+
+    expect((await screen.findAllByText(m.monitoring.sources.openExplorer)).length).toBeGreaterThan(0)
+    expect(screen.queryByText(m.monitoring.sources.error)).not.toBeInTheDocument()
   })
 })
 

@@ -132,7 +132,7 @@ export function ExplorerChartCard({
         {prompt ? (
           <p className="text-sm text-amber-200">{prompt}</p>
         ) : (
-          <ChartBody chart={chart} view={view} error={seriesQuery.error} brush={brush} text={chartText} />
+          <ChartBody chart={chart} view={view} brush={brush} text={chartText} />
         )}
       </CardContent>
     </Card>
@@ -142,13 +142,11 @@ export function ExplorerChartCard({
 interface ChartBodyStateProps {
   chart: ExplorerChartConfig
   view: QueryView<NonEmptyArray<PlottedSeries>, 'nothingToPlot'>
-  // Over a kept chart the view carries no error, so the notice classifies the query's own; paused has none.
-  error: unknown
   brush: ChartBrush
   text: Messages['explorer']['chart']
 }
 
-function ChartBody({ chart, view, error, brush, text }: ChartBodyStateProps) {
+function ChartBody({ chart, view, brush, text }: ChartBodyStateProps) {
   switch (view.kind) {
     case 'loading':
       return <p className="text-sm text-slate-400">{text.loading}</p>
@@ -157,18 +155,18 @@ function ChartBody({ chart, view, error, brush, text }: ChartBodyStateProps) {
       return null
     case 'paused':
     case 'error':
-      return <p className="text-sm text-rose-300">{seriesErrorMessage(view.kind === 'error' ? view.error : undefined, text)}</p>
+      return <p className="text-sm text-rose-300">{seriesErrorMessage(view.error, text)}</p>
     case 'empty':
       return (
         <>
-          {view.refreshFailed && <RefreshFailedNotice error={error} text={text} />}
+          {view.refreshFailed && <RefreshFailedNotice error={view.error} text={text} />}
           <p className="text-sm text-slate-300">{text.empty}</p>
         </>
       )
     case 'content':
       return (
         <>
-          {view.refreshFailed && <RefreshFailedNotice error={error} text={text} />}
+          {view.refreshFailed && <RefreshFailedNotice error={view.error} text={text} />}
           <PlottedChart chart={chart} plotted={view.content} brush={brush} text={text} />
         </>
       )
