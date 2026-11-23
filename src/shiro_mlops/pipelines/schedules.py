@@ -17,7 +17,7 @@ from dagster import (
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.taipower_supply_demand import resolve_snapshot_observed_at
-from shiro_mlops.pipelines.execution_origin import scheduled_tick, tick_run_key
+from shiro_mlops.pipelines.execution_origin import scheduled_tick, tick_run_request
 
 TAIPOWER_REALTIME_SNAPSHOT_ASSETS = (
     "raw_taipower_supply_demand_snapshot",
@@ -125,15 +125,5 @@ hourly_actual_load_job = define_asset_job(
     execution_timezone=TAIWAN_TZ,
 )
 def hourly_actual_load_schedule(context: ScheduleEvaluationContext) -> RunRequest:
-    """Use the tick to make each hourly recompute window stable across retries.
-
-    Manual evaluations have no tick, run key, or evaluated_at; the run chooses
-    its window from the current time.
-    """
-    evaluated_at = tick_run_key(context)
-    if evaluated_at is None:
-        return RunRequest()
-    return RunRequest(
-        run_key=evaluated_at,
-        run_config={"ops": {HOURLY_ACTUAL_LOAD_ASSET: {"config": {"evaluated_at": evaluated_at}}}},
-    )
+    """The tick sets the recompute window; without one the run uses the time it was created."""
+    return tick_run_request(context)

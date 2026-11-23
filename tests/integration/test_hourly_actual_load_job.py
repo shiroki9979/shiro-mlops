@@ -56,9 +56,10 @@ def _run_scheduled_tick(
         resources={"time_series_repo": repo},
     ).resolve_job_def("hourly_actual_load_job")
 
+    [request] = evaluation.run_requests
     with patch("httpx.Client", side_effect=AssertionError("external API must not be called")):
         result = job_def.execute_in_process(
-            run_config=evaluation.run_requests[0].run_config, instance=instance
+            run_config=request.run_config, tags=request.tags, instance=instance
         )
     assert result.success
     return result
