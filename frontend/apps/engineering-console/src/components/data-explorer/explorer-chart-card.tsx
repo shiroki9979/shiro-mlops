@@ -20,7 +20,14 @@ import { plotSeries } from './plot-series'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { SeriesStackedAreaChart } from './series-stacked-area-chart'
 import { SeriesStatusChart } from './series-status-chart'
-import { CHART_DEFAULTS, type ChartSearch, type ChartSearchKey, DEFAULT_AGG, DEFAULT_BUCKET } from './use-explorer-query'
+import {
+  CHART_DEFAULTS,
+  type ChartSearch,
+  type ChartSearchKey,
+  DEFAULT_AGG,
+  DEFAULT_BUCKET,
+  type ExplorerFilterValues,
+} from './explorer-query-state'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
@@ -35,7 +42,8 @@ interface ExplorerChartCardProps {
   dataset: ExplorerDatasetConfig
   chart: ExplorerChartConfig
   // The same window and filters the table uses, so chart and table always show one slice.
-  query: Record<string, string | undefined>
+  window: ExplorerWindow
+  filters: ExplorerFilterValues
   chartSearch: ChartSearch
   onSettingChange: (key: ChartSearchKey, value: string | string[] | undefined) => void
   // A brushed range becomes the shared window, the same URL path as the quick ranges and shifts.
@@ -45,7 +53,8 @@ interface ExplorerChartCardProps {
 export function ExplorerChartCard({
   dataset,
   chart,
-  query,
+  window,
+  filters,
   chartSearch,
   onSettingChange,
   onWindowChange,
@@ -53,6 +62,7 @@ export function ExplorerChartCard({
   const m = useMessages()
   const locale = useLocale()
   const chartText = m.explorer.chart
+  const query = { ...window, ...filters }
   const bucket = optionOr(chartSearch.bucket, BucketSchema.options, DEFAULT_BUCKET)
   const agg = optionOr(chartSearch.agg, AggSchema.options, DEFAULT_AGG)
   const fields = selectedChartFields(chartSearch.fields, chart.fields)

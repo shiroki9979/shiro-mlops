@@ -14,7 +14,7 @@ import { useExplorerQuery } from './use-explorer-query'
 
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const explorer = useExplorerQuery(dataset)
-  const { list } = explorer
+  const { list, state } = explorer
   const statusQuery = useDatasetStatus()
   const refetchSeries = useRefetchDatasetSeries()
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null)
@@ -45,12 +45,12 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
       <ExplorerStatus dataset={dataset} status={datasetStatus} auditStatus={auditStatus} />
       <ExplorerFilters
         dataset={dataset}
-        start={explorer.start}
-        end={explorer.end}
-        filterValues={explorer.filterValues}
+        start={state.window.start}
+        end={state.window.end}
+        filterValues={state.filters}
         fetchedAt={fetchedAt}
         items={list.data?.items ?? []}
-        csvDisabled={explorer.detailLimitExceeded}
+        csvDisabled={state.rows.kind === 'overDetailLimit'}
         onRefresh={() => {
           explorer.refetchList()
           void statusQuery.refetch()
@@ -65,8 +65,9 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         <ExplorerChartCard
           dataset={dataset}
           chart={dataset.chart}
-          query={explorer.query}
-          chartSearch={explorer.chartSearch}
+          window={state.window}
+          filters={state.filters}
+          chartSearch={state.chart}
           onSettingChange={explorer.setChartSetting}
           onWindowChange={explorer.setWindow}
         />
@@ -77,8 +78,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         error={list.error}
         isError={list.isError}
         isLoading={list.isLoading}
-        canRestart={explorer.canRestart}
-        detailLimitExceeded={explorer.detailLimitExceeded}
+        rows={state.rows}
         onSelect={setSelected}
         onNextPage={explorer.goToNextPage}
         onRestart={explorer.restartFromFirstPage}
