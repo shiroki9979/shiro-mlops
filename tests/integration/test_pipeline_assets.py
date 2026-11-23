@@ -11,8 +11,8 @@ from dagster import (
     Definitions,
     Failure,
     MetadataValue,
+    ScheduleDefinition,
     build_asset_context,
-    build_schedule_context,
     load_assets_from_modules,
     materialize,
 )
@@ -41,11 +41,13 @@ from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 from shiro_mlops.tasks.model_store import model_directory_sha256
 from tests.helpers import (
+    REEXECUTION,
     FixtureCWASource,
     derived_hourly_load,
     derived_load_series,
     insert_other_source_load_row,
     override_task_policies,
+    scheduled_run_tags,
     unfetched_source_resources,
     write_derived_load,
 )
@@ -374,19 +376,10 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     assert report["training_rows"] == len(taipower_raw_df)
 
 
-def _scheduled_tags(
-    schedule_name: str, tick: datetime, repository: TimeSeriesRepository, instance
-) -> dict[str, str]:
-    """The tags of the run the task schedule launches at ``tick``, as the daemon sets them."""
+def _task_schedule(name: str) -> ScheduleDefinition:
+    """The deployed dynamic horizon forecast schedule called ``name``."""
     pipeline = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST)
-    schedule = next(schedule for schedule in pipeline.schedules if schedule.name == schedule_name)
-    context = build_schedule_context(
-        instance=instance,
-        scheduled_execution_time=tick,
-        resources={"time_series_repo": repository},
-    )
-    [request] = schedule.evaluate_tick(context).run_requests
-    return dict(request.tags)
+    return next(schedule for schedule in pipeline.schedules if schedule.name == name)
 
 
 def _persist_hours_after(repository: TimeSeriesRepository, tick: datetime, hours: int) -> datetime:
@@ -411,7 +404,12 @@ def test_scheduled_training_reads_features_and_monitors_as_of_its_tick(
     last_hour_at_tick = taipower_raw_df["datetime"].max()
     # 動態視界預報每日 00:00 訓練；tick 之後才入庫的小時不得進入這次訓練與監控。
     tick = (last_hour_at_tick + pd.Timedelta(hours=1)).to_pydatetime().replace(tzinfo=TAIPEI)
-    tags = _scheduled_tags(NAMES.training_schedule, tick, test_repo, dagster_instance)
+    tags = scheduled_run_tags(
+        _task_schedule(NAMES.training_schedule),
+        tick,
+        dagster_instance,
+        resources={"time_series_repo": test_repo},
+    )
     _persist_hours_after(test_repo, tick, hours=2)
 
     with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
@@ -441,7 +439,12 @@ def test_scheduled_monitoring_reports_on_the_target_known_at_its_tick(
         job_defs.resolve_job_def(NAMES.training_job).execute_in_process(instance=dagster_instance)
     last_hour_at_tick = taipower_raw_df["datetime"].max()
     tick = (last_hour_at_tick + pd.Timedelta(minutes=30)).to_pydatetime().replace(tzinfo=TAIPEI)
-    tags = _scheduled_tags(NAMES.monitoring_schedule, tick, test_repo, dagster_instance)
+    tags = scheduled_run_tags(
+        _task_schedule(NAMES.monitoring_schedule),
+        tick,
+        dagster_instance,
+        resources={"time_series_repo": test_repo},
+    )
     _persist_hours_after(test_repo, tick.replace(minute=0), hours=2)
 
     monitoring = job_defs.resolve_job_def(NAMES.monitoring_job).execute_in_process(
@@ -452,9 +455,6 @@ def test_scheduled_monitoring_reports_on_the_target_known_at_its_tick(
     report = monitoring.output_for_node(NAMES.monitoring)
     assert report["latest_target_time"] == last_hour_at_tick.isoformat()
     assert report["target_hours"] == len(taipower_raw_df)
-
-
-REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
 
 
 @pytest.mark.parametrize("reexecuted", [False, True], ids=["manual", "re-execution-of-tick-run"])
@@ -473,7 +473,12 @@ def test_training_without_a_scheduled_tick_reads_as_of_the_run_creation_time(
     )
     last_hour_at_tick = taipower_raw_df["datetime"].max()
     tick = (last_hour_at_tick + pd.Timedelta(hours=1)).to_pydatetime().replace(tzinfo=TAIPEI)
-    tick_tags = _scheduled_tags(NAMES.training_schedule, tick, test_repo, dagster_instance)
+    tick_tags = scheduled_run_tags(
+        _task_schedule(NAMES.training_schedule),
+        tick,
+        dagster_instance,
+        resources={"time_series_repo": test_repo},
+    )
     tags = {**tick_tags, **REEXECUTION} if reexecuted else {}
     # 測試資料皆早於 run 建立時刻，所以建立時刻的 as_of 讀得到 tick 之後才入庫的小時。
     last_persisted_hour = _persist_hours_after(test_repo, tick, hours=2)

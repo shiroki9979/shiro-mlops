@@ -24,11 +24,16 @@ from shiro_mlops.pipelines.schedules import (
     build_taipower_supply_demand_snapshot_job,
     taipower_supply_demand_snapshot_schedule,
 )
-from tests.helpers import FIXTURES_DIR, FixtureSource, scheduled_run_tags
+from tests.helpers import (
+    FIXTURES_DIR,
+    REEXECUTION,
+    FixtureSource,
+    run_creation_time,
+    scheduled_run_tags,
+)
 
 SCHEDULED_EXECUTION_TIME = datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
 OBSERVED_SLOT = datetime(2026, 9, 5, 17, 30)
-REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
 
 
 @dataclass(frozen=True)
@@ -64,12 +69,6 @@ def _fixture_sources(*, unit_fail_first: float = 0) -> SnapshotSources:
 
 def _scheduled_tags() -> dict[str, str]:
     return scheduled_run_tags(taipower_supply_demand_snapshot_schedule, SCHEDULED_EXECUTION_TIME)
-
-
-def _creation_slot(instance, run_id: str) -> datetime:
-    """The ten-minute slot, in Taiwan-local time, in which Dagster created the run."""
-    created = instance.get_run_record_by_id(run_id).create_timestamp
-    return floor_to_ten_minutes(created.astimezone(ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None))
 
 
 def _slots_written(repo: TimeSeriesRepository, slot: datetime) -> dict[str, int]:
@@ -245,5 +244,5 @@ def test_a_run_without_a_scheduled_tick_writes_all_three_into_its_creation_slot(
 
     assert result.success
     assert _slots_written(test_repo, OBSERVED_SLOT) == NONE_OF_THEM
-    slot = _creation_slot(dagster_instance, result.run_id)
+    slot = floor_to_ten_minutes(run_creation_time(dagster_instance, result.run_id))
     assert _slots_written(test_repo, slot) == ALL_THREE

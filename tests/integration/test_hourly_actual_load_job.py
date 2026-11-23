@@ -29,9 +29,11 @@ from shiro_mlops.pipelines.assets import raw_taipower_load
 from shiro_mlops.pipelines.execution_origin import SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.schedules import hourly_actual_load_job, hourly_actual_load_schedule
 from tests.helpers import (
+    REEXECUTION,
     derived_hourly_load,
     derived_load_series,
     regional_supply_demand_snapshots,
+    run_creation_time,
     scheduled_run_tags,
     write_derived_load,
 )
@@ -40,7 +42,6 @@ TICK = datetime(2026, 9, 5, 18, 5, tzinfo=ZoneInfo(TAIWAN_TZ))
 # 區域 fixture 四區用電加總 3254.0 萬瓩，即 32540 MW。
 FIXTURE_TOTAL_MW = 32540.0
 TAIPEI = ZoneInfo(TAIWAN_TZ)
-REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
 
 
 def _store_samples(repo: TimeSeriesRepository, start: datetime, count: int) -> None:
@@ -141,12 +142,6 @@ def _run(repo, instance: DagsterInstance, tags: dict[str, str]) -> ExecuteInProc
     return result
 
 
-def _creation_hour(instance: DagsterInstance, run_id: str) -> datetime:
-    """The hour, in Taiwan-local time, at which Dagster created the run."""
-    created = instance.get_run_record_by_id(run_id).create_timestamp
-    return created.astimezone(TAIPEI).replace(tzinfo=None, minute=0, second=0, microsecond=0)
-
-
 def _derived_window_end(instance: DagsterInstance, result: ExecuteInProcessResult) -> datetime:
     [message] = _run_log(instance, result, logging.INFO)
     return datetime.fromisoformat(message.split(", ")[1].split(")")[0])
@@ -169,7 +164,9 @@ def test_a_run_without_a_scheduled_tick_derives_up_to_the_hour_it_was_created(
     result = _run(test_repo, dagster_instance, run_tags)
 
     window_end = _derived_window_end(dagster_instance, result)
-    assert window_end == _creation_hour(dagster_instance, result.run_id)
+    assert window_end == run_creation_time(dagster_instance, result.run_id).replace(
+        minute=0, second=0, microsecond=0
+    )
     assert window_end != datetime(2026, 9, 5, 18, 0)
 
 

@@ -38,6 +38,7 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
+from shiro_mlops.pipelines.execution_origin import REEXECUTION_TAGS
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
 from shiro_mlops.service.data_explorer.datasets import Dataset
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
@@ -306,13 +307,30 @@ def selected_asset_names(job) -> set[str]:
     return {key.to_user_string() for key in job.selection.resolve(all_assets)}
 
 
-def scheduled_run_tags(schedule: ScheduleDefinition, tick: datetime, instance=None) -> dict:
+def scheduled_run_tags(
+    schedule: ScheduleDefinition,
+    tick: datetime,
+    instance=None,
+    resources: dict[str, Any] | None = None,
+) -> dict:
     """The tags of the run ``schedule`` launches at ``tick``, schedule name included as Dagster adds it."""
     execution = schedule.evaluate_tick(
-        build_schedule_context(instance=instance, scheduled_execution_time=tick)
+        build_schedule_context(
+            instance=instance, scheduled_execution_time=tick, resources=resources
+        )
     )
     [request] = execution.run_requests
     return dict(request.tags)
+
+
+# Dagster 重新執行 run 時加上的標籤；與原 run 複製過來的標籤合併即為重新執行的 run。
+REEXECUTION = dict.fromkeys(REEXECUTION_TAGS, "tick-run")
+
+
+def run_creation_time(instance, run_id: str) -> datetime:
+    """The naive Taiwan-local time at which Dagster created the run; callers floor it themselves."""
+    created = instance.get_run_record_by_id(run_id).create_timestamp
+    return created.astimezone(TAIWAN).replace(tzinfo=None)
 
 
 def task_jobs() -> list:
