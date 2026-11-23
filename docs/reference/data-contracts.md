@@ -252,6 +252,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 - **時刻格式**：所有時刻為台灣本地時間、ISO 8601 帶 `+08:00` offset（例如 `2026-11-20T10:15:00+08:00`），觀眾瀏覽器不論位於哪個時區都能換算距當下的時間。與 §5.1 的 Dagster artifact（不帶時區）不同。
 - **編碼**：UTF-8 JSON，不含 `NaN` 或無限大；出現時匯出失敗，不寫出無效 JSON。HTTP `Content-Type` 為 `application/json`；`Cache-Control` 由 Nginx 與 CloudFront 決定，上傳端不設定物件 metadata。
 - **空狀態只由內容決定**：還沒有已發布預報、或累積天數未滿 7 時，兩份 JSON 仍照常輸出（見各小節），前端不以 HTTP 狀態碼推斷空狀態。
+- **前端只驗證文件本身表達得出的關係**：前端 schema（`frontend/apps/forecast-view/src/schemas/published.ts`）驗證欄位型別與 §6.1 的 `issued_at` 與 `steps` 關係，不重複累積天數門檻與統計期間長度這類匯出端的規則。網站與 JSON 分開部署（[預報檢視託管 §5](forecast-view-hosting.md#5-部署與驗證)），前端若內建這些數字，匯出端調整後、網站更新前的合法文件會被判為讀取失敗。預報實績是否累積不足因此只看 `metrics` 是否為 `null`，`accumulated_days` 只供顯示；兩者是否一致由匯出端保證。
 - **fixtures**：`tests/fixtures/published/` 是兩份 JSON 的範例，由單元測試核對與匯出結果一致，也供 Nginx smoke check 掛載。前端的 Docker 建置只含 `frontend/`，因此預報檢視的 MSW 另存一份 `latest_issued_forecast.json` 副本於應用內，由前端單元測試核對與此 fixture 相同。
 
 ### 6.1 最新已發布預報 `latest_issued_forecast.json`
@@ -270,7 +271,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 
 - `issued_at`（字串或 `null`）：預報時刻，即發布時刻。
 - `steps`（陣列）：只含目標小時晚於 `issued_at` 的步，依目標小時排序；每步 `target_hour`（字串）與 `predicted_load_mw`（MW）。負載起點落後 $k$ 小時時，目標小時不晚於發布時刻的前 $k$ 步不輸出，因此步數為 $168 - k$。
-- 還沒有任何已發布預報時為 `{"issued_at": null, "steps": []}`。
+- 還沒有任何已發布預報時為 `{"issued_at": null, "steps": []}`。`issued_at` 為 `null` 時 `steps` 必為空，前端把 `issued_at` 為 `null` 卻帶有步的文件視為讀取失敗；反之不然，`issued_at` 有值時 `steps` 仍可為空，契約不保證步數下限。
 
 ### 6.2 預報實績 `forecast_track_record.json`
 
