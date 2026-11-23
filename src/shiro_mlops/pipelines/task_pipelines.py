@@ -10,6 +10,7 @@ talk to the runner; task types never see Dagster
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -34,8 +35,8 @@ from dagster import (
 )
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
-from shiro_mlops.pipelines.execution_origin import tick_run_key
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.pipelines.execution_origin import WithoutTick, run_as_of, tick_run_request
 from shiro_mlops.pipelines.schedules import CWA_OBSERVATION_ASSET, HOURLY_ACTUAL_LOAD_ASSET
 from shiro_mlops.pipelines.tracking import log_training_run
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
@@ -159,7 +160,7 @@ def _features_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDef
     def features(context: AssetExecutionContext) -> Output[pd.DataFrame]:
         """Read and gate training data once; the model asset trains from this table."""
         try:
-            data = load_training_data(task, _runtime(context), as_of=taiwan_now())
+            data = load_training_data(task, _runtime(context), as_of=_as_of(context))
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         table = training_table(data)
@@ -266,7 +267,7 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
     def monitoring(context: AssetExecutionContext, model: dict) -> dict:
         """Hourly report: bounded reads only, so the full history is never re-read."""
         try:
-            report = monitor_task(task, _runtime(context), model["metrics"], as_of=taiwan_now())
+            report = monitor_task(task, _runtime(context), model["metrics"], as_of=_as_of(context))
         except TaskNotReady as error:
             raise _not_ready_failure(error.readiness) from error
         context.log.info(
@@ -323,7 +324,7 @@ def _training_schedule(
         readiness = _schedule_readiness(context, task)
         if not readiness.ready:
             return SkipReason(readiness.reason)
-        return RunRequest(run_key=tick_run_key(context))
+        return tick_run_request(context)
 
     return training_schedule
 
@@ -350,12 +351,17 @@ def _monitoring_schedule(
             return SkipReason(readiness.reason)
         if context.instance.get_latest_materialization_event(AssetKey(names.model)) is None:
             return SkipReason(no_model_reason)
-        return RunRequest(run_key=tick_run_key(context))
+        return tick_run_request(context)
 
     return monitoring_schedule
 
 
 # --- Shared helpers ------------------------------------------------------------------------
+
+
+def _as_of(context: AssetExecutionContext) -> datetime:
+    """The tick of a scheduled run, otherwise the run's creation time: one as_of per run."""
+    return run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW)
 
 
 def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> TaskRuntime:

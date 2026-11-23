@@ -10,7 +10,7 @@
 
 ## 執行來源與 as_of
 
-帶 as_of 的排程資產由 `src/shiro_mlops/pipelines/execution_origin.py` 把一次 run 解析成執行來源與 as_of，各資產只宣告沒有 tick 時怎麼做。目前採用的資產：`raw_taipower_load`（第 5 項，退回現在）、`issued_forecast`（第 6 項，拒絕）、`forecast_track_record`（第 7 項，退回現在）；其餘各項的 tick 來源見各項說明。
+帶 as_of 的排程資產由 `src/shiro_mlops/pipelines/execution_origin.py` 把一次 run 解析成執行來源與 as_of，各資產只宣告沒有 tick 時怎麼做。目前採用的資產：`{task_id}__features` 與 `{task_id}__monitoring`（第 1 項，皆退回現在）、`raw_taipower_load`（第 5 項，退回現在）、`issued_forecast`（第 6 項，拒絕）、`forecast_track_record`（第 7 項，退回現在）；其餘各項的 tick 來源見各項說明。
 
 - **三種來源**：排程 tick 發起的 run、手動執行（含在 launchpad 手動啟動）、重新執行（Dagster UI 的 re-execute 等，以原 run 為 parent 建立的新 run）。`RetryPolicy` 的重試在同一 run 內進行、不產生新 run，沿用該 run 的來源與 as_of。
 - **tick 標籤**：排程以 `tick_run_request` 產生 `RunRequest`：有 tick 時，`run_key` 與 run 標籤 `shiro_mlops/scheduled_tick` 皆為 tick 的台灣本地時間 ISO 字串（例如 `2026-11-20T10:25:00`）；以 `build_schedule_context()` 不帶時間評估時兩者都不帶，不拋錯。一個 run 只有一個 tick，job 內所有資產共用；資產不以設定欄位接收 tick。只用公開的 `RunRequest(tags=...)`，不讀 Dagster scheduler 的隱藏標籤 `.dagster/scheduled_execution_time`。
@@ -36,7 +36,7 @@
      | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需 `{task_id}__model` 已有 materialization |
 
    - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）、`forecast_track_record`（見第 7 項）或 `forecast_view_export`（見第 8 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
-   - **排程 run_key**：排程 tick 轉為台灣本地時間 ISO 字串作為 `run_key`，同一 tick 重複評估不重跑；無 tick 的手動評估不帶 `run_key`。
+   - **排程 run_key 與 as_of**：兩個排程以 `tick_run_request` 把 tick 的台灣本地時間 ISO 字串同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），同一 tick 重複評估不重跑；無 tick 的手動評估兩者都不帶。`{task_id}__features` 與 `{task_id}__monitoring` 以 run 的 as_of 呼叫 runner，沒有 tick 時退回現在：排程 tick 發起的 run 為該 tick（例如動態視界預報每日 00:00 的訓練固定以 00:00 為 as_of，不因排隊或執行延遲而後移），手動執行與重新執行的 run 為 run 建立時刻；資產沒有 tick 設定欄位。訓練 job 內所有資產共用同一 run 的 as_of，因此訓練 job 裡的 monitoring 與 features 用同一時刻。兩個 job 目前沒有重試政策。
    - **MLflow**：每個任務擁有獨立 experiment 與 registered model，名稱皆等於 `task_id`。每次訓練以 `{task_id}_training` 為 run 名稱記錄 metrics、攤平的 `[params]`（巢狀鍵以 `.` 連接，另含 `task_id`、`task_type`）與模型目錄（artifact path `model`），並以該 artifact URI 建立新的 model version（模型為原生檔案而非 MLflow logged model，ADR-0010）。MLflow 不可用時記錄警告、`run_id` 標為 `local_run`，已保存的模型仍有效。
    - **動態視界預報任務**：`dynamic_horizon_forecast__training_schedule` 為 `0 0 * * *`（`Asia/Taipei`，與舊版 `0 16 * * *` UTC 同一時刻），`dynamic_horizon_forecast__monitoring_schedule` 為 `0 * * * *`；健康門檻 `max_mape = 10.0`。
    - **高負載預警任務**：`high_load_alert__training_schedule` 為 `30 0 * * *`（錯開動態視界預報 00:00 與用電型態異常偵測 01:00 的訓練），`high_load_alert__monitoring_schedule` 為 `5 * * * *`；健康門檻 `min_precision`／`min_recall`／`min_f1` 皆為 `0.5`。
