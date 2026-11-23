@@ -15,10 +15,24 @@ from dataclasses import dataclass
 import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL
-from shiro_mlops.data.weather_resolution import WeatherResolution, WeatherResolutionMode
+from shiro_mlops.data.weather_resolution import (
+    WeatherResolution,
+    WeatherResolutionMode,
+    WeatherValueSource,
+)
 
 # 每個預報小時：天氣欄位 → 氣象代表點別名 → 該點該欄位的來源。
-PointSources = Mapping[str, Mapping[str, Mapping[str, str]]]
+PointSources = Mapping[str, Mapping[str, WeatherValueSource]]
+# PointSources 序列化後的 `weather_sources` JSON 形狀（rest-api.md §3）。
+SerializedPointSources = dict[str, dict[str, dict[str, str]]]
+
+
+def serialize_point_sources(sources: PointSources) -> SerializedPointSources:
+    """One hour's sources in the ``weather_sources`` JSON shape, field → alias → source."""
+    return {
+        field: {alias: source.as_dict() for alias, source in by_alias.items()}
+        for field, by_alias in sources.items()
+    }
 
 
 @dataclass(frozen=True)

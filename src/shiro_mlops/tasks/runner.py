@@ -27,7 +27,11 @@ from shiro_mlops.core.datetime_utils import with_datetime_column
 from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stale_load_anchor
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_weather
+from shiro_mlops.data.weather_resolution import (
+    WeatherResolutionMode,
+    WeatherValueSource,
+    resolve_weather,
+)
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
 from shiro_mlops.tasks.definition import TaskDefinition
 
@@ -56,13 +60,13 @@ from shiro_mlops.tasks.weighted_weather import (
     PointResolution,
     PointSources,
     PointWeather,
+    SerializedPointSources,
     WeightedWeather,
+    serialize_point_sources,
     weighted_observations,
     weighted_resolution,
 )
 
-OBSERVED_WEATHER_SOURCE = "station_observation"
-OBSERVED_AT_FIELD = "observed_at"
 TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
 
 
@@ -116,7 +120,7 @@ class PredictionOutcome:
     mode: WeatherResolutionMode
     predictions: pd.DataFrame
     weather: pd.DataFrame
-    weather_sources: tuple[PointSources, ...]
+    weather_sources: tuple[SerializedPointSources, ...]
 
 
 @dataclass(frozen=True)
@@ -299,7 +303,7 @@ def predict_task(
         mode=weather.mode,
         predictions=predictions,
         weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],
-        weather_sources=weather.sources,
+        weather_sources=tuple(serialize_point_sources(sources) for sources in weather.sources),
     )
 
 
@@ -508,9 +512,8 @@ _WEATHER_PATHS = {
 
 def _observation_source(task: TaskDefinition, observed_at: pd.Timestamp) -> PointSources:
     """Weighted observations exist only where every point observed that same hour."""
-    source = {"source": OBSERVED_WEATHER_SOURCE, OBSERVED_AT_FIELD: observed_at.isoformat()}
-    aliases = task.weather.aliases
-    return {field: {alias: dict(source) for alias in aliases} for field in task.weather.fields}
+    source = WeatherValueSource.observed(observed_at)
+    return {field: dict.fromkeys(task.weather.aliases, source) for field in task.weather.fields}
 
 
 # --- Shared I/O ----------------------------------------------------------------------------

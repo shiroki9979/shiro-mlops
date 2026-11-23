@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
+from enum import StrEnum
+from typing import Literal, Self
 
 import pandas as pd
 
@@ -36,12 +37,99 @@ def forecast_is_stale(issued_at: datetime, as_of: datetime) -> bool:
     return as_of - issued_at > FORECAST_STALE_AFTER
 
 
+class WeatherSourceKind(StrEnum):
+    """Where one weather value came from; a closed set, each kind known to substitute or not."""
+
+    THREE_DAY = "three_day"
+    WEEKLY = "weekly"
+    PREVIOUS_DAY_OBSERVATION = "previous_day_observation"
+    CLIMATOLOGY = "climatology"
+    STATION_OBSERVATION = "station_observation"
+
+    @property
+    def is_substitute(self) -> bool:
+        """Whether the value stands in for a missing forecast (GLOSSARY 降級預報).
+
+        Station observations feed observed-weather tasks as the real input, not a
+        substitute, so they never degrade.
+        """
+        return self in _SUBSTITUTE_KINDS
+
+
+_SUBSTITUTE_KINDS = frozenset(
+    {WeatherSourceKind.PREVIOUS_DAY_OBSERVATION, WeatherSourceKind.CLIMATOLOGY}
+)
+_FORECAST_KINDS = frozenset({WeatherSourceKind.THREE_DAY, WeatherSourceKind.WEEKLY})
+_VERSION_FIELDS = ("dataset_id", "issued_at", "source_updated_at")
+_OBSERVATION_FIELDS = ("observed_at",)
+_OPTIONAL_FIELDS = (*_VERSION_FIELDS, *_OBSERVATION_FIELDS)
+
+
+@dataclass(frozen=True)
+class WeatherValueSource:
+    """The provenance of one weather value; only the fields its kind defines are set.
+
+    Forecast kinds carry the forecast version that supplied the value, a station
+    observation carries when it was observed, and substitutes carry nothing.
+    """
+
+    kind: WeatherSourceKind
+    dataset_id: str | None = None
+    issued_at: pd.Timestamp | None = None
+    source_updated_at: pd.Timestamp | None = None
+    observed_at: pd.Timestamp | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, WeatherSourceKind):
+            raise ValueError(f"Weather source kind must be a WeatherSourceKind: {self.kind!r}")
+        if self.kind in _FORECAST_KINDS:
+            required = _VERSION_FIELDS
+        elif self.kind is WeatherSourceKind.STATION_OBSERVATION:
+            required = _OBSERVATION_FIELDS
+        else:
+            required = ()
+        present = [name for name in _OPTIONAL_FIELDS if getattr(self, name) is not None]
+        if present != list(required):
+            raise ValueError(
+                f"A {self.kind.value} source carries exactly {list(required)}, got {present}"
+            )
+
+    @classmethod
+    def forecast(cls, kind: WeatherSourceKind, row: pd.Series) -> Self:
+        """The forecast version in ``row`` that supplied a value of ``kind``."""
+        return cls(
+            kind,
+            dataset_id=str(row["dataset_id"]),
+            issued_at=_as_timestamp(row["issued_at"]),
+            source_updated_at=_as_timestamp(row["source_updated_at"]),
+        )
+
+    @classmethod
+    def substitute(cls, kind: WeatherSourceKind) -> Self:
+        """A substitute value standing in for a missing forecast."""
+        return cls(kind)
+
+    @classmethod
+    def observed(cls, observed_at: pd.Timestamp) -> Self:
+        """A station observation made at ``observed_at``."""
+        return cls(WeatherSourceKind.STATION_OBSERVATION, observed_at=observed_at)
+
+    def as_dict(self) -> dict[str, str]:
+        """The ``weather_sources`` JSON of this value: ``source`` plus the kind's own fields."""
+        result = {"source": self.kind.value}
+        for name in _OPTIONAL_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value if isinstance(value, str) else value.isoformat()
+        return result
+
+
 @dataclass(frozen=True)
 class WeatherResolution:
-    """Hourly weather values and their per-field provenance."""
+    """Hourly weather values and each field's source."""
 
     dataframe: pd.DataFrame
-    sources: tuple[dict[str, dict[str, str]], ...]
+    sources: tuple[dict[str, WeatherValueSource], ...]
     mode: WeatherResolutionMode
     reason: str | None = None
 
@@ -108,22 +196,9 @@ def _interval_value(
     return candidates.iloc[-1][column], candidates.iloc[-1]
 
 
-def _source(row: pd.Series | None, source: str) -> dict[str, str]:
-    result = {"source": source}
-    if row is not None:
-        result.update(
-            {
-                "dataset_id": str(row["dataset_id"]),
-                "issued_at": _as_timestamp(row["issued_at"]).isoformat(),
-                "source_updated_at": _as_timestamp(row["source_updated_at"]).isoformat(),
-            }
-        )
-    return result
-
-
 def _fallback_from_observations(
     observations: pd.DataFrame, moment: pd.Timestamp, column: str
-) -> tuple[object, str | None]:
+) -> tuple[object, WeatherSourceKind | None]:
     if observations.empty:
         return None, None
     work = observations.copy()
@@ -138,7 +213,7 @@ def _fallback_from_observations(
     work["observed_at"] = work["observed_at"].map(_as_timestamp)
     previous = work[work["observed_at"] == moment - timedelta(days=1)]
     if not previous.empty and pd.notna(previous.iloc[-1].get(column)):
-        return previous.iloc[-1][column], "previous_day_observation"
+        return previous.iloc[-1][column], WeatherSourceKind.PREVIOUS_DAY_OBSERVATION
     same = work[
         (work["observed_at"].dt.month == moment.month)
         & (work["observed_at"].dt.hour == moment.hour)
@@ -146,7 +221,26 @@ def _fallback_from_observations(
     same = same[same[column].notna()]
     if same["observed_at"].dt.date.nunique() < 7:
         return None, None
-    return float(same[column].mean()), "climatology"
+    return float(same[column].mean()), WeatherSourceKind.CLIMATOLOGY
+
+
+def _resolve_value(
+    datasets: dict[str, pd.DataFrame],
+    observations: pd.DataFrame,
+    moment: pd.Timestamp,
+    column: str,
+) -> tuple[object, WeatherValueSource | None]:
+    """One hour's value of ``column`` and its source, or no source when nothing covers it."""
+    value, row = _point_value(datasets["F-D0047-089"], moment, column)
+    if value is not None:
+        return value, WeatherValueSource.forecast(WeatherSourceKind.THREE_DAY, row)
+    value, row = _interval_value(datasets["F-D0047-091"], moment, column)
+    if value is not None:
+        return value, WeatherValueSource.forecast(WeatherSourceKind.WEEKLY, row)
+    value, substitute = _fallback_from_observations(observations, moment, column)
+    if substitute is None:
+        return None, None
+    return value, WeatherValueSource.substitute(substitute)
 
 
 def resolve_weather(
@@ -195,40 +289,25 @@ def resolve_weather(
         for dataset_id in FORECAST_DATASET_IDS
     }
     rows: list[dict[str, object]] = []
-    sources: list[dict[str, dict[str, str]]] = []
+    sources: list[dict[str, WeatherValueSource]] = []
     degraded = False
     for moment in moments:
         output: dict[str, object] = {DATETIME_COL: moment, LOCATION_COL: reference_point.alias}
-        point_sources: dict[str, dict[str, str]] = {}
+        point_sources: dict[str, WeatherValueSource] = {}
         for output_name in fields:
-            source_column = FORECAST_FIELDS[output_name]
-            value: object = None
-            source_row: pd.Series | None = None
-            source_kind: str | None = None
-            value, source_row = _point_value(datasets["F-D0047-089"], moment, source_column)
-            if value is not None:
-                source_kind = "three_day"
-            else:
-                value, source_row = _interval_value(datasets["F-D0047-091"], moment, source_column)
-                if value is not None:
-                    source_kind = "weekly"
-            if value is None:
-                value, fallback_kind = _fallback_from_observations(
-                    observations,
-                    moment,
-                    source_column,
-                )
-                source_kind = fallback_kind
-                degraded = True
-            if value is None:
+            value, source = _resolve_value(
+                datasets, observations, moment, FORECAST_FIELDS[output_name]
+            )
+            if source is None:
                 return WeatherResolution(
                     dataframe=pd.DataFrame(),
                     sources=tuple(sources),
                     mode="unavailable",
                     reason=f"No weather coverage for {moment.isoformat()} {output_name}",
                 )
+            degraded = degraded or source.kind.is_substitute
             output[output_name] = value
-            point_sources[output_name] = _source(source_row, source_kind or "unknown")
+            point_sources[output_name] = source
         rows.append(output)
         sources.append(point_sources)
     return WeatherResolution(

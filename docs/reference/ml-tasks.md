@@ -1,7 +1,7 @@
 # ML 任務設定與任務類型介面
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 5 節拆出。
@@ -105,6 +105,8 @@ runner 經 `TaskRuntime.hourly_actual_load` 取得全台逐時實際負載 store
 serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是否過舊，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史、取得天氣，交由[預測輸入關卡](#預測輸入關卡tasksprediction_inputspy)判定並裁切負載歷史後才交給任務類型。
 
 `OBSERVED` 任務的 serving 路徑：負載起點過舊檢查照常適用；天氣改讀同一區間 `[anchor - lookback_hours, anchor]` 的測站觀測（加權規則同 `load_training_data`），不讀預報也不降級，`mode` 固定 `normal`。區間內沒有任何觀測時拋 `WeatherUnavailableError`；任務類型未能評分任何請求的結束小時（負載或天氣缺口）時拋 `ObservedInputsIncompleteError`。`PredictionOutcome.weather` 與 `weather_sources` 對齊至每個被評分的結束小時，取該小時以前最新一筆觀測，來源為 `station_observation` 並附 `observed_at`。
+
+天氣數值的來源：預報天氣路徑（`resolve_weather`）、觀測天氣路徑與加權天氣（`tasks/weighted_weather.py`）逐值傳遞 `data/weather_resolution.py` 的 `WeatherValueSource`，不自行組來源字串。來源種類 `WeatherSourceKind` 是封閉集合：`three_day`、`weekly`（預報，帶產生該值的預報版本 `dataset_id`、`issued_at`、`source_updated_at`）、`previous_day_observation`、`climatology`（替代來源，不帶欄位）、`station_observation`（測站觀測，帶 `observed_at`）；只有兩種替代來源的 `is_substitute` 為真。欄位與種類不符的來源在建構時即拋 `ValueError`。`predict_task` 把來源以 `as_dict()` 序列化為 `PredictionOutcome.weather_sources`，即 API `weather_sources` 的 JSON 形狀（[REST API §3](rest-api.md#3-隨需動態視界負載預報)）。
 
 ## 4. 模型保存（`tasks/model_store.py`）
 
