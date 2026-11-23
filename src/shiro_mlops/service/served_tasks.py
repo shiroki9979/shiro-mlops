@@ -1,8 +1,7 @@
 """The deployed tasks as this API process serves them: model state, readiness and prediction.
 
-Each task's model is loaded once into one of three states: ``Loaded`` with the sha256
-of the directory version it was read from, ``Untrained``, or ``LoadFailed`` with its
-cause. ``model_states`` hands callers that state itself, not flags derived from it.
+Each task's model is loaded once into its state, keeping the sha256 of the directory
+version it was read from. ``served_models`` hands callers that state itself, not flags derived from it.
 Without a model, the state's ``reason`` is the only source of the text that model
 state, readiness and prediction report. Failures come back as two kinds:
 ``ServingUnavailableError`` (no model, or inputs that cannot support a prediction right
@@ -122,7 +121,7 @@ class ServedTasks:
             )
         return self._tasks[task_id]
 
-    def model_states(self) -> dict[str, ServedModel]:
+    def served_models(self) -> dict[str, ServedModel]:
         return {
             task_id: ServedModel(task.task_type, self._state(task_id))
             for task_id, task in self._tasks.items()

@@ -90,8 +90,8 @@ def test_an_untrained_task_is_not_ready_and_refuses_to_predict(
     assert not readiness.ready
     assert not readiness.model_loaded
     assert readiness.reason == UNTRAINED_REASON
-    model = served.model_states()[DYNAMIC_HORIZON_FORECAST]
-    assert model == ServedModel("recursive_regression", Untrained())
+    model = served.served_models()[DYNAMIC_HORIZON_FORECAST]
+    assert model == ServedModel(deployed_task(DYNAMIC_HORIZON_FORECAST).task_type, Untrained())
     assert model.state.reason == UNTRAINED_REASON
 
 
@@ -114,7 +114,7 @@ def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
     )
 
     failed = "Model failed to load: MissingModelLockError: "
-    models = served.model_states()
+    models = served.served_models()
     load_failure = models[broken.task_id].state
     assert isinstance(load_failure, LoadFailed)
     assert load_failure.reason.startswith(failed)

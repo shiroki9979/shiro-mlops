@@ -192,7 +192,7 @@ TaskPredictionResponse = reduce(
 @routes.get("/health", response_model=HealthResponse)
 def health_check(served: Served) -> HealthResponse:
     """Check API and per-task model health status."""
-    tasks = {task_id: _model_health(model) for task_id, model in served.model_states().items()}
+    tasks = {task_id: _model_health(model) for task_id, model in served.served_models().items()}
     return HealthResponse(
         status="ok",
         version=__version__,
