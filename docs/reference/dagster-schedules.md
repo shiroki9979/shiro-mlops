@@ -19,6 +19,7 @@
 - **「現在」**：run 的建立時刻（Dagster run 紀錄的建立時間），轉為台灣本地時間；不是每次嘗試的當下，因此同一 run 內的重試得到同一 as_of。
 - **對齊**：module 只交出未取整的 as_of；十分鐘 slot 與整點的取整由各領域函式負責。
 - **新增帶 as_of 的排程資產**：排程回傳 `tick_run_request(context)`（需要略過時另回傳 `SkipReason`）；資產以 `run_as_of(context, without_tick=...)` 取得 as_of，宣告 `WithoutTick.REFUSE` 或 `WithoutTick.FALL_BACK_TO_NOW`。不新增 tick 設定欄位，也不在資產或排程內自取現在時刻、自讀 tick 或 Dagster 的排程名稱與重新執行標籤。
+- **邊界測試**：`tests/unit/test_pipelines_as_of_boundary.py` 掃描 `src/shiro_mlops/pipelines/`，在 `execution_origin.py` 以外抓到直接取現在時刻（`taiwan_now()`、`datetime.now()` 等）、讀取排程 tick（`scheduled_execution_time`）或讀取 tick、排程名稱、重新執行標籤時失敗。唯一例外是 `smoke_check.py`：它是操作人員在容器內執行的 CLI，不在 Dagster run 裡，以現在時刻當作 tick 評估各排程。
 
 ## 資產、job 與排程
 
