@@ -79,10 +79,10 @@ export const en: Messages = {
     availabilityLabel: 'Availability',
     freshnessLabel: 'Data Freshness',
     completenessLabel: 'Data Completeness',
-    availability: { available: 'Available', empty: 'Empty', unavailable: 'Unavailable' },
+    availability: { available: 'Available', empty: 'Empty' },
     freshness: { fresh: 'Fresh', warning: 'Warning', unknown: 'Unknown' },
     completeness: { complete: 'Complete', incomplete: 'Incomplete', unknown: 'Unknown' },
-    overall: { healthy: 'Healthy', warning: 'Warning', critical: 'Critical', unknown: 'Unknown' },
+    overall: { healthy: 'Healthy', warning: 'Warning', unknown: 'Unknown' },
   },
   explorer: {
     title: 'Data Explorer',

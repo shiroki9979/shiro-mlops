@@ -8,6 +8,7 @@ import pytest
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import FORECAST_STALE_AFTER
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
+from shiro_mlops.service.data_explorer.schemas import DatasetStatus
 from shiro_mlops.service.data_explorer.status import (
     DatasetFreshness,
     derive_overall,
@@ -130,9 +131,15 @@ def test_freshness_unknown_when_timestamps_missing() -> None:
 
 
 def test_overall_severity_maps_availability_and_warnings() -> None:
-    """資料庫不可用為 critical；過期、不完整或空資料為 warning。"""
-    assert derive_overall("unavailable", "unknown", "unknown") == "critical"
+    """過期、不完整或空資料為 warning。"""
     assert derive_overall("empty", "unknown", "unknown") == "warning"
     assert derive_overall("available", "warning", "complete") == "warning"
     assert derive_overall("available", "fresh", "incomplete") == "warning"
     assert derive_overall("available", "fresh", "complete") == "healthy"
+
+
+def test_status_contract_has_no_value_for_a_failed_read() -> None:
+    """讀取失敗以 HTTP 503 回報，不是一種資料集狀態。"""
+    properties = DatasetStatus.model_json_schema()["properties"]
+    assert properties["availability"]["enum"] == ["available", "empty"]
+    assert properties["overall"]["enum"] == ["healthy", "warning", "unknown"]

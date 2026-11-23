@@ -7,7 +7,6 @@ import { translateCompleteness } from './status-text'
 const overallVariant = {
   healthy: 'success',
   warning: 'warning',
-  critical: 'destructive',
   unknown: 'secondary',
 } as const
 

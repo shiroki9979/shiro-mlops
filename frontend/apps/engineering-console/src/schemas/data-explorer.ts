@@ -3,10 +3,10 @@ import { z } from 'zod'
 export const DatasetStatusSchema = z.object({
   id: z.string(),
   label: z.string(),
-  availability: z.enum(['available', 'empty', 'unavailable']),
+  availability: z.enum(['available', 'empty']),
   freshness: z.enum(['fresh', 'warning', 'unknown']),
   completeness: z.enum(['complete', 'incomplete', 'unknown']),
-  overall: z.enum(['healthy', 'warning', 'critical', 'unknown']),
+  overall: z.enum(['healthy', 'warning', 'unknown']),
   latest_source_at: z.string().nullable().optional(),
   latest_ingested_at: z.string().nullable().optional(),
   ingestion_age_seconds: z.number().nullable().optional(),
