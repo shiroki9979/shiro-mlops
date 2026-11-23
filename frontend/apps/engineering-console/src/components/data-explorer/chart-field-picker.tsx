@@ -1,13 +1,14 @@
 import { type RefObject, useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useMessages } from '@/i18n/messages'
+import type { ExplorerFieldKey } from './catalog'
 import { type ChartFieldOption, chartFieldChoices, toggleChartField } from './chart-fields'
 import { explorerFieldLabel } from './field-format'
 
 interface ChartFieldPickerProps {
   options: readonly ChartFieldOption[]
-  selected: readonly string[]
-  onChange: (fields: string[]) => void
+  selected: readonly ExplorerFieldKey[]
+  onChange: (fields: ExplorerFieldKey[]) => void
 }
 
 export function ChartFieldPicker({ options, selected, onChange }: ChartFieldPickerProps) {

@@ -14,7 +14,7 @@ import { useExplorerQuery } from './use-explorer-query'
 
 export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
   const explorer = useExplorerQuery(dataset)
-  const { list } = explorer
+  const { chart, list, state } = explorer
   const statusQuery = useDatasetStatus()
   const refetchSeries = useRefetchDatasetSeries()
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null)
@@ -45,12 +45,12 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
       <ExplorerStatus dataset={dataset} status={datasetStatus} auditStatus={auditStatus} />
       <ExplorerFilters
         dataset={dataset}
-        start={explorer.start}
-        end={explorer.end}
-        filterValues={explorer.filterValues}
+        start={state.window.start}
+        end={state.window.end}
+        filterValues={state.filters}
         fetchedAt={fetchedAt}
         items={list.data?.items ?? []}
-        csvDisabled={explorer.detailLimitExceeded}
+        csvDisabled={state.rows.kind === 'overDetailLimit'}
         onRefresh={() => {
           explorer.refetchList()
           void statusQuery.refetch()
@@ -61,21 +61,20 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         onWindowChange={explorer.setWindow}
         onFilterChange={explorer.setFilter}
       />
-      {dataset.chart && (
+      {chart && (
         <ExplorerChartCard
           dataset={dataset}
-          chart={dataset.chart}
-          query={explorer.query}
-          chartSearch={explorer.chartSearch}
-          onSettingChange={explorer.setChartSetting}
+          chart={chart.config}
+          settings={chart.settings}
+          series={chart.series}
+          onChartChange={explorer.setChart}
           onWindowChange={explorer.setWindow}
         />
       )}
       <ExplorerResults
         dataset={dataset}
         list={list}
-        canRestart={explorer.canRestart}
-        detailLimitExceeded={explorer.detailLimitExceeded}
+        rows={state.rows}
         onSelect={setSelected}
         onNextPage={explorer.goToNextPage}
         onRestart={explorer.restartFromFirstPage}

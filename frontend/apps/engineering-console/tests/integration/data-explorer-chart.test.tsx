@@ -107,6 +107,19 @@ describe('Data Explorer chart card', () => {
     expect(params.has('agg')).toBe(false)
   })
 
+  // Hourly load has no grouping selector, so a hand-written `group_by` is not applicable.
+  it('draws the chart without sending an inapplicable group_by from the URL', async () => {
+    const requests = captureRequests()
+    renderPath(`/data/power/load?${WINDOW}&group_by=x`)
+
+    await screen.findByRole('figure', {
+      name: chart.figureLabel(m.explorer.datasets.hourly_load.label, m.explorer.fields.load_mw, 'nationwide'),
+    })
+    expect(screen.queryByText(chart.invalidQuery)).not.toBeInTheDocument()
+    expect(requests.series.length).toBeGreaterThan(0)
+    for (const series of requests.series) expect(series.searchParams.has('group_by')).toBe(false)
+  })
+
   it('describes the chart by dataset, field, and series name', async () => {
     captureRequests()
     renderPath(`/data/power/load?${WINDOW}`)
@@ -142,8 +155,8 @@ describe('Data Explorer chart card', () => {
     expect(requests.lists.at(-1)!.searchParams.get('cursor')).toBe('page-2')
   })
 
-  it('omits default chart settings from the URL and disables agg for raw', async () => {
-    captureRequests()
+  it('omits default chart settings from the URL and clears agg for raw', async () => {
+    const requests = captureRequests()
     const user = userEvent.setup()
     const router = renderPath(`/data/power/load?${WINDOW}&bucket=1h&agg=min`)
     await screen.findByRole('figure')
@@ -156,8 +169,20 @@ describe('Data Explorer chart card', () => {
       expect(search.bucket).toBeUndefined()
       expect(search.agg).toBeUndefined()
     })
+    await choose(user, chart.agg, chart.aggs.max)
     await choose(user, chart.bucket, chart.buckets.raw)
-    expect(screen.getByRole('combobox', { name: chart.agg })).toBeDisabled()
+    const aggSelect = screen.getByRole('combobox', { name: chart.agg })
+    expect(aggSelect).toBeDisabled()
+    expect(aggSelect).toHaveTextContent(chart.aggs.avg)
+    await waitFor(() => expect(requests.series.at(-1)!.searchParams.get('bucket')).toBe('raw'))
+    expect(requests.series.at(-1)!.searchParams.has('agg')).toBe(false)
+    expect(router.state.location.search).toMatchObject({ bucket: 'raw' })
+    expect(router.state.location.search).not.toHaveProperty('agg')
+
+    await choose(user, chart.bucket, chart.buckets['1h'])
+    expect(screen.getByRole('combobox', { name: chart.agg })).toHaveTextContent(chart.aggs.avg)
+    await waitFor(() => expect(requests.series.at(-1)!.searchParams.get('bucket')).toBe('1h'))
+    expect(requests.series.at(-1)!.searchParams.has('agg')).toBe(false)
   })
 
   it('keeps chart settings when the window changes and the cursor is cleared', async () => {

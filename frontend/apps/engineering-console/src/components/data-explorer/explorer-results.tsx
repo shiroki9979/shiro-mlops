@@ -12,14 +12,14 @@ import { type Messages, useMessages } from '@/i18n/messages'
 import type { DataExplorerError } from '@/lib/api-client'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
+import type { ExplorerRows } from './explorer-query-state'
 import { ExplorerGapList } from './explorer-gap-list'
 import { ExplorerTable } from './explorer-table'
 
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
   list: QueryResultLike<ListEnvelope, DataExplorerError>
-  canRestart: boolean
-  detailLimitExceeded: boolean
+  rows: ExplorerRows
   onSelect: (row: Record<string, unknown>) => void
   onNextPage: (cursor: string | undefined) => void
   onRestart: () => void
@@ -44,8 +44,7 @@ function listErrorMessage(error: DataExplorerError | undefined, resultsText: Mes
 export function ExplorerResults({
   dataset,
   list,
-  canRestart,
-  detailLimitExceeded,
+  rows,
   onSelect,
   onNextPage,
   onRestart,
@@ -62,7 +61,7 @@ export function ExplorerResults({
   return (
     <Card>
       <CardContent className="pt-6">
-        {detailLimitExceeded ? (
+        {rows.kind === 'overDetailLimit' ? (
           <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
         ) : (
           <>
@@ -77,7 +76,7 @@ export function ExplorerResults({
               onSelect={onSelect}
               onNextPage={onNextPage}
             />
-            {canRestart && readError?.kind === 'cursorRejected' && (
+            {rows.kind === 'page' && readError?.kind === 'cursorRejected' && (
               <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </>
