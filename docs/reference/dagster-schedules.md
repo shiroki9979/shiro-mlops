@@ -10,7 +10,7 @@
 
 ## 執行來源與 as_of
 
-帶 as_of 的排程資產由 `src/shiro_mlops/pipelines/execution_origin.py` 把一次 run 解析成執行來源與 as_of，各資產只宣告沒有 tick 時怎麼做。目前採用的資產：`forecast_track_record`（第 7 項，退回現在）、三個台電即時快照資產（第 2 項，退回現在）；其餘各項的 tick 來源見各項說明。
+帶 as_of 的排程資產由 `src/shiro_mlops/pipelines/execution_origin.py` 把一次 run 解析成執行來源與 as_of，各資產只宣告沒有 tick 時怎麼做。目前採用的資產：`{task_id}__features` 與 `{task_id}__monitoring`（第 1 項，皆退回現在）、三個台電即時快照資產（第 2 項，退回現在）、`raw_taipower_load`（第 5 項，退回現在）、`issued_forecast`（第 6 項，拒絕）、`forecast_track_record`（第 7 項，退回現在）；其餘各項的 tick 來源見各項說明。
 
 - **三種來源**：排程 tick 發起的 run、手動執行（含在 launchpad 手動啟動）、重新執行（Dagster UI 的 re-execute 等，以原 run 為 parent 建立的新 run）。`RetryPolicy` 的重試在同一 run 內進行、不產生新 run，沿用該 run 的來源與 as_of。
 - **tick 標籤**：排程以 `tick_run_request` 產生 `RunRequest`：有 tick 時，`run_key` 與 run 標籤 `shiro_mlops/scheduled_tick` 皆為 tick 的台灣本地時間 ISO 字串（例如 `2026-11-20T10:25:00`）；以 `build_schedule_context()` 不帶時間評估時兩者都不帶，不拋錯。一個 run 只有一個 tick，job 內所有資產共用；資產不以設定欄位接收 tick。只用公開的 `RunRequest(tags=...)`，不讀 Dagster scheduler 的隱藏標籤 `.dagster/scheduled_execution_time`。
@@ -36,7 +36,7 @@
      | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需 `{task_id}__model` 已有 materialization |
 
    - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）、`forecast_track_record`（見第 7 項）或 `forecast_view_export`（見第 8 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
-   - **排程 run_key**：排程 tick 轉為台灣本地時間 ISO 字串作為 `run_key`，同一 tick 重複評估不重跑；無 tick 的手動評估不帶 `run_key`。
+   - **排程 run_key 與 as_of**：兩個排程以 `tick_run_request` 把 tick 的台灣本地時間 ISO 字串同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），同一 tick 重複評估不重跑；無 tick 的手動評估兩者都不帶。`{task_id}__features` 與 `{task_id}__monitoring` 以 run 的 as_of 呼叫 runner，沒有 tick 時退回現在：排程 tick 發起的 run 為該 tick（例如動態視界預報每日 00:00 的訓練固定以 00:00 為 as_of，不因排隊或執行延遲而後移），手動執行與重新執行的 run 為 run 建立時刻；資產沒有 tick 設定欄位。訓練 job 內所有資產共用同一 run 的 as_of，因此訓練 job 裡的 monitoring 與 features 用同一時刻。兩個 job 目前沒有重試政策。
    - **MLflow**：每個任務擁有獨立 experiment 與 registered model，名稱皆等於 `task_id`。每次訓練以 `{task_id}_training` 為 run 名稱記錄 metrics、攤平的 `[params]`（巢狀鍵以 `.` 連接，另含 `task_id`、`task_type`）與模型目錄（artifact path `model`），並以該 artifact URI 建立新的 model version（模型為原生檔案而非 MLflow logged model，ADR-0010）。MLflow 不可用時記錄警告、`run_id` 標為 `local_run`，已保存的模型仍有效。
    - **動態視界預報任務**：`dynamic_horizon_forecast__training_schedule` 為 `0 0 * * *`（`Asia/Taipei`，與舊版 `0 16 * * *` UTC 同一時刻），`dynamic_horizon_forecast__monitoring_schedule` 為 `0 * * * *`；健康門檻 `max_mape = 10.0`。
    - **高負載預警任務**：`high_load_alert__training_schedule` 為 `30 0 * * *`（錯開動態視界預報 00:00 與用電型態異常偵測 01:00 的訓練），`high_load_alert__monitoring_schedule` 為 `5 * * * *`；健康門檻 `min_precision`／`min_recall`／`min_f1` 皆為 `0.5`。
@@ -63,18 +63,18 @@
    - **排程**：`40 * * * *`（`Asia/Taipei`）；每小時檢查 `F-D0047-089` 與 `F-D0047-091`，以 `(dataset_id, IssueTime, Update)` 去重；失敗時在同一 run 內最多重試三次，以三十秒起算指數退避；重試用盡時 run 必須失敗且不得改動既有預報版本。
    - **故障邊界**：使用獨立 job 與 schedule，不因觀測擷取或其他管線失敗而跳過當次預報版本。
 5. **`hourly_actual_load_job`**：
-   - **排程**：`5 * * * *`（`Asia/Taipei`）。
+   - **排程**：`5 * * * *`（`Asia/Taipei`）；以 `tick_run_request` 把 tick 同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），資產沒有設定欄位。無 tick 的手動排程評估兩者都不帶，run 以建立時刻為準。
    - **管線鏈路**：讀取 `raw_taipower_regional_supply_demand_snapshot`，依 [資料契約 §1](data-contracts.md#1-台電用電負載實體-taipower-load-schema) 推算已結束小時，以 `(time, subject)` upsert 至 `raw_taipower_load`，`subject` 為 `nationwide`；不呼叫任何台電外部 API。
-   - **推算窗口**：最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，並向前延伸至 tick 時已存在的最後一個推算小時（`source = regional_snapshot_sum`）之後，使擷取中斷前已入庫、尚未推算的小時在排程恢復後補上；最多回溯 `HOURLY_LOAD_CATCHUP_MAX_HOURS`（預設 `168`）個小時，尚無推算小時時即回溯此上限。超出上限而未涵蓋的區間以 warning 記錄於 run log，改由 `scripts/rederive_hourly_actual_load.py` 補算。
-   - **組合**：決定推算窗口、讀取窗內區域快照、推算與寫入由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore.derive_scheduled`）負責，寫入列的 `source` 由 store 固定為 `regional_snapshot_sum`。資產只解析評估時刻，以 `HOURLY_LOAD_RECOMPUTE_HOURS`、`HOURLY_LOAD_CATCHUP_MAX_HOURS` 與 `HOURLY_LOAD_MIN_SAMPLES` 呼叫 store，再依回傳的推算窗口、未涵蓋區間、快照數與寫入小時數記錄 log 與 warning。
-   - **冪等性**：排程以 tick 時間決定重算窗口，手動 materialize 以實際執行時間決定；重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
+   - **推算窗口**：最近 `HOURLY_LOAD_RECOMPUTE_HOURS`（預設 `3`）個已結束小時，並向前延伸至評估時刻前已存在的最後一個推算小時（`source = regional_snapshot_sum`）之後，使擷取中斷前已入庫、尚未推算的小時在排程恢復後補上；最多回溯 `HOURLY_LOAD_CATCHUP_MAX_HOURS`（預設 `168`）個小時，尚無推算小時時即回溯此上限。超出上限而未涵蓋的區間以 warning 記錄於 run log，改由 `scripts/rederive_hourly_actual_load.py` 補算。
+   - **組合**：決定推算窗口、讀取窗內區域快照、推算與寫入由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore.derive_scheduled`）負責，寫入列的 `source` 由 store 固定為 `regional_snapshot_sum`。資產只以 `run_as_of` 取得評估時刻，以 `HOURLY_LOAD_RECOMPUTE_HOURS`、`HOURLY_LOAD_CATCHUP_MAX_HOURS` 與 `HOURLY_LOAD_MIN_SAMPLES` 呼叫 store，再依回傳的推算窗口、未涵蓋區間、快照數與寫入小時數記錄 log 與 warning。
+   - **冪等性**：評估時刻為 run 的 as_of，資產宣告沒有 tick 時退回現在（[執行來源與 as_of](#執行來源與-as_of)）：排程 tick 發起的 run 為該 tick，手動執行與重新執行的 run 為 run 建立時刻，同一 run 內的重試得到同一推算窗口。重新執行排程 run 時不沿用原 tick；追補窗口從最後一個推算小時之後接續，原 tick 應涵蓋的小時仍在窗口內，最多回溯 `HOURLY_LOAD_CATCHUP_MAX_HOURS`。重算同一小時得到相同結果；後到的有效樣本可使先前缺值的小時補上或更新平均值。
 6. **`issued_forecast_job`（已發布預報，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
    - **定義**：固定資產 `issued_forecast`、job `issued_forecast_job`、排程 `issued_forecast_schedule`，位於 `pipelines/issued_forecast.py`，不進任務資產工廠；只發布動態視界預報。排程預設停用，於首次訓練成功後開啟。
-   - **排程**：`15 * * * *`（`Asia/Taipei`），排在逐時負載推算（:05）與觀測擷取（:10）之後。tick 轉為台灣本地時間 ISO 字串，同時作為 `run_key` 與資產設定 `issued_at`。
+   - **排程**：`15 * * * *`（`Asia/Taipei`），排在逐時負載推算（:05）與觀測擷取（:10）之後。以 `tick_run_request` 把 tick 同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），資產沒有設定欄位。
    - **發布時刻**：發布時刻即排程 tick 時刻，也是預報的 `as_of`，不取整點（決策見 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)）。
    - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。
    - **lineage**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，因此任務 job 不會帶出發布（見第 1 項邊界）。`issued_forecast_job` 不選取任何擷取資產。
-   - **只有定時發布才算**：資產只接受由 `issued_forecast_schedule` tick 產生的 run（設定帶 `issued_at` 且 run 帶 `dagster/schedule_name` 標籤）；手動 materialize、在 launchpad 自填 `issued_at` 的 run，以及重新執行的 run（帶 `dagster/parent_run_id` 或 `dagster/root_run_id` 標籤，即使沿用原 tick 的設定與標籤）皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過。隨需 `/predict` 不寫入。
+   - **只有定時發布才算**：資產宣告沒有 tick 時拒絕（[執行來源與 as_of](#執行來源與-as_of)），退回現在等於在 tick 以外的時刻補發。只有排程 tick 發起的 run 以該 tick 發布；手動 materialize、在 launchpad 自填 tick 標籤的 run，以及重新執行的 run 皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過、不產生 run。隨需 `/predict` 不寫入。
    - **無法產出**：尚無 `dynamic_horizon_forecast__model` materialization 時，排程以 `SkipReason` 略過。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入；模型目錄不存在時同樣以 `Failure` 結束。
    - **不設重試政策**：`issued_forecast` 資產與 `issued_forecast_job` 皆無重試政策；重新執行的 run 不寫入（見上）。理由見 [ADR-0013 §2.1](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#21-已發布預報) 的不補發與 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)。
    - **冪等性**：同一發布時刻已有紀錄（例如 commit 後崩潰被重跑）時不預報、不寫入、不覆寫，資產成功並以 metadata `already_issued = true` 標示；新寫入時 metadata 另記 `load_anchor`、`status`、`model_sha256` 與步數。

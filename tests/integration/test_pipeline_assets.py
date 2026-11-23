@@ -1,7 +1,8 @@
 """Integration tests for Dagster ingestion assets and database persistence."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -11,6 +12,7 @@ from dagster import (
     Failure,
     MetadataValue,
     build_asset_context,
+    build_schedule_context,
     load_assets_from_modules,
     materialize,
 )
@@ -49,14 +51,16 @@ from tests.helpers import (
 )
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
+TAIPEI = ZoneInfo("Asia/Taipei")
+TRACKED = TrackedRun(run_id="run-1", model_version="1")
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 
 
 def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
-    """Invoke the task's features asset the way a training run does."""
+    """Materialize the task's features asset in a manual run; a failure raises its ``Failure``."""
     features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
-    with build_asset_context(resources={"time_series_repo": repository}) as context:
-        return features_asset(context).value
+    result = materialize([features_asset], resources={"time_series_repo": repository})
+    return result.output_for_node(NAMES.features)
 
 
 def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete():
@@ -368,3 +372,118 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     assert report["latest_target_time"] == next_hour.isoformat()
     assert report["target_hours"] == len(taipower_raw_df) + 1
     assert report["training_rows"] == len(taipower_raw_df)
+
+
+def _scheduled_tags(
+    schedule_name: str, tick: datetime, repository: TimeSeriesRepository, instance
+) -> dict[str, str]:
+    """The tags of the run the task schedule launches at ``tick``, as the daemon sets them."""
+    pipeline = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST)
+    schedule = next(schedule for schedule in pipeline.schedules if schedule.name == schedule_name)
+    context = build_schedule_context(
+        instance=instance,
+        scheduled_execution_time=tick,
+        resources={"time_series_repo": repository},
+    )
+    [request] = schedule.evaluate_tick(context).run_requests
+    return dict(request.tags)
+
+
+def _persist_hours_after(repository: TimeSeriesRepository, tick: datetime, hours: int) -> datetime:
+    """Persist ``hours`` derived hours after ``tick``, as if derived while the run was queued."""
+    last_hour = tick.replace(tzinfo=None) + timedelta(hours=hours)
+    write_derived_load(repository.engine, derived_hourly_load(hours, last_hour))
+    return last_hour
+
+
+def test_scheduled_training_reads_features_and_monitors_as_of_its_tick(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run that starts late trains and reports on what was known at the tick, both from one as_of."""
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+    last_hour_at_tick = taipower_raw_df["datetime"].max()
+    # 動態視界預報每日 00:00 訓練；tick 之後才入庫的小時不得進入這次訓練與監控。
+    tick = (last_hour_at_tick + pd.Timedelta(hours=1)).to_pydatetime().replace(tzinfo=TAIPEI)
+    tags = _scheduled_tags(NAMES.training_schedule, tick, test_repo, dagster_instance)
+    _persist_hours_after(test_repo, tick, hours=2)
+
+    with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance, tags=tags
+        )
+
+    assert training.success
+    assert training.output_for_node(NAMES.features)["datetime"].max() == last_hour_at_tick
+    report = training.output_for_node(NAMES.monitoring)
+    assert report["latest_target_time"] == last_hour_at_tick.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df)
+
+
+def test_scheduled_monitoring_reports_on_the_target_known_at_its_tick(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+    with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
+        job_defs.resolve_job_def(NAMES.training_job).execute_in_process(instance=dagster_instance)
+    last_hour_at_tick = taipower_raw_df["datetime"].max()
+    tick = (last_hour_at_tick + pd.Timedelta(minutes=30)).to_pydatetime().replace(tzinfo=TAIPEI)
+    tags = _scheduled_tags(NAMES.monitoring_schedule, tick, test_repo, dagster_instance)
+    _persist_hours_after(test_repo, tick.replace(minute=0), hours=2)
+
+    monitoring = job_defs.resolve_job_def(NAMES.monitoring_job).execute_in_process(
+        instance=dagster_instance, tags=tags
+    )
+
+    assert monitoring.success
+    report = monitoring.output_for_node(NAMES.monitoring)
+    assert report["latest_target_time"] == last_hour_at_tick.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df)
+
+
+REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
+
+
+@pytest.mark.parametrize("reexecuted", [False, True], ids=["manual", "re-execution-of-tick-run"])
+def test_training_without_a_scheduled_tick_reads_as_of_the_run_creation_time(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    reexecuted: bool,
+) -> None:
+    """A re-execution copies the tick run's tags but runs later, so the tick is not its as_of."""
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+    last_hour_at_tick = taipower_raw_df["datetime"].max()
+    tick = (last_hour_at_tick + pd.Timedelta(hours=1)).to_pydatetime().replace(tzinfo=TAIPEI)
+    tick_tags = _scheduled_tags(NAMES.training_schedule, tick, test_repo, dagster_instance)
+    tags = {**tick_tags, **REEXECUTION} if reexecuted else {}
+    # 測試資料皆早於 run 建立時刻，所以建立時刻的 as_of 讀得到 tick 之後才入庫的小時。
+    last_persisted_hour = _persist_hours_after(test_repo, tick, hours=2)
+
+    with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance, tags=tags
+        )
+
+    assert training.success
+    assert training.output_for_node(NAMES.features)["datetime"].max() == last_persisted_hour
+    report = training.output_for_node(NAMES.monitoring)
+    assert report["latest_target_time"] == last_persisted_hour.isoformat()
