@@ -2,14 +2,26 @@ import { z } from 'zod'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
+// The server answered with a non-2xx status; `data` is the parsed body when it was JSON.
 export class ApiError extends Error {
   constructor(
     message: string,
-    public status?: number,
+    public status: number,
     public data?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
+  }
+}
+
+// A 2xx body the caller's schema rejected; it carries no status so no caller mistakes it for a rejection.
+export class InvalidResponseError extends Error {
+  constructor(
+    message: string,
+    public data: unknown,
+  ) {
+    super(message)
+    this.name = 'InvalidResponseError'
   }
 }
 
@@ -50,7 +62,7 @@ export async function request<T>(
     const parseResult = schema.safeParse(json)
     if (!parseResult.success) {
       console.error('Schema validation failed:', parseResult.error)
-      throw new ApiError(`Invalid API response format: ${parseResult.error.message}`, response.status, json)
+      throw new InvalidResponseError(`Invalid API response format: ${parseResult.error.message}`, json)
     }
     return parseResult.data
   }

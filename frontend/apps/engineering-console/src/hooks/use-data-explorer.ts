@@ -1,11 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiClient, type QueryParams } from '@/lib/api-client'
+import { apiClient, type DataExplorerError, type QueryParams } from '@/lib/api-client'
+import type { ListEnvelope, SeriesResponse } from '@/schemas/data-explorer'
 
-function shouldRetryListQuery(failureCount: number, error: unknown): boolean {
-  if (failureCount >= 1 || typeof error !== 'object' || error === null || !('status' in error)) {
-    return false
-  }
-  return error.status === 503
+function retryOnceWhenDatabaseUnavailable(failureCount: number, error: DataExplorerError): boolean {
+  return failureCount < 1 && error.kind === 'databaseUnavailable'
 }
 
 export function useDatasetStatus() {
@@ -27,13 +25,13 @@ export function useDatasetList(
   params: Record<string, string | undefined>,
   enabled = true,
 ) {
-  return useQuery({
+  return useQuery<ListEnvelope, DataExplorerError>({
     queryKey: datasetListQueryKey(path, params),
     queryFn: () => apiClient.getDataList(path, params),
     enabled,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    retry: shouldRetryListQuery,
+    retry: retryOnceWhenDatabaseUnavailable,
   })
 }
 
@@ -42,13 +40,13 @@ export function datasetSeriesQueryKey(path: string, params: QueryParams) {
 }
 
 export function useDatasetSeries(path: string, params: QueryParams, enabled = true) {
-  return useQuery({
+  return useQuery<SeriesResponse, DataExplorerError>({
     queryKey: datasetSeriesQueryKey(path, params),
     queryFn: () => apiClient.getDataSeries(path, params),
     enabled,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    retry: shouldRetryListQuery,
+    retry: retryOnceWhenDatabaseUnavailable,
   })
 }
 
