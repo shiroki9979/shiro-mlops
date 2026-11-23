@@ -1,11 +1,21 @@
-"""Resolve a Dagster run into its execution origin and as_of."""
+"""Resolve a Dagster run into its execution origin and as_of.
+
+A schedule tags the run its tick launches with that tick, in Taiwan-local ISO
+time, through ``tick_run_request``; assets never read the tick from config. The
+tick counts only in the run the schedule launched: one Dagster also tagged with
+the schedule name, and not a re-execution, which copies the original run's tags.
+Any other run has no tick, and each asset with an as_of declares what it does
+then (``WithoutTick``): refuse, or fall back to now. Now is the run's creation
+time, so every retry inside one run gets the same as_of. Flooring the as_of to
+a ten-minute slot or an hour stays with each asset's domain functions.
+"""
 
 from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum, StrEnum
 from zoneinfo import ZoneInfo
 
-from dagster import RunRequest, ScheduleEvaluationContext
+from dagster import AssetExecutionContext, Failure, RunRequest, ScheduleEvaluationContext
 from dagster_shared.check import CheckError
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
@@ -43,8 +53,8 @@ _REFUSAL_REASONS = {
         "This run has no scheduled tick: only the run a schedule tick launched carries one."
     ),
     ExecutionOrigin.REEXECUTION: (
-        "This run is a re-execution: it copies the original run's scheduled tick but runs later, "
-        "so that tick is not its as_of."
+        "This run is a re-execution: it copies the original run's tags, any scheduled tick "
+        "among them, but runs later, so that tick is not its as_of."
     ),
 }
 
@@ -68,6 +78,18 @@ def execution_origin(tags: Mapping[str, str]) -> ExecutionOrigin:
     if SCHEDULED_TICK_TAG in tags and SCHEDULE_NAME_TAG in tags:
         return ExecutionOrigin.SCHEDULED_TICK
     return ExecutionOrigin.MANUAL
+
+
+def run_as_of(context: AssetExecutionContext, *, without_tick: WithoutTick) -> datetime:
+    """The as_of of the run this asset executes in: its tags and creation time, never the clock.
+
+    A refusal fails the run with a ``Failure`` that says why the run has no tick.
+    """
+    created_at = context.instance.get_run_record_by_id(context.run_id).create_timestamp
+    try:
+        return resolve_as_of(context.run.tags, created_at, without_tick=without_tick)
+    except NoScheduledTickError as refusal:
+        raise Failure(description=str(refusal)) from refusal
 
 
 def tick_run_request(context: ScheduleEvaluationContext) -> RunRequest:

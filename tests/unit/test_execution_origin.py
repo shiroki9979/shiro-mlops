@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from dagster import build_schedule_context
+from dagster import AssetExecutionContext, asset, build_schedule_context, materialize
 
 from shiro_mlops.pipelines.execution_origin import (
     SCHEDULE_NAME_TAG,
@@ -12,6 +12,7 @@ from shiro_mlops.pipelines.execution_origin import (
     NoScheduledTickError,
     WithoutTick,
     resolve_as_of,
+    run_as_of,
     tick_run_request,
 )
 
@@ -115,3 +116,39 @@ def test_a_schedule_evaluated_without_a_tick_requests_a_run_with_neither_key_nor
 
     assert request.run_key is None
     assert SCHEDULED_TICK_TAG not in request.tags
+
+
+@asset
+def _issue_like(context: AssetExecutionContext) -> str:
+    return run_as_of(context, without_tick=WithoutTick.REFUSE).isoformat()
+
+
+def _refusal(result) -> str:
+    [failure] = [event for event in result.all_events if event.is_step_failure]
+    return failure.step_failure_data.user_failure_data.description
+
+
+def test_a_refusing_asset_in_a_scheduled_run_gets_the_tick(dagster_instance) -> None:
+    result = materialize([_issue_like], tags=SCHEDULED, instance=dagster_instance)
+
+    assert result.output_for_node("_issue_like") == "2026-11-20T10:25:00"
+
+
+@pytest.mark.parametrize(
+    ("tags", "reason"),
+    [
+        pytest.param({}, "scheduled tick", id="manual"),
+        pytest.param(
+            {**SCHEDULED, "dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"},
+            "re-execut",
+            id="re-execution",
+        ),
+    ],
+)
+def test_a_refusing_asset_fails_the_run_saying_why_it_has_no_tick(
+    dagster_instance, tags: dict, reason: str
+) -> None:
+    result = materialize([_issue_like], tags=tags, instance=dagster_instance, raise_on_error=False)
+
+    assert not result.success
+    assert reason in _refusal(result)
