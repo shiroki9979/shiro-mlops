@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import (
-    TaipowerUnitGenerationRepository,
-    TimeSeriesRepository,
-)
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_unit_generation import parse_unit_generation_payload
+from shiro_mlops.data.taipower_unit_generation_repository import (
+    TaipowerUnitGenerationRepository,
+)
 from tests.helpers import unit_generation_snapshots
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"

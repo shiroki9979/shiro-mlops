@@ -8,12 +8,13 @@ from sqlalchemy import create_engine, text
 from shiro_mlops.core.database import ensure_timescale_hypertables
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
+from shiro_mlops.tasks.runner import check_training_readiness
 from tests.helpers import (
     create_legacy_load_table,
     derived_hourly_load,
     insert_legacy_load_row,
     override_task_policies,
+    task_runtime,
     write_derived_load,
 )
 
@@ -24,7 +25,7 @@ TWENTY_EIGHT_DAYS_HOURS = 672
 
 def _readiness(repository: TimeSeriesRepository, *, as_of: datetime | None = None):
     return check_training_readiness(
-        deployed_task(DYNAMIC_HORIZON_FORECAST), TaskRuntime(repository=repository), as_of=as_of
+        deployed_task(DYNAMIC_HORIZON_FORECAST), task_runtime(repository), as_of=as_of
     )
 
 

@@ -25,6 +25,7 @@ from shiro_mlops.data.cwa_client import (
     CWATownshipForecast,
 )
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
     parse_regional_supply_demand_csv,
@@ -42,6 +43,7 @@ from shiro_mlops.service.data_explorer.datasets import Dataset
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.runner import TaskRuntime
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -353,6 +355,14 @@ def override_task_policies(
     updated = replace(task, policies=task.policies.model_copy(update=updates))
     monkeypatch.setitem(tasks, task_id, updated)
     return updated
+
+
+def task_runtime(repository: TimeSeriesRepository) -> TaskRuntime:
+    """The runtime the deployed entry points build from the composition root's two stores."""
+    return TaskRuntime(
+        hourly_actual_load=repository.hourly_actual_load_store,
+        cwa_weather=repository.cwa_weather_store,
+    )
 
 
 def upstream_http_500(url: str = "https://example.invalid/source") -> httpx.HTTPStatusError:

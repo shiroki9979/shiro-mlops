@@ -35,6 +35,7 @@ from tests.helpers import (
     FixtureCWASource,
     insert_legacy_load_row,
     override_task_policies,
+    task_runtime,
     upstream_http_500,
     with_dynamic_horizon_lookback,
     write_derived_load,
@@ -166,7 +167,7 @@ class _ServingApi:
         served = ServedTasks(
             deployed_tasks(),
             {DYNAMIC_HORIZON_FORECAST: Loaded(self.model, "0" * 64)},
-            repository=self.repository,
+            runtime=task_runtime(self.repository),
             clock=lambda: self.request_time,
         )
         return TestClient(create_app(repository=self.repository, served_tasks=served))
