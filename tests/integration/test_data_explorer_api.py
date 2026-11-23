@@ -714,7 +714,7 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
 
     client, repo = explorer_client
     observed = _now().replace(minute=0)
-    repo.upsert_cwa_observation_batch(
+    repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
             status="incomplete",
@@ -783,8 +783,8 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
             raw_payload={"secret": "do-not-return"},
         )
 
-    repo.upsert_cwa_forecast_release(release(older, 28.0))
-    repo.upsert_cwa_forecast_release(release(newer, 31.0))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release(older, 28.0)])
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release(newer, 31.0)])
     latest_page = client.get(
         "/data/weather/forecasts",
         params={"start": rfc3339(valid - timedelta(hours=1)), "end": rfc3339(valid)},
@@ -855,7 +855,7 @@ def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> No
             ),
         )
 
-    repo.upsert_cwa_forecast_release(release(issued_at, (28.0, 29.0)))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release(issued_at, (28.0, 29.0))])
     params = {
         "start": rfc3339(valid_from),
         "end": rfc3339(valid_from + timedelta(hours=1)),
@@ -865,7 +865,9 @@ def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> No
     assert first.status_code == 200
     assert first.json()["has_more"] is True
 
-    repo.upsert_cwa_forecast_release(release(issued_at + timedelta(hours=1), (31.0,)))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [release(issued_at + timedelta(hours=1), (31.0,))]
+    )
     second = client.get(
         "/data/weather/forecasts",
         params={**params, "cursor": first.json()["next_cursor"]},
@@ -891,7 +893,7 @@ def test_forecast_cursor_distinguishes_rows_by_valid_to(explorer_client) -> None
             for hours, temperature in ((1, 28.0), (2, 31.0))
         ),
     )
-    repo.upsert_cwa_forecast_release(release)
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release])
     params = {
         "start": rfc3339(valid_from),
         "end": rfc3339(valid_from),
@@ -917,7 +919,7 @@ def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) 
 
     client, repo = explorer_client
     observed_at = _now().replace(minute=0)
-    repo.upsert_cwa_observation_batch(
+    repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
             status="incomplete",
@@ -926,17 +928,19 @@ def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) 
             observations=(),
         )
     )
-    repo.upsert_cwa_forecast_release(
-        CWAForecastRelease(
-            dataset_id="F-D0047-089",
-            issued_at=pd.Timestamp(observed_at),
-            source_updated_at=pd.Timestamp(observed_at),
-            fetched_at=observed_at,
-            status="incomplete",
-            missing_geocodes=(),
-            raw_payload={},
-            forecasts=(),
-        )
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            CWAForecastRelease(
+                dataset_id="F-D0047-089",
+                issued_at=pd.Timestamp(observed_at),
+                source_updated_at=pd.Timestamp(observed_at),
+                fetched_at=observed_at,
+                status="incomplete",
+                missing_geocodes=(),
+                raw_payload={},
+                forecasts=(),
+            )
+        ]
     )
 
     statuses = {item["id"]: item for item in client.get("/data/status").json()["datasets"]}

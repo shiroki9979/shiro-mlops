@@ -1,6 +1,7 @@
 """Integration tests for Dagster ingestion assets and database persistence."""
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -22,6 +23,7 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     CWAStationObservation,
 )
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.assets import (
@@ -63,13 +65,16 @@ def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete():
     batch = MagicMock(spec=CWAObservationBatch)
     batch.status = "complete"
     batch.missing_station_ids = ()
-    repository = MagicMock(spec=TimeSeriesRepository)
-    resources = {"time_series_repo": repository, CWA_SOURCE: FixtureCWASource(batch)}
+    store = MagicMock(spec=CWAWeatherStore)
+    resources = {
+        "time_series_repo": SimpleNamespace(cwa_weather_store=store),
+        CWA_SOURCE: FixtureCWASource(batch),
+    }
     with build_asset_context(resources=resources) as context:
         result = raw_cwa_station_observation(context)
 
     assert result is batch
-    repository.upsert_cwa_observation_batch.assert_called_once_with(batch)
+    store.upsert_cwa_observation_batch.assert_called_once_with(batch)
 
 
 def test_canonical_cwa_forecast_asset_persists_both_products():
@@ -80,13 +85,13 @@ def test_canonical_cwa_forecast_asset_persists_both_products():
     source = FixtureCWASource(
         forecast_releases={"F-D0047-089": releases[0], "F-D0047-091": releases[1]}
     )
-    repository = MagicMock(spec=TimeSeriesRepository)
-    resources = {"time_series_repo": repository, CWA_SOURCE: source}
+    store = MagicMock(spec=CWAWeatherStore)
+    resources = {"time_series_repo": SimpleNamespace(cwa_weather_store=store), CWA_SOURCE: source}
     with build_asset_context(resources=resources) as context:
         result = raw_cwa_township_forecast(context)
 
     assert result == releases
-    repository.upsert_cwa_forecast_releases.assert_called_once_with(releases)
+    store.upsert_cwa_forecast_releases.assert_called_once_with(releases)
 
 
 def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository) -> None:
@@ -106,7 +111,7 @@ def test_task_features_read_weather_from_configured_reference_station(
     )
     override_task_policies(monkeypatch, min_training_hours=2)
     write_derived_load(test_repo.engine, derived_hourly_load(2, LAST_LOAD_HOUR))
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=LAST_LOAD_HOUR,
             status="complete",
@@ -235,7 +240,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     persisted_load = derived_load_series(test_repo.engine)
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
+    persisted_weather = test_repo.cwa_weather_store.fetch_weather_range(reference_point="Taipei")
     assert len(persisted_weather) == len(cwa_obs_df)
 
 
@@ -250,7 +255,7 @@ def _trainable_task_definitions(
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     write_derived_load(test_repo.engine, taipower_raw_df)
-    test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(cwa_observation_batch)
     pipelines = build_task_pipelines(deployed_tasks())
     return Definitions(
         assets=[

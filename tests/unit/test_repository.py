@@ -8,11 +8,11 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.core.config import settings
+from shiro_mlops.data.cwa_client import CWAObservationBatch
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.repository import (
-    FORECAST_ROW_COLUMNS,
     TaipowerRegionalSupplyDemandRepository,
     TaipowerSupplyDemandRepository,
     TaipowerUnitGenerationRepository,
@@ -48,6 +48,18 @@ def test_repository_initialization(sqlite_engine: Engine):
         repo_default = TimeSeriesRepository(auto_init=False)
         assert repo_default.engine is mock_engine
         mock_get_engine.assert_called_once()
+
+
+def test_repository_hands_out_a_cwa_weather_store_on_its_engine(
+    sqlite_engine: Engine, cwa_observation_batch: CWAObservationBatch
+) -> None:
+    """Weather written through the facade's store is what any store on that engine reads."""
+    store = TimeSeriesRepository(engine=sqlite_engine).cwa_weather_store
+
+    store.upsert_cwa_observation_batch(cwa_observation_batch)
+
+    observations = CWAWeatherStore(sqlite_engine).fetch_cwa_station_observations()
+    assert len(observations) == len(cwa_observation_batch.observations)
 
 
 @pytest.mark.parametrize(
@@ -102,7 +114,9 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     )
 
     write_derived_load(repository.engine, load_df)
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(weather_df))
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
+        canonical_observation_batch(weather_df)
+    )
 
     with repository.engine.connect() as conn:
         stored_load_time = pd.read_sql_query("SELECT time FROM raw_taipower_load", conn).iloc[0][
@@ -119,7 +133,7 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     persisted_load = repository.hourly_actual_load_store.series(
         start=datetime(2026, 8, 20, 14, 0), end=datetime(2026, 8, 20, 15, 0)
     )
-    persisted_weather = repository.fetch_weather_range(
+    persisted_weather = repository.cwa_weather_store.fetch_weather_range(
         start_time="2026-08-20T06:00:00Z",
         end_time="2026-08-20T06:00:00Z",
         reference_point="Taipei",
@@ -159,7 +173,7 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
             }
         ),
     )
-    repository.upsert_cwa_observation_batch(
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
         replace(
             canonical_observation_batch(
                 pd.DataFrame(
@@ -182,21 +196,23 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
             fetched_at=datetime(2026, 8, 20, 15, 5, 30, 123456),
         )
     )
-    repository.upsert_cwa_forecast_release(
-        replace(
-            forecast_release(
-                datetime(2026, 8, 20, 11, 0),
-                (
-                    township_forecast(
-                        datetime(2026, 8, 20, 12, 0),
-                        31.0,
-                        valid_to=datetime(2026, 8, 20, 15, 0),
+    repository.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            replace(
+                forecast_release(
+                    datetime(2026, 8, 20, 11, 0),
+                    (
+                        township_forecast(
+                            datetime(2026, 8, 20, 12, 0),
+                            31.0,
+                            valid_to=datetime(2026, 8, 20, 15, 0),
+                        ),
                     ),
                 ),
-            ),
-            source_updated_at=pd.Timestamp("2026-08-20T11:20:00+08:00"),
-            fetched_at=datetime(2026, 8, 20, 11, 25),
-        )
+                source_updated_at=pd.Timestamp("2026-08-20T11:20:00+08:00"),
+                fetched_at=datetime(2026, 8, 20, 11, 25),
+            )
+        ]
     )
 
     assert _stored_text(repository.engine, "raw_taipower_load", "time") == [
@@ -233,20 +249,22 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
 ) -> None:
     """Every load and CWA read hands back Taiwan-local naive instants, bounds included."""
     write_derived_load(repository.engine, derived_hourly_load(3, datetime(2026, 8, 20, 16, 0)))
-    repository.upsert_cwa_forecast_release(
-        replace(
-            forecast_release(
-                datetime(2026, 8, 20, 11, 0),
-                (
-                    township_forecast(
-                        datetime(2026, 8, 20, 12, 0),
-                        31.0,
-                        valid_to=datetime(2026, 8, 20, 15, 0),
+    repository.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            replace(
+                forecast_release(
+                    datetime(2026, 8, 20, 11, 0),
+                    (
+                        township_forecast(
+                            datetime(2026, 8, 20, 12, 0),
+                            31.0,
+                            valid_to=datetime(2026, 8, 20, 15, 0),
+                        ),
                     ),
                 ),
-            ),
-            source_updated_at=pd.Timestamp("2026-08-20 11:20"),
-        )
+                source_updated_at=pd.Timestamp("2026-08-20 11:20"),
+            )
+        ]
     )
 
     store = repository.hourly_actual_load_store
@@ -255,7 +273,7 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
     )
     latest = store.latest_observation(datetime(2026, 8, 20, 15, 30))
     accumulation = store.accumulation(datetime(2026, 8, 20, 15, 0))
-    forecasts = repository.fetch_cwa_forecast_rows(
+    forecasts = repository.cwa_weather_store.fetch_cwa_forecast_rows(
         geocode="63000050",
         issued_before="2026-08-20T03:00:00Z",
         source_updated_before=datetime(2026, 8, 20, 11, 20),
@@ -281,220 +299,3 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
             "valid_to": pd.Timestamp("2026-08-20 15:00"),
         }
     ]
-
-
-def test_point_in_time_forecast_read_without_rows_returns_empty_frame(
-    repository: TimeSeriesRepository,
-) -> None:
-    """A cutoff read before any vintage exists is an empty result, not an error."""
-    rows = repository.fetch_cwa_forecast_rows(geocode="63000050", issued_before="2026-08-20 12:00")
-
-    assert rows.empty
-    assert list(rows.columns) == FORECAST_ROW_COLUMNS
-
-
-def test_upsert_cwa_weather_insert_and_fetch(
-    repository: TimeSeriesRepository, cwa_obs_df: pd.DataFrame, cwa_observation_batch
-):
-    """Verify canonical observations are exposed through the training weather query."""
-    affected = repository.upsert_cwa_observation_batch(cwa_observation_batch)
-    assert affected == len(cwa_obs_df)
-
-    fetched_df = repository.fetch_weather_range(reference_point="Taipei")
-    assert len(fetched_df) == len(cwa_obs_df)
-    assert "time" in fetched_df.columns
-    assert "location" in fetched_df.columns
-    assert "temperature" in fetched_df.columns
-    assert "relative_humidity" in fetched_df.columns
-    assert fetched_df.iloc[0]["temperature"] == pytest.approx(27.8)
-    assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(80.0)
-
-
-def test_legacy_weather_upsert_is_rejected_before_it_can_create_canonical_provenance(
-    repository: TimeSeriesRepository,
-) -> None:
-    """Legacy location labels must never be converted into canonical station identities."""
-    legacy_weather = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 00:00:00",
-                "location": "Unknown",
-                "temperature": 27.0,
-                "relative_humidity": 80.0,
-            }
-        ]
-    )
-
-    with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
-        repository.upsert_cwa_weather(legacy_weather)
-
-    assert repository.fetch_cwa_station_observations().empty
-
-
-def test_fetch_weather_range_keeps_canonical_station_identity(
-    repository: TimeSeriesRepository,
-    cwa_observation_batch,
-) -> None:
-    """Training source rows retain StationId so strict gap handling is selected."""
-    repository.upsert_cwa_observation_batch(cwa_observation_batch)
-
-    weather = repository.fetch_weather_range(reference_point="Taipei")
-
-    assert set(weather["station_id"]) == {"466920"}
-
-
-def test_fetch_weather_range_uses_configured_taipei_station(
-    repository: TimeSeriesRepository,
-    cwa_observation_batch,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        settings,
-        "CWA_LOCATION_ALLOWLIST",
-        '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
-    )
-    observation = replace(cwa_observation_batch.observations[0], station_id="999999")
-    repository.upsert_cwa_observation_batch(
-        replace(cwa_observation_batch, observations=(observation,))
-    )
-
-    weather = repository.fetch_weather_range(reference_point="Taipei")
-
-    assert len(weather) == 1
-    assert weather.iloc[0]["station_id"] == "999999"
-    assert weather.iloc[0]["location"] == "Taipei"
-
-
-def test_upsert_cwa_weather_idempotency_and_update(repository: TimeSeriesRepository):
-    """Verify ON CONFLICT DO UPDATE updates temperature and relative_humidity on conflict."""
-    initial_df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 00:00:00",
-                "temperature": 27.0,
-                "relative_humidity": 80.0,
-                "location": "Taipei",
-            }
-        ]
-    )
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(initial_df))
-
-    updated_df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 00:00:00",
-                "temperature": 29.5,
-                "relative_humidity": 75.0,
-                "location": "Taipei",
-            }
-        ]
-    )
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(updated_df))
-
-    fetched_df = repository.fetch_weather_range(reference_point="Taipei")
-    assert len(fetched_df) == 1
-    assert fetched_df.iloc[0]["temperature"] == pytest.approx(29.5)
-    assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(75.0)
-
-
-def test_upsert_cwa_weather_preserves_non_null_fields_on_partial_update(
-    repository: TimeSeriesRepository,
-):
-    """Verify COALESCE logic preserves existing non-null fields on partial update."""
-    initial_df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 00:00:00",
-                "temperature": 27.0,
-                "relative_humidity": 80.0,
-                "location": "Taipei",
-            }
-        ]
-    )
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(initial_df))
-
-    # Partial update: new temperature, relative_humidity is None/NaN
-    partial_df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 00:00:00",
-                "temperature": 31.0,
-                "relative_humidity": None,
-                "location": "Taipei",
-            }
-        ]
-    )
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(partial_df))
-
-    fetched_df = repository.fetch_weather_range(reference_point="Taipei")
-    assert len(fetched_df) == 1
-    assert fetched_df.iloc[0]["temperature"] == pytest.approx(31.0)
-    # Relative humidity preserved from initial insert
-    assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(80.0)
-
-
-def test_legacy_weather_upsert_rejects_an_empty_dataframe(repository: TimeSeriesRepository):
-    """An empty frame is rejected like any legacy weather write rather than counted as zero rows."""
-    empty_df = pd.DataFrame()
-    with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
-        repository.upsert_cwa_weather(empty_df)
-
-
-def test_fetch_weather_range_filters_and_sorting(repository: TimeSeriesRepository):
-    """Verify fetch_weather_range filters by date range and weather reference point with ascending sort."""
-    df = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 05:00:00",
-                "temperature": 26.6,
-                "relative_humidity": 84.0,
-                "location": "Taipei",
-            },
-            {
-                "datetime": "2026-08-20 02:00:00",
-                "temperature": 26.9,
-                "relative_humidity": 83.0,
-                "location": "Taipei",
-            },
-            {
-                "datetime": "2026-08-20 02:00:00",
-                "temperature": 28.0,
-                "relative_humidity": 80.0,
-                "location": "Taichung",
-            },
-        ]
-    )
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(df))
-
-    filtered_df = repository.fetch_weather_range(
-        start_time="2026-08-20 01:00:00",
-        end_time="2026-08-20 04:00:00",
-        reference_point="Taipei",
-    )
-    assert len(filtered_df) == 1
-    assert filtered_df.iloc[0]["temperature"] == pytest.approx(26.9)
-
-
-def test_fetch_weather_range_propagates_database_errors(
-    repository: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A database outage must not appear as missing observed weather to callers."""
-
-    def unavailable(**_: object) -> pd.DataFrame:
-        raise OperationalError("SELECT", {}, Exception("connection refused"))
-
-    monkeypatch.setattr(repository, "fetch_cwa_station_observations", unavailable)
-
-    with pytest.raises(OperationalError):
-        repository.fetch_weather_range(reference_point="Taipei")
-
-
-def test_fetch_empty_results_schema(repository: TimeSeriesRepository):
-    """Verify the weather fetch on empty tables returns an empty DataFrame with typed columns."""
-    weather_df = repository.fetch_weather_range()
-    assert weather_df.empty
-    assert "time" in weather_df.columns
-    assert "location" in weather_df.columns
-    assert "temperature" in weather_df.columns
-    assert "relative_humidity" in weather_df.columns
-    assert pd.api.types.is_datetime64_any_dtype(weather_df["time"])

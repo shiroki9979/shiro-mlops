@@ -101,7 +101,7 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(
     load, weather = hourly_load_with_weather(24 * 21, last_hour)
     write_derived_load(test_repo.engine, load)
     # 沒有鄉鎮預報，只能以測站前日觀測補足視界，故為降級。
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     client = _client(
@@ -141,14 +141,14 @@ def _fresh_inputs(
         hour=anchor["datetime"].to_pydatetime(), load_mw=float(anchor["load_mw"])
     )
     repository.hourly_actual_load_store.series.return_value = taipower_raw_df
-    repository.fetch_cwa_station_observations.return_value = cwa_obs_df.rename(
+    repository.cwa_weather_store.fetch_cwa_station_observations.return_value = cwa_obs_df.rename(
         columns={
             "datetime": "observed_at",
             "temperature": "temperature_c",
             "relative_humidity": "relative_humidity_pct",
         }
     )
-    repository.fetch_cwa_forecast_rows.return_value = cwa_forecast_df.assign(
+    repository.cwa_weather_store.fetch_cwa_forecast_rows.return_value = cwa_forecast_df.assign(
         dataset_id="F-D0047-089",
         issued_at=pd.Timestamp("2026-08-21 22:00"),
         source_updated_at=pd.Timestamp("2026-08-21 22:10"),
@@ -214,10 +214,10 @@ def test_api_predict_reads_weather_from_the_weather_reference_point(
     client.post("/predict", json={"horizon_hours": 1})
 
     taipei = settings.cwa_locations["Taipei"]
-    assert repository.fetch_cwa_forecast_rows.call_args.kwargs["geocode"] == taipei.geocode
-    assert (
-        repository.fetch_cwa_station_observations.call_args.kwargs["station_id"]
-        == taipei.station_id
+    store = repository.cwa_weather_store
+    assert store.fetch_cwa_forecast_rows.call_args.kwargs["geocode"] == taipei.geocode
+    assert store.fetch_cwa_station_observations.call_args.kwargs["station_id"] == (
+        taipei.station_id
     )
 
 
@@ -239,8 +239,8 @@ def test_api_predict_on_demand_does_not_issue_a_forecast(
     assert {name for name, _args, _kwargs in repository.method_calls} <= {
         "hourly_actual_load_store.latest_observation",
         "hourly_actual_load_store.series",
-        "fetch_cwa_station_observations",
-        "fetch_cwa_forecast_rows",
+        "cwa_weather_store.fetch_cwa_station_observations",
+        "cwa_weather_store.fetch_cwa_forecast_rows",
     }
 
 
@@ -581,7 +581,7 @@ def serve_anomaly_task(test_repo, monkeypatch) -> Callable[..., TestClient]:
     hours = 24 * 21
     load, weather = hourly_load_with_weather(hours, ANOMALY_ANCHOR.to_pydatetime())
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     task = override_task_policies(monkeypatch, ANOMALY_TASK, min_training_hours=hours)
@@ -634,7 +634,7 @@ def test_anomaly_task_reports_a_database_outage_instead_of_missing_weather(
     def unavailable(**_: object) -> pd.DataFrame:
         raise OperationalError("SELECT", {}, Exception("connection refused"))
 
-    monkeypatch.setattr(test_repo, "fetch_cwa_station_observations", unavailable)
+    monkeypatch.setattr(test_repo.cwa_weather_store, "fetch_cwa_station_observations", unavailable)
 
     response = serve_anomaly_task().post(
         f"/tasks/{ANOMALY_TASK}/predict", json={"horizon_hours": 1}

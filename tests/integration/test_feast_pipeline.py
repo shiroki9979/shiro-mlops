@@ -107,7 +107,9 @@ def test_training_data_excludes_other_load_provenance(
     insert_other_source_load_row(
         test_repo.engine, derived["datetime"].iloc[1] + pd.Timedelta(minutes=30), 99999.0
     )
-    test_repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
+        canonical_observation_batch(cwa_obs_df)
+    )
 
     data = _training_data(test_repo, monkeypatch)
 
@@ -124,7 +126,7 @@ def test_training_data_isolates_subject_and_weather_reference_point(
     """Only the task's subject trains, and weather comes only from its reference point."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
     write_derived_load(repo.engine, taipower_raw_df)
-    repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
+    repo.cwa_weather_store.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
 
     north_load = taipower_raw_df.copy()
     north_load["load_mw"] = north_load["load_mw"] * 0.6
@@ -133,7 +135,7 @@ def test_training_data_isolates_subject_and_weather_reference_point(
     kh_weather = cwa_obs_df.copy()
     kh_weather["temperature"] = kh_weather["temperature"] + 30.0
     kh_weather["location"] = "Kaohsiung"
-    repo.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
+    repo.cwa_weather_store.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
 
     data = _training_data(repo, monkeypatch)
 
@@ -187,7 +189,9 @@ def test_training_data_excludes_rows_after_as_of(sqlite_engine: Engine, monkeypa
         ]
     )
     write_derived_load(repository.engine, source_load)
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(source_weather))
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
+        canonical_observation_batch(source_weather)
+    )
 
     data = _training_data(repository, monkeypatch, as_of=pd.Timestamp("2026-08-20 12:00"))
 

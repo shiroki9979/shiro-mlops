@@ -88,7 +88,7 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
     try:
         assert load_store.write(load_df, subject=subject) == 1
         assert load_store.write(revised_load_df, subject=subject) == 1
-        assert repository.upsert_cwa_observation_batch(observation_batch) == 1
+        assert repository.cwa_weather_store.upsert_cwa_observation_batch(observation_batch) == 1
 
         with timescaledb_engine.connect() as connection:
             stored_load_time = connection.execute(
@@ -108,7 +108,7 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
         persisted_load = load_store.series(
             start=datetime(2026, 8, 20, 14, 0), end=datetime(2026, 8, 20, 15, 0), subject=subject
         )
-        persisted_weather = repository.fetch_weather_range(
+        persisted_weather = repository.cwa_weather_store.fetch_weather_range(
             start_time="2026-08-20T06:00:00Z",
             end_time="2026-08-20T06:00:00Z",
             reference_point=reference_point,
@@ -166,7 +166,7 @@ def test_string_raw_payload_round_trips_through_timescaledb_jsonb(
     release_key = {"dataset_id": "F-D0047-089", "issued_at": pd.Timestamp("2026-08-20T03:00:00Z")}
 
     try:
-        repository.upsert_cwa_forecast_release(release)
+        repository.cwa_weather_store.upsert_cwa_forecast_releases([release])
         with timescaledb_engine.connect() as connection:
             stored = connection.execute(
                 text(

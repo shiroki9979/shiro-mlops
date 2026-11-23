@@ -50,7 +50,7 @@ def test_repo(tmp_path: Path) -> TimeSeriesRepository:
 def runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     return TaskRuntime(repository=test_repo)
@@ -101,7 +101,7 @@ def test_snapshot_round_trip_with_staggered_load_and_weather_gaps_trains_identic
     gapped_load = load[load["datetime"] != hour_n].reset_index(drop=True)
     gapped_weather = weather[weather["datetime"] != hour_n_plus_1].reset_index(drop=True)
     write_derived_load(test_repo.engine, gapped_load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(gapped_weather.assign(location="Taipei"))
     )
     gapped_runtime = TaskRuntime(repository=test_repo)
@@ -217,7 +217,9 @@ def three_point_runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     write_derived_load(test_repo.engine, load)
     for offset, location in enumerate(THREE_POINTS):
         shifted = weather.assign(temperature=weather["temperature"] + offset, location=location)
-        test_repo.upsert_cwa_observation_batch(canonical_observation_batch(shifted))
+        test_repo.cwa_weather_store.upsert_cwa_observation_batch(
+            canonical_observation_batch(shifted)
+        )
     return TaskRuntime(repository=test_repo)
 
 

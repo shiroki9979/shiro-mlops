@@ -24,6 +24,7 @@ from shiro_mlops.core.constants import (
     SUBJECT_COL,
 )
 from shiro_mlops.core.datetime_utils import with_datetime_column
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stale_load_anchor
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -76,6 +77,11 @@ class TaskRuntime:
     def hourly_actual_load(self) -> HourlyActualLoadStore:
         """The store of the hourly actual load every task targets."""
         return self.repository.hourly_actual_load_store
+
+    @property
+    def cwa_weather(self) -> CWAWeatherStore:
+        """The store of the CWA observations and forecasts every task reads weather from."""
+        return self.repository.cwa_weather_store
 
 
 class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interface design
@@ -221,7 +227,7 @@ def load_observed_weather(
     """
     points = []
     for point in task.weather.reference_points:
-        observed = runtime.repository.fetch_weather_range(
+        observed = runtime.cwa_weather.fetch_weather_range(
             start_time=start, end_time=end, reference_point=point.location.alias
         )
         observed = with_datetime_column(observed)[[DATETIME_COL, *task.weather.fields]]
@@ -317,10 +323,6 @@ class _ServingRequest:
         return _requirements_of(self.task)
 
     @property
-    def repository(self) -> TimeSeriesRepository:
-        return self.runtime.repository
-
-    @property
     def weather_path(self) -> _WeatherPath:
         return _weather_path(self.requirements)
 
@@ -401,7 +403,7 @@ def _resolve_future_weather(
             point.location.alias,
             point.weight,
             resolve_weather(
-                request.repository,
+                request.runtime.cwa_weather,
                 reference_point=point.location,
                 start_time=anchor + timedelta(hours=1),
                 horizon_hours=request.horizon_hours,

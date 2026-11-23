@@ -12,7 +12,7 @@ def assert_observation_audit_pages(repo: TimeSeriesRepository) -> None:
     """The expected order is fixed by the fixture, independent of cursor helpers."""
     second = datetime(2026, 9, 27, 12, 0, 0)
     for microsecond, station_id in ((100, "old"), (600, "middle"), (900, "new")):
-        repo.upsert_cwa_observation_batch(
+        repo.cwa_weather_store.upsert_cwa_observation_batch(
             CWAObservationBatch(
                 fetched_at=second.replace(microsecond=microsecond),
                 status="incomplete",

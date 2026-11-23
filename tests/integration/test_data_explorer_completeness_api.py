@@ -94,7 +94,7 @@ def test_audit_status_reports_missing_ids_or_an_incomplete_placeholder(
 ) -> None:
     """觀測缺站、預報缺 geocode；incomplete 卻未列 id 時以 placeholder 揭露。"""
     observed_at = datetime(2026, 9, 20, 12)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
             status="incomplete",
@@ -103,12 +103,14 @@ def test_audit_status_reports_missing_ids_or_an_incomplete_placeholder(
             observations=(_observation(observed_at),),
         )
     )
-    test_repo.upsert_cwa_forecast_release(
-        replace(
-            forecast_release(observed_at, (township_forecast(observed_at, 30.0),)),
-            status="incomplete",
-            missing_geocodes=missing_geocodes,
-        )
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            replace(
+                forecast_release(observed_at, (township_forecast(observed_at, 30.0),)),
+                status="incomplete",
+                missing_geocodes=missing_geocodes,
+            )
+        ]
     )
 
     statuses = _status(client)
@@ -142,7 +144,7 @@ def test_observation_list_without_station_expects_every_allowlisted_station_hour
 ) -> None:
     """未指定測站時，測站缺口依 allowlist 的每站逐時 slot 計算。"""
     observed = datetime(2026, 8, 20, 14, 0)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
             status="complete",
@@ -168,7 +170,7 @@ def test_observation_status_without_an_audit_header_is_complete(
 ) -> None:
     """有觀測列但沒有批次審計表頭時，觀測狀態仍為 complete，不列出缺漏 id。"""
     observed_at = datetime(2026, 9, 20, 12)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
             status="incomplete",

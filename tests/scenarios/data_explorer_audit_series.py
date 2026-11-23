@@ -27,7 +27,7 @@ def _seeded_batches(
 ) -> Iterator[TestClient]:
     """Seed observation batch headers keyed by fetch time and remove them afterwards."""
     for fetched_at, status in batches.items():
-        repo.upsert_cwa_observation_batch(
+        repo.cwa_weather_store.upsert_cwa_observation_batch(
             CWAObservationBatch(
                 fetched_at=fetched_at,
                 status=status,
@@ -57,7 +57,7 @@ def _seeded_versions(
 ) -> Iterator[tuple[TestClient, str]]:
     """Seed forecast versions `(issued_at, source_updated_at, status)` under a unique dataset."""
     dataset_id = f"T-{uuid4().hex[:10]}"
-    repo.upsert_cwa_forecast_releases(
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
         [
             CWAForecastRelease(
                 dataset_id=dataset_id,

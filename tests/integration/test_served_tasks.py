@@ -34,7 +34,7 @@ def serving_repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     """Three weeks of fresh nationwide load and Taipei observations, without forecasts."""
     load, weather = hourly_load_with_weather(24 * 21, LAST_HOUR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     return test_repo
@@ -158,7 +158,7 @@ def _fresh_forecast_release() -> CWAForecastRelease:
 def test_a_fresh_forecast_keeps_the_task_ready_and_predicting_in_normal_mode(
     serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel
 ) -> None:
-    serving_repo.upsert_cwa_forecast_release(_fresh_forecast_release())
+    serving_repo.cwa_weather_store.upsert_cwa_forecast_releases([_fresh_forecast_release()])
     served = _serving(fitted_task_model, serving_repo)
 
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)

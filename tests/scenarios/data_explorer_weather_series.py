@@ -66,7 +66,7 @@ def _seeded_observations(
             for (alias, moment), value in temperatures.items()
         ),
     )
-    repo.upsert_cwa_observation_batch(batch)
+    repo.cwa_weather_store.upsert_cwa_observation_batch(batch)
     try:
         with series_client(repo) as client:
             yield client, station_ids
@@ -199,17 +199,19 @@ def _seeded_forecasts(
         ),
     }
     for (issued_at, source_updated_at), forecasts in releases.items():
-        repo.upsert_cwa_forecast_release(
-            CWAForecastRelease(
-                dataset_id=dataset_id,
-                issued_at=pd.Timestamp(issued_at),
-                source_updated_at=pd.Timestamp(source_updated_at),
-                fetched_at=source_updated_at,
-                status="complete",
-                missing_geocodes=(),
-                raw_payload={},
-                forecasts=forecasts,
-            )
+        repo.cwa_weather_store.upsert_cwa_forecast_releases(
+            [
+                CWAForecastRelease(
+                    dataset_id=dataset_id,
+                    issued_at=pd.Timestamp(issued_at),
+                    source_updated_at=pd.Timestamp(source_updated_at),
+                    fetched_at=source_updated_at,
+                    status="complete",
+                    missing_geocodes=(),
+                    raw_payload={},
+                    forecasts=forecasts,
+                )
+            ]
         )
     try:
         with series_client(repo) as client:
@@ -324,7 +326,7 @@ def assert_forecast_series_prefers_three_day_dataset_on_shared_issue(
         ),
     }
     for release in releases.values():
-        repo.upsert_cwa_forecast_release(release)
+        repo.cwa_weather_store.upsert_cwa_forecast_releases([release])
     window = {
         "start": rfc3339(issued_at.replace(microsecond=0)),
         "end": rfc3339(issued_at.replace(microsecond=0) + timedelta(hours=6)),
