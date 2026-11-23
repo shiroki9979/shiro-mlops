@@ -23,7 +23,6 @@ from shiro_mlops.data.weather_resolution import (
 
 # 每個預報小時：天氣欄位 → 氣象代表點別名 → 該點該欄位的來源。
 PointSources = Mapping[str, Mapping[str, WeatherValueSource]]
-# PointSources 序列化後的 `weather_sources` JSON 形狀（rest-api.md §3）。
 SerializedPointSources = dict[str, dict[str, dict[str, str]]]
 
 
