@@ -19,7 +19,6 @@ from typing import ClassVar, Self
 import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import UnknownTaskError
@@ -93,12 +92,12 @@ class ServedTasks:
         tasks: Mapping[str, TaskDefinition],
         models: Mapping[str, ModelState],
         *,
-        repository: TimeSeriesRepository,
+        runtime: TaskRuntime,
         clock: Callable[[], pd.Timestamp],
     ) -> None:
         self._tasks = dict(tasks)
         self._models = dict(models)
-        self._runtime = TaskRuntime(repository=repository)
+        self._runtime = runtime
         self._clock = clock
 
     @classmethod
@@ -107,12 +106,12 @@ class ServedTasks:
         tasks: Mapping[str, TaskDefinition],
         model_root: Path,
         *,
-        repository: TimeSeriesRepository,
+        runtime: TaskRuntime,
         clock: Callable[[], pd.Timestamp],
     ) -> Self:
         """Load each task's model with its sha256; a failed load leaves only that task unserved."""
         models = {task_id: _load_state(model_root, task) for task_id, task in tasks.items()}
-        return cls(tasks, models, repository=repository, clock=clock)
+        return cls(tasks, models, runtime=runtime, clock=clock)
 
     def task(self, task_id: str) -> TaskDefinition:
         """One served task definition; unknown ids fail loudly."""

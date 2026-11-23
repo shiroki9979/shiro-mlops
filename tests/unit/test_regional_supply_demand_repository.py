@@ -6,22 +6,22 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import (
-    TaipowerRegionalSupplyDemandRepository,
-    TimeSeriesRepository,
-)
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import parse_regional_supply_demand_csv
+from shiro_mlops.data.taipower_regional_supply_demand_repository import (
+    TaipowerRegionalSupplyDemandRepository,
+)
 from tests.helpers import regional_supply_demand_snapshots
 
 
-def test_upsert_regional_snapshots_insert_and_fetch(
+def test_upsert_then_fetch_returns_the_regional_snapshots(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """多區域快照應可依 (observed_at, region) 寫入並讀回萬瓩欄位與 raw payload。"""
     snapshots = regional_supply_demand_snapshots()
-    assert test_repo.upsert_regional_supply_demand_snapshots(snapshots) == 4
+    assert test_repo.regional_supply_demand_store.upsert(snapshots) == 4
 
-    fetched = test_repo.fetch_regional_supply_demand_snapshots(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.regional_supply_demand_store.fetch(datetime(2026, 9, 5, 17, 30))
     assert [item.region for item in fetched] == ["北部", "中部", "南部", "東部"]
     assert fetched[0].load_wan_kw == pytest.approx(1091.7)
     assert fetched[0].generation_wan_kw == pytest.approx(1155.4)
@@ -29,12 +29,12 @@ def test_upsert_regional_snapshots_insert_and_fetch(
     assert fetched[0].raw_payload["發電(萬瓩)"] == "1155.4"
 
 
-def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
+def test_upsert_is_idempotent_on_region_and_slot(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同區域與觀測 slot 重跑時應更新既有快照而非新增列。"""
     first = regional_supply_demand_snapshots(datetime(2026, 9, 5, 17, 30))
-    test_repo.upsert_regional_supply_demand_snapshots(first)
+    test_repo.regional_supply_demand_store.upsert(first)
 
     revised_csv = (
         "時間,區域,發電(萬瓩),用電(萬瓩)\n"
@@ -46,9 +46,9 @@ def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
     revised = parse_regional_supply_demand_csv(
         revised_csv, observed_at=datetime(2026, 9, 5, 17, 30)
     )
-    assert test_repo.upsert_regional_supply_demand_snapshots(revised) == 4
+    assert test_repo.regional_supply_demand_store.upsert(revised) == 4
 
-    fetched = test_repo.fetch_regional_supply_demand_snapshots(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.regional_supply_demand_store.fetch(datetime(2026, 9, 5, 17, 30))
     north = next(item for item in fetched if item.region == "北部")
     assert north.load_wan_kw == pytest.approx(1100.0)
     assert north.generation_wan_kw == pytest.approx(1200.0)
@@ -60,7 +60,7 @@ def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
     assert count == 4
 
 
-def test_upsert_regional_snapshots_excludes_corrupted_rows(
+def test_upsert_excludes_corrupted_rows(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """含非約定格式錯誤列的 CSV 經解析後僅有效區域寫入資料庫，損壞列不寫入。"""
@@ -76,9 +76,9 @@ def test_upsert_regional_snapshots_excludes_corrupted_rows(
     assert len(snapshots) == 2
     assert [item.region for item in snapshots] == ["中部", "東部"]
 
-    assert test_repo.upsert_regional_supply_demand_snapshots(snapshots) == 2
+    assert test_repo.regional_supply_demand_store.upsert(snapshots) == 2
 
-    fetched = test_repo.fetch_regional_supply_demand_snapshots(observed_at)
+    fetched = test_repo.regional_supply_demand_store.fetch(observed_at)
     assert len(fetched) == 2
     assert [item.region for item in fetched] == ["中部", "東部"]
 
@@ -129,7 +129,7 @@ def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
         repo.upsert([invalid_snapshot])
 
 
-def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
+def test_fetch_by_source_time_uses_half_open_window(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """Hourly-load derivation reads snapshots by source time in [start, end), independently of observation slots."""
@@ -143,11 +143,11 @@ def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
             f"{observed_at:%Y%m%dT%H%M%S},北部,1155.4,1091.7\n"
             f"{observed_at:%Y%m%dT%H%M%S},東部,12.8,38.5\n"
         )
-        test_repo.upsert_regional_supply_demand_snapshots(
+        test_repo.regional_supply_demand_store.upsert(
             parse_regional_supply_demand_csv(csv_text, observed_at=observed_at)
         )
 
-    fetched = test_repo.fetch_regional_supply_demand_snapshots_by_source_time(
+    fetched = test_repo.regional_supply_demand_store.fetch_by_source_time(
         start_time=datetime(2026, 9, 5, 17, 0),
         end_time=datetime(2026, 9, 5, 18, 0),
     )
@@ -184,7 +184,7 @@ def test_regional_snapshots_store_every_instant_as_aware_utc(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """區域快照的觀測時刻與來源時刻皆存為帶 +00:00 的 UTC 字串。"""
-    test_repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots())
+    test_repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots())
 
     with test_repo.engine.connect() as conn:
         stored = conn.exec_driver_sql(

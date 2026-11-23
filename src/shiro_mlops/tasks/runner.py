@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -26,9 +27,9 @@ from shiro_mlops.core.constants import (
     SUBJECT_COL,
 )
 from shiro_mlops.core.datetime_utils import with_datetime_column
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stale_load_anchor
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
-from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import (
     ForecastMode,
     WeatherCoverageError,
@@ -70,19 +71,29 @@ from shiro_mlops.tasks.weighted_weather import (
     weighted_resolution,
 )
 
+if TYPE_CHECKING:
+    from shiro_mlops.data.repository import TimeSeriesRepository
+
 TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
 
 
 @dataclass(frozen=True)
 class TaskRuntime:
-    """Process resources the runner reads task data through."""
+    """The only stores the runner reads task data through.
 
-    repository: TimeSeriesRepository
+    ``hourly_actual_load`` holds the hourly actual load every task targets;
+    ``cwa_weather`` holds the CWA observations and forecasts every task reads weather from.
+    """
 
-    @property
-    def hourly_actual_load(self) -> HourlyActualLoadStore:
-        """The store of the hourly actual load every task targets."""
-        return self.repository.hourly_actual_load_store
+    hourly_actual_load: HourlyActualLoadStore
+    cwa_weather: CWAWeatherStore
+
+    @classmethod
+    def from_composition_root(cls, root: TimeSeriesRepository) -> TaskRuntime:
+        """Take the two task stores out of the composition root; the runtime keeps no reference to it."""
+        return cls(
+            hourly_actual_load=root.hourly_actual_load_store, cwa_weather=root.cwa_weather_store
+        )
 
 
 class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interface design
@@ -228,8 +239,8 @@ def load_observed_weather(
     """
     points = []
     for point in task.weather.reference_points:
-        observed = runtime.repository.fetch_weather_range(
-            start_time=start, end_time=end, reference_point=point.location.alias
+        observed = runtime.cwa_weather.fetch_weather_range(
+            reference_point=point.location, start_time=start, end_time=end
         )
         observed = with_datetime_column(observed)[[DATETIME_COL, *task.weather.fields]]
         points.append(PointWeather(point.location.alias, point.weight, observed))
@@ -312,7 +323,7 @@ def predict_task(
 
 @dataclass(frozen=True)
 class _ServingRequest:
-    """One point-in-time prediction: the task, its store, the request time, and the horizon."""
+    """One point-in-time prediction: the task, its stores, the request time, and the horizon."""
 
     task: TaskDefinition
     runtime: TaskRuntime
@@ -322,10 +333,6 @@ class _ServingRequest:
     @cached_property
     def requirements(self) -> InputRequirements:
         return _requirements_of(self.task)
-
-    @property
-    def repository(self) -> TimeSeriesRepository:
-        return self.runtime.repository
 
     @property
     def weather_path(self) -> _WeatherPath:
@@ -413,7 +420,7 @@ def _resolve_future_weather(
                 point.location.alias,
                 point.weight,
                 resolve_weather(
-                    request.repository,
+                    request.runtime.cwa_weather,
                     reference_point=point.location,
                     start_time=anchor + timedelta(hours=1),
                     horizon_hours=request.horizon_hours,

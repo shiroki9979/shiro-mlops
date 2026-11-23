@@ -9,24 +9,24 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import (
-    TaipowerUnitGenerationRepository,
-    TimeSeriesRepository,
-)
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_unit_generation import parse_unit_generation_payload
+from shiro_mlops.data.taipower_unit_generation_repository import (
+    TaipowerUnitGenerationRepository,
+)
 from tests.helpers import unit_generation_snapshots
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
 
-def test_upsert_unit_generation_snapshots_insert_and_fetch(
+def test_upsert_then_fetch_returns_the_unit_generation_snapshots(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """多機組快照應可依 (observed_at, unit_type, unit_name) 寫入並讀回。"""
     snapshots = unit_generation_snapshots()
-    assert test_repo.upsert_unit_generation_snapshots(snapshots) == 4
+    assert test_repo.unit_generation_store.upsert(snapshots) == 4
 
-    fetched = test_repo.fetch_unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.unit_generation_store.fetch(datetime(2026, 9, 5, 17, 30))
     assert len(fetched) == 4
     first = next(item for item in fetched if item.unit_name == "大潭CC#1")
     assert first.net_generation_mw == pytest.approx(670.4)
@@ -39,21 +39,21 @@ def test_upsert_unit_generation_snapshots_insert_and_fetch(
     assert offline.remark == "歲修"
 
 
-def test_upsert_unit_generation_snapshots_is_idempotent(
+def test_upsert_is_idempotent(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同機組識別與觀測 slot 重跑時應更新既有快照而非新增列。"""
     first = unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
-    test_repo.upsert_unit_generation_snapshots(first)
+    test_repo.unit_generation_store.upsert(first)
 
     with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
         payload = json.load(f)
     payload["aaData"][0]["淨發電量(MW)"] = "700.0"
     payload["aaData"][0]["淨發電量/裝置容量比(%)"] = "94.250%"
     revised = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
-    assert test_repo.upsert_unit_generation_snapshots(revised) == 4
+    assert test_repo.unit_generation_store.upsert(revised) == 4
 
-    fetched = test_repo.fetch_unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.unit_generation_store.fetch(datetime(2026, 9, 5, 17, 30))
     updated = next(item for item in fetched if item.unit_name == "大潭CC#1")
     assert updated.net_generation_mw == pytest.approx(700.0)
     assert updated.capacity_ratio_pct == pytest.approx(94.25)
@@ -65,7 +65,7 @@ def test_upsert_unit_generation_snapshots_is_idempotent(
     assert count == 4
 
 
-def test_upsert_unit_generation_snapshots_excludes_corrupted_and_fake_identity_rows(
+def test_upsert_excludes_corrupted_and_fake_identity_rows(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """含缺失識別鍵與格式損壞列的 payload 經解析後僅有效列入庫，資料庫無任何 None/假識別資料。"""
@@ -106,9 +106,9 @@ def test_upsert_unit_generation_snapshots_excludes_corrupted_and_fake_identity_r
     assert len(snapshots) == 1
     assert snapshots[0].unit_name == "有效機組A"
 
-    assert test_repo.upsert_unit_generation_snapshots(snapshots) == 1
+    assert test_repo.unit_generation_store.upsert(snapshots) == 1
 
-    fetched = test_repo.fetch_unit_generation_snapshots(observed_at)
+    fetched = test_repo.unit_generation_store.fetch(observed_at)
     assert len(fetched) == 1
     assert fetched[0].unit_name == "有效機組A"
 
@@ -171,7 +171,7 @@ def test_unit_generation_snapshots_store_every_instant_as_aware_utc(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """機組快照的觀測時刻與來源時刻皆存為帶 +00:00 的 UTC 字串。"""
-    test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots())
+    test_repo.unit_generation_store.upsert(unit_generation_snapshots())
 
     with test_repo.engine.connect() as conn:
         stored = conn.exec_driver_sql(
@@ -200,7 +200,7 @@ def _unit_generation_row(**overrides: Any) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("column", ["observed_at", "source_time"])
-def test_fetch_unit_generation_snapshots_rejects_rows_without_an_instant(column: str) -> None:
+def test_fetch_rejects_rows_without_an_instant(column: str) -> None:
     """NOT NULL 的觀測或來源時刻讀到 NULL 代表儲存毀損，不可拿查詢條件或觀測時刻代填。"""
     engine = MagicMock(spec=Engine)
     connection = engine.connect.return_value.__enter__.return_value

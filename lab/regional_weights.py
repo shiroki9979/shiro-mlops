@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     start = normalize_taiwan_timestamp(args.start)
     end = normalize_taiwan_timestamp(args.end)
-    snapshots = TimeSeriesRepository().fetch_regional_supply_demand_snapshots_by_source_time(
+    snapshots = TimeSeriesRepository().regional_supply_demand_store.fetch_by_source_time(
         start.to_pydatetime(), end.to_pydatetime()
     )
     shares = regional_load_shares(snapshots, start=start, end=end)

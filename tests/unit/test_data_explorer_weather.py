@@ -92,7 +92,7 @@ def test_observation_and_audit_readers_keep_station_and_missing_id_filters(
 ) -> None:
     """觀測與 audit reader 必須支援 station／missing identifier 篩選，且不回傳 raw payload。"""
     observed = datetime.now(TAIWAN).replace(tzinfo=None, minute=0, second=0, microsecond=0)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
             status="incomplete",
@@ -172,8 +172,8 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
             ),
         )
 
-    test_repo.upsert_cwa_forecast_release(release(older, 28.0))
-    test_repo.upsert_cwa_forecast_release(release(newer, 31.0))
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([release(older, 28.0)])
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([release(newer, 31.0)])
     window = {
         "start": rfc3339(valid - timedelta(hours=1)),
         "end": rfc3339(valid),

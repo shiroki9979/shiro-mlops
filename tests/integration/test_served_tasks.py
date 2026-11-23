@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.served_tasks import (
@@ -24,8 +25,14 @@ from shiro_mlops.service.served_tasks import (
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, UnknownTaskError, deployed_task
 from shiro_mlops.tasks.model_store import model_directory, save_model
+from shiro_mlops.tasks.runner import TaskRuntime
 from shiro_mlops.tasks.types.base import TaskModel
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
+from tests.helpers import (
+    canonical_observation_batch,
+    hourly_load_with_weather,
+    task_runtime,
+    write_derived_load,
+)
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 FRESH_AS_OF = pd.Timestamp(LAST_HOUR) + pd.Timedelta(minutes=30)
@@ -37,7 +44,7 @@ def serving_repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     """Three weeks of fresh nationwide load and Taipei observations, without forecasts."""
     load, weather = hourly_load_with_weather(24 * 21, LAST_HOUR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     return test_repo
@@ -46,18 +53,18 @@ def serving_repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
 def _load(root: Path, repository: TimeSeriesRepository) -> ServedTasks:
     task = deployed_task(DYNAMIC_HORIZON_FORECAST)
     return ServedTasks.load(
-        {task.task_id: task}, root, repository=repository, clock=lambda: FRESH_AS_OF
+        {task.task_id: task}, root, runtime=task_runtime(repository), clock=lambda: FRESH_AS_OF
     )
 
 
 def _serving(
-    model: TaskModel, repository: TimeSeriesRepository, as_of: pd.Timestamp = FRESH_AS_OF
+    model: TaskModel, runtime: TaskRuntime, as_of: pd.Timestamp = FRESH_AS_OF
 ) -> ServedTasks:
     task = deployed_task(DYNAMIC_HORIZON_FORECAST)
     return ServedTasks(
         {task.task_id: task},
         {task.task_id: Loaded(model, "a" * 64)},
-        repository=repository,
+        runtime=runtime,
         clock=lambda: as_of,
     )
 
@@ -66,7 +73,7 @@ def test_a_loaded_model_is_ready_and_predicts_the_requested_horizon(
     serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel
 ) -> None:
     """Without forecasts, previous-day observations keep the task serving in degraded mode."""
-    served = _serving(fitted_task_model, serving_repo)
+    served = _serving(fitted_task_model, task_runtime(serving_repo))
 
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
     outcome = served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
@@ -109,7 +116,7 @@ def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
     served = ServedTasks.load(
         {broken.task_id: broken, other.task_id: other},
         tmp_path,
-        repository=serving_repo,
+        runtime=task_runtime(serving_repo),
         clock=lambda: FRESH_AS_OF,
     )
 
@@ -160,8 +167,8 @@ def _fresh_forecast_release() -> CWAForecastRelease:
 def test_a_fresh_forecast_keeps_the_task_ready_and_predicting_in_normal_mode(
     serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel
 ) -> None:
-    serving_repo.upsert_cwa_forecast_release(_fresh_forecast_release())
-    served = _serving(fitted_task_model, serving_repo)
+    serving_repo.cwa_weather_store.upsert_cwa_forecast_releases([_fresh_forecast_release()])
+    served = _serving(fitted_task_model, task_runtime(serving_repo))
 
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
     outcome = served.predict(DYNAMIC_HORIZON_FORECAST, horizon_hours=3)
@@ -175,7 +182,9 @@ def test_a_stale_load_anchor_makes_the_task_unavailable(
     serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel
 ) -> None:
     served = _serving(
-        fitted_task_model, serving_repo, as_of=pd.Timestamp(LAST_HOUR) + pd.Timedelta(hours=4)
+        fitted_task_model,
+        task_runtime(serving_repo),
+        as_of=pd.Timestamp(LAST_HOUR) + pd.Timedelta(hours=4),
     )
 
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
@@ -186,16 +195,18 @@ def test_a_stale_load_anchor_makes_the_task_unavailable(
     assert readiness.reason.startswith("Stale load anchor")
 
 
-def _broken_repository(error: Exception) -> MagicMock:
-    repository = MagicMock(spec=TimeSeriesRepository)
-    repository.hourly_actual_load_store = MagicMock(spec=HourlyActualLoadStore)
-    repository.hourly_actual_load_store.latest_observation.side_effect = error
-    return repository
+def _broken_runtime(error: Exception) -> TaskRuntime:
+    """Every hourly actual load read raises ``error``; weather is never reached."""
+    hourly_actual_load = MagicMock(spec=HourlyActualLoadStore)
+    hourly_actual_load.latest_observation.side_effect = error
+    return TaskRuntime(
+        hourly_actual_load=hourly_actual_load, cwa_weather=MagicMock(spec=CWAWeatherStore)
+    )
 
 
 def test_unreachable_persistence_makes_the_task_unavailable(fitted_task_model: TaskModel) -> None:
     error = OperationalError("SELECT 1", {}, Exception("connection refused"))
-    served = _serving(fitted_task_model, _broken_repository(error))
+    served = _serving(fitted_task_model, _broken_runtime(error))
 
     readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)
     with pytest.raises(
@@ -211,9 +222,7 @@ def test_unexpected_errors_fail_with_their_traceback_logged(
     fitted_task_model: TaskModel, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Readiness reports an unexpected error as not ready; prediction fails with it."""
-    served = _serving(
-        fitted_task_model, _broken_repository(RuntimeError("feature column mismatch"))
-    )
+    served = _serving(fitted_task_model, _broken_runtime(RuntimeError("feature column mismatch")))
 
     with caplog.at_level("ERROR"):
         readiness = served.readiness(DYNAMIC_HORIZON_FORECAST)

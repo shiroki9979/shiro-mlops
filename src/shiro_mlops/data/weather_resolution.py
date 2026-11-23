@@ -21,6 +21,7 @@ from shiro_mlops.core.constants import (
 )
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.cwa_client import CWALocation
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 
 FORECAST_FIELDS = {
     TEMPERATURE_COL: "temperature_c",
@@ -298,7 +299,7 @@ def _resolve_value(
 
 
 def resolve_weather(
-    repository: object,
+    store: CWAWeatherStore,
     *,
     reference_point: CWALocation,
     start_time: datetime | str | pd.Timestamp,
@@ -324,7 +325,7 @@ def resolve_weather(
     moments = [start + timedelta(hours=index) for index in range(horizon_hours)]
     end = moments[-1]
     forecasts = _fresh_rows(
-        repository.fetch_cwa_forecast_rows(
+        store.fetch_cwa_forecast_rows(
             geocode=reference_point.geocode,
             issued_before=cutoff,
             source_updated_before=cutoff,
@@ -334,7 +335,7 @@ def resolve_weather(
         ),
         cutoff,
     )
-    observations = repository.fetch_cwa_station_observations(
+    observations = store.fetch_cwa_station_observations(
         start_time=start - timedelta(days=366),
         end_time=cutoff,
         station_id=reference_point.station_id,
