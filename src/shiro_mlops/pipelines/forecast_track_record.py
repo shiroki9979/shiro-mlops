@@ -67,8 +67,8 @@ def forecast_track_record(
 ) -> Output[ForecastTrackRecord]:
     """Recompile from scratch; with no issued forecast yet, the record has 0 accumulated days."""
     cutoff = track_record_cutoff(_run_time(config))
-    repository = getattr(context.resources, TIME_SERIES_REPO)
-    pairs = repository.fetch_track_record_pairs(track_record_window(cutoff))
+    store = getattr(context.resources, TIME_SERIES_REPO).forecast_track_record_store
+    pairs = store.fetch_pairs(track_record_window(cutoff))
     record = compile_forecast_track_record(cutoff, pairs)
     return Output(
         record,

@@ -41,7 +41,7 @@ def _seeded_national(
             snapshot = replace(
                 supply_demand_snapshot(observed_at), curr_load_wan_kw=load_wan_kw, **columns
             )
-            repo.upsert_supply_demand_snapshot(snapshot)
+            repo.supply_demand_store.upsert(snapshot)
 
     return _seeded_rows(repo, "raw_taipower_supply_demand_snapshot", window, seed)
 
@@ -121,7 +121,7 @@ def _seeded_regional(
         repo,
         "raw_taipower_regional_supply_demand_snapshot",
         window,
-        lambda: repo.upsert_regional_supply_demand_snapshots(rows),
+        lambda: repo.regional_supply_demand_store.upsert(rows),
     )
 
 

@@ -1,3 +1,4 @@
+import type { NonEmptyArray } from '@shiro-mlops/shared/query-view'
 import type { ForecastStep } from '@/schemas/published'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
 import { EMPTY_VALUE, formatDateTime, formatLoadMW } from '@shiro-mlops/shared/i18n/format'
@@ -6,31 +7,13 @@ import { useMessages } from '@/i18n/messages'
 import { Activity, ArrowUpRight, Gauge, Zap } from 'lucide-react'
 
 interface MetricCardsProps {
-  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
-  steps: ForecastStep[]
-  isLoading: boolean
+  steps: NonEmptyArray<ForecastStep>
 }
 
-export function MetricCards({ steps, isLoading }: MetricCardsProps) {
+export function MetricCards({ steps }: MetricCardsProps) {
   const m = useMessages()
   const locale = useLocale()
   const metricsText = m.dashboard.metrics
-
-  if (isLoading) {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {[1, 2, 3].map((i) => (
-          <Card key={i} className="animate-pulse bg-slate-900/50 border-slate-800">
-            <CardContent className="p-5 space-y-3">
-              <div className="h-4 w-24 bg-slate-800 rounded" />
-              <div className="h-8 w-32 bg-slate-800 rounded" />
-              <div className="h-3 w-40 bg-slate-800 rounded" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    )
-  }
 
   // Computed over the steps of the selected preset only.
   const loads = steps.map((step) => step.predicted_load_mw)

@@ -466,8 +466,8 @@ def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_c
     observed = _now().replace(minute=30, second=0, microsecond=0)
     snapshot = supply_demand_snapshot(observed)
     earlier_snapshot = supply_demand_snapshot(observed - timedelta(minutes=20))
-    repo.upsert_supply_demand_snapshot(earlier_snapshot)
-    repo.upsert_supply_demand_snapshot(snapshot)
+    repo.supply_demand_store.upsert(earlier_snapshot)
+    repo.supply_demand_store.upsert(snapshot)
 
     body = client.get(
         "/data/power/supply-demand",
@@ -518,7 +518,7 @@ def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
             raw_payload={"區域": "北部"},
         )
     )
-    repo.upsert_regional_supply_demand_snapshots(rows)
+    repo.regional_supply_demand_store.upsert(rows)
 
     params = {"start": rfc3339(complete_slot), "end": rfc3339(observed), "limit": 50}
     page = client.get("/data/power/regional", params=params).json()
@@ -581,7 +581,7 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
     """機組零發電必須保留，契約允許空值不得被當成缺失，且不以固定數量判定不完整。"""
     client, repo = explorer_client
     observed = _now().replace(minute=10, second=0, microsecond=0)
-    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
+    repo.unit_generation_store.upsert(unit_generation_snapshots(observed))
 
     page = client.get(
         "/data/power/units",
@@ -654,12 +654,12 @@ def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
     newer_at = rfc3339(newer)
     older_at = rfc3339(older)
 
-    repo.upsert_supply_demand_snapshot(supply_demand_snapshot(older))
-    repo.upsert_supply_demand_snapshot(supply_demand_snapshot(newer))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(older))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(newer))
-    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(older))
-    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(newer))
+    repo.supply_demand_store.upsert(supply_demand_snapshot(older))
+    repo.supply_demand_store.upsert(supply_demand_snapshot(newer))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(older))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(newer))
+    repo.unit_generation_store.upsert(unit_generation_snapshots(older))
+    repo.unit_generation_store.upsert(unit_generation_snapshots(newer))
 
     pages = (
         ("/data/power/supply-demand", 1),
@@ -690,9 +690,9 @@ def test_regional_completeness_filter_reaches_older_matching_slots(explorer_clie
     newest = _now().replace(minute=30, second=0, microsecond=0)
     middle = newest - timedelta(minutes=10)
     oldest = newest - timedelta(minutes=20)
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(newest))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(middle))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(oldest)[:1])
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(newest))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(middle))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(oldest)[:1])
 
     response = client.get(
         "/data/power/regional",
@@ -714,7 +714,7 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
 
     client, repo = explorer_client
     observed = _now().replace(minute=0)
-    repo.upsert_cwa_observation_batch(
+    repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
             status="incomplete",
@@ -783,8 +783,8 @@ def test_cwa_forecasts_default_to_latest_vintage_and_keep_all_vintages(explorer_
             raw_payload={"secret": "do-not-return"},
         )
 
-    repo.upsert_cwa_forecast_release(release(older, 28.0))
-    repo.upsert_cwa_forecast_release(release(newer, 31.0))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release(older, 28.0)])
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release(newer, 31.0)])
     latest_page = client.get(
         "/data/weather/forecasts",
         params={"start": rfc3339(valid - timedelta(hours=1)), "end": rfc3339(valid)},
@@ -855,7 +855,7 @@ def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> No
             ),
         )
 
-    repo.upsert_cwa_forecast_release(release(issued_at, (28.0, 29.0)))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release(issued_at, (28.0, 29.0))])
     params = {
         "start": rfc3339(valid_from),
         "end": rfc3339(valid_from + timedelta(hours=1)),
@@ -865,7 +865,9 @@ def test_latest_forecast_cursor_stays_on_original_vintage(explorer_client) -> No
     assert first.status_code == 200
     assert first.json()["has_more"] is True
 
-    repo.upsert_cwa_forecast_release(release(issued_at + timedelta(hours=1), (31.0,)))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [release(issued_at + timedelta(hours=1), (31.0,))]
+    )
     second = client.get(
         "/data/weather/forecasts",
         params={**params, "cursor": first.json()["next_cursor"]},
@@ -891,7 +893,7 @@ def test_forecast_cursor_distinguishes_rows_by_valid_to(explorer_client) -> None
             for hours, temperature in ((1, 28.0), (2, 31.0))
         ),
     )
-    repo.upsert_cwa_forecast_release(release)
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([release])
     params = {
         "start": rfc3339(valid_from),
         "end": rfc3339(valid_from),
@@ -917,7 +919,7 @@ def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) 
 
     client, repo = explorer_client
     observed_at = _now().replace(minute=0)
-    repo.upsert_cwa_observation_batch(
+    repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
             status="incomplete",
@@ -926,17 +928,19 @@ def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) 
             observations=(),
         )
     )
-    repo.upsert_cwa_forecast_release(
-        CWAForecastRelease(
-            dataset_id="F-D0047-089",
-            issued_at=pd.Timestamp(observed_at),
-            source_updated_at=pd.Timestamp(observed_at),
-            fetched_at=observed_at,
-            status="incomplete",
-            missing_geocodes=(),
-            raw_payload={},
-            forecasts=(),
-        )
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            CWAForecastRelease(
+                dataset_id="F-D0047-089",
+                issued_at=pd.Timestamp(observed_at),
+                source_updated_at=pd.Timestamp(observed_at),
+                fetched_at=observed_at,
+                status="incomplete",
+                missing_geocodes=(),
+                raw_payload={},
+                forecasts=(),
+            )
+        ]
     )
 
     statuses = {item["id"]: item for item in client.get("/data/status").json()["datasets"]}

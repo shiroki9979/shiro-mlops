@@ -52,7 +52,7 @@ def test_regional_completeness_lists_only_absent_allowlisted_regions(
     """區域完整度只看北中南東 allowlist：列表逐列標出缺的區，狀態只看最新 slot。"""
     partial = datetime(2026, 9, 5, 17, 30)
     complete = partial - timedelta(minutes=10)
-    test_repo.upsert_regional_supply_demand_snapshots(
+    test_repo.regional_supply_demand_store.upsert(
         regional_supply_demand_snapshots(complete) + regional_supply_demand_snapshots(partial)[:2]
     )
 
@@ -94,7 +94,7 @@ def test_audit_status_reports_missing_ids_or_an_incomplete_placeholder(
 ) -> None:
     """觀測缺站、預報缺 geocode；incomplete 卻未列 id 時以 placeholder 揭露。"""
     observed_at = datetime(2026, 9, 20, 12)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
             status="incomplete",
@@ -103,12 +103,14 @@ def test_audit_status_reports_missing_ids_or_an_incomplete_placeholder(
             observations=(_observation(observed_at),),
         )
     )
-    test_repo.upsert_cwa_forecast_release(
-        replace(
-            forecast_release(observed_at, (township_forecast(observed_at, 30.0),)),
-            status="incomplete",
-            missing_geocodes=missing_geocodes,
-        )
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            replace(
+                forecast_release(observed_at, (township_forecast(observed_at, 30.0),)),
+                status="incomplete",
+                missing_geocodes=missing_geocodes,
+            )
+        ]
     )
 
     statuses = _status(client)
@@ -127,8 +129,8 @@ def test_national_list_reports_the_ten_minute_hole_between_snapshots(
     """全台供需每個 slot 預期一筆；20 分鐘間隔必須揭露中間缺口。"""
     later = datetime(2026, 9, 5, 17, 30)
     earlier = later - timedelta(minutes=20)
-    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(earlier))
-    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(later))
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot(earlier))
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot(later))
 
     page = client.get(
         "/data/power/supply-demand", params={"start": rfc3339(earlier), "end": rfc3339(later)}
@@ -142,7 +144,7 @@ def test_observation_list_without_station_expects_every_allowlisted_station_hour
 ) -> None:
     """未指定測站時，測站缺口依 allowlist 的每站逐時 slot 計算。"""
     observed = datetime(2026, 8, 20, 14, 0)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
             status="complete",
@@ -168,7 +170,7 @@ def test_observation_status_without_an_audit_header_is_complete(
 ) -> None:
     """有觀測列但沒有批次審計表頭時，觀測狀態仍為 complete，不列出缺漏 id。"""
     observed_at = datetime(2026, 9, 20, 12)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
             status="incomplete",

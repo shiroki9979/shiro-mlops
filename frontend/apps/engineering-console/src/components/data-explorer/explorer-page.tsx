@@ -73,10 +73,7 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
       )}
       <ExplorerResults
         dataset={dataset}
-        data={list.data}
-        error={list.error}
-        isError={list.isError}
-        isLoading={list.isLoading}
+        list={list}
         rows={state.rows}
         onSelect={setSelected}
         onNextPage={explorer.goToNextPage}

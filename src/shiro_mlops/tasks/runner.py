@@ -2,10 +2,12 @@
 
 The runner owns I/O and the shared components (ADR-0009): the minimum
 accumulation gate, bounded data retrieval, the stale load anchor rule, and
-weather resolution with degradation. The prediction input gate
-(``tasks/prediction_inputs.py``) judges the frames it reads before any task type
-sees them; task types only ever receive in-memory frames. Every time-dependent
-decision takes an explicit ``as_of`` in Taiwan-local naive time.
+weather resolution with degradation; the forecast mode is never set here but
+derived from the weather sources (``src/shiro_mlops/data/weather_resolution.py``).
+The prediction input gate (``src/shiro_mlops/tasks/prediction_inputs.py``) judges
+the frames it reads before any task type sees them; task types only ever receive
+in-memory frames. Every time-dependent decision takes an explicit ``as_of`` in
+Taiwan-local naive time.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -24,10 +27,15 @@ from shiro_mlops.core.constants import (
     SUBJECT_COL,
 )
 from shiro_mlops.core.datetime_utils import with_datetime_column
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stale_load_anchor
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
-from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_weather
+from shiro_mlops.data.weather_resolution import (
+    ForecastMode,
+    WeatherCoverageError,
+    WeatherValueSource,
+    resolve_weather,
+)
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
 from shiro_mlops.tasks.definition import TaskDefinition
 
@@ -56,26 +64,36 @@ from shiro_mlops.tasks.weighted_weather import (
     PointResolution,
     PointSources,
     PointWeather,
+    SerializedPointSources,
     WeightedWeather,
+    serialize_point_sources,
     weighted_observations,
     weighted_resolution,
 )
 
-OBSERVED_WEATHER_SOURCE = "station_observation"
-OBSERVED_AT_FIELD = "observed_at"
+if TYPE_CHECKING:
+    from shiro_mlops.data.repository import TimeSeriesRepository
+
 TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
 
 
 @dataclass(frozen=True)
 class TaskRuntime:
-    """Process resources the runner reads task data through."""
+    """The only stores the runner reads task data through.
 
-    repository: TimeSeriesRepository
+    ``hourly_actual_load`` holds the hourly actual load every task targets;
+    ``cwa_weather`` holds the CWA observations and forecasts every task reads weather from.
+    """
 
-    @property
-    def hourly_actual_load(self) -> HourlyActualLoadStore:
-        """The store of the hourly actual load every task targets."""
-        return self.repository.hourly_actual_load_store
+    hourly_actual_load: HourlyActualLoadStore
+    cwa_weather: CWAWeatherStore
+
+    @classmethod
+    def from_composition_root(cls, root: TimeSeriesRepository) -> TaskRuntime:
+        """Take the two task stores out of the composition root; the runtime keeps no reference to it."""
+        return cls(
+            hourly_actual_load=root.hourly_actual_load_store, cwa_weather=root.cwa_weather_store
+        )
 
 
 class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interface design
@@ -100,10 +118,10 @@ class ObservedInputsIncompleteError(TaskUnavailableError):
 
 @dataclass(frozen=True)
 class Readiness:
-    """Whether a task can serve a full-horizon prediction now, and in which weather mode."""
+    """Whether a task can serve a full-horizon prediction now, and in which forecast mode."""
 
     ready: bool
-    mode: WeatherResolutionMode | None = None
+    mode: ForecastMode | None = None
     reason: str | None = None
 
 
@@ -113,10 +131,10 @@ class PredictionOutcome:
 
     subject: str
     load_anchor: pd.Timestamp
-    mode: WeatherResolutionMode
+    mode: ForecastMode
     predictions: pd.DataFrame
     weather: pd.DataFrame
-    weather_sources: tuple[PointSources, ...]
+    weather_sources: tuple[SerializedPointSources, ...]
 
 
 @dataclass(frozen=True)
@@ -221,8 +239,8 @@ def load_observed_weather(
     """
     points = []
     for point in task.weather.reference_points:
-        observed = runtime.repository.fetch_weather_range(
-            start_time=start, end_time=end, reference_point=point.location.alias
+        observed = runtime.cwa_weather.fetch_weather_range(
+            reference_point=point.location, start_time=start, end_time=end
         )
         observed = with_datetime_column(observed)[[DATETIME_COL, *task.weather.fields]]
         points.append(PointWeather(point.location.alias, point.weight, observed))
@@ -299,13 +317,13 @@ def predict_task(
         mode=weather.mode,
         predictions=predictions,
         weather=weather.dataframe[[DATETIME_COL, *task.weather.fields]],
-        weather_sources=weather.sources,
+        weather_sources=tuple(serialize_point_sources(sources) for sources in weather.sources),
     )
 
 
 @dataclass(frozen=True)
 class _ServingRequest:
-    """One point-in-time prediction: the task, its store, the request time, and the horizon."""
+    """One point-in-time prediction: the task, its stores, the request time, and the horizon."""
 
     task: TaskDefinition
     runtime: TaskRuntime
@@ -315,10 +333,6 @@ class _ServingRequest:
     @cached_property
     def requirements(self) -> InputRequirements:
         return _requirements_of(self.task)
-
-    @property
-    def repository(self) -> TimeSeriesRepository:
-        return self.runtime.repository
 
     @property
     def weather_path(self) -> _WeatherPath:
@@ -392,29 +406,33 @@ def _fresh_load_anchor(
 def _resolve_future_weather(
     request: _ServingRequest, _history_start: pd.Timestamp, anchor: pd.Timestamp
 ) -> WeightedWeather:
-    """Forecasts (or degraded fallbacks) for the hours after the anchor at every reference point."""
+    """Forecasts (or degraded fallbacks) for the hours after the anchor at every reference point.
+
+    The one place a reference point's lack of weather coverage becomes the task's
+    ``WeatherUnavailableError``, so ``data/`` never depends on the task layer.
+    """
     if request.horizon_hours is None:
         raise ValueError("Forecast-weather prediction needs an explicit horizon_hours")
     fields = request.task.weather.fields
-    resolutions = [
-        PointResolution(
-            point.location.alias,
-            point.weight,
-            resolve_weather(
-                request.repository,
-                reference_point=point.location,
-                start_time=anchor + timedelta(hours=1),
-                horizon_hours=request.horizon_hours,
-                as_of=request.as_of,
-                fields=fields,
-            ),
-        )
-        for point in request.task.weather.reference_points
-    ]
-    weather = weighted_resolution(resolutions, fields)
-    if weather.mode == "unavailable" or weather.dataframe.empty:
-        raise WeatherUnavailableError(weather.reason or "Weather coverage is unavailable.")
-    return weather
+    try:
+        resolutions = [
+            PointResolution(
+                point.location.alias,
+                point.weight,
+                resolve_weather(
+                    request.runtime.cwa_weather,
+                    reference_point=point.location,
+                    start_time=anchor + timedelta(hours=1),
+                    horizon_hours=request.horizon_hours,
+                    as_of=request.as_of,
+                    fields=fields,
+                ),
+            )
+            for point in request.task.weather.reference_points
+        ]
+    except WeatherCoverageError as error:
+        raise WeatherUnavailableError(str(error)) from error
+    return weighted_resolution(resolutions, fields)
 
 
 def _observed_weather_until(
@@ -439,7 +457,7 @@ def _observed_weather_until(
     sources = tuple(
         _observation_source(task, observed_at) for observed_at in observed[DATETIME_COL]
     )
-    return WeightedWeather(dataframe=observed, sources=sources, mode="normal")
+    return WeightedWeather(dataframe=observed, sources=sources)
 
 
 def _observed_weather_at(predictions: pd.DataFrame, observed: WeightedWeather) -> WeightedWeather:
@@ -465,7 +483,6 @@ def _observed_weather_at(predictions: pd.DataFrame, observed: WeightedWeather) -
     return WeightedWeather(
         dataframe=aligned.reset_index(drop=True),
         sources=tuple(observed.sources[row] for row in rows),
-        mode=observed.mode,
     )
 
 
@@ -508,9 +525,8 @@ _WEATHER_PATHS = {
 
 def _observation_source(task: TaskDefinition, observed_at: pd.Timestamp) -> PointSources:
     """Weighted observations exist only where every point observed that same hour."""
-    source = {"source": OBSERVED_WEATHER_SOURCE, OBSERVED_AT_FIELD: observed_at.isoformat()}
-    aliases = task.weather.aliases
-    return {field: {alias: dict(source) for alias in aliases} for field in task.weather.fields}
+    source = WeatherValueSource.observed(observed_at)
+    return {field: dict.fromkeys(task.weather.aliases, source) for field in task.weather.fields}
 
 
 # --- Shared I/O ----------------------------------------------------------------------------

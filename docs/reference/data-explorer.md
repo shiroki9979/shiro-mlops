@@ -69,14 +69,16 @@
 - **排序**：v1 固定以最新資料優先，不提供任意欄位的 server-side 排序。
 - **更新**：Data Explorer 僅提供手動 Refresh 與最後取得時間；不自動改動正在檢視的歷史頁面或已展開明細。
 - **CSV 匯出**：前端可將當前已載入頁面匯出為 CSV；不提供跨頁或無上限的 server-side export。
-- **Monitoring 調整**：Monitoring 以 Data Source Status 摘要顯示 availability、freshness 與 completeness，並連結至 Data Explorer 對應資料集；不再提供 Feature Store Snapshot。
+- **Monitoring 調整**：Monitoring 以 Data Source Status 摘要顯示 availability、freshness 與 completeness，並連結至 Data Explorer 對應資料集；不再提供 Feature Store Snapshot。讀取失敗與離線比照 Data Explorer 首頁的資料集狀態：已有資料時重新讀取失敗保留摘要並加一行更新失敗提示（字典鍵 `monitoring.sources.refreshFailed`），尚無資料或離線時顯示讀取失敗訊息。
 
 ## 7. 狀態、存取與失敗契約
 
 - **Data Explorer 首頁**：`/data` 顯示全部 datasets 的最新來源時間、最新入庫時間、freshness、completeness 與明細連結。每張狀態卡另有一張 24 小時小圖，窗口以進入頁面當下為準、重新渲染不滑動，讓工程師不必點進資料集就能看出哪個資料集斷了或不正常。六個領域資料集畫 sparkline（無軸、無 tooltip，橫軸固定為整個窗口，資料停止時尾端留白）：逐時負載 `load_mw`、全台供需 `curr_load_mw`、區域供需 `load_mw` 四區各一條細線、機組發電 `net_generation_mw` 不分組總和（`group_by=none`）、測站觀測每站一條 `temperature_c`、鄉鎮預報未來 24 小時（`start` 為當下）最新版本每個 `geocode` 一條 `temperature_c`。sparkline 沿用圖表卡片的 series endpoint、集中配色與缺口規則：補值的 `null` 處線段斷開，鄉鎮預報不補值，線段連接相鄰的點。兩個 audit 卡片以 `bucket=1h` 讀取狀態計數，畫成 24 格每小時狀態格線，最後一格為當下所在小時：有任何非 `complete` 批次或版本為不完整，只有 `complete` 為完整，沒有紀錄的小時留空。首頁共發出 8 個 series 請求，粒度皆為 `auto`（audit 為 `1h`），只為 `GET /data/status` 列出的 dataset 發出；Monitoring 頁不顯示小圖。
+- **首頁的讀取失敗與離線**：資料集狀態與小圖採資料優先，與資料頁的列表、圖表卡一致。已有資料時重新讀取失敗，保留狀態卡或小圖，並加一行更新失敗提示（字典鍵 `explorer.statusRefreshFailed`、`explorer.sparkline.refreshFailed`）；尚無資料時讀取失敗，資料集狀態顯示讀取失敗訊息，小圖顯示「失敗」。瀏覽器判定離線而暫停讀取時，比照讀取失敗呈現；恢復連線後自動重新讀取。小圖在 24 小時內沒有任何值時顯示「空」，audit 狀態格線沒有「空」，沒有紀錄的小時留空。
 - **狀態 API**：`GET /data/status` 是 Monitoring、Data Explorer 首頁與各資料頁的共用狀態來源。Typed list endpoints 不重複計算狀態，並共用含 `items`、`next_cursor` 與 `has_more` 的 pagination envelope。
 - **狀態模型**：每個 dataset 分別回傳 `availability` (`available | empty | unavailable`)、`freshness` (`fresh | warning | unknown`)、`completeness` (`complete | incomplete | unknown`) 與衍生的 `overall` (`healthy | warning | critical | unknown`)。`unavailable` 對應 `critical`；`warning` freshness、`incomplete` 或 `empty` 對應 `warning`。
 - **Cursor 契約**：八個列表只接受 v2 cursor。cursor 為 opaque、stateless 且與當前窗口及 filters 綁定的 keyset cursor，含最後一筆完整原始排序鍵與契約版本，不設時間期限。綁定的 filters 即該資料集宣告的篩選，與列表、series 接受的篩選出自同一份資料集定義；列表只接受 `start`、`end`、`limit`、`cursor` 與這些篩選，其他參數回 HTTP 422（見 HTTP 語意）。更改 filters、v1 或格式無效時回傳 HTTP 400。帶 cursor 的請求收到 400 時，前端顯示返回第一頁的恢復操作（字典鍵 `explorer.results.backToFirstPage`，顯示文字隨介面語系）；使用者點擊後清除 cursor，保留窗口與篩選。明確預報版本保留，隱含最新版本重新解析；422／503 不提供此恢復操作。
+- **資料頁的讀取失敗**：列表與圖表卡已有資料時，Refresh 重新讀取失敗會保留已顯示的列或圖，並在上方加一行更新失敗提示（字典鍵 `explorer.results.refreshFailed`、`explorer.chart.refreshFailed`），提示沿用依錯誤種類決定的訊息；帶 cursor 的請求收到 400 時，不論畫面上是否仍有資料都顯示返回第一頁的恢復操作。瀏覽器判定離線時請求暫停，列表與圖表卡比照讀取失敗顯示一般的查詢失敗訊息，不顯示空結果；恢復連線後自動重新讀取。超過明細上限與鄉鎮預報圖缺 `geocode` 時查詢停用，只顯示各自的提示。
 - **開啟條件**：v1 不建立應用層登入與 RBAC。Data Explorer 路由與 API 僅在 local environment 或明確啟用功能旗標時可用；非本機存取必須由內網或 reverse proxy 限制，並使用 same-origin CORS，不得依賴現有 `CORS *` 對外暴露。
 - **顯示範圍**：提供狀態、資料表、篩選、typed detail drawer、當頁 CSV 匯出、首頁的 24 小時小圖，以及八個資料頁表格上方的趨勢圖卡片（六個領域資料集與兩個 CWA audit，語意見 §8）。
 - **HTTP 語意**：無符合資料時回傳 HTTP 200 與空 `items`；資料不完整時仍回傳 HTTP 200 並透過 domain status 揭露；無效 filter 回傳 HTTP 422；未宣告的查詢參數（例如打錯的篩選名稱，或只有 series 才接受的 `bucket`）即使值為空也回傳 HTTP 422，訊息列出這些參數；值為空的已宣告篩選視為沒有篩選。未宣告參數的檢查先於 cursor 檢查，因此同時帶錯 cursor 時仍回 422；無效或不相容 cursor 回傳 HTTP 400；TimescaleDB 無法連線時回傳 HTTP 503。Series endpoints 沿用同一組語意（無資料回 200 與空 `series`，點數超限另帶 `suggested_bucket`），詳見 [rest-api.md](rest-api.md) §5.3。

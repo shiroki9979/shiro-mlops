@@ -1,6 +1,15 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
+import {
+  emptyBecause,
+  isNonEmpty,
+  type NonEmptyArray,
+  type QueryResultLike,
+  type QueryView,
+  toQueryView,
+} from '@shiro-mlops/shared/query-view'
 import { type Messages, useMessages } from '@/i18n/messages'
+import type { DataExplorerError } from '@/lib/api-client'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import type { ExplorerRows } from './explorer-query-state'
@@ -9,44 +18,32 @@ import { ExplorerTable } from './explorer-table'
 
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
-  data?: ListEnvelope
-  error: unknown
-  isError: boolean
-  isLoading: boolean
+  list: QueryResultLike<ListEnvelope, DataExplorerError>
   rows: ExplorerRows
   onSelect: (row: Record<string, unknown>) => void
   onNextPage: (cursor: string | undefined) => void
   onRestart: () => void
 }
 
-const CURSOR_REJECTED_STATUS = 400
-const INVALID_FILTERS_STATUS = 422
-const DATABASE_UNAVAILABLE_STATUS = 503
-
-function errorStatus(error: unknown): unknown {
-  return typeof error === 'object' && error !== null && 'status' in error
-    ? error.status
-    : undefined
-}
-
-function isCursorRejected(error: unknown): boolean {
-  return errorStatus(error) === CURSOR_REJECTED_STATUS
-}
-
-function listErrorMessage(error: unknown, resultsText: Messages['explorer']['results']): string {
-  const status = errorStatus(error)
-  if (status === CURSOR_REJECTED_STATUS) return resultsText.cursorRejected
-  if (status === INVALID_FILTERS_STATUS) return resultsText.invalidFilters
-  if (status === DATABASE_UNAVAILABLE_STATUS) return resultsText.databaseUnavailable
-  return resultsText.queryFailed
+// A read paused offline has no error, so it shows the generic failure.
+function listErrorMessage(error: DataExplorerError | undefined, resultsText: Messages['explorer']['results']): string {
+  switch (error?.kind) {
+    case 'cursorRejected':
+      return resultsText.cursorRejected
+    case 'invalidQuery':
+      return resultsText.invalidFilters
+    case 'databaseUnavailable':
+      return resultsText.databaseUnavailable
+    case 'invalidResponse':
+    case 'other':
+    case undefined:
+      return resultsText.queryFailed
+  }
 }
 
 export function ExplorerResults({
   dataset,
-  data,
-  error,
-  isError,
-  isLoading,
+  list,
   rows,
   onSelect,
   onNextPage,
@@ -54,38 +51,77 @@ export function ExplorerResults({
 }: ExplorerResultsProps) {
   const m = useMessages()
   const resultsText = m.explorer.results
+  const view = toQueryView(list, {
+    policy: 'data-first',
+    settle: (page) => (isNonEmpty(page.items) ? { ...page, items: page.items } : emptyBecause('noRows')),
+  })
+  const failedRefresh = (view.kind === 'content' || view.kind === 'empty') && view.refreshFailed ? view : undefined
+  const readError = view.kind === 'error' || view.kind === 'paused' ? view.error : failedRefresh?.error
+
   return (
     <Card>
       <CardContent className="pt-6">
         {rows.kind === 'overDetailLimit' ? (
           <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
-        ) : isLoading ? (
-          <p className="text-xs text-slate-500">{resultsText.loading}</p>
-        ) : isError ? (
-          <div>
-            <p className="text-xs text-rose-300">{listErrorMessage(error, resultsText)}</p>
-            {rows.kind === 'page' && isCursorRejected(error) && (
-              <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
-            )}
-          </div>
-        ) : !data || data.items.length === 0 ? (
-          <p className="text-xs text-slate-500">{resultsText.empty}</p>
         ) : (
           <>
-            <ExplorerGapList datasetId={dataset.id} missingSlots={data.missing_slots} />
-            <ExplorerTable columns={dataset.columns} rows={data.items} onSelect={onSelect} />
-            {data.has_more && (
-              <Button
-                className="mt-4"
-                variant="outline"
-                onClick={() => onNextPage(data.next_cursor ?? undefined)}
-              >
-                {m.common.nextPage}
-              </Button>
+            {failedRefresh && (
+              <p className="mb-4 text-xs text-rose-300">{resultsText.refreshFailed(listErrorMessage(failedRefresh.error, resultsText))}</p>
+            )}
+            <ResultsBody
+              view={view}
+              dataset={dataset}
+              text={resultsText}
+              nextPageText={m.common.nextPage}
+              onSelect={onSelect}
+              onNextPage={onNextPage}
+            />
+            {rows.kind === 'page' && readError?.kind === 'cursorRejected' && (
+              <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </>
         )}
       </CardContent>
     </Card>
   )
+}
+
+type ResultsPage = ListEnvelope & { items: NonEmptyArray<ListEnvelope['items'][number]> }
+
+interface ResultsBodyProps {
+  view: QueryView<ResultsPage, 'noRows', DataExplorerError>
+  dataset: ExplorerDatasetConfig
+  text: Messages['explorer']['results']
+  nextPageText: string
+  onSelect: (row: Record<string, unknown>) => void
+  onNextPage: (cursor: string | undefined) => void
+}
+
+function ResultsBody({ view, dataset, text, nextPageText, onSelect, onNextPage }: ResultsBodyProps) {
+  switch (view.kind) {
+    case 'loading':
+      return <p className="text-xs text-slate-500">{text.loading}</p>
+    // Only the detail limit disables the list, and the card shows its hint in place of this body.
+    case 'disabled':
+      return null
+    case 'paused':
+    case 'error':
+      return <p className="text-xs text-rose-300">{listErrorMessage(view.error, text)}</p>
+    case 'empty':
+      return <p className="text-xs text-slate-500">{text.empty}</p>
+    case 'content': {
+      const page = view.content
+      return (
+        <>
+          <ExplorerGapList datasetId={dataset.id} missingSlots={page.missing_slots} />
+          <ExplorerTable columns={dataset.columns} rows={page.items} onSelect={onSelect} />
+          {page.has_more && (
+            <Button className="mt-4" variant="outline" onClick={() => onNextPage(page.next_cursor ?? undefined)}>
+              {nextPageText}
+            </Button>
+          )}
+        </>
+      )
+    }
+  }
 }

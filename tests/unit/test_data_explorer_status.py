@@ -26,12 +26,14 @@ def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
 ) -> None:
     catalog = DatasetQuery(test_repo.engine)
     for hour, missing, completeness in ((10, ("63000000",), "incomplete"), (11, (), "complete")):
-        test_repo.upsert_cwa_forecast_release(
-            replace(
-                forecast_release(datetime(2026, 9, 20, hour), ()),
-                status=completeness,
-                missing_geocodes=missing,
-            )
+        test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+            [
+                replace(
+                    forecast_release(datetime(2026, 9, 20, hour), ()),
+                    status=completeness,
+                    missing_geocodes=missing,
+                )
+            ]
         )
 
         statuses = catalog.status(datetime(2026, 9, 20, 12)).datasets
@@ -53,7 +55,7 @@ def test_latest_release_stale_shares_the_resolver_seven_hour_threshold(
     test_repo: TimeSeriesRepository, age: timedelta, expected: bool
 ) -> None:
     issued_at = datetime(2026, 9, 20, 5)
-    test_repo.upsert_cwa_forecast_release(forecast_release(issued_at, ()))
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([forecast_release(issued_at, ())])
 
     statuses = DatasetQuery(test_repo.engine).status(issued_at + age).datasets
     forecasts = next(item for item in statuses if item.id == "cwa_forecasts")
@@ -80,7 +82,7 @@ def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_la
 ) -> None:
     """全國供需目錄的 24 小時窗含起點：恰好早一天的快照撐開窗，中間的 10 分鐘 slot 皆列為缺漏。"""
     for observed_at in (datetime(2026, 9, 4, 17, 30), datetime(2026, 9, 5, 17, 30)):
-        test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(observed_at))
+        test_repo.supply_demand_store.upsert(supply_demand_snapshot(observed_at))
 
     status = DatasetQuery(test_repo.engine).status(datetime(2026, 9, 5, 17, 35))
     national = next(item for item in status.datasets if item.id == "national_supply_demand")

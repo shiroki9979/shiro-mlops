@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache, reduce
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, assert_never
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, create_model
@@ -17,12 +17,17 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, DEFAULT_HORIZON_HOURS, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
 from shiro_mlops.service.served_tasks import (
+    Loaded,
+    LoadFailed,
+    ServedModel,
     ServedTasks,
     ServingFailedError,
     ServingUnavailableError,
+    Untrained,
 )
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import (
@@ -31,12 +36,16 @@ from shiro_mlops.tasks.deployed import (
     deployed_task,
     deployed_tasks,
 )
-from shiro_mlops.tasks.runner import PredictionOutcome
+from shiro_mlops.tasks.runner import PredictionOutcome, TaskRuntime
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import WeatherEchoingItem
 
 logger = logging.getLogger(__name__)
 WEATHER_SOURCES_FIELD = "weather_sources"
+FORECAST_MODE_DESCRIPTION = (
+    "Forecast operating mode: normal, or degraded when any weather value was filled "
+    "by an observation substitute"
+)
 
 
 def _served_task() -> TaskDefinition:
@@ -76,7 +85,10 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     status: str
-    mode: str | None = None
+    mode: ForecastMode | None = Field(
+        default=None,
+        description=f"{FORECAST_MODE_DESCRIPTION}, of a prediction made now; null when not ready",
+    )
     model_loaded: bool
     reason: str | None = None
 
@@ -148,7 +160,7 @@ class PredictionResponse(BaseModel):
     status: str = "success"
     horizon_hours: int
     subject: str = Field(description="Prediction subject whose load is forecast")
-    mode: str = "normal"
+    mode: ForecastMode = Field(description=FORECAST_MODE_DESCRIPTION)
     predictions: list[PredictionItem]
 
 
@@ -158,7 +170,7 @@ class TaskPredictionEnvelope(BaseModel):
     status: str = "success"
     task_id: str
     subject: str = Field(description="Prediction subject of the task")
-    mode: str = Field(description="Weather quality behind the predictions: normal or degraded")
+    mode: ForecastMode = Field(description=FORECAST_MODE_DESCRIPTION)
 
 
 @cache
@@ -188,21 +200,13 @@ TaskPredictionResponse = reduce(
 @routes.get("/health", response_model=HealthResponse)
 def health_check(served: Served) -> HealthResponse:
     """Check API and per-task model health status."""
-    statuses = served.model_status()
+    tasks = {task_id: _model_health(model) for task_id, model in served.served_models().items()}
     return HealthResponse(
         status="ok",
         version=__version__,
         environment=settings.ENVIRONMENT,
-        model_loaded=statuses[DYNAMIC_HORIZON_FORECAST].model_loaded,
-        tasks={
-            task_id: TaskModelHealth(
-                task_type=status.task_type,
-                model_loaded=status.model_loaded,
-                model_sha256=status.model_sha256,
-                reason=status.reason,
-            )
-            for task_id, status in statuses.items()
-        },
+        model_loaded=tasks[DYNAMIC_HORIZON_FORECAST].model_loaded,
+        tasks=tasks,
         data_explorer_enabled=is_data_explorer_enabled(),
     )
 
@@ -252,6 +256,23 @@ def predict_for_task(
         mode=outcome.mode,
         predictions=_prediction_rows(outcome),
     )
+
+
+def _model_health(model: ServedModel) -> TaskModelHealth:
+    match model.state:
+        case Loaded(sha256=sha256):
+            return TaskModelHealth(
+                task_type=model.task_type, model_loaded=True, model_sha256=sha256, reason=None
+            )
+        case Untrained() | LoadFailed() as missing:
+            return TaskModelHealth(
+                task_type=model.task_type,
+                model_loaded=False,
+                model_sha256=None,
+                reason=missing.reason,
+            )
+        case unprojected:
+            assert_never(unprojected)
 
 
 def _task_or_404(served: ServedTasks, task_id: str) -> TaskDefinition:
@@ -310,18 +331,21 @@ def create_app(
 ) -> FastAPI:
     """Build the API; whatever is not injected is set up at startup from settings.
 
-    Inject ``repository`` together with ``served_tasks``: injected alone,
-    ``served_tasks`` reads through its own repository while the Data Explorer
-    gets the one startup builds. Invalid task definitions fail startup.
+    ``repository`` is the composition root: the Data Explorer reads its engine
+    and served tasks built at startup read its two task stores. Inject it
+    together with ``served_tasks``: injected alone, ``served_tasks`` reads
+    through its own stores while the Data Explorer gets the root startup
+    builds. Invalid task definitions fail startup.
     """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        app.state.repository = repository or _startup_repository()
+        root = repository or _startup_repository()
+        app.state.repository = root
         app.state.served_tasks = served_tasks or ServedTasks.load(
             deployed_tasks(),
             settings.models_dir,
-            repository=app.state.repository,
+            runtime=TaskRuntime.from_composition_root(root),
             clock=taiwan_now,
         )
         yield
@@ -333,7 +357,7 @@ def create_app(
     )
     # WHY-NOT(repository): 注入的 repository 與 served_tasks 都在建構時放入 app.state，不等 lifespan。
     # 未進入 lifespan 的 TestClient 也會呼叫端點；改等 lifespan 時，get_served_tasks
-    # 與營運資料檢視器的 _repository 讀 app.state 會拋 AttributeError。
+    # 與營運資料檢視器的 _engine 讀 app.state 會拋 AttributeError。
     if repository is not None:
         app.state.repository = repository
     if served_tasks is not None:
