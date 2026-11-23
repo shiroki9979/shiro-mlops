@@ -1,7 +1,7 @@
 """Integration tests for FastAPI endpoints."""
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -442,6 +442,25 @@ def test_a_model_that_fails_to_load_is_reported_apart_from_an_untrained_one(
     assert untrained_ready.status_code == untrained_predict.status_code == 503
     assert untrained_ready.json()["reason"] == MODEL_NOT_LOADED_REASON
     assert untrained_predict.json()["detail"] == MODEL_NOT_LOADED_REASON
+
+
+def test_health_fails_on_a_model_state_it_does_not_project() -> None:
+    """A model state without its own case must not pass for one of the known states."""
+
+    @dataclass(frozen=True)
+    class Unprojected:
+        pass
+
+    served = ServedTasks(
+        deployed_tasks(),
+        {DYNAMIC_HORIZON_FORECAST: Unprojected()},
+        repository=MagicMock(),
+        clock=lambda: FRESH_REQUEST_TIME,
+    )
+    client = TestClient(create_app(repository=MagicMock(), served_tasks=served))
+
+    with pytest.raises(AssertionError, match="Unprojected"):
+        client.get("/health")
 
 
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
