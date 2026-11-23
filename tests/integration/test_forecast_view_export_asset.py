@@ -3,6 +3,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -19,17 +20,17 @@ from shiro_mlops.data.forecast_view import (
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.forecast_track_record import (
-    FORECAST_TRACK_RECORD_ASSET,
     forecast_track_record,
+    forecast_track_record_schedule,
 )
 from shiro_mlops.pipelines.forecast_view_export import (
     FORECAST_VIEW_EXPORT_ASSET,
     forecast_view_export,
 )
-from tests.helpers import write_derived_load
+from tests.helpers import scheduled_run_tags, write_derived_load
 
 # 預報實績在 10:25 彙整（統計截至 10:00），匯出排在其後。
-TRACK_RECORD_TICK = "2026-11-20T10:25:00"
+TRACK_RECORD_TICK = datetime(2026, 11, 20, 10, 25, tzinfo=ZoneInfo("Asia/Taipei"))
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 BUCKET = "shiro-mlops-forecast-view"
 
@@ -77,9 +78,7 @@ def _export(
     materialize(
         [forecast_track_record],
         resources=resources,
-        run_config={
-            "ops": {FORECAST_TRACK_RECORD_ASSET: {"config": {"scheduled_at": TRACK_RECORD_TICK}}}
-        },
+        tags=scheduled_run_tags(forecast_track_record_schedule, TRACK_RECORD_TICK),
         instance=instance,
     )
     return materialize(

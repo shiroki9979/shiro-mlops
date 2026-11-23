@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import numpy as np
 import pandas as pd
+from dagster import ScheduleDefinition, build_schedule_context
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -303,6 +304,15 @@ def selected_asset_names(job) -> set[str]:
     from shiro_mlops.pipelines.definitions import all_assets
 
     return {key.to_user_string() for key in job.selection.resolve(all_assets)}
+
+
+def scheduled_run_tags(schedule: ScheduleDefinition, tick: datetime, instance=None) -> dict:
+    """The tags of the run ``schedule`` launches at ``tick``, schedule name included as Dagster adds it."""
+    execution = schedule.evaluate_tick(
+        build_schedule_context(instance=instance, scheduled_execution_time=tick)
+    )
+    [request] = execution.run_requests
+    return dict(request.tags)
 
 
 def task_jobs() -> list:
