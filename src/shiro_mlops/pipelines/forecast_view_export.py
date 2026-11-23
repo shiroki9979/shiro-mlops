@@ -11,8 +11,10 @@ The track record arrives as this asset's input, read from the latest
 database. Its job selects only this asset, so a failed or skipped compilation
 still lets the newest issued forecast reach the page. Before the track record
 first materializes (a fresh instance), the input is ``None`` and the export
-publishes the track record's not-yet-accumulated state, cut off at the export's
-own hour: the same document the track record compiles before the first issue.
+publishes the track record's not-yet-accumulated state, cut off at the hour the
+export run was created: the same document the track record compiles before the
+first issue. The export schedule carries no tick, so that as_of always falls
+back to now, the run's creation time.
 """
 
 from dagster import (
@@ -30,7 +32,7 @@ from dagster import (
     schedule,
 )
 
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
+from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.core.forecast_view_publisher import ForecastViewPublisher
 from shiro_mlops.core.io_managers import NONE_BEFORE_FIRST_MATERIALIZATION
 from shiro_mlops.data.forecast_track_record import track_record_cutoff
@@ -41,7 +43,7 @@ from shiro_mlops.data.forecast_view import (
     forecast_track_record_document,
     latest_issued_forecast_document,
 )
-from shiro_mlops.pipelines.execution_origin import tick_run_key
+from shiro_mlops.pipelines.execution_origin import WithoutTick, run_as_of, tick_run_key
 from shiro_mlops.pipelines.forecast_track_record import FORECAST_TRACK_RECORD_ASSET
 from shiro_mlops.pipelines.issued_forecast import ISSUED_FORECAST_ASSET
 from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO
@@ -77,7 +79,7 @@ def forecast_view_export(
     publisher: ForecastViewPublisher = getattr(context.resources, FORECAST_VIEW_PUBLISHER)
     forecast = latest_issued_forecast_document(repository.fetch_latest_issued_forecast())
     record = forecast_track_record_document(
-        _uncompiled_track_record() if track_record is None else track_record
+        _uncompiled_track_record(context) if track_record is None else track_record
     )
     publisher.publish(
         {
@@ -97,9 +99,9 @@ def forecast_view_export(
     )
 
 
-def _uncompiled_track_record() -> dict:
-    """Zero accumulated days, cut off at the export's hour, as before the first issue."""
-    cutoff = track_record_cutoff(taiwan_now().to_pydatetime())
+def _uncompiled_track_record(context: AssetExecutionContext) -> dict:
+    """Zero accumulated days, cut off at the export run's hour, as before the first issue."""
+    cutoff = track_record_cutoff(run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW))
     return {"cutoff": cutoff, "accumulated_days": 0, "metrics": None}
 
 

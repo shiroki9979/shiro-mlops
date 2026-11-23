@@ -26,12 +26,16 @@ from shiro_mlops.pipelines.forecast_track_record import (
 from shiro_mlops.pipelines.forecast_view_export import (
     FORECAST_VIEW_EXPORT_ASSET,
     forecast_view_export,
+    forecast_view_export_schedule,
 )
 from tests.helpers import scheduled_run_tags, write_derived_load
 
 # 預報實績在 10:25 彙整（統計截至 10:00），匯出排在其後。
-TRACK_RECORD_TICK = datetime(2026, 11, 20, 10, 25, tzinfo=ZoneInfo("Asia/Taipei"))
+TAIPEI = ZoneInfo("Asia/Taipei")
+TRACK_RECORD_TICK = datetime(2026, 11, 20, 10, 25, tzinfo=TAIPEI)
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
+# 匯出排程的 tick 只用於去重複，不進 run 標籤；統計截至時刻與它無關。
+EXPORT_TICK = datetime(2026, 11, 20, 10, 35, tzinfo=TAIPEI)
 BUCKET = "shiro-mlops-forecast-view"
 
 
@@ -88,6 +92,12 @@ def _export(
         instance=instance,
         raise_on_error=raise_on_error,
     )
+
+
+def _creation_hour(instance, run_id: str) -> str:
+    """The hour at which Dagster created the run, as the Forecast View writes a cutoff."""
+    created = instance.get_run_record_by_id(run_id).create_timestamp
+    return created.astimezone(TAIPEI).replace(minute=0, second=0, microsecond=0).isoformat()
 
 
 def _published(data_dir: Path, name: str) -> dict:
@@ -224,17 +234,24 @@ def test_before_the_first_issue_both_documents_are_empty_states(
     }
 
 
+@pytest.mark.parametrize(
+    "run_tags",
+    [
+        pytest.param({}, id="manual"),
+        pytest.param(
+            scheduled_run_tags(forecast_view_export_schedule, EXPORT_TICK), id="scheduled"
+        ),
+    ],
+)
 def test_before_the_track_record_first_compiles_the_export_still_publishes_the_forecast(
-    test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, mocker
+    test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, run_tags: dict[str, str]
 ) -> None:
     """A fresh instance whose track record has never materialized still uploads the forecast.
 
-    The track record file is the not-yet-accumulated state, cut off at the export's hour.
+    The track record file is the not-yet-accumulated state, cut off at the hour the export
+    run was created: the export schedule carries no tick, so a scheduled run falls back to
+    now just as a manual one does.
     """
-    mocker.patch(
-        "shiro_mlops.pipelines.forecast_view_export.taiwan_now",
-        return_value=pd.Timestamp("2026-11-20T10:35:12"),
-    )
     test_repo.insert_issued_forecast(_issued_forecast())
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
     for name in (LATEST_ISSUED_FORECAST_FILE, FORECAST_TRACK_RECORD_FILE):
@@ -253,6 +270,7 @@ def test_before_the_track_record_first_compiles_the_export_still_publishes_the_f
                 "io_manager": get_parquet_io_manager(data_dir=tmp_path),
                 "forecast_view_publisher": publisher,
             },
+            tags=run_tags,
             instance=dagster_instance,
         )
 
@@ -262,7 +280,7 @@ def test_before_the_track_record_first_compiles_the_export_still_publishes_the_f
         "2026-11-20T10:15:00+08:00"
     )
     assert _published(tmp_path, FORECAST_TRACK_RECORD_FILE) == {
-        "cutoff": "2026-11-20T10:00:00+08:00",
+        "cutoff": _creation_hour(dagster_instance, result.run_id),
         "accumulated_days": 0,
         "metrics": None,
     }
