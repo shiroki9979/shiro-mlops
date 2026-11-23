@@ -1,6 +1,7 @@
 """Offline tests for the container smoke check of schedules and downstream readiness."""
 
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from dagster import (
@@ -33,9 +34,14 @@ from shiro_mlops.pipelines.smoke_check import (
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipelines
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from tests.conftest import TEST_MIN_LOAD_HOURS
-from tests.helpers import derived_hourly_load, override_task_policies, write_derived_load
+from tests.helpers import (
+    derived_hourly_load,
+    install_model_double,
+    override_task_policies,
+    write_derived_load,
+)
 
-# 監控排程的 tick 讀 DATA_DIR 下的模型目錄；隔離後主機上的 data/models 不會影響判定。
+# 監控與發布排程的 tick 讀 DATA_DIR 下的模型目錄；隔離後主機上的 data/models 不會影響判定。
 pytestmark = pytest.mark.usefixtures("isolated_models_dir")
 
 NOW = datetime(2026, 9, 27, 0, 30)
@@ -387,8 +393,9 @@ def test_issued_forecast_tick_waits_for_the_first_model_without_launching_a_run(
 
 
 def test_issued_forecast_tick_would_issue_once_a_model_exists_without_launching_a_run(
-    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
 ) -> None:
+    install_model_double(isolated_models_dir)
     dagster_instance.report_runless_asset_event(
         AssetMaterialization(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).model)
     )
