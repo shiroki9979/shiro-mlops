@@ -16,9 +16,7 @@ from dagster import (
     DagsterInstance,
     Definitions,
     ExecuteInProcessResult,
-    RetryPolicy,
     build_schedule_context,
-    define_asset_job,
 )
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
@@ -29,9 +27,12 @@ from shiro_mlops.pipelines.assets import raw_taipower_load
 from shiro_mlops.pipelines.execution_origin import SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.schedules import hourly_actual_load_job, hourly_actual_load_schedule
 from tests.helpers import (
+    REEXECUTION,
     derived_hourly_load,
     derived_load_series,
+    job_retrying_once_at_once,
     regional_supply_demand_snapshots,
+    run_creation_time,
     scheduled_run_tags,
     write_derived_load,
 )
@@ -40,7 +41,6 @@ TICK = datetime(2026, 9, 5, 18, 5, tzinfo=ZoneInfo(TAIWAN_TZ))
 # 區域 fixture 四區用電加總 3254.0 萬瓩，即 32540 MW。
 FIXTURE_TOTAL_MW = 32540.0
 TAIPEI = ZoneInfo(TAIWAN_TZ)
-REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
 
 
 def _store_samples(repo: TimeSeriesRepository, start: datetime, count: int) -> None:
@@ -141,12 +141,6 @@ def _run(repo, instance: DagsterInstance, tags: dict[str, str]) -> ExecuteInProc
     return result
 
 
-def _creation_hour(instance: DagsterInstance, run_id: str) -> datetime:
-    """The hour, in Taiwan-local time, at which Dagster created the run."""
-    created = instance.get_run_record_by_id(run_id).create_timestamp
-    return created.astimezone(TAIPEI).replace(tzinfo=None, minute=0, second=0, microsecond=0)
-
-
 def _derived_window_end(instance: DagsterInstance, result: ExecuteInProcessResult) -> datetime:
     [message] = _run_log(instance, result, logging.INFO)
     return datetime.fromisoformat(message.split(", ")[1].split(")")[0])
@@ -169,7 +163,9 @@ def test_a_run_without_a_scheduled_tick_derives_up_to_the_hour_it_was_created(
     result = _run(test_repo, dagster_instance, run_tags)
 
     window_end = _derived_window_end(dagster_instance, result)
-    assert window_end == _creation_hour(dagster_instance, result.run_id)
+    assert window_end == run_creation_time(dagster_instance, result.run_id).replace(
+        minute=0, second=0, microsecond=0
+    )
     assert window_end != datetime(2026, 9, 5, 18, 0)
 
 
@@ -220,17 +216,9 @@ def test_a_retry_in_the_same_run_derives_the_same_window(
 ) -> None:
     flaky = _FirstDerivationFails(test_repo.hourly_actual_load_store)
     # 正式 job 不設重試；此處只加上立即重試，資產與 run 標籤與排程 run 相同。
-    job = Definitions(
-        assets=[raw_taipower_load],
-        jobs=[
-            define_asset_job(
-                "hourly_load_retrying_at_once",
-                selection=["raw_taipower_load"],
-                op_retry_policy=RetryPolicy(max_retries=1),
-            )
-        ],
-        resources={"time_series_repo": _Repository(flaky)},
-    ).resolve_job_def("hourly_load_retrying_at_once")
+    job = job_retrying_once_at_once(
+        raw_taipower_load, resources={"time_series_repo": _Repository(flaky)}
+    )
     tags = scheduled_run_tags(hourly_actual_load_schedule, TICK) if scheduled else {}
 
     result = job.execute_in_process(instance=dagster_instance, tags=tags)

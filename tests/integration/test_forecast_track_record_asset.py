@@ -7,10 +7,7 @@ import pandas as pd
 import pytest
 from dagster import (
     AssetKey,
-    Definitions,
-    RetryPolicy,
     build_input_context,
-    define_asset_job,
     materialize,
 )
 
@@ -24,13 +21,18 @@ from shiro_mlops.pipelines.forecast_track_record import (
     forecast_track_record,
     forecast_track_record_schedule,
 )
-from tests.helpers import scheduled_run_tags, write_derived_load
+from tests.helpers import (
+    REEXECUTION,
+    job_retrying_once_at_once,
+    run_creation_time,
+    scheduled_run_tags,
+    write_derived_load,
+)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # 排程 tick 為 10:25，統計截至時刻取整點 10:00。
 TICK = datetime(2026, 11, 20, 10, 25, tzinfo=TAIPEI)
 CUTOFF = datetime(2026, 11, 20, 10, 0)
-REEXECUTION = {"dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"}
 
 
 def _issue(repo: TimeSeriesRepository, issued_at: datetime, target_hours: list[datetime]) -> None:
@@ -78,12 +80,6 @@ def _compile(
         tags=_scheduled_tags() if run_tags is None else run_tags,
         instance=instance,
     )
-
-
-def _creation_hour(instance, run_id: str) -> datetime:
-    """The hour, in Taiwan-local time, at which Dagster created the run."""
-    created = instance.get_run_record_by_id(run_id).create_timestamp
-    return created.astimezone(TAIPEI).replace(tzinfo=None, minute=0, second=0, microsecond=0)
 
 
 def _artifact(tmp_path) -> dict:
@@ -143,7 +139,9 @@ def test_a_run_without_a_scheduled_tick_cuts_off_at_the_hour_it_was_created(
 
     assert result.success
     cutoff = datetime.fromisoformat(_artifact(tmp_path)["cutoff"])
-    assert cutoff == _creation_hour(dagster_instance, result.run_id)
+    assert cutoff == run_creation_time(dagster_instance, result.run_id).replace(
+        minute=0, second=0, microsecond=0
+    )
     assert cutoff != CUTOFF
 
 
@@ -170,20 +168,13 @@ def test_a_retry_in_the_same_run_compiles_the_same_window(
 ) -> None:
     flaky = _FirstFetchFails(test_repo)
     # 正式 job 每次重試間隔六十秒；此處只改為立即重試，資產與 run 標籤與排程 run 相同。
-    job = Definitions(
-        assets=[forecast_track_record],
-        jobs=[
-            define_asset_job(
-                "track_record_retrying_at_once",
-                selection=[FORECAST_TRACK_RECORD_ASSET],
-                op_retry_policy=RetryPolicy(max_retries=1),
-            )
-        ],
+    job = job_retrying_once_at_once(
+        forecast_track_record,
         resources={
             "time_series_repo": flaky,
             "io_manager": get_parquet_io_manager(data_dir=tmp_path),
         },
-    ).resolve_job_def("track_record_retrying_at_once")
+    )
 
     result = job.execute_in_process(
         instance=dagster_instance, tags=_scheduled_tags() if run_tags is None else run_tags

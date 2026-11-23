@@ -28,7 +28,7 @@ from shiro_mlops.pipelines.forecast_view_export import (
     forecast_view_export,
     forecast_view_export_schedule,
 )
-from tests.helpers import scheduled_run_tags, write_derived_load
+from tests.helpers import run_creation_time, scheduled_run_tags, write_derived_load
 
 # 預報實績在 10:25 彙整（統計截至 10:00），匯出排在其後。
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -92,12 +92,6 @@ def _export(
         instance=instance,
         raise_on_error=raise_on_error,
     )
-
-
-def _creation_hour(instance, run_id: str) -> str:
-    """The hour at which Dagster created the run, as the Forecast View writes a cutoff."""
-    created = instance.get_run_record_by_id(run_id).create_timestamp
-    return created.astimezone(TAIPEI).replace(minute=0, second=0, microsecond=0).isoformat()
 
 
 def _published(data_dir: Path, name: str) -> dict:
@@ -280,7 +274,9 @@ def test_before_the_track_record_first_compiles_the_export_still_publishes_the_f
         "2026-11-20T10:15:00+08:00"
     )
     assert _published(tmp_path, FORECAST_TRACK_RECORD_FILE) == {
-        "cutoff": _creation_hour(dagster_instance, result.run_id),
+        "cutoff": run_creation_time(dagster_instance, result.run_id)
+        .replace(minute=0, second=0, microsecond=0, tzinfo=TAIPEI)
+        .isoformat(),
         "accumulated_days": 0,
         "metrics": None,
     }

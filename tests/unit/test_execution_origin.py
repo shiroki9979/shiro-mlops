@@ -6,6 +6,7 @@ import pytest
 from dagster import AssetExecutionContext, asset, build_schedule_context, materialize
 
 from shiro_mlops.pipelines.execution_origin import (
+    REEXECUTION_TAGS,
     SCHEDULE_NAME_TAG,
     SCHEDULED_TICK_TAG,
     ExecutionOrigin,
@@ -15,6 +16,7 @@ from shiro_mlops.pipelines.execution_origin import (
     run_as_of,
     tick_run_request,
 )
+from tests.helpers import REEXECUTION
 
 # run 建立於 2026-11-20 03:40:12 UTC，即台灣 11:40:12，晚於 10:25 的 tick。
 CREATED_AT = datetime(2026, 11, 20, 3, 40, 12, tzinfo=UTC)
@@ -33,22 +35,22 @@ RUNS_WITHOUT_A_SCHEDULED_TICK = [
         id="tick-tag-filled-in-by-hand",
     ),
     pytest.param(
-        {**SCHEDULED, "dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"},
+        {**SCHEDULED, **REEXECUTION},
         ExecutionOrigin.REEXECUTION,
         id="re-execution-of-a-scheduled-run",
     ),
     pytest.param(
-        {**SCHEDULED, "dagster/parent_run_id": "tick-run"},
+        {**SCHEDULED, REEXECUTION_TAGS[0]: "tick-run"},
         ExecutionOrigin.REEXECUTION,
         id="parent-tag-only",
     ),
     pytest.param(
-        {**SCHEDULED, "dagster/root_run_id": "tick-run"},
+        {**SCHEDULED, REEXECUTION_TAGS[1]: "tick-run"},
         ExecutionOrigin.REEXECUTION,
         id="root-tag-only",
     ),
     pytest.param(
-        {"dagster/parent_run_id": "manual-run", "dagster/root_run_id": "manual-run"},
+        REEXECUTION,
         ExecutionOrigin.REEXECUTION,
         id="re-execution-of-a-manual-run",
     ),
@@ -139,7 +141,7 @@ def test_a_refusing_asset_in_a_scheduled_run_gets_the_tick(dagster_instance) -> 
     [
         pytest.param({}, "scheduled tick", id="manual"),
         pytest.param(
-            {**SCHEDULED, "dagster/parent_run_id": "tick-run", "dagster/root_run_id": "tick-run"},
+            {**SCHEDULED, **REEXECUTION},
             "re-execut",
             id="re-execution",
         ),
