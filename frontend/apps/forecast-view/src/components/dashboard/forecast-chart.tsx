@@ -1,3 +1,4 @@
+import type { NonEmptyArray } from '@shiro-mlops/shared/query-view'
 import type { ForecastStep } from '@/schemas/published'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import { formatDateTime, formatLoadThousands } from '@shiro-mlops/shared/i18n/format'
@@ -16,9 +17,7 @@ import {
 } from 'recharts'
 
 interface ForecastChartProps {
-  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
-  steps: ForecastStep[]
-  isLoading: boolean
+  steps: NonEmptyArray<ForecastStep>
 }
 
 interface CustomTooltipProps {
@@ -63,27 +62,9 @@ function CustomTooltip({ active, payload, label, locale }: CustomTooltipProps) {
   )
 }
 
-export function ForecastChart({ steps, isLoading }: ForecastChartProps) {
+export function ForecastChart({ steps }: ForecastChartProps) {
   const locale = useLocale()
   const chartText = useMessages().dashboard.chart
-
-  if (isLoading) {
-    return (
-      <Card className="border-slate-800 bg-slate-900/60">
-        <CardHeader>
-          <CardTitle className="text-base font-semibold text-slate-200">
-            {chartText.loadingTitle}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="h-[420px] flex items-center justify-center">
-          <div className="text-center space-y-2">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent mx-auto" />
-            <p className="text-xs text-slate-400">{chartText.loading}</p>
-          </div>
-        </CardContent>
-      </Card>
-    )
-  }
 
   // Find min/max for scaling
   const loads = steps.map((step) => step.predicted_load_mw)
