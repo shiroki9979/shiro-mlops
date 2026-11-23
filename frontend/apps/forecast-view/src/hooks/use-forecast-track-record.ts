@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { QUERY_VIEW_FIELDS } from '@shiro-mlops/shared/query-view'
 import { publishedQueryKey, readPublished } from '@/lib/published'
 import { FORECAST_TRACK_RECORD_FILE, ForecastTrackRecordSchema } from '@/schemas/published'
 
@@ -15,6 +16,6 @@ export function useForecastTrackRecord() {
     retry: false,
     // Re-render on every settled read, even one whose JSON is byte-identical (structural sharing keeps
     // `data` the same object), so the stale hint is checked again against the viewer's clock.
-    notifyOnChangeProps: ['data', 'isError', 'dataUpdatedAt', 'errorUpdatedAt'],
+    notifyOnChangeProps: [...QUERY_VIEW_FIELDS, 'dataUpdatedAt', 'errorUpdatedAt'],
   })
 }

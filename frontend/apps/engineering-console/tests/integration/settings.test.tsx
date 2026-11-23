@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { onlineManager } from '@tanstack/react-query'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
 import { createAppRouter } from '@/router'
@@ -12,7 +13,25 @@ function renderSettings() {
   return render(<RouterProvider router={createAppRouter(history)} />)
 }
 
+const predictionPayload = (horizon_hours: number) => ({
+  status: 'success',
+  horizon_hours,
+  subject: 'nationwide',
+  predictions: [
+    {
+      datetime: '2026-10-26T01:00:00+08:00',
+      predicted_load_mw: 27123.4,
+      temperature: 24.5,
+      relative_humidity: 78,
+    },
+  ],
+})
+
 describe('Settings page', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true)
+  })
+
   it('shows the read-only API endpoint without hardcoded resiliency claims', async () => {
     renderSettings()
 
@@ -41,19 +60,7 @@ describe('Settings page', () => {
       http.post('*/predict', async ({ request }) => {
         const { horizon_hours } = (await request.json()) as { horizon_hours: number }
         await responseGate
-        return HttpResponse.json({
-          status: 'success',
-          horizon_hours,
-          subject: 'nationwide',
-          predictions: [
-            {
-              datetime: '2026-10-26T01:00:00+08:00',
-              predicted_load_mw: 27123.4,
-              temperature: 24.5,
-              relative_humidity: 78,
-            },
-          ],
-        })
+        return HttpResponse.json(predictionPayload(horizon_hours))
       }),
     )
     const user = userEvent.setup()
@@ -89,6 +96,74 @@ describe('Settings page', () => {
     expect(
       screen.getByText(zhTW.settings.tester.error('API Error (503): model unavailable')),
     ).toBeInTheDocument()
+    expect(screen.queryByText(zhTW.settings.tester.success)).not.toBeInTheDocument()
+  })
+
+  it('clears the previous failure while a re-submitted prediction is pending', async () => {
+    let releaseRetry: () => void = () => {}
+    const retryGate = new Promise<void>((resolve) => {
+      releaseRetry = resolve
+    })
+    let attempt = 0
+    server.use(
+      http.post('*/predict', async () => {
+        attempt += 1
+        if (attempt === 1) {
+          return HttpResponse.json({ detail: 'model unavailable' }, { status: 503 })
+        }
+        await retryGate
+        return HttpResponse.json(predictionPayload(24))
+      }),
+    )
+    const user = userEvent.setup()
+    renderSettings()
+    const submitButton = await screen.findByRole('button', { name: zhTW.settings.tester.submit })
+    const failureText = zhTW.settings.tester.error('API Error (503): model unavailable')
+
+    await user.click(submitButton)
+    expect(await screen.findByText(failureText)).toBeInTheDocument()
+
+    await user.click(submitButton)
+
+    expect(submitButton).toBeDisabled()
+    expect(screen.queryByText(zhTW.settings.tester.failure)).not.toBeInTheDocument()
+    expect(screen.queryByText(failureText)).not.toBeInTheDocument()
+    releaseRetry()
+    expect(await screen.findByText(zhTW.settings.tester.success)).toBeInTheDocument()
+  })
+
+  it('sends the manual prediction while the browser reports offline and shows the response', async () => {
+    let requested = false
+    server.use(
+      http.post('*/predict', () => {
+        requested = true
+        return HttpResponse.json(predictionPayload(24))
+      }),
+    )
+    const user = userEvent.setup()
+    renderSettings()
+    const submitButton = await screen.findByRole('button', { name: zhTW.settings.tester.submit })
+
+    onlineManager.setOnline(false)
+    await user.click(submitButton)
+
+    expect(await screen.findByText(zhTW.settings.tester.success)).toBeInTheDocument()
+    expect(requested).toBe(true)
+    expect(submitButton).toBeEnabled()
+    expect(screen.getByText(/27123\.4/)).toBeInTheDocument()
+  })
+
+  it('shows the failure when the API is unreachable while the browser reports offline', async () => {
+    server.use(http.post('*/predict', () => HttpResponse.error()))
+    const user = userEvent.setup()
+    renderSettings()
+    const submitButton = await screen.findByRole('button', { name: zhTW.settings.tester.submit })
+
+    onlineManager.setOnline(false)
+    await user.click(submitButton)
+
+    expect(await screen.findByText(zhTW.settings.tester.failure)).toBeInTheDocument()
+    expect(submitButton).toBeEnabled()
     expect(screen.queryByText(zhTW.settings.tester.success)).not.toBeInTheDocument()
   })
 })
