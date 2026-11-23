@@ -1,5 +1,6 @@
 """Offline tests for the container smoke check of schedules and downstream readiness."""
 
+import gc
 from datetime import datetime
 from pathlib import Path
 
@@ -630,3 +631,30 @@ def test_unreadable_model_directory_fails_the_model_line_only(
     assert results["dynamic_horizon_forecast load accumulation"].status is CheckStatus.PASS
     assert results["dynamic_horizon_forecast load freshness"].status is CheckStatus.PASS
     assert len(results) == 5
+
+
+def test_failing_tick_closes_the_instance_it_opened(
+    test_repo: TimeSeriesRepository,
+    min_hours: int,
+    isolated_models_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """A tick that raises must not leave a closed instance current for later Definitions loads."""
+    lock = isolated_models_dir / f".{DYNAMIC_HORIZON_FORECAST}.lock"
+    isolated_models_dir.mkdir(parents=True)
+    lock.symlink_to(lock)
+    scope = {DYNAMIC_HORIZON_FORECAST: deployed_task(DYNAMIC_HORIZON_FORECAST)}
+    (tmp_path / "instance").mkdir()
+    with DagsterInstance.local_temp(tempdir=str(tmp_path / "instance")) as instance:
+        deployment = _ready_deployment(test_repo, instance)
+        ticks = [
+            result
+            for result in check_downstream_readiness(deployment, scope)
+            if result.name.startswith("tick ")
+        ]
+        assert CheckStatus.FAIL in {result.status for result in ticks}
+    # 釋放對已關閉 instance 的參照，殘留的 weakref 才會像下一個測試那樣失效。
+    del instance, deployment
+    gc.collect()
+
+    assert _scoped_definitions().resolve_asset_graph() is not None

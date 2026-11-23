@@ -417,13 +417,15 @@ def _check_load_freshness(
 def _check_tick(deployment: Deployment, schedule_name: str) -> CheckResult:
     """Evaluate the deployed schedule function exactly as the daemon would at ``now``."""
     check_name = f"tick {schedule_name}"
-    context = build_schedule_context(
-        instance=deployment.instance,
-        scheduled_execution_time=deployment.now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
-        resources={"time_series_repo": deployment.repository},
-    )
+    # WHY-NOT(build_schedule_context): 以 with 關閉 context 開啟的 instance；不關閉時 tick 失敗的
+    # traceback 循環會讓它延到之後才回收，回收時把 Dagster 的 defs state storage 還原成已關閉的 instance。
     try:
-        execution = deployment.defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
+        with build_schedule_context(
+            instance=deployment.instance,
+            scheduled_execution_time=deployment.now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
+            resources={"time_series_repo": deployment.repository},
+        ) as context:
+            execution = deployment.defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         return CheckResult(
             check_name, CheckStatus.FAIL, f"tick evaluation failed: {_summarize(error)}"
