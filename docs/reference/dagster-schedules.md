@@ -32,15 +32,15 @@
      | 已訓練（`TRAINED`） | 訓練紀錄與模型目錄都有模型 | 兩邊都有模型 |
      | 紀錄與目錄不一致（`RECORD_DIRECTORY_MISMATCH`） | 只有一邊有模型（例如刪除 `dagster_home` volume 但保留 `data/models/`，或相反） | 點名缺少模型的一邊，處理方式為執行一次 `{task_id}__training_job` |
 
-     已有模型時，階段停在「已訓練」或「紀錄與目錄不一致」，即使最低累積之後又未通過（例如調高 `min_training_hours`，或舊列被寫回），因此階段不是單純的線性鏈。訓練與監控排程「要不要執行、不執行的原因」都由此 module 給出，排程本身不查 materialization 或最低累積；每個排程只看自己的資產實際會用到的那一邊：
+     已有模型時，階段停在「已訓練」或「紀錄與目錄不一致」，即使最低累積之後又未通過（例如調高 `min_training_hours`，或舊列被寫回），因此階段不是單純的線性鏈。訓練、監控與發布排程「要不要執行、不執行的原因」都由此 module 給出，排程本身不查 materialization、模型目錄或最低累積；每個排程只看自己的資產實際會用到的那一邊。發布排程（第 6 項）只看模型目錄，不看最低累積，因此最低累積未通過時照常發布：
 
-     | 模型狀態 | 訓練排程 | 監控排程 |
-     | :--- | :--- | :--- |
-     | 最低累積未通過（不論模型狀態） | 以最低累積的原因略過 | 以最低累積的原因略過 |
-     | 兩邊都沒有 | 執行 | 略過：`No {task_id}__model materialization yet; {task_id}__monitoring_schedule waits for the first successful {task_id}__training_job run.` |
-     | 兩邊都有 | 執行 | 執行 |
-     | 只有訓練紀錄 | 執行 | 執行（監控資產從上次訓練的紀錄取 metrics，不讀模型目錄） |
-     | 只有模型目錄 | 執行（重新訓練即不一致的處理方式） | 以「紀錄與目錄不一致」的原因略過 |
+     | 模型狀態 | 訓練排程 | 監控排程 | 發布排程 |
+     | :--- | :--- | :--- | :--- |
+     | 最低累積未通過（不論模型狀態） | 以最低累積的原因略過 | 以最低累積的原因略過 | 依下列模型狀態，不看最低累積 |
+     | 兩邊都沒有 | 執行 | 略過：`No {task_id}__model materialization yet; {task_id}__monitoring_schedule waits for the first successful {task_id}__training_job run.` | 略過：`No dynamic_horizon_forecast__model materialization yet; issued_forecast_schedule waits for the first successful training run.` |
+     | 兩邊都有 | 執行 | 執行 | 執行 |
+     | 只有訓練紀錄 | 執行 | 執行（監控資產從上次訓練的紀錄取 metrics，不讀模型目錄） | 以「紀錄與目錄不一致」的原因略過 |
+     | 只有模型目錄 | 執行（重新訓練即不一致的處理方式） | 以「紀錄與目錄不一致」的原因略過 | 執行（發布資產從模型目錄載入模型），MLflow 附註留空 |
 
    - **排程 run_key**：排程 tick 轉為台灣本地時間 ISO 字串作為 `run_key`，同一 tick 重複評估不重跑；無 tick 的手動評估不帶 `run_key`。
    - **MLflow**：每個任務擁有獨立 experiment 與 registered model，名稱皆等於 `task_id`。每次訓練以 `{task_id}_training` 為 run 名稱記錄 metrics、攤平的 `[params]`（巢狀鍵以 `.` 連接，另含 `task_id`、`task_type`）與模型目錄（artifact path `model`），並以該 artifact URI 建立新的 model version（模型為原生檔案而非 MLflow logged model，ADR-0010）。MLflow 不可用時記錄警告、`run_id` 標為 `local_run`，已保存的模型仍有效。
@@ -81,7 +81,7 @@
    - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。
    - **lineage**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，因此任務 job 不會帶出發布（見第 1 項邊界）。`issued_forecast_job` 不選取任何擷取資產。
    - **只有定時發布才算**：資產只接受由 `issued_forecast_schedule` tick 產生的 run（設定帶 `issued_at` 且 run 帶 `dagster/schedule_name` 標籤）；手動 materialize、在 launchpad 自填 `issued_at` 的 run，以及重新執行的 run（帶 `dagster/parent_run_id` 或 `dagster/root_run_id` 標籤，即使沿用原 tick 的設定與標籤）皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過。隨需 `/predict` 不寫入。
-   - **無法產出**：尚無 `dynamic_horizon_forecast__model` materialization 時，排程以 `SkipReason` 略過。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入；模型目錄不存在時同樣以 `Failure` 結束。
+   - **無法產出**：排程與資產都讀第 1 項的冷啟動階段判斷有沒有模型可發布，只看模型目錄、不看最低累積。模型目錄沒有由模型存放安裝的模型時，排程以 `SkipReason` 略過：兩邊都沒有模型時為尚無 `dynamic_horizon_forecast__model` materialization 的原因，只有訓練紀錄時為「紀錄與目錄不一致」的原因。只有模型目錄時（例如刪除 `dagster_home` volume 但保留 `data/models/`）照常發布，MLflow 附註（`mlflow_model_version`）依 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的雜湊比對規則留空。模型目錄在 tick 之後、run 載入之前消失時，資產以 `Failure` 結束、description 為冷啟動階段的原因並附 `issued_at` metadata，不寫入。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入。
    - **不設重試政策**：`issued_forecast` 資產與 `issued_forecast_job` 皆無重試政策；重新執行的 run 不寫入（見上）。理由見 [ADR-0013 §2.1](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#21-已發布預報) 的不補發與 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)。
    - **冪等性**：同一發布時刻已有紀錄（例如 commit 後崩潰被重跑）時不預報、不寫入、不覆寫，資產成功並以 metadata `already_issued = true` 標示；新寫入時 metadata 另記 `load_anchor`、`status`、`model_sha256` 與步數。
 7. **`forecast_track_record`（預報實績，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
