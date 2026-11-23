@@ -417,9 +417,9 @@ def _check_load_freshness(
 def _check_tick(deployment: Deployment, schedule_name: str) -> CheckResult:
     """Evaluate the deployed schedule function exactly as the daemon would at ``now``."""
     check_name = f"tick {schedule_name}"
-    # WHY-NOT(build_schedule_context): 以 with 關閉 context 開啟的 instance；不關閉時 tick 失敗的
-    # traceback 循環會讓它延到之後才回收，回收時把 Dagster 的 defs state storage 還原成已關閉的 instance。
     try:
+        # WHY-NOT(build_schedule_context): 以 with 關閉 context 開啟的 instance；不關閉時 tick 失敗的
+        # traceback 循環會讓它延到之後才回收，回收時把 Dagster 的 defs state storage 還原成已關閉的 instance。
         with build_schedule_context(
             instance=deployment.instance,
             scheduled_execution_time=deployment.now.replace(tzinfo=ZoneInfo(TAIWAN_TZ)),
