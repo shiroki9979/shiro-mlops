@@ -11,7 +11,6 @@ interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
   data?: ListEnvelope
   error: DataExplorerError | null
-  isError: boolean
   isLoading: boolean
   canRestart: boolean
   detailLimitExceeded: boolean
@@ -21,21 +20,23 @@ interface ExplorerResultsProps {
 }
 
 function listErrorMessage(kind: DataExplorerErrorKind, resultsText: Messages['explorer']['results']): string {
-  const messages: Record<DataExplorerErrorKind, string> = {
-    cursorRejected: resultsText.cursorRejected,
-    invalidQuery: resultsText.invalidFilters,
-    databaseUnavailable: resultsText.databaseUnavailable,
-    invalidResponse: resultsText.queryFailed,
-    other: resultsText.queryFailed,
+  switch (kind) {
+    case 'cursorRejected':
+      return resultsText.cursorRejected
+    case 'invalidQuery':
+      return resultsText.invalidFilters
+    case 'databaseUnavailable':
+      return resultsText.databaseUnavailable
+    case 'invalidResponse':
+    case 'other':
+      return resultsText.queryFailed
   }
-  return messages[kind]
 }
 
 export function ExplorerResults({
   dataset,
   data,
   error,
-  isError,
   isLoading,
   canRestart,
   detailLimitExceeded,
@@ -52,7 +53,7 @@ export function ExplorerResults({
           <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
         ) : isLoading ? (
           <p className="text-xs text-slate-500">{resultsText.loading}</p>
-        ) : isError && error ? (
+        ) : error ? (
           <div>
             <p className="text-xs text-rose-300">{listErrorMessage(error.kind, resultsText)}</p>
             {canRestart && error.kind === 'cursorRejected' && (

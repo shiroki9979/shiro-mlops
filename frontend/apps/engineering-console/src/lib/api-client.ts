@@ -38,16 +38,17 @@ const KIND_BY_STATUS: Partial<Record<number, DataExplorerErrorKind>> = {
   503: 'databaseUnavailable',
 }
 
-// A series 422 over the point cap names the finest bucket within it (docs/reference/rest-api.md §5.3).
-const InvalidQueryBodySchema = z.object({
+// Body shape per docs/reference/rest-api.md §5.3.
+const PointLimitExceededBodySchema = z.object({
   detail: z.object({ suggested_bucket: ResolvedBucketSchema }),
 })
 
 export class DataExplorerError extends Error {
+  constructor(kind: 'invalidQuery', message: string, suggestedBucket?: ResolvedBucket)
+  constructor(kind: Exclude<DataExplorerErrorKind, 'invalidQuery'>, message: string)
   constructor(
     public readonly kind: DataExplorerErrorKind,
     message: string,
-    // Only an invalidQuery carries it, and only when the API named a bucket the chart can apply.
     public readonly suggestedBucket?: ResolvedBucket,
   ) {
     super(message)
@@ -56,15 +57,15 @@ export class DataExplorerError extends Error {
 }
 
 function suggestedBucketOf(body: unknown): ResolvedBucket | undefined {
-  const parsed = InvalidQueryBodySchema.safeParse(body)
+  const parsed = PointLimitExceededBodySchema.safeParse(body)
   return parsed.success ? parsed.data.detail.suggested_bucket : undefined
 }
 
 function toDataExplorerError(error: unknown): DataExplorerError {
   if (error instanceof ApiError) {
     const kind = KIND_BY_STATUS[error.status] ?? 'other'
-    const suggestedBucket = kind === 'invalidQuery' ? suggestedBucketOf(error.data) : undefined
-    return new DataExplorerError(kind, error.message, suggestedBucket)
+    if (kind === 'invalidQuery') return new DataExplorerError(kind, error.message, suggestedBucketOf(error.data))
+    return new DataExplorerError(kind, error.message)
   }
   if (error instanceof InvalidResponseError) {
     return new DataExplorerError('invalidResponse', error.message)

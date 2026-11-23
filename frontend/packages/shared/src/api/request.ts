@@ -16,10 +16,7 @@ export class ApiError extends Error {
 
 // A 2xx body the caller's schema rejected; it carries no status so no caller mistakes it for a rejection.
 export class InvalidResponseError extends Error {
-  constructor(
-    message: string,
-    public data: unknown,
-  ) {
+  constructor(message: string) {
     super(message)
     this.name = 'InvalidResponseError'
   }
@@ -62,7 +59,7 @@ export async function request<T>(
     const parseResult = schema.safeParse(json)
     if (!parseResult.success) {
       console.error('Schema validation failed:', parseResult.error)
-      throw new InvalidResponseError(`Invalid API response format: ${parseResult.error.message}`, json)
+      throw new InvalidResponseError(`Invalid API response format: ${parseResult.error.message}`)
     }
     return parseResult.data
   }

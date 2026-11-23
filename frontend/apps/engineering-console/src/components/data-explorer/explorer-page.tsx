@@ -75,7 +75,6 @@ export function ExplorerPage({ dataset }: { dataset: ExplorerDatasetConfig }) {
         dataset={dataset}
         data={list.data}
         error={list.error}
-        isError={list.isError}
         isLoading={list.isLoading}
         canRestart={explorer.canRestart}
         detailLimitExceeded={explorer.detailLimitExceeded}
