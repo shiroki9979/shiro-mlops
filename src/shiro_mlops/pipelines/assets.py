@@ -23,7 +23,7 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     CWASource,
 )
-from shiro_mlops.data.hourly_actual_load import ONE_HOUR, resolve_evaluation_time
+from shiro_mlops.data.hourly_actual_load import ONE_HOUR
 from shiro_mlops.data.hourly_actual_load_store import (
     HourlyActualLoadStore,
     ScheduledDerivationPolicy,
@@ -45,6 +45,7 @@ from shiro_mlops.data.taipower_unit_generation import (
     parse_unit_generation_payload,
 )
 from shiro_mlops.features.feast_export import build_feast_feature_frames
+from shiro_mlops.pipelines.execution_origin import WithoutTick, run_as_of
 from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO, TaskPipelineNames
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.runner import training_data_from_table
@@ -62,12 +63,6 @@ class SnapshotObservationConfig(Config):
     """提供選用的排程 tick，讓即時快照共用同一個觀測 slot。"""
 
     observed_at: str | None = None
-
-
-class HourlyActualLoadConfig(Config):
-    """Carry an optional schedule tick so run delays do not shift the recompute window."""
-
-    evaluated_at: str | None = None
 
 
 # 區域快照是全台逐時實際負載的唯一來源且無法回補，故重試比其他即時快照更久；
@@ -178,16 +173,18 @@ def raw_taipower_regional_supply_demand_snapshot(
     required_resource_keys={TIME_SERIES_REPO},
     deps=[raw_taipower_regional_supply_demand_snapshot],
 )
-def raw_taipower_load(
-    context: AssetExecutionContext,
-    config: HourlyActualLoadConfig,
-) -> pd.DataFrame:
-    """Asset: recompute recent hours and any after the latest derived hour, then upsert them."""
+def raw_taipower_load(context: AssetExecutionContext) -> pd.DataFrame:
+    """Asset: recompute recent hours and any after the latest derived hour, then upsert them.
+
+    The run's as_of is the evaluation time: the tick for a run a schedule tick
+    launched, otherwise the run's creation time, so a retry in the same run
+    derives the same window.
+    """
     store: HourlyActualLoadStore = getattr(
         context.resources, TIME_SERIES_REPO
     ).hourly_actual_load_store
     derivation = store.derive_scheduled(
-        resolve_evaluation_time(config.evaluated_at),
+        run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW),
         ScheduledDerivationPolicy(
             recompute_hours=settings.HOURLY_LOAD_RECOMPUTE_HOURS,
             max_catchup_hours=settings.HOURLY_LOAD_CATCHUP_MAX_HOURS,
