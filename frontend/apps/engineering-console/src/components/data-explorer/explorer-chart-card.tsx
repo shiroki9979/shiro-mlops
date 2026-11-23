@@ -17,7 +17,7 @@ import { plotSeries } from './plot-series'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { SeriesStackedAreaChart } from './series-stacked-area-chart'
 import { SeriesStatusChart } from './series-status-chart'
-import type { ChartSettings, SeriesRequest } from './explorer-query-state'
+import { type ChartSettings, type ChartSettingsPatch, DEFAULT_AGG, type SeriesRequest } from './explorer-query-state'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
@@ -34,7 +34,7 @@ interface ExplorerChartCardProps {
   settings: ChartSettings
   // Built from the same window and filters the table uses, so chart and table show one slice.
   series: SeriesRequest
-  onChartChange: (patch: Partial<ChartSettings>) => void
+  onChartChange: (patch: ChartSettingsPatch) => void
   // A brushed range becomes the shared window, the same URL path as the quick ranges and shifts.
   onWindowChange: (window: ExplorerWindow) => void
 }
@@ -105,7 +105,7 @@ export function ExplorerChartCard({
           {chart.measure !== 'count' && (
             <ChartSelect
               label={chartText.agg}
-              value={settings.agg}
+              value={settings.agg ?? DEFAULT_AGG}
               disabled={settings.bucket === 'raw'}
               options={AggSchema.options.map((option) => [option, chartText.aggs[option]])}
               onChange={(agg) => onChartChange({ agg })}
