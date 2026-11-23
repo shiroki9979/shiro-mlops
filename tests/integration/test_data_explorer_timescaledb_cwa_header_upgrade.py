@@ -6,7 +6,7 @@ from sqlalchemy.engine import Engine
 from tests.scenarios.cwa_header_upgrade import (
     CWA_HEADER_TABLES,
     LEGACY_STATUS_COLUMN,
-    assert_header_status_drop_survives_a_concurrent_upgrade,
+    assert_header_status_drop_survives_an_unlocked_upgrade,
     assert_header_status_is_dropped_repeatably,
     header_columns,
 )
@@ -29,10 +29,10 @@ def test_existing_timescaledb_cwa_headers_lose_status_column_repeatably(
     assert_header_status_is_dropped_repeatably(data_explorer_timescaledb_engine)
 
 
-def test_concurrent_timescaledb_startups_both_drop_the_status_column(
+def test_timescaledb_status_drop_survives_a_startup_that_takes_no_migration_lock(
     data_explorer_timescaledb_engine: Engine,
 ) -> None:
-    assert_header_status_drop_survives_a_concurrent_upgrade(data_explorer_timescaledb_engine)
+    assert_header_status_drop_survives_an_unlocked_upgrade(data_explorer_timescaledb_engine)
 
 
 @pytest.mark.parametrize(("missing_station_ids", "status"), COMPLETENESS_CASES)

@@ -249,6 +249,16 @@ def derived_load_series(engine: Engine, *, subject: str = NATIONWIDE_SUBJECT) ->
     return HourlyActualLoadStore(engine).series(end=datetime.max, subject=subject)
 
 
+def forget_schema_migrations(engine: Engine) -> None:
+    """Empty the migration record, as in a database older than the record (ADR-0017).
+
+    A test that rebuilds a legacy table shape in an already migrated database calls
+    this too; otherwise the recorded migrations are skipped and the shape stays legacy.
+    """
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM schema_migration"))
+
+
 def create_legacy_load_table(engine: Engine) -> None:
     """Model a d015046-era database without a source column; migration leaves legacy rows with NULL source."""
     with engine.begin() as connection:

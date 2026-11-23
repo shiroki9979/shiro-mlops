@@ -1,7 +1,7 @@
 """ADR-0008: the hourly actual load store owns ``raw_taipower_load`` and its derived source.
 
-Outside the store, SQL naming the table appears only in schema init and migration
-(``src/shiro_mlops/core/database.py``) and in the forecast track-record join
+Outside the store, SQL naming the table appears only in schema migrations
+(``src/shiro_mlops/core/schema_migrations.py``) and in the forecast track-record join
 (``src/shiro_mlops/data/forecast_track_record.py``). The Data
 Explorer reaches the table through its declarative dataset definition, not SQL of its
 own; it and the join bind the store's source constant rather than spelling the value.
@@ -17,7 +17,7 @@ import pytest
 from tests.source_scan import REPO_ROOT, SRC_DIR, scan_sources
 
 STORE = "src/shiro_mlops/data/hourly_actual_load_store.py"
-SCHEMA_SETUP = "src/shiro_mlops/core/database.py"
+SCHEMA_SETUP = "src/shiro_mlops/core/schema_migrations.py"
 SCANNED_DIRS = (SRC_DIR, REPO_ROOT / "scripts", REPO_ROOT / "lab")
 LOAD_TABLE_SQL = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+raw_taipower_load\b")
 DERIVED_SOURCE = "regional_snapshot_sum"

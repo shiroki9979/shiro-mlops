@@ -58,7 +58,7 @@
 - **負載起點過舊**：最新推算列（`source = 'regional_snapshot_sum'`）的 `raw_taipower_load.time` 早於請求時間超過任務設定 `[policies].stale_anchor_max_lag_hours`（預設 `3`）小時；此狀態不降級，`/ready` 與 `/predict` 皆回傳 HTTP 503。
 - **模型**：API 啟動時依任務設定逐一載入 `DATA_DIR/models/<task_id>/`（[ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）；單一任務的模型目錄不存在或無法載入時，只有該任務維持 `not_ready`，其他任務照常服務。未訓練（模型目錄不存在）時 `reason` 為 `Model is not loaded or trained yet.`；載入失敗時 `reason` 為 `Model failed to load: <例外類型>: <訊息>`，完整 traceback 寫入日誌。兩者皆回傳 HTTP 503，該任務的 `/predict` 以同一字串作為 `detail`。既有 `DATA_DIR/model.joblib` 不載入，首次以新格式重新訓練前 `/ready` 維持 `not_ready`。任務設定無效時 API 啟動失敗。
 - 空資料庫首次啟動時 API process 可存活，但不得由 API lifespan 直接呼叫 CWA 或以測試資料建立正式模型。
-- **資料庫**：API 啟動時確保一次 schema（`init_db`），之後所有 request 共用同一個 repository 與連線池，不再逐 request 執行 DDL。啟動時資料庫無法連線只記錄錯誤，API 之後不會自行補建 schema；資料庫恢復連線後即可讀取既有資料表。
+- **資料庫**：API 啟動時確保一次 schema（`init_db`），之後所有 request 共用同一個 repository 與連線池，不再逐 request 執行 DDL。啟動時資料庫無法連線只記錄錯誤，API 之後不會自行補建 schema；資料庫恢復連線後即可讀取既有資料表。資料庫記錄了本程式不認得的 schema 遷移（由較新版本的程式遷移過）時 API 啟動失敗，不支援降版（[資料模型與契約 §3.4](data-contracts.md#34-schema-遷移紀錄-schema_migration)）。
 
 ## 3. 隨需動態視界負載預報
 
