@@ -94,8 +94,8 @@ EXPECTED_SCHEDULES: dict[str, ExpectedSchedule] = {
     ),
 }
 
-# SYNC(src/shiro_mlops/pipelines/issued_forecast.py, docs/reference/dagster-schedules.md): 排程名稱、
-# job 與 cron 三處一起修改（文件第 6 項）
+# SYNC(src/shiro_mlops/pipelines/issuing.py, src/shiro_mlops/pipelines/issued_forecast.py, docs/reference/dagster-schedules.md): 排程名稱在
+# issuing.py，job 與 cron 在 issued_forecast.py，連同文件第 6 項一起修改
 ISSUED_FORECAST_SCHEDULES: dict[str, ExpectedSchedule] = {
     "issued_forecast_schedule": ExpectedSchedule(
         "issued_forecast_job",

@@ -1,13 +1,15 @@
-"""Issuing a forecast end to end: schedule tick, Dagster job, runner and the issued-forecast store."""
+"""Issuing a forecast end to end: schedule tick, Dagster job, runner and the issued-forecast store.
+
+Here: which runs issue, and how each issuing outcome becomes a materialization or a
+``Failure``. What decides the outcome is tested in tests/integration/test_issuing.py.
+"""
 
 import shutil
-from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 from dagster import AssetMaterialization, Definitions, MetadataValue, build_schedule_context
-from sqlalchemy import create_engine
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -24,13 +26,12 @@ from shiro_mlops.pipelines.task_pipelines import (
     MODEL_SHA256_METADATA,
     TaskPipelineNames,
 )
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
-from shiro_mlops.tasks.model_store import SavedModel, model_directory, save_model
-from shiro_mlops.tasks.runner import train_task
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST
+from shiro_mlops.tasks.model_store import SavedModel, model_directory
 from tests.helpers import (
     canonical_observation_batch,
     hourly_load_with_weather,
-    task_runtime,
+    train_and_install_forecast_model,
     write_derived_load,
 )
 
@@ -41,8 +42,6 @@ TICK = datetime(2026, 11, 20, 10, 15, tzinfo=TAIPEI)
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 # 負載起點 09:00 落後 12:15 超過 3 小時。
 STALE_TICK = datetime(2026, 11, 20, 12, 15, tzinfo=TAIPEI)
-# 早於第一筆逐時負載的 tick：尚無負載歷史可作起點。
-BEFORE_HISTORY_TICK = datetime(2026, 10, 1, 10, 15, tzinfo=TAIPEI)
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 MLFLOW_VERSION = "7"
 
@@ -76,16 +75,13 @@ def _report_model_materialization(instance, metadata: dict) -> None:
 
 
 def _train_and_save(repo: TimeSeriesRepository, *, n_estimators: int) -> SavedModel:
-    shipped = deployed_task(DYNAMIC_HORIZON_FORECAST)
-    task = replace(
-        shipped,
-        params=shipped.params.model_copy(
-            update={"model": shipped.params.model.model_copy(update={"n_estimators": n_estimators})}
-        ),
-        policies=shipped.policies.model_copy(update={"min_training_hours": HOURS}),
+    return train_and_install_forecast_model(
+        repo,
+        settings.models_dir,
+        as_of=ISSUED_AT,
+        min_training_hours=HOURS,
+        n_estimators=n_estimators,
     )
-    model = train_task(task, task_runtime(repo), as_of=ISSUED_AT).model
-    return save_model(settings.models_dir, DYNAMIC_HORIZON_FORECAST, model)
 
 
 def _job(repo: TimeSeriesRepository):
@@ -110,14 +106,6 @@ def _issue(
         tags={**request.tags, **(extra_tags or {})},
         raise_on_error=False,
     )
-
-
-def _load_only_repo(tmp_path) -> TimeSeriesRepository:
-    """Load accumulated but CWA never ingested: no forecast and no observation to fall back on."""
-    load_only = TimeSeriesRepository(engine=create_engine(f"sqlite:///{tmp_path / 'load.db'}"))
-    load, _weather = hourly_load_with_weather(HOURS, LOAD_ANCHOR)
-    write_derived_load(load_only.engine, load)
-    return load_only
 
 
 def _materialization_metadata(result) -> dict:
@@ -151,7 +139,14 @@ def test_scheduled_tick_issues_the_168_hour_forecast_from_the_loaded_model(
     assert issued.steps[0].target_hour == LOAD_ANCHOR + timedelta(hours=1)
     assert issued.steps[-1].target_hour == LOAD_ANCHOR + timedelta(hours=168)
     assert all(step.predicted_load_mw > 0 for step in issued.steps)
-    assert _materialization_metadata(result)["already_issued"] is False
+    assert _materialization_metadata(result) == {
+        "issued_at": ISSUED_AT.isoformat(),
+        "already_issued": False,
+        "load_anchor": LOAD_ANCHOR.isoformat(),
+        "status": "degraded",
+        MODEL_SHA256_METADATA: trained.sha256,
+        "steps": 168,
+    }
 
 
 def test_issuing_the_same_tick_again_keeps_the_first_record(
@@ -165,47 +160,25 @@ def test_issuing_the_same_tick_again_keeps_the_first_record(
     result = _issue(repo, dagster_instance)
 
     assert result.success
-    assert _materialization_metadata(result)["already_issued"] is True
+    assert _materialization_metadata(result) == {
+        "issued_at": ISSUED_AT.isoformat(),
+        "already_issued": True,
+    }
     assert repo.issued_forecast_store.fetch(ISSUED_AT) == first
 
 
-@pytest.mark.parametrize(
-    ("issue_from", "tick", "reason"),
-    [
-        pytest.param(lambda repo, _tmp: repo, STALE_TICK, "Stale load anchor", id="stale-anchor"),
-        pytest.param(
-            lambda repo, _tmp: repo,
-            BEFORE_HISTORY_TICK,
-            "No persisted nationwide load history",
-            id="no-load-history",
-        ),
-        pytest.param(
-            lambda _repo, tmp: _load_only_repo(tmp),
-            TICK,
-            "No weather coverage",
-            id="weather-unavailable",
-        ),
-    ],
-)
-def test_forecast_the_runner_cannot_produce_fails_the_issue_and_records_nothing(
-    repo: TimeSeriesRepository,
-    dagster_instance,
-    trained: SavedModel,
-    tmp_path,
-    issue_from,
-    tick: datetime,
-    reason: str,
+def test_forecast_the_runner_cannot_produce_fails_the_run_naming_the_issue_time(
+    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel
 ) -> None:
-    issuing_repo = issue_from(repo, tmp_path)
-    issued_at = tick.replace(tzinfo=None)
+    issued_at = STALE_TICK.replace(tzinfo=None)
 
-    result = _issue(issuing_repo, dagster_instance, tick=tick)
+    result = _issue(repo, dagster_instance, tick=STALE_TICK)
 
     assert not result.success
     failure = _failure(result)
-    assert reason in failure.description
+    assert "Stale load anchor" in failure.description
     assert failure.metadata["issued_at"] == MetadataValue.text(issued_at.isoformat())
-    assert issuing_repo.issued_forecast_store.fetch(issued_at) is None
+    assert repo.issued_forecast_store.fetch(issued_at) is None
 
 
 @pytest.mark.parametrize(
@@ -228,66 +201,6 @@ def test_re_executed_scheduled_run_fails_and_issues_nothing(
     assert not result.success
     assert "re-execut" in _failure_description(result)
     assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
-
-
-def test_issuing_never_calls_mlflow_and_reads_the_note_from_the_materialization(
-    repo: TimeSeriesRepository,
-    dagster_instance,
-    trained: SavedModel,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def unreachable(*_args, **_kwargs):
-        raise ConnectionError("MLflow is down")
-
-    monkeypatch.setattr(settings, "MLFLOW_TRACKING_URI", "http://127.0.0.1:9")
-    monkeypatch.setattr("mlflow.set_tracking_uri", unreachable)
-    monkeypatch.setattr("mlflow.MlflowClient", unreachable)
-
-    result = _issue(repo, dagster_instance)
-
-    assert result.success
-    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
-    assert issued is not None
-    assert issued.model_sha256 == trained.sha256
-    assert issued.mlflow_model_version == MLFLOW_VERSION
-
-
-@pytest.mark.parametrize(
-    "latest_metadata",
-    [
-        pytest.param(
-            lambda _loaded: {
-                MODEL_SHA256_METADATA: "0" * 64,
-                MLFLOW_MODEL_VERSION_METADATA: "8",
-            },
-            id="training-finished-after-the-model-was-loaded",
-        ),
-        pytest.param(lambda _loaded: {}, id="materialization-without-metadata"),
-        pytest.param(
-            lambda loaded: {
-                MODEL_SHA256_METADATA: loaded,
-                MLFLOW_MODEL_VERSION_METADATA: MetadataValue.null(),
-            },
-            id="mlflow-was-unavailable-at-training",
-        ),
-        pytest.param(
-            lambda loaded: {MODEL_SHA256_METADATA: loaded, MLFLOW_MODEL_VERSION_METADATA: ""},
-            id="empty-mlflow-version",
-        ),
-    ],
-)
-def test_mlflow_note_stays_empty_unless_the_latest_materialization_names_the_loaded_model(
-    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel, latest_metadata
-) -> None:
-    _report_model_materialization(dagster_instance, latest_metadata(trained.sha256))
-
-    result = _issue(repo, dagster_instance)
-
-    assert result.success
-    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
-    assert issued is not None
-    assert issued.model_sha256 == trained.sha256
-    assert issued.mlflow_model_version is None
 
 
 def test_manual_run_without_a_tick_fails_and_issues_nothing(
@@ -315,22 +228,6 @@ def test_hand_launched_run_with_an_issue_time_but_no_tick_issues_nothing(
     assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
 
 
-def test_model_directory_without_a_training_record_issues_with_an_empty_mlflow_note(
-    repo: TimeSeriesRepository, dagster_instance, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A rebuilt Dagster instance lost the record, but data/models still holds the trained model."""
-    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
-    saved = _train_and_save(repo, n_estimators=20)
-
-    result = _issue(repo, dagster_instance)
-
-    assert result.success
-    issued = repo.issued_forecast_store.fetch(ISSUED_AT)
-    assert issued is not None
-    assert issued.model_sha256 == saved.sha256
-    assert issued.mlflow_model_version is None
-
-
 def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     repo: TimeSeriesRepository, dagster_instance, trained: SavedModel
 ) -> None:
@@ -352,50 +249,4 @@ def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     assert "Training record and model directory disagree" in failure.description
     assert f"Run {NAMES.training_job} once" in failure.description
     assert failure.metadata["issued_at"] == MetadataValue.text(ISSUED_AT.isoformat())
-    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
-
-
-def _unreadable_load_store(*_args, **_kwargs):
-    raise RuntimeError("load store unreachable")
-
-
-def test_issuing_never_queries_the_accumulation_gate(
-    repo: TimeSeriesRepository,
-    dagster_instance,
-    trained: SavedModel,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Issuing needs only the model directory, so a failing gate query cannot stop it."""
-    monkeypatch.setattr(
-        "shiro_mlops.pipelines.cold_start.check_training_readiness", _unreadable_load_store
-    )
-
-    result = _issue(repo, dagster_instance)
-
-    assert result.success
-    assert repo.issued_forecast_store.fetch(ISSUED_AT) is not None
-
-
-def test_no_model_on_either_side_fails_saying_there_is_no_model(
-    repo: TimeSeriesRepository, dagster_instance, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
-    _train_and_save(repo, n_estimators=20)
-    execution = issued_forecast_schedule.evaluate_tick(
-        build_schedule_context(instance=dagster_instance, scheduled_execution_time=TICK)
-    )
-    [request] = execution.run_requests
-    shutil.rmtree(model_directory(settings.models_dir, DYNAMIC_HORIZON_FORECAST))
-
-    result = _job(repo).execute_in_process(
-        run_config=request.run_config,
-        instance=dagster_instance,
-        tags=request.tags,
-        raise_on_error=False,
-    )
-
-    assert not result.success
-    description = _failure_description(result)
-    assert description.startswith(f"No {NAMES.model} materialization yet")
-    assert "valid hourly observations" not in description
     assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
