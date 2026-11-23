@@ -226,7 +226,7 @@ def _issued_result(
     if forecast is not None and not already_issued:
         metadata |= {
             "load_anchor": MetadataValue.text(forecast.load_anchor.isoformat()),
-            "status": MetadataValue.text(forecast.status),
+            "status": MetadataValue.text(forecast.status.value),
             MODEL_SHA256_METADATA: MetadataValue.text(forecast.model_sha256),
             "steps": MetadataValue.int(len(forecast.steps)),
         }

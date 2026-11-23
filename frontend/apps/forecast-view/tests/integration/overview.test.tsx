@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { server } from '@/mocks/server'
 import { OverviewPage } from '@/routes/index'
@@ -87,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  onlineManager.setOnline(true)
 })
 
 describe('Overview page shows the latest issued forecast', () => {
@@ -214,6 +215,33 @@ describe('Overview page shows the latest issued forecast', () => {
 })
 
 describe('Overview page states', () => {
+  it('shows loading placeholders, and no error or forecast data, until the first read settles', async () => {
+    let respond: () => void = () => {}
+    const answered = new Promise<void>((resolve) => {
+      respond = resolve
+    })
+    server.use(
+      http.get('*/published/latest_issued_forecast.json', async () => {
+        await answered
+        return HttpResponse.json(publishedForecast('2026-11-20T10:15:00+08:00', 168))
+      }),
+    )
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.chart.loading)).toBeInTheDocument()
+    expect(screen.getByText(dashboard.table.loading)).toBeInTheDocument()
+    expect(document.querySelectorAll('.animate-pulse')).toHaveLength(3)
+    expect(screen.queryByText(dashboard.unavailable)).not.toBeInTheDocument()
+    expect(screen.queryByText(dashboard.metrics.peakTitle)).not.toBeInTheDocument()
+
+    respond()
+
+    expect(await screen.findByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.chart.loading)).not.toBeInTheDocument()
+  })
+
   it('shows an empty state and no forecast data before any forecast is issued', async () => {
     servePublished({ issued_at: null, steps: [] })
     freezeViewerNow('2026-11-20T10:30:00+08:00')
@@ -368,6 +396,31 @@ describe('Overview page states', () => {
     expect(screen.getByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
     expect(screen.getByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
     expect(screen.queryByText(dashboard.unavailable)).not.toBeInTheDocument()
+  })
+
+  it('shows the neutral error while offline before the first read, then the forecast once back online', async () => {
+    let reads = 0
+    server.use(
+      http.get('*/published/latest_issued_forecast.json', () => {
+        reads += 1
+        return HttpResponse.json(publishedForecast('2026-11-20T10:15:00+08:00', 168))
+      }),
+    )
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+    onlineManager.setOnline(false)
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.unavailable)).toBeInTheDocument()
+    expect(document.querySelector('.animate-pulse, .animate-spin')).toBeNull()
+    expect(reads).toBe(0)
+
+    act(() => onlineManager.setOnline(true))
+
+    expect(await screen.findByText(dashboard.issuedAt('11/20 10:15'))).toBeInTheDocument()
+    expect(screen.getByText(dashboard.table.range(1, 10, 24))).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.unavailable)).not.toBeInTheDocument()
+    expect(reads).toBe(1)
   })
 
   it('reads the stale notice, empty state and error in English', async () => {

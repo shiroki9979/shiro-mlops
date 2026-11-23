@@ -1,7 +1,7 @@
 """Integration tests for FastAPI endpoints."""
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -444,6 +444,25 @@ def test_a_model_that_fails_to_load_is_reported_apart_from_an_untrained_one(
     assert untrained_predict.json()["detail"] == MODEL_NOT_LOADED_REASON
 
 
+def test_health_fails_on_a_model_state_it_does_not_project() -> None:
+    """A model state without its own case must not pass for one of the known states."""
+
+    @dataclass(frozen=True)
+    class Unprojected:
+        pass
+
+    served = ServedTasks(
+        deployed_tasks(),
+        {DYNAMIC_HORIZON_FORECAST: Unprojected()},
+        repository=MagicMock(),
+        clock=lambda: FRESH_REQUEST_TIME,
+    )
+    client = TestClient(create_app(repository=MagicMock(), served_tasks=served))
+
+    with pytest.raises(AssertionError, match="Unprojected"):
+        client.get("/health")
+
+
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
     """Issue #68 keeps the /predict item contract aligned with the dynamic-horizon task item."""
     expected_fields = {
@@ -688,3 +707,23 @@ def test_openapi_describes_weather_sources_per_field_and_reference_point() -> No
     by_field = item["properties"]["weather_sources"]["additionalProperties"]
     by_point = by_field["additionalProperties"]
     assert by_point["additionalProperties"] == {"type": "string"}
+
+
+def test_openapi_describes_mode_as_the_forecast_mode_enum() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    forecast_mode = "#/components/schemas/ForecastMode"
+
+    task_responses = {
+        schema["properties"]["task_id"].get("const"): name
+        for name, schema in schemas.items()
+        if name.endswith("TaskPredictionResponse")
+    }
+
+    assert set(task_responses) == set(deployed_tasks())
+    assert schemas["ForecastMode"]["enum"] == ["normal", "degraded"]
+    for name in ("PredictionResponse", *task_responses.values()):
+        assert schemas[name]["properties"]["mode"]["$ref"] == forecast_mode
+        assert "mode" in schemas[name]["required"]
+    ready_mode = schemas["ReadyResponse"]["properties"]["mode"]
+    assert ready_mode["anyOf"] == [{"$ref": forecast_mode}, {"type": "null"}]
+    assert "mode" not in schemas["ReadyResponse"].get("required", [])

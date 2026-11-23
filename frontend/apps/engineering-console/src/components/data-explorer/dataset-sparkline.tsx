@@ -1,4 +1,5 @@
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
+import { emptyBecause, toQueryView } from '@shiro-mlops/shared/query-view'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
@@ -40,21 +41,63 @@ function SparklinePreview({ dataset, chart, sparkline, now }: SparklinePreviewPr
   const params: QueryParams = isStatusGrid
     ? { ...window, bucket: STATUS_GRID_BUCKET }
     : { ...window, fields: sparkline.fields, group_by: sparkline.groupBy }
-  const query = useDatasetSeries(chart.seriesApiPath, params)
+  const view = toQueryView(useDatasetSeries(chart.seriesApiPath, params), {
+    policy: 'data-first',
+    // The status grid draws hours without records too, so only the line preview can be empty.
+    settle: (data) => {
+      if (isStatusGrid) return { preview: 'grid' as const, series: data.series }
+      const plotted = plotSeries(data.series, chart, m, locale)
+      return plotted.some((item) => item.points.some((point) => point.v !== null))
+        ? { preview: 'line' as const, series: plotted }
+        : emptyBecause('noValues')
+    },
+  })
   const text = m.explorer.sparkline
   const datasetLabel = m.explorer.datasets[dataset.id].label
   const rangeLabel = m.explorer.filters.quickRanges[range]
 
-  if (query.isLoading) return <p className="text-xs text-slate-500">{text.loading}</p>
-  if (query.isError || !query.data) return <p className="text-xs text-rose-300">{text.failed}</p>
-  if (isStatusGrid) {
-    return <AuditStatusGrid series={query.data.series} now={now} label={(summary) => text.statusGridLabel(datasetLabel, rangeLabel, summary)} />
+  switch (view.kind) {
+    case 'loading':
+      return <p className="text-xs text-slate-500">{text.loading}</p>
+    // The series query is never disabled; it falls in with the failures only so every kind is handled.
+    case 'disabled':
+    case 'paused':
+    case 'error':
+      return <p className="text-xs text-rose-300">{text.failed}</p>
+    case 'empty':
+      return (
+        <>
+          <p className="text-xs text-slate-500">{text.empty}</p>
+          {view.refreshFailed && <p className="text-xs text-amber-300">{text.refreshFailed}</p>}
+        </>
+      )
+    case 'content': {
+      const { content } = view
+      const preview =
+        content.preview === 'grid' ? (
+          <AuditStatusGrid
+            series={content.series}
+            now={now}
+            label={(summary) => text.statusGridLabel(datasetLabel, rangeLabel, summary)}
+          />
+        ) : (
+          <SeriesSparkline
+            series={content.series}
+            window={window}
+            label={text.lineLabel(
+              datasetLabel,
+              rangeLabel,
+              (sparkline.fields ?? []).map((field) => explorerFieldLabel(field, m)).join('、'),
+              content.series.map((item) => item.name).join('、'),
+            )}
+          />
+        )
+      return (
+        <>
+          {preview}
+          {view.refreshFailed && <p className="text-xs text-amber-300">{text.refreshFailed}</p>}
+        </>
+      )
+    }
   }
-  const plotted = plotSeries(query.data.series, chart, m, locale)
-  if (!plotted.some((item) => item.points.some((point) => point.v !== null))) {
-    return <p className="text-xs text-slate-500">{text.empty}</p>
-  }
-  const fieldLabels = (sparkline.fields ?? []).map((field) => explorerFieldLabel(field, m)).join('、')
-  const label = text.lineLabel(datasetLabel, rangeLabel, fieldLabels, plotted.map((item) => item.name).join('、'))
-  return <SeriesSparkline series={plotted} window={window} label={label} />
 }

@@ -1,36 +1,38 @@
 import { useState } from 'react'
+import { useMutation, type UseMutationResult } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api-client'
 import { Badge } from '@shiro-mlops/shared/ui/badge'
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import { CheckCircle2, Play, RefreshCw, Server, XCircle } from 'lucide-react'
-import { useMessages } from '@/i18n/messages'
+import { type Messages, useMessages } from '@/i18n/messages'
+import type { PredictionResponse } from '@/schemas/api'
+
+function testerResponseText(
+  testInference: UseMutationResult<PredictionResponse, Error, number>,
+  testerText: Messages['settings']['tester'],
+): string | null {
+  switch (testInference.status) {
+    case 'success':
+      return JSON.stringify(testInference.data, null, 2)
+    case 'error':
+      return testerText.error(testInference.error.message)
+    default:
+      return null
+  }
+}
 
 export function ApiConfigPanel() {
   const m = useMessages()
   const [testHorizon, setTestHorizon] = useState(24)
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<string | null>(null)
-  const [isSuccess, setIsSuccess] = useState<boolean | null>(null)
-
-  const handleTestInference = async () => {
-    setLoading(true)
-    setResult(null)
-    setIsSuccess(null)
-    try {
-      const response = await apiClient.predict({
-        horizon_hours: testHorizon,
-      })
-      setIsSuccess(true)
-      setResult(JSON.stringify(response, null, 2))
-    } catch (err: unknown) {
-      setIsSuccess(false)
-      const errorMsg = err instanceof Error ? err.message : String(err)
-      setResult(m.settings.tester.error(errorMsg))
-    } finally {
-      setLoading(false)
-    }
-  }
+  const testInference = useMutation({
+    mutationFn: (horizonHours: number) => apiClient.predict({ horizon_hours: horizonHours }),
+    // WHY-NOT(networkMode): the default 'online' holds the POST as paused while the browser reports
+    // offline, leaving the tester stuck in pending; the console calls a same-origin local API that may
+    // still answer then, so send anyway and let an unreachable API surface as a failure.
+    networkMode: 'always',
+  })
+  const responseText = testerResponseText(testInference, m.settings.tester)
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -73,12 +75,12 @@ export function ApiConfigPanel() {
                 {m.settings.tester.title}
               </CardTitle>
             </div>
-            {isSuccess === true && (
+            {testInference.isSuccess && (
               <Badge variant="success" className="gap-1">
                 <CheckCircle2 className="h-3 w-3" /> {m.settings.tester.success}
               </Badge>
             )}
-            {isSuccess === false && (
+            {testInference.isError && (
               <Badge variant="destructive" className="gap-1">
                 <XCircle className="h-3 w-3" /> {m.settings.tester.failure}
               </Badge>
@@ -107,11 +109,11 @@ export function ApiConfigPanel() {
           </div>
 
           <Button
-            onClick={handleTestInference}
-            disabled={loading}
+            onClick={() => testInference.mutate(testHorizon)}
+            disabled={testInference.isPending}
             className="w-full gap-2 text-xs"
           >
-            {loading ? (
+            {testInference.isPending ? (
               <RefreshCw className="h-4 w-4 animate-spin" />
             ) : (
               <Play className="h-4 w-4" />
@@ -119,11 +121,11 @@ export function ApiConfigPanel() {
             {m.settings.tester.submit}
           </Button>
 
-          {result && (
+          {responseText && (
             <div className="space-y-1.5 pt-2">
               <label className="text-slate-400 font-medium">{m.settings.tester.response}</label>
               <pre className="max-h-48 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] text-cyan-300">
-                {result}
+                {responseText}
               </pre>
             </div>
           )}

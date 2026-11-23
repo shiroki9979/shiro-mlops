@@ -1,4 +1,5 @@
-import { request } from '@shiro-mlops/shared/api'
+import { z } from 'zod'
+import { ApiError, InvalidResponseError, request } from '@shiro-mlops/shared/api'
 import {
   HealthResponse,
   HealthResponseSchema,
@@ -9,6 +10,8 @@ import {
 import {
   ListEnvelope,
   ListEnvelopeSchema,
+  type ResolvedBucket,
+  ResolvedBucketSchema,
   SeriesResponse,
   SeriesResponseSchema,
   StatusResponse,
@@ -20,6 +23,63 @@ import {
 const LIST_PAGE_SIZE = '200'
 
 export type QueryParams = Record<string, string | string[] | undefined>
+
+export type DataExplorerErrorKind =
+  | 'cursorRejected'
+  | 'invalidQuery'
+  | 'databaseUnavailable'
+  | 'invalidResponse'
+  | 'other'
+
+// Status codes per docs/reference/data-explorer.md §7 and docs/reference/rest-api.md §5.3.
+const KIND_BY_STATUS: Partial<Record<number, DataExplorerErrorKind>> = {
+  400: 'cursorRejected',
+  422: 'invalidQuery',
+  503: 'databaseUnavailable',
+}
+
+// Body shape per docs/reference/rest-api.md §5.3.
+const PointLimitExceededBodySchema = z.object({
+  detail: z.object({ suggested_bucket: ResolvedBucketSchema }),
+})
+
+export class DataExplorerError extends Error {
+  constructor(kind: 'invalidQuery', message: string, suggestedBucket?: ResolvedBucket)
+  constructor(kind: Exclude<DataExplorerErrorKind, 'invalidQuery'>, message: string)
+  constructor(
+    public readonly kind: DataExplorerErrorKind,
+    message: string,
+    public readonly suggestedBucket?: ResolvedBucket,
+  ) {
+    super(message)
+    this.name = 'DataExplorerError'
+  }
+}
+
+function suggestedBucketOf(body: unknown): ResolvedBucket | undefined {
+  const parsed = PointLimitExceededBodySchema.safeParse(body)
+  return parsed.success ? parsed.data.detail.suggested_bucket : undefined
+}
+
+function toDataExplorerError(error: unknown): DataExplorerError {
+  if (error instanceof ApiError) {
+    const kind = KIND_BY_STATUS[error.status] ?? 'other'
+    if (kind === 'invalidQuery') return new DataExplorerError(kind, error.message, suggestedBucketOf(error.data))
+    return new DataExplorerError(kind, error.message)
+  }
+  if (error instanceof InvalidResponseError) {
+    return new DataExplorerError('invalidResponse', error.message)
+  }
+  return new DataExplorerError('other', error instanceof Error ? error.message : String(error))
+}
+
+async function dataExplorerRequest<T>(endpoint: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): Promise<T> {
+  try {
+    return await request<T>(endpoint, { method: 'GET' }, schema)
+  } catch (error) {
+    throw toDataExplorerError(error)
+  }
+}
 
 // Array values become repeated keys (`fields=a&fields=b`), which the series API reads as a list.
 function toQuery(params: QueryParams): string {
@@ -59,10 +119,10 @@ export const apiClient = {
     params: Record<string, string | undefined> = {},
   ): Promise<ListEnvelope> {
     const query = toQuery({ ...params, limit: LIST_PAGE_SIZE })
-    return request<ListEnvelope>(`${path}${query}`, { method: 'GET' }, ListEnvelopeSchema)
+    return dataExplorerRequest(`${path}${query}`, ListEnvelopeSchema)
   },
 
   async getDataSeries(path: string, params: QueryParams = {}): Promise<SeriesResponse> {
-    return request<SeriesResponse>(`${path}${toQuery(params)}`, { method: 'GET' }, SeriesResponseSchema)
+    return dataExplorerRequest(`${path}${toQuery(params)}`, SeriesResponseSchema)
   },
 }
