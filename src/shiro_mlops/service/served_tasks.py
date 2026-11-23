@@ -18,6 +18,7 @@ import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import UnknownTaskError
 from shiro_mlops.tasks.model_store import load_model_with_sha256
@@ -65,11 +66,11 @@ class TaskModelStatus:
 
 @dataclass(frozen=True)
 class ServingReadiness:
-    """Whether a task can serve a full-horizon prediction now, and in which weather mode."""
+    """Whether a task can serve a full-horizon prediction now, and in which forecast mode."""
 
     ready: bool
     model_loaded: bool
-    mode: str | None = None
+    mode: ForecastMode | None = None
     reason: str | None = None
 
 
