@@ -41,9 +41,9 @@ from shiro_mlops.data.forecast_view import (
     forecast_track_record_document,
     latest_issued_forecast_document,
 )
+from shiro_mlops.pipelines.execution_origin import tick_run_key
 from shiro_mlops.pipelines.forecast_track_record import FORECAST_TRACK_RECORD_ASSET
 from shiro_mlops.pipelines.issued_forecast import ISSUED_FORECAST_ASSET
-from shiro_mlops.pipelines.schedules import tick_run_key
 from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO
 
 FORECAST_VIEW_EXPORT_ASSET = "forecast_view_export"

@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from dagster import build_schedule_context
 
 from shiro_mlops.pipelines.execution_origin import (
     SCHEDULE_NAME_TAG,
@@ -11,6 +12,7 @@ from shiro_mlops.pipelines.execution_origin import (
     NoScheduledTickError,
     WithoutTick,
     resolve_as_of,
+    tick_run_request,
 )
 
 # run 建立於 2026-11-20 03:40:12 UTC，即台灣 11:40:12，晚於 10:25 的 tick。
@@ -93,3 +95,23 @@ def test_a_run_without_a_scheduled_tick_is_refused_naming_its_origin(
     assert refused.value.origin == origin
     expected_reason = "re-execut" if origin is ExecutionOrigin.REEXECUTION else "scheduled tick"
     assert expected_reason in str(refused.value)
+
+
+def test_a_schedule_tick_requests_a_run_keyed_and_tagged_with_its_taiwan_local_time() -> None:
+    context = build_schedule_context(
+        scheduled_execution_time=datetime(2026, 11, 20, 2, 25, tzinfo=UTC)
+    )
+
+    request = tick_run_request(context)
+
+    assert request.run_key == "2026-11-20T10:25:00"
+    assert request.tags == {SCHEDULED_TICK_TAG: "2026-11-20T10:25:00"}
+    assert not request.run_config
+
+
+def test_a_schedule_evaluated_without_a_tick_requests_a_run_with_neither_key_nor_tick() -> None:
+    """Dagster raises on reading a tick that was never set; the helper must not."""
+    request = tick_run_request(build_schedule_context())
+
+    assert request.run_key is None
+    assert SCHEDULED_TICK_TAG not in request.tags

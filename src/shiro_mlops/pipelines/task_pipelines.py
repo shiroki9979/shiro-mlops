@@ -35,11 +35,8 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
-from shiro_mlops.pipelines.schedules import (
-    CWA_OBSERVATION_ASSET,
-    HOURLY_ACTUAL_LOAD_ASSET,
-    tick_run_key,
-)
+from shiro_mlops.pipelines.execution_origin import tick_run_key
+from shiro_mlops.pipelines.schedules import CWA_OBSERVATION_ASSET, HOURLY_ACTUAL_LOAD_ASSET
 from shiro_mlops.pipelines.tracking import log_training_run
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
 from shiro_mlops.tasks.definition import HOURLY_ACTUAL_LOAD_TARGET, TaskDefinition

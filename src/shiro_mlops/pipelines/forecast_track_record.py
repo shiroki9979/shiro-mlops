@@ -36,8 +36,9 @@ from shiro_mlops.data.forecast_track_record import (
     track_record_cutoff,
     track_record_window,
 )
+from shiro_mlops.pipelines.execution_origin import tick_run_key
 from shiro_mlops.pipelines.issued_forecast import ISSUED_FORECAST_ASSET
-from shiro_mlops.pipelines.schedules import HOURLY_ACTUAL_LOAD_ASSET, tick_run_key
+from shiro_mlops.pipelines.schedules import HOURLY_ACTUAL_LOAD_ASSET
 from shiro_mlops.pipelines.task_pipelines import TIME_SERIES_REPO
 
 FORECAST_TRACK_RECORD_ASSET = "forecast_track_record"

@@ -5,6 +5,9 @@ from datetime import datetime
 from enum import Enum, StrEnum
 from zoneinfo import ZoneInfo
 
+from dagster import RunRequest, ScheduleEvaluationContext
+from dagster_shared.check import CheckError
+
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 
 SCHEDULED_TICK_TAG = "shiro_mlops/scheduled_tick"
@@ -65,6 +68,35 @@ def execution_origin(tags: Mapping[str, str]) -> ExecutionOrigin:
     if SCHEDULED_TICK_TAG in tags and SCHEDULE_NAME_TAG in tags:
         return ExecutionOrigin.SCHEDULED_TICK
     return ExecutionOrigin.MANUAL
+
+
+def tick_run_request(context: ScheduleEvaluationContext) -> RunRequest:
+    """Key and tag the run with the tick; an evaluation without a tick gets neither."""
+    tick = tick_run_key(context)
+    if tick is None:
+        return RunRequest()
+    return RunRequest(run_key=tick, tags={SCHEDULED_TICK_TAG: tick})
+
+
+def tick_run_key(context: ScheduleEvaluationContext) -> str | None:
+    """Deduplicate repeated evaluations of the same tick with a run key."""
+    tick = scheduled_tick(context)
+    if tick is None:
+        return None
+    return tick.isoformat(timespec="seconds")
+
+
+def scheduled_tick(context: ScheduleEvaluationContext) -> datetime | None:
+    """The tick in naive Taiwan-local time, or None for an evaluation built without one.
+
+    Dagster raises CheckError on access instead of returning None when no tick was
+    set, so a plain ``is None`` check never runs.
+    """
+    try:
+        tick = context.scheduled_execution_time
+    except CheckError:
+        return None
+    return _to_taiwan_local(tick)
 
 
 def _to_taiwan_local(moment: datetime) -> datetime:

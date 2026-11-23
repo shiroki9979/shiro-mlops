@@ -33,11 +33,11 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
+from shiro_mlops.pipelines.execution_origin import tick_run_key
 from shiro_mlops.pipelines.schedules import (
     CWA_FORECAST_ASSET,
     CWA_OBSERVATION_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
-    tick_run_key,
 )
 from shiro_mlops.pipelines.task_pipelines import (
     MODEL_SHA256_METADATA,
