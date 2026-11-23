@@ -36,6 +36,7 @@ from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, 
 from tests.conftest import TEST_MIN_LOAD_HOURS
 from tests.helpers import (
     derived_hourly_load,
+    hand_copied_model_double,
     install_model_double,
     override_task_policies,
     write_derived_load,
@@ -156,6 +157,7 @@ def test_cold_start_reports_waiting_readiness_without_failing(
         for name, status in {
             f"{task_id} load accumulation": CheckStatus.WAIT,
             f"{task_id} load freshness": CheckStatus.PASS,
+            f"{task_id} model": CheckStatus.WAIT,
             f"tick {TaskPipelineNames(task_id).training_schedule}": CheckStatus.WAIT,
             f"tick {TaskPipelineNames(task_id).monitoring_schedule}": CheckStatus.WAIT,
         }.items()
@@ -169,12 +171,13 @@ def test_cold_start_reports_waiting_readiness_without_failing(
 
 
 def test_recovered_stack_reports_both_ticks_triggering(
-    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
 ) -> None:
     write_derived_load(
         test_repo.engine, derived_hourly_load(min_hours, datetime(2026, 9, 26, 23, 0))
     )
     for task_id in deployed_tasks():
+        install_model_double(isolated_models_dir, task_id)
         dagster_instance.report_runless_asset_event(
             AssetMaterialization(TaskPipelineNames(task_id).model)
         )
@@ -241,11 +244,11 @@ def test_full_run_on_fresh_deployment_flags_stopped_schedules_and_waiting_readin
     assert f"[WAIT] schedule {ISSUED_SCHEDULE}" in report
     assert f"[FAIL] schedule {TRACK_RECORD_SCHEDULE}" in report
     assert f"[FAIL] schedule {EXPORT_SCHEDULE}" in report
-    # 每個任務：兩個 job 通過、累積／新鮮度／兩個 tick 等待、兩個排程未啟動；
+    # 每個任務：兩個 job 通過、累積／模型／兩個 tick 等待、新鮮度通過、兩個排程未啟動；
     # 發布排程停用與其 tick 各等待一項；擷取、預報實績與匯出排程未啟動。
     tasks = len(deployed_tasks())
     failed = ALWAYS_ON_SCHEDULES + 2 * tasks
-    waiting = 4 * tasks + ISSUED_WAITS
+    waiting = 5 * tasks + ISSUED_WAITS
     assert report.splitlines()[-1] == f"Summary: {2 * tasks} pass, {waiting} wait, {failed} fail"
     assert exit_code(results, require_ready=False) == 1
 
@@ -261,7 +264,10 @@ def _scoped_definitions() -> Definitions:
 
 
 def test_task_scope_is_ready_while_another_task_still_accumulates(
-    test_repo: TimeSeriesRepository, dagster_instance, monkeypatch: pytest.MonkeyPatch
+    test_repo: TimeSeriesRepository,
+    dagster_instance,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_models_dir: Path,
 ) -> None:
     """M6 acceptance: one task ready must not be blocked by another task's higher threshold."""
     override_task_policies(
@@ -270,6 +276,7 @@ def test_task_scope_is_ready_while_another_task_still_accumulates(
     write_derived_load(
         test_repo.engine, derived_hourly_load(TEST_MIN_LOAD_HOURS, datetime(2026, 9, 26, 23, 0))
     )
+    install_model_double(isolated_models_dir)
     dagster_instance.report_runless_asset_event(
         AssetMaterialization(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).model)
     )
@@ -321,7 +328,7 @@ def test_full_run_scoped_to_one_task_reports_only_that_task(
     assert f"[FAIL] schedule {TRACK_RECORD_SCHEDULE}" in report
     assert f"[FAIL] schedule {EXPORT_SCHEDULE}" in report
     failed = ALWAYS_ON_SCHEDULES + 2
-    assert report.splitlines()[-1] == f"Summary: 2 pass, {4 + ISSUED_WAITS} wait, {failed} fail"
+    assert report.splitlines()[-1] == f"Summary: 2 pass, {5 + ISSUED_WAITS} wait, {failed} fail"
 
 
 def test_unknown_task_is_a_usage_error_listing_deployed_tasks(
@@ -495,3 +502,131 @@ def test_unregistered_or_drifted_export_schedule_fails() -> None:
     assert (missing.status, missing.detail) == (CheckStatus.FAIL, "not registered in Definitions")
     assert cron.status is CheckStatus.FAIL
     assert "'35 * * * *'" in cron.detail and "'25 * * * *'" in cron.detail
+
+
+def _model_line(results, task_id: str = DYNAMIC_HORIZON_FORECAST):
+    return next(result for result in results if result.name == f"{task_id} model")
+
+
+def _ready_deployment(test_repo: TimeSeriesRepository, dagster_instance) -> Deployment:
+    write_derived_load(
+        test_repo.engine, derived_hourly_load(TEST_MIN_LOAD_HOURS, datetime(2026, 9, 26, 23, 0))
+    )
+    return Deployment(_scoped_definitions(), test_repo, dagster_instance, NOW)
+
+
+def test_record_without_model_directory_fails_without_require_ready(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int
+) -> None:
+    """Instance kept but data/models removed: the model line names the missing directory."""
+    deployment = _ready_deployment(test_repo, dagster_instance)
+    dagster_instance.report_runless_asset_event(
+        AssetMaterialization(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).model)
+    )
+    scope = {DYNAMIC_HORIZON_FORECAST: deployed_task(DYNAMIC_HORIZON_FORECAST)}
+
+    results = check_downstream_readiness(deployment, scope)
+
+    model = _model_line(results)
+    assert model.status is CheckStatus.FAIL
+    assert "model directory" in model.detail
+    assert "holds no model" in model.detail
+    assert "Run dynamic_horizon_forecast__training_job once" in model.detail
+    assert exit_code(results, require_ready=False) == 1
+
+
+def test_model_directory_without_record_fails_and_keeps_load_lines_unchanged(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    """dagster_home volume removed but data/models kept: the model line names the missing record."""
+    deployment = _ready_deployment(test_repo, dagster_instance)
+    scope = {DYNAMIC_HORIZON_FORECAST: deployed_task(DYNAMIC_HORIZON_FORECAST)}
+    before = {result.name: result for result in check_downstream_readiness(deployment, scope)}
+    install_model_double(isolated_models_dir)
+
+    results = {result.name: result for result in check_downstream_readiness(deployment, scope)}
+
+    model = results["dynamic_horizon_forecast model"]
+    assert model.status is CheckStatus.FAIL
+    assert "training record has no dynamic_horizon_forecast__model materialization" in model.detail
+    assert "Run dynamic_horizon_forecast__training_job once" in model.detail
+    for line in (
+        "dynamic_horizon_forecast load accumulation",
+        "dynamic_horizon_forecast load freshness",
+    ):
+        assert results[line] == before[line]
+    assert exit_code(results.values(), require_ready=False) == 1
+
+
+def test_hand_copied_model_directory_with_record_fails(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    """A directory the model store did not install counts as no model, as loading it would fail."""
+    deployment = _ready_deployment(test_repo, dagster_instance)
+    hand_copied_model_double(isolated_models_dir)
+    dagster_instance.report_runless_asset_event(
+        AssetMaterialization(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).model)
+    )
+    scope = {DYNAMIC_HORIZON_FORECAST: deployed_task(DYNAMIC_HORIZON_FORECAST)}
+
+    model = _model_line(check_downstream_readiness(deployment, scope))
+
+    assert model.status is CheckStatus.FAIL
+    assert "holds no model installed by the model store" in model.detail
+
+
+def test_trained_task_model_line_passes_and_waits_before_first_training(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    deployment = _ready_deployment(test_repo, dagster_instance)
+    scope = {DYNAMIC_HORIZON_FORECAST: deployed_task(DYNAMIC_HORIZON_FORECAST)}
+
+    untrained = _model_line(check_downstream_readiness(deployment, scope))
+    install_model_double(isolated_models_dir)
+    dagster_instance.report_runless_asset_event(
+        AssetMaterialization(TaskPipelineNames(DYNAMIC_HORIZON_FORECAST).model)
+    )
+    trained = _model_line(check_downstream_readiness(deployment, scope))
+
+    assert untrained.status is CheckStatus.WAIT
+    assert untrained.detail.startswith("AWAITING_FIRST_TRAINING: ")
+    assert "dynamic_horizon_forecast__training_job" in untrained.detail
+    assert trained.status is CheckStatus.PASS
+    assert trained.detail.startswith("TRAINED: ")
+
+
+def test_task_scope_reports_only_the_scoped_task_model_line(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    other_tasks = set(deployed_tasks()) - {DYNAMIC_HORIZON_FORECAST}
+    for task_id in other_tasks:
+        install_model_double(isolated_models_dir, task_id)
+
+    results = run_smoke_check(
+        Deployment(defs, test_repo, dagster_instance, NOW), task_id=DYNAMIC_HORIZON_FORECAST
+    )
+
+    assert [result.name for result in results if result.name.endswith(" model")] == [
+        "dynamic_horizon_forecast model"
+    ]
+    assert other_tasks
+
+
+def test_unreadable_model_directory_fails_the_model_line_only(
+    test_repo: TimeSeriesRepository, dagster_instance, min_hours: int, isolated_models_dir: Path
+) -> None:
+    deployment = _ready_deployment(test_repo, dagster_instance)
+    # 自我指向的 symlink 讓開啟模型鎖檔失敗（ELOOP），以 root 執行時權限位元擋不住讀取。
+    lock = isolated_models_dir / f".{DYNAMIC_HORIZON_FORECAST}.lock"
+    isolated_models_dir.mkdir(parents=True)
+    lock.symlink_to(lock)
+    scope = {DYNAMIC_HORIZON_FORECAST: deployed_task(DYNAMIC_HORIZON_FORECAST)}
+
+    results = {result.name: result for result in check_downstream_readiness(deployment, scope)}
+
+    model = results["dynamic_horizon_forecast model"]
+    assert model.status is CheckStatus.FAIL
+    assert "Cannot read the training record or model directory" in model.detail
+    assert results["dynamic_horizon_forecast load accumulation"].status is CheckStatus.PASS
+    assert results["dynamic_horizon_forecast load freshness"].status is CheckStatus.PASS
+    assert len(results) == 5

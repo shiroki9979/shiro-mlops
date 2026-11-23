@@ -29,15 +29,18 @@ from dagster import DagsterInstance, Definitions, ScheduleDefinition, build_sche
 # Dagster 未公開排程狀態型別；僅此處依賴內部路徑，升級時由離線測試揭露破壞。
 from dagster._core.scheduler.instigation import InstigatorType
 
+from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
 from shiro_mlops.data.hourly_actual_load import is_stale_load_anchor
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.pipelines.cold_start import ColdStart, ColdStartStage, read_model_presence
 from shiro_mlops.pipelines.schedules import (
     CWA_INGESTION_ASSETS,
     HOURLY_ACTUAL_LOAD_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
 from shiro_mlops.pipelines.task_names import TaskPipelineNames
+from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import deployed_task, deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness
@@ -134,6 +137,13 @@ FORECAST_VIEW_EXPORT_SCHEDULES: dict[str, ExpectedSchedule] = {
 }
 
 
+# 兩邊都沒有模型的三個階段為 WAIT：首次訓練前本來就沒有模型。
+_MODEL_STATUS = {
+    ColdStartStage.TRAINED: CheckStatus.PASS,
+    ColdStartStage.RECORD_DIRECTORY_MISMATCH: CheckStatus.FAIL,
+}
+
+
 @dataclass(frozen=True)
 class CheckResult:
     name: str
@@ -210,7 +220,7 @@ def check_load_consumer_boundaries(
 def check_downstream_readiness(
     deployment: Deployment, tasks: Tasks | None = None
 ) -> list[CheckResult]:
-    """Per task: load accumulation, its freshness, and what the next two ticks do."""
+    """Per task: load accumulation, its freshness, its cold-start model stage, and what the next two ticks do."""
     return [
         result
         for task in (tasks or deployed_tasks()).values()
@@ -331,6 +341,7 @@ def _load_consumer_jobs(tasks: Tasks | None = None) -> dict[str, str]:
 def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[CheckResult]:
     names = TaskPipelineNames(task.task_id)
     accumulation, freshness = _readiness_check_names(task)
+    model = f"{task.task_id} model"
     ticks = (names.training_schedule, names.monitoring_schedule)
     try:
         readiness = check_training_readiness(task, TaskRuntime(repository=deployment.repository))
@@ -338,7 +349,7 @@ def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[
         detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
         return [
             CheckResult(name, CheckStatus.FAIL, detail)
-            for name in (accumulation, freshness, *(f"tick {tick}" for tick in ticks))
+            for name in (accumulation, freshness, model, *(f"tick {tick}" for tick in ticks))
         ]
     return [
         CheckResult(
@@ -347,8 +358,34 @@ def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[
             readiness.reason,
         ),
         _check_load_freshness(task, readiness.latest_hour, deployment.now),
+        _check_model(deployment, task, readiness, model),
         *(_check_tick(deployment, tick) for tick in ticks),
     ]
+
+
+def _check_model(
+    deployment: Deployment,
+    task: TaskDefinition,
+    readiness: TrainingLoadReadiness,
+    check_name: str,
+) -> CheckResult:
+    """The cold-start stage the schedules read: a record/directory mismatch fails without --require-ready."""
+    try:
+        models = read_model_presence(
+            task.task_id, instance=deployment.instance, models_root=settings.models_dir
+        )
+    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
+        return CheckResult(
+            check_name,
+            CheckStatus.FAIL,
+            f"Cannot read the training record or model directory: {_summarize(error)}",
+        )
+    cold_start = ColdStart(models=models, readiness=readiness)
+    return CheckResult(
+        check_name,
+        _MODEL_STATUS.get(cold_start.stage, CheckStatus.WAIT),
+        f"{cold_start.stage.name}: {cold_start.reason}",
+    )
 
 
 def _readiness_check_names(task: TaskDefinition) -> tuple[str, str]:
