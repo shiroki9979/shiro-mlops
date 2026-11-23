@@ -49,7 +49,7 @@ def judge_status(db: ExplorerDb, dataset: Dataset, as_of: datetime) -> DatasetSt
             count = _newest_instant_count(db, dataset) if newest is not None else 0
             return _compose_status(dataset, as_of, latest, [], record_count=count)
         case LatestAudit(header=header, flags_stale_release=flags_stale_release):
-            missing = _audit_missing_identifiers(_latest_audit(db, header), header)
+            missing = _audit_missing_identifiers(_latest_audit(db, header))
             stale = (
                 forecast_is_stale(newest, as_of)
                 if flags_stale_release and newest is not None
@@ -106,19 +106,16 @@ def _latest_row(db: ExplorerDb, source: FreshnessSource) -> Row | None:
 
 def _latest_audit(db: ExplorerDb, header: AuditHeader) -> Row | None:
     return db.fetch_one(
-        f"SELECT {header.status_column} AS status, {header.ids_column} AS missing_ids "
+        f"SELECT {header.ids_column} AS missing_ids "
         f"FROM {header.table} "
         f"ORDER BY {sort_order(header.order)} LIMIT 1"
     )
 
 
-def _audit_missing_identifiers(audit: Row | None, header: AuditHeader) -> list[str]:
+def _audit_missing_identifiers(audit: Row | None) -> list[str]:
     if audit is None:
         return []
-    missing = [str(item) for item in json_list(audit["missing_ids"])]
-    if audit["status"] == header.incomplete_status and not missing:
-        return [header.incomplete_placeholder]
-    return missing
+    return [str(item) for item in json_list(audit["missing_ids"])]
 
 
 def _compose_status(

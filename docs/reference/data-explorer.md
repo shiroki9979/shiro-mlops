@@ -42,7 +42,7 @@
 - **全台供需完整度**：每個 observation slot 預期一筆資料。
 - **區域供需完整度**：每個 observation slot 預期同時具備北、中、南、東四區；缺少任一區即標記該 slot 不完整。列表的 `missing_slots` 以整個查詢窗口計算：窗口內每個預期的 10 分鐘時段只要不足四區（包含四區全缺、沒有任何資料列的時段）即列為缺口，結果不隨分頁或 `region`／`completeness` 篩選變動，口徑與逐時負載、全台供需、測站觀測一致。`GET /data/status` 仍只判定最新一個 slot 缺少的區域。
 - **列表缺口範圍**：`missing_slots` 只檢查已發生的預期時段，即 `min(end, 現在)` 之前；窗口延伸到未來時，尚未到來的時段不列為缺口。逐時負載只檢查到最近一個已完成的小時。各列表的 `missing_slots` 以時間遞增排列。只有逐時負載的 `subject` 與測站觀測的 `station_id` 篩選縮小缺口範圍（只檢查該預測對象或該測站），其他篩選不改變 `missing_slots`；每個篩選是否縮小缺口宣告在資料集定義上。
-- **CWA 完整度**：以 allowlist 與 observation batch／forecast release audit header 判定缺少的測站或行政區。
+- **CWA 完整度**：以 allowlist 與 observation batch／forecast release audit header 判定缺少的測站或行政區。測站觀測、鄉鎮預報與兩個 audit datasets 在 `GET /data/status` 的 `completeness` 與 `missing_identifiers` 只看最新 header 的缺漏清單（`missing_station_ids`、`missing_geocodes`）：清單為空即完整，否則不完整並列出清單。Audit 列表項目、`status` 篩選與狀態時間軸的 `status` 也由同一份缺漏清單推導（清單為空為 `complete`，否則為 `incomplete`），推導在 SQL 內完成、SQLite 與 TimescaleDB 共用同一個運算式；Data Explorer 不讀 header 表儲存的 `status` 欄。
 - **逐時負載完整度**：在查詢時間區間內檢查預期的逐小時時間點，並揭露缺口。
 - **機組完整度**：機組數量可變，不以固定筆數判定失敗。
 - **空值語意**：資料契約允許的 nullable 欄位不得僅因為值為 `NULL` 就標記 dataset 不完整。

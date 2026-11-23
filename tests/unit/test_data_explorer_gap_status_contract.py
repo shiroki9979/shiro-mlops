@@ -128,7 +128,7 @@ def test_status_policies_follow_the_per_dataset_contract() -> None:
     """status 完整度依資料集口徑：近 24 個完成小時、最新 slot、最新 audit、機組恆為完整。"""
     policies = {dataset.id: dataset.status_policy for dataset in DATASETS.values()}
     audits = {
-        dataset_id: (policy.header.table, policy.header.incomplete_placeholder)
+        dataset_id: (policy.header.table, policy.header.ids_column)
         for dataset_id, policy in policies.items()
         if isinstance(policy, LatestAudit)
     }
@@ -151,10 +151,10 @@ def test_status_policies_follow_the_per_dataset_contract() -> None:
         "unit_generation": AlwaysComplete(),
     }
     assert audits == {
-        "cwa_observations": ("raw_cwa_observation_batch", "incomplete_batch"),
-        "cwa_forecasts": ("raw_cwa_forecast_release", "incomplete_release"),
-        "cwa_observation_audits": ("raw_cwa_observation_batch", "incomplete_batch"),
-        "cwa_forecast_audits": ("raw_cwa_forecast_release", "incomplete_release"),
+        "cwa_observations": ("raw_cwa_observation_batch", "missing_station_ids"),
+        "cwa_forecasts": ("raw_cwa_forecast_release", "missing_geocodes"),
+        "cwa_observation_audits": ("raw_cwa_observation_batch", "missing_station_ids"),
+        "cwa_forecast_audits": ("raw_cwa_forecast_release", "missing_geocodes"),
     }
     assert stale_flags == {"cwa_forecasts"}
 

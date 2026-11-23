@@ -23,7 +23,6 @@ from tests.helpers import (
     create_legacy_load_table,
     forecast_release,
     insert_legacy_load_row,
-    mark_cwa_headers_incomplete,
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
@@ -926,38 +925,3 @@ def test_audit_status_filter_accepts_only_ingestion_completeness(explorer_client
     }
 
     assert statuses == {"complete": 200, "incomplete": 200, "partial": 422, "failed": 422}
-
-
-def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) -> None:
-    """Audit header 已標 incomplete 時，不得因 missing identifiers 為空而改標 complete。"""
-    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
-
-    client, repo = explorer_client
-    observed_at = _now().replace(minute=0)
-    repo.cwa_weather_store.upsert_cwa_observation_batch(
-        CWAObservationBatch(
-            fetched_at=observed_at,
-            missing_station_ids=(),
-            raw_payload={},
-            observations=(),
-        )
-    )
-    repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [
-            CWAForecastRelease(
-                dataset_id="F-D0047-089",
-                issued_at=pd.Timestamp(observed_at),
-                source_updated_at=pd.Timestamp(observed_at),
-                fetched_at=observed_at,
-                missing_geocodes=(),
-                raw_payload={},
-                forecasts=(),
-            )
-        ]
-    )
-    mark_cwa_headers_incomplete(repo.engine)
-
-    statuses = {item["id"]: item for item in client.get("/data/status").json()["datasets"]}
-
-    assert statuses["cwa_observation_audits"]["completeness"] == "incomplete"
-    assert statuses["cwa_forecast_audits"]["completeness"] == "incomplete"

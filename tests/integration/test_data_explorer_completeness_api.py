@@ -12,8 +12,8 @@ from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservati
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import create_app
 from tests.helpers import (
+    contradict_cwa_header_statuses,
     forecast_release,
-    mark_cwa_headers_incomplete,
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
@@ -123,23 +123,35 @@ def test_audit_status_reports_the_newest_header_missing_ids(
         assert statuses[dataset_id]["missing_identifiers"] == ["63000050"]
 
 
-def test_audit_status_discloses_an_incomplete_header_without_ids_as_a_placeholder(
-    client: TestClient, test_repo: TimeSeriesRepository
+@pytest.mark.parametrize(
+    ("missing_station_ids", "missing_geocodes", "completeness"),
+    [((), (), "complete"), (("467490",), ("63000050",), "incomplete")],
+    ids=["header-says-incomplete", "header-says-complete"],
+)
+def test_audit_status_follows_the_missing_list_over_the_header_status(
+    client: TestClient,
+    test_repo: TimeSeriesRepository,
+    missing_station_ids: tuple[str, ...],
+    missing_geocodes: tuple[str, ...],
+    completeness: str,
 ) -> None:
-    """表頭標 incomplete 卻未列 id 時，status 以 placeholder 揭露。"""
+    """表頭 status 與缺漏清單矛盾時，status 只依缺漏清單判定完整度。"""
     _persist_cwa_ingestion(
-        test_repo, datetime(2026, 9, 20, 12), missing_station_ids=(), missing_geocodes=()
+        test_repo,
+        datetime(2026, 9, 20, 12),
+        missing_station_ids=missing_station_ids,
+        missing_geocodes=missing_geocodes,
     )
-    mark_cwa_headers_incomplete(test_repo.engine)
+    contradict_cwa_header_statuses(test_repo.engine)
 
     statuses = _status(client)
 
     for dataset_id in ("cwa_observations", "cwa_observation_audits"):
-        assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == ["incomplete_batch"]
+        assert statuses[dataset_id]["completeness"] == completeness
+        assert statuses[dataset_id]["missing_identifiers"] == list(missing_station_ids)
     for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
-        assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == ["incomplete_release"]
+        assert statuses[dataset_id]["completeness"] == completeness
+        assert statuses[dataset_id]["missing_identifiers"] == list(missing_geocodes)
 
 
 def test_national_list_reports_the_ten_minute_hole_between_snapshots(

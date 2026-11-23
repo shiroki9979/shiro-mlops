@@ -1,11 +1,20 @@
-"""CWA audit datasets: observation batch and forecast release headers, without raw payloads."""
+"""CWA audit datasets: observation batch and forecast release headers, without raw payloads.
+
+Each audit dataset reads its header table through a derived relation whose `status` is
+judged from the header's missing list, so list items, the `status` filter and the series
+grouping agree with `GET /data/status` and never read a stored status.
+"""
 
 from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
 
-from shiro_mlops.data.cwa_client import CWA_INGESTION_INCOMPLETE, CWA_INGESTION_STATUSES
+from shiro_mlops.data.cwa_client import (
+    CWA_INGESTION_COMPLETE,
+    CWA_INGESTION_INCOMPLETE,
+    CWA_INGESTION_STATUSES,
+)
 from shiro_mlops.service.data_explorer.datasets.definition import (
     AuditHeader,
     Dataset,
@@ -31,17 +40,39 @@ OBSERVATION_BATCH_AUDIT = AuditHeader(
     table=OBSERVATION_BATCH_TABLE,
     order=("fetched_at",),
     ids_column="missing_station_ids",
-    status_column=AUDIT_STATUS_COLUMN,
-    incomplete_status=CWA_INGESTION_INCOMPLETE,
-    incomplete_placeholder="incomplete_batch",
 )
 FORECAST_RELEASE_AUDIT = AuditHeader(
     table=FORECAST_RELEASE_TABLE,
     order=FORECAST_RELEASE_ORDER,
     ids_column="missing_geocodes",
-    status_column=AUDIT_STATUS_COLUMN,
-    incomplete_status=CWA_INGESTION_INCOMPLETE,
-    incomplete_placeholder="incomplete_release",
+)
+
+
+# WHY-NOT(_derived_status): an array-length function is `json_array_length` on SQLite but
+# `jsonb_array_length` on PostgreSQL; both render an empty JSON array as the text `[]`.
+def _derived_status(ids_column: str) -> str:
+    return (
+        f"CASE WHEN CAST({ids_column} AS TEXT) = '[]' "
+        f"THEN '{CWA_INGESTION_COMPLETE}' ELSE '{CWA_INGESTION_INCOMPLETE}' END"
+    )
+
+
+def _judged_headers(header: AuditHeader, columns: tuple[str, ...], alias: str) -> str:
+    """The header table's `columns` plus `status` judged from its missing list."""
+    selected = ", ".join([*columns, header.ids_column])
+    return (
+        f"(SELECT {selected}, {_derived_status(header.ids_column)} AS {AUDIT_STATUS_COLUMN} "
+        f"FROM {header.table}) AS {alias}"
+    )
+
+
+OBSERVATION_BATCHES = _judged_headers(
+    OBSERVATION_BATCH_AUDIT, ("fetched_at", "created_at"), "observation_batches"
+)
+FORECAST_RELEASE_HEADERS = _judged_headers(
+    FORECAST_RELEASE_AUDIT,
+    ("dataset_id", "issued_at", "source_updated_at", "fetched_at", "created_at"),
+    "forecast_releases",
 )
 FORECAST_RELEASES = FreshnessSource(
     table=FORECAST_RELEASE_TABLE,
@@ -81,7 +112,7 @@ CWA_OBSERVATION_AUDITS = Dataset(
     href="/data/audits?type=observations",
     cadence=HOURLY,
     max_days=31,
-    table=OBSERVATION_BATCH_TABLE,
+    table=OBSERVATION_BATCHES,
     time_column="fetched_at",
     sort=("fetched_at",),
     instant_columns=frozenset({"fetched_at"}),
@@ -114,7 +145,7 @@ CWA_FORECAST_AUDITS = Dataset(
     href="/data/audits?type=forecasts",
     cadence=HOURLY,
     max_days=31,
-    table=FORECAST_RELEASE_TABLE,
+    table=FORECAST_RELEASE_HEADERS,
     time_column="issued_at",
     sort=FORECAST_RELEASE_ORDER,
     instant_columns=frozenset({"issued_at", "source_updated_at"}),

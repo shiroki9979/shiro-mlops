@@ -187,23 +187,19 @@ class AlwaysComplete:
 class AuditHeader:
     """The newest audit header a dataset's completeness is read from.
 
-    `status_column` holds the header's audit status; `incomplete_status` is its value for
-    a header that judged its batch or release incomplete.
+    `ids_column` holds the header's missing identifiers, the only record of whether its
+    batch or release is complete.
     """
 
     table: str
     order: tuple[str, ...]
     ids_column: str
-    status_column: str
-    incomplete_status: str
-    incomplete_placeholder: str
 
 
 @dataclass(frozen=True)
 class LatestAudit:
     """Status completeness: the newest audit header's missing identifiers.
 
-    A header marked incomplete without naming any reports `incomplete_placeholder`.
     `flags_stale_release` adds the serving hint that the newest release is stale.
     """
 
@@ -235,7 +231,9 @@ class VersionResolver(Protocol):
 class Dataset:
     """Everything the explorer knows about one dataset.
 
-    `sort` is the newest-first keyset; its first column is `time_column`, and every sort
+    `table` is the relation every list, series and gap read selects from: a table name, or
+    a parenthesised derived relation with an alias when a column is judged rather than
+    stored. `sort` is the newest-first keyset; its first column is `time_column`, and every sort
     column holding an instant is in `instant_columns` so cursors carry it at microsecond
     precision. `list_columns` is the list SELECT, which must include every sort column.
     `project` turns one page of rows into response items, and `gaps` declares which slots

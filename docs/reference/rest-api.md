@@ -291,12 +291,12 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 
 #### CWA audit series
 
-兩個 audit series 回傳狀態時間軸：每個 `status`（`complete`、`incomplete`）一條 series，`v` 為該 bucket 內的批次數（依 `fetched_at`）或版本數（依 `issued_at`，版本以 `dataset_id`、`issued_at`、`source_updated_at` 識別）。
+兩個 audit series 回傳狀態時間軸：每個 `status`（`complete`、`incomplete`）一條 series，`v` 為該 bucket 內的批次數（依 `fetched_at`）或版本數（依 `issued_at`，版本以 `dataset_id`、`issued_at`、`source_updated_at` 識別）。`status` 由各批次或版本的缺漏清單（`missing_station_ids`、`missing_geocodes`）推導：清單為空為 `complete`，否則為 `incomplete`；list 項目的 `status`、`status` 篩選與 `GET /data/status` 的完整度採同一推導，不讀 header 表儲存的 `status` 欄。
 
 - 不接受 `fields` 與 `agg`，帶了就回 HTTP 422（未宣告的參數）；回應的 `agg` 固定為 `null`。
 - `1h`、`1d` 的 `v` 為該 bucket 的列數；`raw` 時每個批次或版本各是一個 `v = 1` 的點，`issued_at` 相同的版本各自成點，因此 `t` 可能重複。
 - 不補值：沒有批次或版本的 bucket 不出現；某狀態在窗口內沒有任何列時，不回傳該狀態的 series。
-- 篩選與 list 相同，`status` 只接受 `complete` 或 `incomplete`，其他值回 HTTP 422。點數上限依 §5.3，`raw` 以 1 小時節奏估算。
+- 篩選與 list 相同，`status` 只接受 `complete` 或 `incomplete`，其他值回 HTTP 422；篩選比對的是推導出的 `status`。點數上限依 §5.3，`raw` 以 1 小時節奏估算。
 
 ```json
 {

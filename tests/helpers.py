@@ -213,15 +213,16 @@ def canonical_observation_batch(frame: pd.DataFrame) -> CWAObservationBatch:
     )
 
 
-def mark_cwa_headers_incomplete(engine: Engine) -> None:
-    """Mark every stored CWA batch and release header incomplete, leaving its missing list.
+def contradict_cwa_header_statuses(engine: Engine) -> None:
+    """Flip every stored CWA batch and release header `status`, leaving its missing list.
 
-    The domain objects derive completeness from the missing list, so they cannot build an
-    incomplete header with an empty one; the header tables can still hold it.
+    The domain objects derive completeness from the missing list, so they cannot build a
+    header whose `status` disagrees with it; the header tables can still hold one.
     """
+    flipped = "CASE WHEN status = 'complete' THEN 'incomplete' ELSE 'complete' END"
     with engine.begin() as connection:
         for table in ("raw_cwa_observation_batch", "raw_cwa_forecast_release"):
-            connection.execute(text(f"UPDATE {table} SET status = 'incomplete'"))
+            connection.execute(text(f"UPDATE {table} SET status = {flipped}"))
 
 
 def derived_hourly_load(hours: int, last_hour: datetime) -> pd.DataFrame:

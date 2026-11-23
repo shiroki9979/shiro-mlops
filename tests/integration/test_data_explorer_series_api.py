@@ -9,7 +9,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
 from shiro_mlops.data.repository import TimeSeriesRepository
 from tests.helpers import rfc3339, write_derived_load
-from tests.scenarios.data_explorer_audit_series import AUDIT_SERIES_SCENARIOS
+from tests.scenarios.data_explorer_audit_series import (
+    AUDIT_SERIES_SCENARIOS,
+    AUDIT_STATUS_SCENARIOS,
+)
 from tests.scenarios.data_explorer_series import (
     LOAD_SERIES_PATH,
     SERIES_SCENARIOS,
@@ -139,4 +142,9 @@ def test_hours_not_yet_derived_are_not_gap_filled(
 
 @pytest.mark.parametrize("scenario", AUDIT_SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__)
 def test_audit_series_scenarios_on_sqlite(scenario, test_repo: TimeSeriesRepository) -> None:
+    scenario(test_repo)
+
+
+@pytest.mark.parametrize("scenario", AUDIT_STATUS_SCENARIOS, ids=lambda scenario: scenario.__name__)
+def test_audit_status_scenarios_on_sqlite(scenario, test_repo: TimeSeriesRepository) -> None:
     scenario(test_repo)
