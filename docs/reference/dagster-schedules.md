@@ -1,7 +1,7 @@
 # Dagster 資產排程與觸發規格
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 3 節拆出。
@@ -18,10 +18,30 @@
      | 資產 | `{task_id}__monitoring` | 經 runner `monitor_task` 以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新一列（僅 `source = 'regional_snapshot_sum'`），再由任務類型 `assess_health` 以任務設定 `[health]` 門檻判定；輸出 `task_id`、`status`（`HEALTHY`／`WARNING`）、`health_reason`、`metrics`、`training_rows`、`target_hours`（有效逐時目標觀測數）、`latest_target_time`、`latest_target_value`（目前任務的目標皆為逐時實際負載，單位 MW） |
      | job | `{task_id}__training_job` | selection 為 `{task_id}__features` 及其所有下游（model、monitoring，以及只掛在該任務的資產，例如 Feast 匯出） |
      | job | `{task_id}__monitoring_job` | selection 僅含 `{task_id}__monitoring`；model 輸出取自最近一次訓練的 I/O Manager 產物，不重跑讀取完整歷史的 features |
-     | 排程 | `{task_id}__training_schedule` | cron 取自 `[schedule].training`，時區 `Asia/Taipei`；最低累積未達時以 `SkipReason` 揭露差距 |
-     | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需 `{task_id}__model` 已有 materialization |
+     | 排程 | `{task_id}__training_schedule` | cron 取自 `[schedule].training`，時區 `Asia/Taipei`；只看最低累積，未達時以 `SkipReason` 揭露差距，不受模型狀態影響（見下方冷啟動階段） |
+     | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需訓練紀錄有模型（`{task_id}__model` 已有 materialization），不看模型目錄（見下方冷啟動階段） |
 
    - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）、`forecast_track_record`（見第 7 項）或 `forecast_view_export`（見第 8 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
+   - **冷啟動階段（`pipelines/cold_start.py`）**：`read_cold_start` 從三個輸入判定任務的階段與原因：最低累積的結果（見下方「最低累積」）、模型目錄（`DATA_DIR/models/{task_id}/` 有沒有由模型存放安裝的模型，規則同 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy) 的 `has_installed_model`）、訓練紀錄（`{task_id}__model` 有沒有 materialization）。只判斷兩邊有沒有模型：不載入模型、不比對雜湊（訓練先安裝模型目錄、再寫 materialization，比對雜湊會把每次訓練中間的空檔判成不一致）。五個階段為封閉集合，每個都帶原因：
+
+     | 階段 | 條件 | 原因 |
+     | :--- | :--- | :--- |
+     | 舊列阻擋（`BLOCKED_BY_LEGACY_ROWS`） | 兩邊都沒有模型，最低累積被 `source IS NULL` 的舊列擋下 | 最低累積的原因 |
+     | 累積中（`ACCUMULATING`） | 兩邊都沒有模型，有效逐時觀測未達最低累積 | 最低累積的原因 |
+     | 待首次訓練（`AWAITING_FIRST_TRAINING`） | 兩邊都沒有模型，已達最低累積 | 最低累積的原因，並說明下一次 `{task_id}__training_job` 會訓練第一個模型 |
+     | 已訓練（`TRAINED`） | 訓練紀錄與模型目錄都有模型 | 兩邊都有模型 |
+     | 紀錄與目錄不一致（`RECORD_DIRECTORY_MISMATCH`） | 只有一邊有模型（例如刪除 `dagster_home` volume 但保留 `data/models/`，或相反） | 點名缺少模型的一邊，處理方式為執行一次 `{task_id}__training_job` |
+
+     已有模型時，階段停在「已訓練」或「紀錄與目錄不一致」，即使最低累積之後又未通過（例如調高 `min_training_hours`，或舊列被寫回），因此階段不是單純的線性鏈。訓練與監控排程「要不要執行、不執行的原因」都由此 module 給出，排程本身不查 materialization 或最低累積；每個排程只看自己的資產實際會用到的那一邊：
+
+     | 模型狀態 | 訓練排程 | 監控排程 |
+     | :--- | :--- | :--- |
+     | 最低累積未通過（不論模型狀態） | 以最低累積的原因略過 | 以最低累積的原因略過 |
+     | 兩邊都沒有 | 執行 | 略過：`No {task_id}__model materialization yet; {task_id}__monitoring_schedule waits for the first successful {task_id}__training_job run.` |
+     | 兩邊都有 | 執行 | 執行 |
+     | 只有訓練紀錄 | 執行 | 執行（監控資產從上次訓練的紀錄取 metrics，不讀模型目錄） |
+     | 只有模型目錄 | 執行（重新訓練即不一致的處理方式） | 以「紀錄與目錄不一致」的原因略過 |
+
    - **排程 run_key**：排程 tick 轉為台灣本地時間 ISO 字串作為 `run_key`，同一 tick 重複評估不重跑；無 tick 的手動評估不帶 `run_key`。
    - **MLflow**：每個任務擁有獨立 experiment 與 registered model，名稱皆等於 `task_id`。每次訓練以 `{task_id}_training` 為 run 名稱記錄 metrics、攤平的 `[params]`（巢狀鍵以 `.` 連接，另含 `task_id`、`task_type`）與模型目錄（artifact path `model`），並以該 artifact URI 建立新的 model version（模型為原生檔案而非 MLflow logged model，ADR-0010）。MLflow 不可用時記錄警告、`run_id` 標為 `local_run`，已保存的模型仍有效。
    - **動態視界預報任務**：`dynamic_horizon_forecast__training_schedule` 為 `0 0 * * *`（`Asia/Taipei`，與舊版 `0 16 * * *` UTC 同一時刻），`dynamic_horizon_forecast__monitoring_schedule` 為 `0 * * * *`；健康門檻 `max_mape = 10.0`。
