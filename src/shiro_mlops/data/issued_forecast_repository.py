@@ -74,7 +74,7 @@ class IssuedForecastRepository:
         header = {
             "issued_at": issued_at,
             "load_anchor": to_storage_time(forecast.load_anchor),
-            "status": forecast.status,
+            "status": forecast.status.value,
             "model_sha256": forecast.model_sha256,
             "mlflow_model_version": forecast.mlflow_model_version,
         }

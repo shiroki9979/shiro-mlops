@@ -1,9 +1,15 @@
-"""Point-in-time CWA forecast projection and degraded weather resolution."""
+"""Point-in-time CWA forecast projection, degraded weather resolution and the forecast mode.
 
+This module owns the one rule for 預報運行狀態 (GLOSSARY): a forecast is degraded
+exactly when some value it used is a substitute, so callers derive the mode from
+the sources and never store or recompute it themselves.
+"""
+
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Self
 
 import pandas as pd
 
@@ -27,7 +33,6 @@ FORECAST_FIELDS = {
 }
 DEFAULT_RESOLUTION_FIELDS = (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL)
 NON_INTERPOLATED_FORECAST_FIELDS = {"wind_direction"}
-WeatherResolutionMode = Literal["normal", "degraded"]
 FORECAST_STALE_AFTER = timedelta(hours=7)
 FORECAST_DATASET_IDS = ("F-D0047-089", "F-D0047-091")
 
@@ -35,6 +40,13 @@ FORECAST_DATASET_IDS = ("F-D0047-089", "F-D0047-091")
 def forecast_is_stale(issued_at: datetime, as_of: datetime) -> bool:
     """Whether a forecast version issued at ``issued_at`` is too old to serve at ``as_of``."""
     return as_of - issued_at > FORECAST_STALE_AFTER
+
+
+class ForecastMode(StrEnum):
+    """預報運行狀態 (GLOSSARY): normal, or degraded when any value is a substitute."""
+
+    NORMAL = "normal"
+    DEGRADED = "degraded"
 
 
 class WeatherSourceKind(StrEnum):
@@ -124,6 +136,13 @@ class WeatherValueSource:
         return result
 
 
+def forecast_mode(sources: Iterable[WeatherValueSource]) -> ForecastMode:
+    """Degraded when any value came from a substitute, otherwise normal."""
+    if any(source.kind.is_substitute for source in sources):
+        return ForecastMode.DEGRADED
+    return ForecastMode.NORMAL
+
+
 class WeatherCoverageError(Exception):
     """A weather reference point has neither a fresh forecast nor a substitute for some value."""
 
@@ -134,7 +153,13 @@ class WeatherResolution:
 
     dataframe: pd.DataFrame
     sources: tuple[dict[str, WeatherValueSource], ...]
-    mode: WeatherResolutionMode
+
+    @property
+    def mode(self) -> ForecastMode:
+        """The forecast mode these sources imply."""
+        return forecast_mode(
+            source for point_sources in self.sources for source in point_sources.values()
+        )
 
 
 def _as_timestamp(value: datetime | str | pd.Timestamp) -> pd.Timestamp:
@@ -298,7 +323,6 @@ def resolve_weather(
     }
     rows: list[dict[str, object]] = []
     sources: list[dict[str, WeatherValueSource]] = []
-    degraded = False
     for moment in moments:
         output: dict[str, object] = {DATETIME_COL: moment, LOCATION_COL: reference_point.alias}
         point_sources: dict[str, WeatherValueSource] = {}
@@ -311,11 +335,8 @@ def resolve_weather(
                     f"{reference_point.alias}: No weather coverage for "
                     f"{moment.isoformat()} {output_name}"
                 )
-            degraded = degraded or source.kind.is_substitute
             output[output_name] = value
             point_sources[output_name] = source
         rows.append(output)
         sources.append(point_sources)
-    return WeatherResolution(
-        pd.DataFrame(rows), tuple(sources), "degraded" if degraded else "normal"
-    )
+    return WeatherResolution(pd.DataFrame(rows), tuple(sources))

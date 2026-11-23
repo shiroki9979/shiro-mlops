@@ -11,9 +11,11 @@ from shiro_mlops.core.config import Settings, settings
 from shiro_mlops.data.cwa_client import CWALocation, resolve_cwa_location
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import (
+    ForecastMode,
     WeatherCoverageError,
     WeatherSourceKind,
     WeatherValueSource,
+    forecast_mode,
     resolve_weather,
 )
 from tests.helpers import canonical_observation_batch, forecast_release, township_forecast
@@ -575,3 +577,32 @@ def test_observed_source_serializes_the_observation_time() -> None:
 def test_source_whose_fields_do_not_match_its_kind_is_rejected(build) -> None:
     with pytest.raises(ValueError):
         build()
+
+
+OBSERVED = WeatherValueSource.observed(pd.Timestamp("2026-08-20 12:00"))
+THREE_DAY = WeatherValueSource.forecast(WeatherSourceKind.THREE_DAY, FORECAST_ROW)
+
+
+def test_forecast_mode_has_only_normal_and_degraded() -> None:
+    assert [mode.value for mode in ForecastMode] == ["normal", "degraded"]
+
+
+def test_forecast_mode_is_normal_when_every_value_is_a_station_observation() -> None:
+    assert forecast_mode([OBSERVED, OBSERVED]) == "normal"
+
+
+def test_forecast_mode_is_normal_when_every_value_comes_from_a_forecast() -> None:
+    weekly = WeatherValueSource.forecast(WeatherSourceKind.WEEKLY, FORECAST_ROW)
+
+    assert forecast_mode([THREE_DAY, weekly]) == "normal"
+
+
+@pytest.mark.parametrize(
+    "kind", [WeatherSourceKind.PREVIOUS_DAY_OBSERVATION, WeatherSourceKind.CLIMATOLOGY]
+)
+def test_forecast_mode_is_degraded_when_any_value_is_a_substitute(
+    kind: WeatherSourceKind,
+) -> None:
+    sources = [THREE_DAY, WeatherValueSource.substitute(kind), OBSERVED]
+
+    assert forecast_mode(sources) == "degraded"

@@ -3,6 +3,8 @@
 All times are Taiwan-local naive datetimes. The issue time is the schedule tick
 and the forecast's ``as_of``; the load anchor is the latest actual load hour the
 recursion started from. Steps are every hour the model produced, unfiltered.
+``status`` is the forecast mode (預報運行狀態, GLOSSARY) and only ever holds a
+``ForecastMode`` member, whether built by the issuing asset or read from the database.
 """
 
 from __future__ import annotations
@@ -10,10 +12,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, get_args
 
-IssuedForecastStatus = Literal["normal", "degraded"]
-ISSUED_FORECAST_STATUSES: tuple[str, ...] = get_args(IssuedForecastStatus)
+from shiro_mlops.data.weather_resolution import ForecastMode
+
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
@@ -35,17 +36,20 @@ class IssuedForecast:
 
     issued_at: datetime
     load_anchor: datetime
-    status: IssuedForecastStatus
+    status: ForecastMode
     model_sha256: str
     mlflow_model_version: str | None
     steps: tuple[IssuedForecastStep, ...]
 
     def __post_init__(self) -> None:
-        if self.status not in ISSUED_FORECAST_STATUSES:
+        try:
+            status = ForecastMode(self.status)
+        except ValueError as error:
             raise ValueError(
-                f"Issued forecast status must be one of {ISSUED_FORECAST_STATUSES}, "
+                f"Issued forecast status must be one of {[mode.value for mode in ForecastMode]}, "
                 f"got {self.status!r}"
-            )
+            ) from error
+        object.__setattr__(self, "status", status)
         if not _SHA256_HEX.fullmatch(self.model_sha256):
             raise ValueError(
                 f"model_sha256 must be a 64-character lowercase hex digest, "

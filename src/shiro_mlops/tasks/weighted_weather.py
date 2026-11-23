@@ -16,9 +16,10 @@ import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL
 from shiro_mlops.data.weather_resolution import (
+    ForecastMode,
     WeatherResolution,
-    WeatherResolutionMode,
     WeatherValueSource,
+    forecast_mode,
 )
 
 PointSources = Mapping[str, Mapping[str, WeatherValueSource]]
@@ -35,11 +36,20 @@ def serialize_point_sources(sources: PointSources) -> SerializedPointSources:
 
 @dataclass(frozen=True)
 class WeightedWeather:
-    """Hourly weighted weather, each field's source at every reference point, and the mode."""
+    """Hourly weighted weather and each field's source at every reference point."""
 
     dataframe: pd.DataFrame
     sources: tuple[PointSources, ...]
-    mode: WeatherResolutionMode
+
+    @property
+    def mode(self) -> ForecastMode:
+        """The forecast mode the sources at every reference point imply (ADR-0012)."""
+        return forecast_mode(
+            source
+            for hour in self.sources
+            for by_alias in hour.values()
+            for source in by_alias.values()
+        )
 
 
 @dataclass(frozen=True)
@@ -89,7 +99,7 @@ def weighted_resolution(
 ) -> WeightedWeather:
     """Combine per-point forecast resolutions over the same hours into weighted weather.
 
-    Degraded at any point degrades the whole result.
+    Every point's sources are kept, so a substitute at any point degrades the whole result.
     """
     hours = pd.to_datetime(points[0].resolution.dataframe[DATETIME_COL]).to_numpy()
     for point in points[1:]:
@@ -109,5 +119,4 @@ def weighted_resolution(
         }
         for hour in range(len(combined))
     )
-    degraded = any(point.resolution.mode == "degraded" for point in points)
-    return WeightedWeather(combined, sources, "degraded" if degraded else "normal")
+    return WeightedWeather(combined, sources)

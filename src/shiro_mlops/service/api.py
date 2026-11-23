@@ -17,6 +17,7 @@ from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, DEFAULT_HORIZON_HOURS, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.router import router as data_explorer_router
 from shiro_mlops.service.served_tasks import (
@@ -76,7 +77,7 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     status: str
-    mode: str | None = None
+    mode: ForecastMode | None = None
     model_loaded: bool
     reason: str | None = None
 
@@ -148,7 +149,7 @@ class PredictionResponse(BaseModel):
     status: str = "success"
     horizon_hours: int
     subject: str = Field(description="Prediction subject whose load is forecast")
-    mode: str = "normal"
+    mode: ForecastMode
     predictions: list[PredictionItem]
 
 
@@ -158,7 +159,9 @@ class TaskPredictionEnvelope(BaseModel):
     status: str = "success"
     task_id: str
     subject: str = Field(description="Prediction subject of the task")
-    mode: str = Field(description="Weather quality behind the predictions: normal or degraded")
+    mode: ForecastMode = Field(
+        description="Weather quality behind the predictions: normal or degraded"
+    )
 
 
 @cache

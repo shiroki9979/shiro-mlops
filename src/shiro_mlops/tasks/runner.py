@@ -2,7 +2,8 @@
 
 The runner owns I/O and the shared components (ADR-0009): the minimum
 accumulation gate, bounded data retrieval, the stale load anchor rule, and
-weather resolution with degradation. The prediction input gate
+weather resolution with degradation; the forecast mode is never set here but
+derived from the weather sources (``data/weather_resolution.py``). The prediction input gate
 (``tasks/prediction_inputs.py``) judges the frames it reads before any task type
 sees them; task types only ever receive in-memory frames. Every time-dependent
 decision takes an explicit ``as_of`` in Taiwan-local naive time.
@@ -28,8 +29,8 @@ from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stal
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import (
+    ForecastMode,
     WeatherCoverageError,
-    WeatherResolutionMode,
     WeatherValueSource,
     resolve_weather,
 )
@@ -105,10 +106,10 @@ class ObservedInputsIncompleteError(TaskUnavailableError):
 
 @dataclass(frozen=True)
 class Readiness:
-    """Whether a task can serve a full-horizon prediction now, and in which weather mode."""
+    """Whether a task can serve a full-horizon prediction now, and in which forecast mode."""
 
     ready: bool
-    mode: WeatherResolutionMode | None = None
+    mode: ForecastMode | None = None
     reason: str | None = None
 
 
@@ -118,7 +119,7 @@ class PredictionOutcome:
 
     subject: str
     load_anchor: pd.Timestamp
-    mode: WeatherResolutionMode
+    mode: ForecastMode
     predictions: pd.DataFrame
     weather: pd.DataFrame
     weather_sources: tuple[SerializedPointSources, ...]
@@ -448,7 +449,7 @@ def _observed_weather_until(
     sources = tuple(
         _observation_source(task, observed_at) for observed_at in observed[DATETIME_COL]
     )
-    return WeightedWeather(dataframe=observed, sources=sources, mode="normal")
+    return WeightedWeather(dataframe=observed, sources=sources)
 
 
 def _observed_weather_at(predictions: pd.DataFrame, observed: WeightedWeather) -> WeightedWeather:
@@ -474,7 +475,6 @@ def _observed_weather_at(predictions: pd.DataFrame, observed: WeightedWeather) -
     return WeightedWeather(
         dataframe=aligned.reset_index(drop=True),
         sources=tuple(observed.sources[row] for row in rows),
-        mode=observed.mode,
     )
 
 

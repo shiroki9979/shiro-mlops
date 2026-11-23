@@ -688,3 +688,16 @@ def test_openapi_describes_weather_sources_per_field_and_reference_point() -> No
     by_field = item["properties"]["weather_sources"]["additionalProperties"]
     by_point = by_field["additionalProperties"]
     assert by_point["additionalProperties"] == {"type": "string"}
+
+
+def test_openapi_describes_mode_as_the_forecast_mode_enum() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    forecast_mode = "#/components/schemas/ForecastMode"
+
+    assert schemas["ForecastMode"]["enum"] == ["normal", "degraded"]
+    for name in ("PredictionResponse", "LoadPatternAnomalyTaskPredictionResponse"):
+        assert schemas[name]["properties"]["mode"]["$ref"] == forecast_mode
+        assert "mode" in schemas[name]["required"]
+    ready_mode = schemas["ReadyResponse"]["properties"]["mode"]
+    assert ready_mode["anyOf"] == [{"$ref": forecast_mode}, {"type": "null"}]
+    assert "mode" not in schemas["ReadyResponse"].get("required", [])
