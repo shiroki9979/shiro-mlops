@@ -24,9 +24,9 @@ def test_upsert_unit_generation_snapshots_insert_and_fetch(
 ) -> None:
     """多機組快照應可依 (observed_at, unit_type, unit_name) 寫入並讀回。"""
     snapshots = unit_generation_snapshots()
-    assert test_repo.upsert_unit_generation_snapshots(snapshots) == 4
+    assert test_repo.unit_generation_store.upsert(snapshots) == 4
 
-    fetched = test_repo.fetch_unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.unit_generation_store.fetch(datetime(2026, 9, 5, 17, 30))
     assert len(fetched) == 4
     first = next(item for item in fetched if item.unit_name == "大潭CC#1")
     assert first.net_generation_mw == pytest.approx(670.4)
@@ -44,16 +44,16 @@ def test_upsert_unit_generation_snapshots_is_idempotent(
 ) -> None:
     """相同機組識別與觀測 slot 重跑時應更新既有快照而非新增列。"""
     first = unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
-    test_repo.upsert_unit_generation_snapshots(first)
+    test_repo.unit_generation_store.upsert(first)
 
     with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
         payload = json.load(f)
     payload["aaData"][0]["淨發電量(MW)"] = "700.0"
     payload["aaData"][0]["淨發電量/裝置容量比(%)"] = "94.250%"
     revised = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
-    assert test_repo.upsert_unit_generation_snapshots(revised) == 4
+    assert test_repo.unit_generation_store.upsert(revised) == 4
 
-    fetched = test_repo.fetch_unit_generation_snapshots(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.unit_generation_store.fetch(datetime(2026, 9, 5, 17, 30))
     updated = next(item for item in fetched if item.unit_name == "大潭CC#1")
     assert updated.net_generation_mw == pytest.approx(700.0)
     assert updated.capacity_ratio_pct == pytest.approx(94.25)
@@ -106,9 +106,9 @@ def test_upsert_unit_generation_snapshots_excludes_corrupted_and_fake_identity_r
     assert len(snapshots) == 1
     assert snapshots[0].unit_name == "有效機組A"
 
-    assert test_repo.upsert_unit_generation_snapshots(snapshots) == 1
+    assert test_repo.unit_generation_store.upsert(snapshots) == 1
 
-    fetched = test_repo.fetch_unit_generation_snapshots(observed_at)
+    fetched = test_repo.unit_generation_store.fetch(observed_at)
     assert len(fetched) == 1
     assert fetched[0].unit_name == "有效機組A"
 
@@ -171,7 +171,7 @@ def test_unit_generation_snapshots_store_every_instant_as_aware_utc(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """機組快照的觀測時刻與來源時刻皆存為帶 +00:00 的 UTC 字串。"""
-    test_repo.upsert_unit_generation_snapshots(unit_generation_snapshots())
+    test_repo.unit_generation_store.upsert(unit_generation_snapshots())
 
     with test_repo.engine.connect() as conn:
         stored = conn.exec_driver_sql(

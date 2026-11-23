@@ -26,7 +26,7 @@ def explorer_http_client(repo: TimeSeriesRepository) -> Iterator[TestClient]:
 
 @contextmanager
 def _regional_rows_in(repo: TimeSeriesRepository, window: TimeWindow, rows: list) -> Iterator[None]:
-    repo.upsert_regional_supply_demand_snapshots(rows)
+    repo.regional_supply_demand_store.upsert(rows)
     try:
         yield
     finally:
