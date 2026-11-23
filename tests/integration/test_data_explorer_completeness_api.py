@@ -76,51 +76,84 @@ def test_regional_completeness_lists_only_absent_allowlisted_regions(
     assert regional["missing_slot_count"] == 2
 
 
-@pytest.mark.parametrize(
-    ("missing_station_ids", "missing_geocodes", "observation_ids", "forecast_ids"),
-    [
-        (("467490",), ("63000050",), ["467490"], ["63000050"]),
-        ((), (), ["incomplete_batch"], ["incomplete_release"]),
-    ],
-    ids=["named-ids", "placeholders"],
-)
-def test_audit_status_reports_missing_ids_or_an_incomplete_placeholder(
-    client: TestClient,
-    test_repo: TimeSeriesRepository,
+def _persist_cwa_ingestion(
+    repo: TimeSeriesRepository,
+    at: datetime,
+    *,
     missing_station_ids: tuple[str, ...],
     missing_geocodes: tuple[str, ...],
-    observation_ids: list[str],
-    forecast_ids: list[str],
 ) -> None:
-    """觀測缺站、預報缺 geocode；incomplete 卻未列 id 時以 placeholder 揭露。"""
-    observed_at = datetime(2026, 9, 20, 12)
-    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
+    repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
-            fetched_at=observed_at,
-            status="incomplete",
+            fetched_at=at,
             missing_station_ids=missing_station_ids,
             raw_payload={},
-            observations=(_observation(observed_at),),
+            observations=(_observation(at),),
         )
     )
-    test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
         [
             replace(
-                forecast_release(observed_at, (township_forecast(observed_at, 30.0),)),
-                status="incomplete",
+                forecast_release(at, (township_forecast(at, 30.0),)),
                 missing_geocodes=missing_geocodes,
             )
         ]
+    )
+
+
+def test_audit_status_reports_the_newest_header_missing_ids(
+    client: TestClient, test_repo: TimeSeriesRepository
+) -> None:
+    """較舊與較新的表頭缺漏不同時，status 只列出最新表頭的缺漏 id。"""
+    older = datetime(2026, 9, 20, 12)
+    _persist_cwa_ingestion(
+        test_repo, older, missing_station_ids=("467490",), missing_geocodes=("63000050",)
+    )
+    _persist_cwa_ingestion(
+        test_repo,
+        older + timedelta(hours=1),
+        missing_station_ids=("467441",),
+        missing_geocodes=("64000000",),
     )
 
     statuses = _status(client)
 
     for dataset_id in ("cwa_observations", "cwa_observation_audits"):
         assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == observation_ids
+        assert statuses[dataset_id]["missing_identifiers"] == ["467441"]
     for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
         assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == forecast_ids
+        assert statuses[dataset_id]["missing_identifiers"] == ["64000000"]
+
+
+@pytest.mark.parametrize(
+    ("missing_station_ids", "missing_geocodes", "completeness"),
+    [((), (), "complete"), (("467490",), ("63000050",), "incomplete")],
+    ids=["nothing-missing", "some-missing"],
+)
+def test_audit_status_judges_completeness_by_the_missing_list(
+    client: TestClient,
+    test_repo: TimeSeriesRepository,
+    missing_station_ids: tuple[str, ...],
+    missing_geocodes: tuple[str, ...],
+    completeness: str,
+) -> None:
+    """status 只依缺漏清單是否為空判定 CWA 擷取完整度。"""
+    _persist_cwa_ingestion(
+        test_repo,
+        datetime(2026, 9, 20, 12),
+        missing_station_ids=missing_station_ids,
+        missing_geocodes=missing_geocodes,
+    )
+
+    statuses = _status(client)
+
+    for dataset_id in ("cwa_observations", "cwa_observation_audits"):
+        assert statuses[dataset_id]["completeness"] == completeness
+        assert statuses[dataset_id]["missing_identifiers"] == list(missing_station_ids)
+    for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
+        assert statuses[dataset_id]["completeness"] == completeness
+        assert statuses[dataset_id]["missing_identifiers"] == list(missing_geocodes)
 
 
 def test_national_list_reports_the_ten_minute_hole_between_snapshots(
@@ -147,7 +180,6 @@ def test_observation_list_without_station_expects_every_allowlisted_station_hour
     test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
-            status="complete",
             missing_station_ids=(),
             raw_payload={},
             observations=(_observation(observed),),
@@ -173,7 +205,6 @@ def test_observation_status_without_an_audit_header_is_complete(
     test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
-            status="incomplete",
             missing_station_ids=("467490",),
             raw_payload={},
             observations=(_observation(observed_at),),

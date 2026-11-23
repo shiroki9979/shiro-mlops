@@ -177,7 +177,6 @@ def forecast_release(
         issued_at=pd.Timestamp(issued_at),
         source_updated_at=pd.Timestamp(issued_at),
         fetched_at=issued_at,
-        status="complete",
         missing_geocodes=(),
         raw_payload=raw_payload or {},
         forecasts=forecasts,
@@ -208,7 +207,6 @@ def canonical_observation_batch(frame: pd.DataFrame) -> CWAObservationBatch:
         )
     return CWAObservationBatch(
         fetched_at=pd.Timestamp(frame.datetime.max()).to_pydatetime(),
-        status="complete",
         missing_station_ids=(),
         raw_payload={"fixture": "canonical_observation_batch"},
         observations=tuple(observations),

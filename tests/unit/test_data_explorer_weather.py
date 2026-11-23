@@ -95,7 +95,6 @@ def test_observation_and_audit_readers_keep_station_and_missing_id_filters(
     test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
-            status="incomplete",
             missing_station_ids=("467490",),
             raw_payload={"secret": "do-not-return"},
             observations=(
@@ -152,7 +151,6 @@ def test_forecast_reader_defaults_to_latest_vintage_and_keeps_explicit_filters(
             issued_at=pd.Timestamp(issued_at),
             source_updated_at=pd.Timestamp(issued_at),
             fetched_at=issued_at,
-            status="complete",
             missing_geocodes=(),
             raw_payload={"secret": "do-not-return"},
             forecasts=(

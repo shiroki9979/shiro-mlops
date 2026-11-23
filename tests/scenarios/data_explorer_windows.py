@@ -124,8 +124,8 @@ def _all_dataset_fixtures(start: datetime, times: tuple[datetime, ...]) -> tuple
         ),
         SqlFixture(
             "raw_cwa_observation_batch",
-            "fetched_at, status, missing_station_ids, raw_payload",
-            ":time, 'incomplete', :missing, '{}'",
+            "fetched_at, missing_station_ids, raw_payload",
+            ":time, :missing, '{}'",
             "fetched_at = :time",
             rows(
                 lambda t, i: {"time": t, "missing": f'["edge-{i}"]'},
@@ -133,8 +133,8 @@ def _all_dataset_fixtures(start: datetime, times: tuple[datetime, ...]) -> tuple
         ),
         SqlFixture(
             "raw_cwa_forecast_release",
-            "dataset_id, issued_at, source_updated_at, fetched_at, status, missing_geocodes, raw_payload",
-            "'F-EDGE', :time, :time, :time, 'incomplete', :missing, '{}'",
+            "dataset_id, issued_at, source_updated_at, fetched_at, missing_geocodes, raw_payload",
+            "'F-EDGE', :time, :time, :time, :missing, '{}'",
             "dataset_id = 'F-EDGE' AND issued_at = :time AND source_updated_at = :time",
             rows(
                 lambda t, i: {"time": t, "missing": f'["edge-{i}"]'},

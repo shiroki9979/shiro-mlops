@@ -717,7 +717,6 @@ def test_cwa_observations_and_audits_exclude_raw_payload(explorer_client) -> Non
     repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
-            status="incomplete",
             missing_station_ids=("467490",),
             raw_payload={"secret": "do-not-return"},
             observations=(
@@ -913,37 +912,16 @@ def test_forecast_cursor_distinguishes_rows_by_valid_to(explorer_client) -> None
     assert [item["temperature_c"] for item in second.json()["items"]] == [28.0]
 
 
-def test_incomplete_audit_without_missing_ids_stays_incomplete(explorer_client) -> None:
-    """Audit header 已標 incomplete 時，不得因 missing identifiers 為空而改標 complete。"""
-    from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
+@pytest.mark.parametrize("path", ["/data/audits/cwa-observations", "/data/audits/cwa-forecasts"])
+def test_audit_status_filter_accepts_only_ingestion_completeness(explorer_client, path) -> None:
+    """審計 status 篩選只接受 complete 與 incomplete，其他值回 422。"""
+    client, _ = explorer_client
+    observed = _now().replace(minute=0)
+    window = {"start": rfc3339(observed - timedelta(hours=1)), "end": rfc3339(observed)}
 
-    client, repo = explorer_client
-    observed_at = _now().replace(minute=0)
-    repo.cwa_weather_store.upsert_cwa_observation_batch(
-        CWAObservationBatch(
-            fetched_at=observed_at,
-            status="incomplete",
-            missing_station_ids=(),
-            raw_payload={},
-            observations=(),
-        )
-    )
-    repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [
-            CWAForecastRelease(
-                dataset_id="F-D0047-089",
-                issued_at=pd.Timestamp(observed_at),
-                source_updated_at=pd.Timestamp(observed_at),
-                fetched_at=observed_at,
-                status="incomplete",
-                missing_geocodes=(),
-                raw_payload={},
-                forecasts=(),
-            )
-        ]
-    )
+    statuses = {
+        value: client.get(path, params={**window, "status": value}).status_code
+        for value in ("complete", "incomplete", "partial", "failed")
+    }
 
-    statuses = {item["id"]: item for item in client.get("/data/status").json()["datasets"]}
-
-    assert statuses["cwa_observation_audits"]["completeness"] == "incomplete"
-    assert statuses["cwa_forecast_audits"]["completeness"] == "incomplete"
+    assert statuses == {"complete": 200, "incomplete": 200, "partial": 422, "failed": 422}

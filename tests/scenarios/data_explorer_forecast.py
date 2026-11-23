@@ -18,7 +18,6 @@ def _release(
     issued_at: datetime,
     source_updated_at: datetime,
     *,
-    status: str = "complete",
     missing_geocodes: tuple[str, ...] = (),
     forecasts: tuple = (),
 ) -> CWAForecastRelease:
@@ -27,7 +26,6 @@ def _release(
         issued_at=pd.Timestamp(issued_at),
         source_updated_at=pd.Timestamp(source_updated_at),
         fetched_at=issued_at,
-        status=status,
         missing_geocodes=missing_geocodes,
         raw_payload={"private": dataset_id},
         forecasts=forecasts,
@@ -107,17 +105,11 @@ def assert_forecast_audit_pages_keep_complete_sort_key(repo: TimeSeriesRepositor
         ("D", low, high),
     ):
         repo.cwa_weather_store.upsert_cwa_forecast_releases(
-            [
-                _release(
-                    dataset_id, issued, source, status="incomplete", missing_geocodes=("63000050",)
-                )
-            ]
+            [_release(dataset_id, issued, source, missing_geocodes=("63000050",))]
         )
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([_release("E", high, low)])
     repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [_release("E", high, low, missing_geocodes=("63000050",))]
-    )
-    repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [_release("F", high, low, status="incomplete", missing_geocodes=("other",))]
+        [_release("F", high, low, missing_geocodes=("other",))]
     )
     reader = DatasetLister(repo.engine, CWA_FORECAST_AUDITS)
     params = {

@@ -58,7 +58,6 @@ def _seeded_observations(
     fetched_at = max(moment for _, moment in temperatures)
     batch = CWAObservationBatch(
         fetched_at=fetched_at,
-        status="complete",
         missing_station_ids=(),
         raw_payload={},
         observations=tuple(
@@ -206,7 +205,6 @@ def _seeded_forecasts(
                     issued_at=pd.Timestamp(issued_at),
                     source_updated_at=pd.Timestamp(source_updated_at),
                     fetched_at=source_updated_at,
-                    status="complete",
                     missing_geocodes=(),
                     raw_payload={},
                     forecasts=forecasts,
@@ -304,7 +302,6 @@ def _shared_issue_release(
         issued_at=pd.Timestamp(issued_at),
         source_updated_at=pd.Timestamp(source_updated_at),
         fetched_at=source_updated_at,
-        status="complete",
         missing_geocodes=(),
         raw_payload={},
         forecasts=(forecast,),

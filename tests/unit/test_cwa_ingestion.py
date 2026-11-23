@@ -8,6 +8,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from defusedxml.common import DefusedXmlException
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from shiro_mlops.core.config import Settings
@@ -15,11 +16,16 @@ from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
     CWAClient,
     CWAForecastRelease,
+    CWAObservationBatch,
     CWATownshipForecast,
     parse_forecast_release,
     parse_observation_batch,
 )
 from shiro_mlops.data.repository import TimeSeriesRepository
+from tests.scenarios.cwa_ingestion_status import (
+    COMPLETENESS_CASES,
+    assert_python_and_sql_judge_alike,
+)
 
 
 def _observation_payload() -> dict:
@@ -263,6 +269,84 @@ def test_parse_observation_batch_preserves_raw_and_normalizes_special_values() -
     assert observation.air_pressure_hpa == 1008.2
     assert observation.precipitation_mm == 0.0
     assert observation.wind_direction_deg is None
+
+
+@pytest.mark.parametrize(
+    ("missing_station_ids", "status"),
+    [((), "complete"), (("467490",), "incomplete")],
+    ids=["nothing-missing", "station-missing"],
+)
+def test_observation_batch_completeness_follows_its_missing_station_ids(
+    missing_station_ids: tuple[str, ...], status: str
+) -> None:
+    """觀測批次缺漏測站清單為空即完整，否則不完整。"""
+    batch = CWAObservationBatch(
+        fetched_at=datetime(2026, 8, 20, 14, 5),
+        missing_station_ids=missing_station_ids,
+        raw_payload={},
+        observations=(),
+    )
+
+    assert batch.status == status
+
+
+@pytest.mark.parametrize(("missing_station_ids", "status"), COMPLETENESS_CASES)
+def test_stored_batch_completeness_reads_the_same_in_sql_as_in_python(
+    sqlite_engine: Engine, missing_station_ids: tuple[str, ...], status: str
+) -> None:
+    """Data Explorer 以 SQL 判讀的完整度與擷取端 Python 推導一致。"""
+    assert_python_and_sql_judge_alike(sqlite_engine, missing_station_ids, status)
+
+
+def test_observation_batch_cannot_be_built_with_its_own_completeness() -> None:
+    """完整度不是建構參數，app 無法建出與缺漏清單矛盾的批次。"""
+    with pytest.raises(TypeError, match="status"):
+        CWAObservationBatch(  # type: ignore[call-arg]
+            fetched_at=datetime(2026, 8, 20, 14, 5),
+            status="complete",
+            missing_station_ids=("467490",),
+            raw_payload={},
+            observations=(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("missing_geocodes", "status"),
+    [((), "complete"), (("64000000",), "incomplete")],
+    ids=["nothing-missing", "geocode-missing"],
+)
+def test_forecast_release_completeness_follows_its_missing_geocodes(
+    missing_geocodes: tuple[str, ...], status: str
+) -> None:
+    """預報版本缺漏行政區清單為空即完整，否則不完整。"""
+    issued_at = pd.Timestamp("2026-08-20 11:00")
+    release = CWAForecastRelease(
+        dataset_id="F-D0047-089",
+        issued_at=issued_at,
+        source_updated_at=issued_at,
+        fetched_at=issued_at.to_pydatetime(),
+        missing_geocodes=missing_geocodes,
+        raw_payload={},
+        forecasts=(),
+    )
+
+    assert release.status == status
+
+
+def test_forecast_release_cannot_be_built_with_its_own_completeness() -> None:
+    """完整度不是建構參數，app 無法建出與缺漏清單矛盾的版本。"""
+    issued_at = pd.Timestamp("2026-08-20 11:00")
+    with pytest.raises(TypeError, match="status"):
+        CWAForecastRelease(  # type: ignore[call-arg]
+            dataset_id="F-D0047-089",
+            issued_at=issued_at,
+            source_updated_at=issued_at,
+            fetched_at=issued_at.to_pydatetime(),
+            status="complete",
+            missing_geocodes=("64000000",),
+            raw_payload={},
+            forecasts=(),
+        )
 
 
 @pytest.mark.parametrize("value", ["upstream-schema-changed", "NaN", "Infinity"])
@@ -657,12 +741,11 @@ def test_forecast_product_write_failure_rolls_back_entire_batch(
         issued_at=issued_at,
         source_updated_at=issued_at,
         fetched_at=issued_at.to_pydatetime(),
-        status="complete",
         missing_geocodes=(),
         raw_payload={},
         forecasts=(),
     )
-    invalid_second = replace(first, dataset_id="F-D0047-091", status=None)
+    invalid_second = replace(first, dataset_id=None)
 
     with pytest.raises(IntegrityError):
         test_repo.cwa_weather_store.upsert_cwa_forecast_releases([first, invalid_second])
@@ -701,7 +784,7 @@ def test_forecast_query_uses_previous_complete_release_when_latest_lacks_request
 
     def release(
         issued_at: str,
-        status: str,
+        missing_geocodes: tuple[str, ...],
         geocode: str,
         temperature: float,
     ) -> CWAForecastRelease:
@@ -711,8 +794,7 @@ def test_forecast_query_uses_previous_complete_release_when_latest_lacks_request
             issued_at=timestamp,
             source_updated_at=timestamp,
             fetched_at=timestamp.to_pydatetime(),
-            status=status,  # type: ignore[arg-type]
-            missing_geocodes=() if status == "complete" else ("63000050",),
+            missing_geocodes=missing_geocodes,
             raw_payload={},
             forecasts=(
                 CWATownshipForecast(
@@ -732,13 +814,13 @@ def test_forecast_query_uses_previous_complete_release_when_latest_lacks_request
         )
 
     test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [release("2026-08-20 10:00", "complete", "63000050", 30.0)]
+        [release("2026-08-20 10:00", (), "63000050", 30.0)]
     )
     test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [release("2026-08-20 11:00", "incomplete", "64000040", 31.0)]
+        [release("2026-08-20 11:00", ("63000050",), "64000040", 31.0)]
     )
     test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
-        [release("2026-08-20 12:00", "incomplete", "64000040", 32.0)]
+        [release("2026-08-20 12:00", ("63000050",), "64000040", 32.0)]
     )
 
     rows = test_repo.cwa_weather_store.fetch_cwa_forecast_rows(

@@ -30,7 +30,6 @@ def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
             [
                 replace(
                     forecast_release(datetime(2026, 9, 20, hour), ()),
-                    status=completeness,
                     missing_geocodes=missing,
                 )
             ]

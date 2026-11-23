@@ -248,11 +248,12 @@ class SeriesReader:
     ) -> list[tuple[str, ...]]:
         if not groups:
             found = self.db.fetch_one(
-                f"SELECT 1 AS present FROM {self.dataset.table} WHERE {where} LIMIT 1", params
+                f"SELECT 1 AS present FROM {self.dataset.relation} WHERE {where} LIMIT 1", params
             )
             return [()] if found else []
         rows = self.db.fetch(
-            f"SELECT DISTINCT {', '.join(groups)} FROM {self.dataset.table} WHERE {where}", params
+            f"SELECT DISTINCT {', '.join(groups)} FROM {self.dataset.relation} WHERE {where}",
+            params,
         )
         return sorted({self._group_key(row, groups) for row in rows})
 
@@ -308,10 +309,12 @@ class SeriesReader:
         """
         fields = [self.options.fields[name] for name in request.fields]
         if not self.options.member_sum:
-            return f"{self.dataset.table} WHERE {where}", [item.sql for item in fields]
+            return f"{self.dataset.relation} WHERE {where}", [item.sql for item in fields]
         keys = ", ".join([self.dataset.time_column, *request.group_columns])
         sums = ", ".join(f"SUM({item.sql}) AS m{index}" for index, item in enumerate(fields))
-        members = f"SELECT {keys}, {sums} FROM {self.dataset.table} WHERE {where} GROUP BY {keys}"
+        members = (
+            f"SELECT {keys}, {sums} FROM {self.dataset.relation} WHERE {where} GROUP BY {keys}"
+        )
         return f"({members}) AS members", [f"m{index}" for index in range(len(fields))]
 
     def _assemble(

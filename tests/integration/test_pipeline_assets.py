@@ -1,5 +1,6 @@
 """Integration tests for Dagster ingestion assets and database persistence."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -20,11 +21,7 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import get_feast_parquet_io_manager, get_parquet_io_manager
-from shiro_mlops.data.cwa_client import (
-    CWAForecastRelease,
-    CWAObservationBatch,
-    CWAStationObservation,
-)
+from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets as assets_module
@@ -52,9 +49,11 @@ from tests.helpers import (
     FixtureCWASource,
     derived_hourly_load,
     derived_load_series,
+    forecast_release,
     insert_other_source_load_row,
     override_task_policies,
     scheduled_run_tags,
+    township_forecast,
     unfetched_source_resources,
     write_derived_load,
 )
@@ -73,9 +72,9 @@ def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
 
 
 def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete():
-    batch = MagicMock(spec=CWAObservationBatch)
-    batch.status = "complete"
-    batch.missing_station_ids = ()
+    batch = CWAObservationBatch(
+        fetched_at=LAST_LOAD_HOUR, missing_station_ids=(), raw_payload={}, observations=()
+    )
     store = MagicMock(spec=CWAWeatherStore)
     resources = {
         "time_series_repo": SimpleNamespace(cwa_weather_store=store),
@@ -90,8 +89,8 @@ def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete():
 
 def test_canonical_cwa_forecast_asset_persists_both_products():
     releases = [
-        MagicMock(spec=CWAForecastRelease, status="complete"),
-        MagicMock(spec=CWAForecastRelease, status="complete"),
+        forecast_release(LAST_LOAD_HOUR, ()),
+        replace(forecast_release(LAST_LOAD_HOUR, ()), dataset_id="F-D0047-091"),
     ]
     source = FixtureCWASource(
         forecast_releases={"F-D0047-089": releases[0], "F-D0047-091": releases[1]}
@@ -103,6 +102,48 @@ def test_canonical_cwa_forecast_asset_persists_both_products():
 
     assert result == releases
     store.upsert_cwa_forecast_releases.assert_called_once_with(releases)
+
+
+def test_incomplete_cwa_observation_batch_is_persisted_before_the_run_fails(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """data-contracts.md §3.2：缺站的批次仍寫入所有有效觀測列，再讓 run 失敗並列出缺漏測站。"""
+    batch = CWAObservationBatch(
+        fetched_at=LAST_LOAD_HOUR,
+        missing_station_ids=("467441", "467490"),
+        raw_payload={},
+        observations=(_station_observation("466920", 30.0),),
+    )
+    resources = {"time_series_repo": test_repo, CWA_SOURCE: FixtureCWASource(batch)}
+
+    with (
+        build_asset_context(resources=resources) as context,
+        pytest.raises(RuntimeError, match="missing station IDs: 467441, 467490"),
+    ):
+        raw_cwa_station_observation(context)
+
+    stored = test_repo.cwa_weather_store.fetch_cwa_station_observations(station_id="466920")
+    assert list(stored["temperature_c"]) == [30.0]
+
+
+def test_incomplete_cwa_forecast_release_is_persisted_before_the_run_fails(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """data-contracts.md §3.2：缺行政區時兩個產品仍一起寫入，再讓 run 失敗並列出缺漏 Geocode。"""
+    rows = (township_forecast(LAST_LOAD_HOUR, 30.0),)
+    three_day = replace(forecast_release(LAST_LOAD_HOUR, rows), missing_geocodes=("64000000",))
+    weekly = replace(forecast_release(LAST_LOAD_HOUR, rows), dataset_id="F-D0047-091")
+    source = FixtureCWASource(forecast_releases={"F-D0047-089": three_day, "F-D0047-091": weekly})
+    resources = {"time_series_repo": test_repo, CWA_SOURCE: source}
+
+    with (
+        build_asset_context(resources=resources) as context,
+        pytest.raises(RuntimeError, match="missing Geocodes: F-D0047-089: 64000000$"),
+    ):
+        raw_cwa_township_forecast(context)
+
+    stored = test_repo.cwa_weather_store.fetch_cwa_forecast_rows(geocode="63000050")
+    assert sorted(stored["dataset_id"]) == ["F-D0047-089", "F-D0047-091"]
 
 
 def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository) -> None:
@@ -129,7 +170,6 @@ def test_task_features_read_weather_from_configured_reference_station(
     test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=LAST_LOAD_HOUR,
-            status="complete",
             missing_station_ids=(),
             raw_payload={},
             observations=tuple(
@@ -209,7 +249,6 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     observation_batch = CWAObservationBatch(
         fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
-        status="complete",
         observations=tuple(
             CWAStationObservation(
                 observed_at=row.datetime.to_pydatetime(),

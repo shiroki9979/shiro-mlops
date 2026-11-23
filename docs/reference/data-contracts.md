@@ -82,9 +82,9 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
   2. `raw_cwa_observation_batch`:
      - 每次逐時觀測 API 成功回應保存一筆批次 header；完整來源回應僅在此保存一次，不複製到各測站觀測列。
      - `fetched_at` (TIMESTAMPTZ, NOT NULL)：實際開始擷取時間，為批次識別。
-     - `status` (VARCHAR(16), NOT NULL)：`complete` 或 `incomplete`。
-     - `missing_station_ids` (JSONB, NOT NULL)：未出現在成功回應中的 allowlist 測站編號；完整批次為空陣列。
+     - `missing_station_ids` (JSONB, NOT NULL)：未出現在成功回應中的 allowlist 測站編號，為批次完整度的唯一事實：空陣列即完整，非空即不完整。header 不保存完整度欄位；批次的 `complete`／`incomplete` 由此清單推導，判定與兩個字面值只由 CWA 擷取模組 `shiro_mlops.data.cwa_client` 擁有，以兩種形式提供：由清單推導的 Python 函式，與以清單欄位為參數的 SQL 運算式；Data Explorer 讀取 header 時使用 SQL 形式，不另行定義判定。批次建立時不接受完整度。
      - `raw_payload` (JSONB, NOT NULL)：完整成功回應。
+     - **完整度欄位遷移**：舊資料庫的 header 帶有 `status` 欄。服務啟動時的 schema 升級移除此欄，其他欄位與資料列不變；已移除時不做任何事，可安全重跑；API 與 Dagster 同時啟動時，PostgreSQL 以 `DROP COLUMN IF EXISTS` 移除，後執行者不因欄位已被移除而失敗。此表不是 hypertable。
      - **Constraint**: `PRIMARY KEY (fetched_at)`。
   3. `raw_cwa_station_observation`:
      - `observed_at` (TIMESTAMPTZ, NOT NULL)：來源 `ObsTime/DateTime`，寫入前轉為 UTC。
@@ -99,7 +99,8 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：來源 `IssueTime`，為預報版本識別。
      - `source_updated_at` (TIMESTAMPTZ, NOT NULL)：來源 `Update`；同一發布時間的修正版以此區分。
      - `fetched_at` (TIMESTAMPTZ, NOT NULL)：首次取得此版本的時間。
-     - `status`、`missing_geocodes` 與 `raw_payload` 的完整度語意同觀測批次。
+     - `missing_geocodes` (JSONB, NOT NULL)：未出現在此版本中的 allowlist 行政區代碼；完整度語意與 `status` 欄遷移同觀測批次的 `missing_station_ids`。
+     - `raw_payload` (JSONB, NOT NULL)：完整來源回應。
      - **Constraint**: `PRIMARY KEY (dataset_id, issued_at, source_updated_at)`；每小時檢查時以此去重。
   5. `raw_cwa_township_forecast`:
      - `dataset_id` (VARCHAR(16), NOT NULL)：識別三日或一週預報產品。
@@ -167,14 +168,14 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 ### 3.2 CWA 特殊值與批次完整度
 
 - `X`、`-` 與 `-99` 正規化為 `NULL`；降水量 `T` 與 `-98` 正規化為 `0.0 mm`；風向 `990` 正規化為 `NULL`。來源原值仍可由 batch／release 的 `raw_payload` 追溯。
-- allowlist 中任一測站或行政區缺少時，以單一 transaction 寫入所有有效 child rows，將 header 標為 `incomplete`，再使 asset 失敗以觸發有限重試；重試不得產生重複觀測或預報版本。
+- allowlist 中任一測站或行政區缺少時，以單一 transaction 寫入所有有效 child rows 與缺漏清單非空的 header，再使 asset 失敗以觸發有限重試；重試不得產生重複觀測或預報版本。
 
 ### 3.3 CWA 預報版本選取與逐時投影
 
 - 只能選取 `issued_at <= prediction_time` 的預報版本，禁止使用預測當時尚未發布的資料。
 - 每個氣象代表點、每個有效小時與 typed 欄位依序取值：發布未超過七小時的 `F-D0047-089` → 發布未超過七小時的 `F-D0047-091` → 測站前日同小時觀測 → 同月份同小時歷史平均。七小時以實際提供該數值的預報版本 `issued_at` 判定，而非兩個 dataset 中較新的版本；門檻只定義於 `shiro_mlops.data.weather_resolution.FORECAST_STALE_AFTER`。
 - `F-D0047-089` 的連續數值點資料在相鄰時間點間線性插值；`F-D0047-091` 的區間平均值展開為有效區間內每小時固定值；風向與文字／代碼不得線性插值。
-- 可消費 `incomplete` header 中已存在的指定行政區資料；指定行政區缺少時，退回上一個含有該行政區資料的版本，不要求該版本 `complete`。
+- 可消費缺漏清單非空的版本中已存在的指定行政區資料；指定行政區缺少時，退回上一個含有該行政區資料的版本，不要求該版本的缺漏清單為空。
 - 預報與觀測皆取自同一氣象代表點：預報讀其 `geocode`，替代資料讀其 `station_id`。
 - 改用 `F-D0047-091` 仍屬正常預報；只有以觀測填補的數值才使整次預報成為 `mode: degraded`，其餘仍有效的預報數值照常採用。月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料；任一數值無替代資料即無法產出。
 - Data Explorer 狀態的 `latest_release_stale` 只表示該資料集最新發布是否超過同一七小時門檻，屬資料集層級的粗略訊號，不等同單次請求的降級判定。

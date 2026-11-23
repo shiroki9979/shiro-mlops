@@ -97,7 +97,7 @@ CWA_OBSERVATIONS = Dataset(
     href="/data/weather/observations",
     cadence=HOURLY,
     max_days=31,
-    table="raw_cwa_station_observation",
+    relation="raw_cwa_station_observation",
     time_column="observed_at",
     sort=("observed_at", "station_id"),
     instant_columns=frozenset({"observed_at"}),
@@ -265,7 +265,7 @@ picking by `source_updated_at` alone would chart the 12-hourly weekly forecast b
 NEWEST_CORRECTION_SQL = """
     (dataset_id, issued_at, geocode, source_updated_at) IN (
         SELECT dataset_id, issued_at, geocode, MAX(source_updated_at)
-        FROM {table}
+        FROM {relation}
         {where}
         GROUP BY dataset_id, issued_at, geocode
     )
@@ -317,7 +317,7 @@ CWA_FORECASTS = Dataset(
     href="/data/weather/forecasts",
     cadence=HOURLY,
     max_days=14,
-    table="raw_cwa_township_forecast",
+    relation="raw_cwa_township_forecast",
     time_column="valid_from",
     sort=("valid_from", "issued_at", "source_updated_at", "dataset_id", "geocode", "valid_to"),
     instant_columns=frozenset({"valid_from", "issued_at", "source_updated_at", "valid_to"}),
@@ -359,5 +359,5 @@ def _forecast_vintage_series_filters(db: ExplorerDb, filters: Mapping[str, Any])
     if filters.get("source_updated_at"):
         return clauses, params
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    newest_correction = NEWEST_CORRECTION_SQL.format(table=CWA_FORECASTS.table, where=where)
+    newest_correction = NEWEST_CORRECTION_SQL.format(relation=CWA_FORECASTS.relation, where=where)
     return [*clauses, newest_correction], params
