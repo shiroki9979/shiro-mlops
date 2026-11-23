@@ -1,4 +1,4 @@
-import type { z } from 'zod'
+import { z } from 'zod'
 import { ApiError, InvalidResponseError, request } from '@shiro-mlops/shared/api'
 import {
   HealthResponse,
@@ -10,6 +10,8 @@ import {
 import {
   ListEnvelope,
   ListEnvelopeSchema,
+  type ResolvedBucket,
+  ResolvedBucketSchema,
   SeriesResponse,
   SeriesResponseSchema,
   StatusResponse,
@@ -36,22 +38,33 @@ const KIND_BY_STATUS: Partial<Record<number, DataExplorerErrorKind>> = {
   503: 'databaseUnavailable',
 }
 
+// A series 422 over the point cap names the finest bucket within it (docs/reference/rest-api.md §5.3).
+const InvalidQueryBodySchema = z.object({
+  detail: z.object({ suggested_bucket: ResolvedBucketSchema }),
+})
+
 export class DataExplorerError extends Error {
   constructor(
     public readonly kind: DataExplorerErrorKind,
     message: string,
-    // TODO(#292): the chart card still reads the raw status and body; drop both once it branches on `kind`.
-    public readonly status?: number,
-    public readonly data?: unknown,
+    // Only an invalidQuery carries it, and only when the API named a bucket the chart can apply.
+    public readonly suggestedBucket?: ResolvedBucket,
   ) {
     super(message)
     this.name = 'DataExplorerError'
   }
 }
 
+function suggestedBucketOf(body: unknown): ResolvedBucket | undefined {
+  const parsed = InvalidQueryBodySchema.safeParse(body)
+  return parsed.success ? parsed.data.detail.suggested_bucket : undefined
+}
+
 function toDataExplorerError(error: unknown): DataExplorerError {
   if (error instanceof ApiError) {
-    return new DataExplorerError(KIND_BY_STATUS[error.status] ?? 'other', error.message, error.status, error.data)
+    const kind = KIND_BY_STATUS[error.status] ?? 'other'
+    const suggestedBucket = kind === 'invalidQuery' ? suggestedBucketOf(error.data) : undefined
+    return new DataExplorerError(kind, error.message, suggestedBucket)
   }
   if (error instanceof InvalidResponseError) {
     return new DataExplorerError('invalidResponse', error.message)

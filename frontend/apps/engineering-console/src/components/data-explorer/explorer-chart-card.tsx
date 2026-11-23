@@ -6,10 +6,10 @@ import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
-import type { QueryParams } from '@/lib/api-client'
+import type { DataExplorerError, QueryParams } from '@/lib/api-client'
 import { isFlagOn } from '@/lib/data-explorer'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
-import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
+import { AggSchema, BucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { type ChartBrush, useChartBrush } from './chart-brush'
 import { ChartFieldPicker } from './chart-field-picker'
@@ -27,9 +27,6 @@ const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> 
   stackedArea: SeriesStackedAreaChart,
   status: SeriesStatusChart,
 }
-
-const INVALID_QUERY_STATUS = 422
-const DATABASE_UNAVAILABLE_STATUS = 503
 
 interface ExplorerChartCardProps {
   dataset: ExplorerDatasetConfig
@@ -242,19 +239,16 @@ function missingFilterPrompt(chart: ExplorerChartConfig, query: Record<string, s
   return m.explorer.chart.requiresFilter(explorerFieldLabel(required.filter, m), explorerFieldLabel(required.when, m))
 }
 
-function seriesErrorMessage(error: unknown, text: Messages['explorer']['chart']): string {
-  const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined
-  if (status === DATABASE_UNAVAILABLE_STATUS) return text.databaseUnavailable
-  if (status !== INVALID_QUERY_STATUS) return text.queryFailed
-  const suggested = suggestedBucket(error)
-  return suggested ? text.tooManyPoints(text.buckets[suggested]) : text.invalidQuery
-}
-
-function suggestedBucket(error: unknown): ResolvedBucket | undefined {
-  const data = typeof error === 'object' && error !== null && 'data' in error ? error.data : undefined
-  const detail = typeof data === 'object' && data !== null && 'detail' in data ? data.detail : undefined
-  const suggested = typeof detail === 'object' && detail !== null && 'suggested_bucket' in detail ? detail.suggested_bucket : undefined
-  const parsed = ResolvedBucketSchema.safeParse(suggested)
-  return parsed.success ? parsed.data : undefined
+function seriesErrorMessage(error: DataExplorerError, text: Messages['explorer']['chart']): string {
+  switch (error.kind) {
+    case 'databaseUnavailable':
+      return text.databaseUnavailable
+    case 'invalidQuery':
+      return error.suggestedBucket ? text.tooManyPoints(text.buckets[error.suggestedBucket]) : text.invalidQuery
+    case 'cursorRejected':
+    case 'invalidResponse':
+    case 'other':
+      return text.queryFailed
+  }
 }
 
