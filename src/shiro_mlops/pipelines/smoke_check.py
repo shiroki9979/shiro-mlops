@@ -314,7 +314,7 @@ def _check_load_consumer(defs: Definitions, job_name: str, load_reader: str) -> 
     check_name = f"job {job_name}"
     try:
         job = defs.resolve_job_def(job_name)
-    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
+    except Exception as error:  # WHY-NOT(Exception): 以失敗檢查回報原因，不中斷其餘檢查
         return CheckResult(check_name, CheckStatus.FAIL, f"cannot resolve job: {_summarize(error)}")
     selected = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     problems = []
@@ -341,15 +341,15 @@ def _load_consumer_jobs(tasks: Tasks | None = None) -> dict[str, str]:
 def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[CheckResult]:
     names = TaskPipelineNames(task.task_id)
     accumulation, freshness = _readiness_check_names(task)
-    model = f"{task.task_id} model"
+    model_check = f"{task.task_id} model"
     ticks = (names.training_schedule, names.monitoring_schedule)
     try:
         readiness = check_training_readiness(task, TaskRuntime(repository=deployment.repository))
-    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
+    except Exception as error:  # WHY-NOT(Exception): 以失敗檢查回報原因，不中斷其餘檢查
         detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
         return [
             CheckResult(name, CheckStatus.FAIL, detail)
-            for name in (accumulation, freshness, model, *(f"tick {tick}" for tick in ticks))
+            for name in (accumulation, freshness, model_check, *(f"tick {tick}" for tick in ticks))
         ]
     return [
         CheckResult(
@@ -358,7 +358,7 @@ def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[
             readiness.reason,
         ),
         _check_load_freshness(task, readiness.latest_hour, deployment.now),
-        _check_model(deployment, task, readiness, model),
+        _check_model(deployment, task, readiness, model_check),
         *(_check_tick(deployment, tick) for tick in ticks),
     ]
 
@@ -426,7 +426,7 @@ def _check_tick(deployment: Deployment, schedule_name: str) -> CheckResult:
             resources={"time_series_repo": deployment.repository},
         ) as context:
             execution = deployment.defs.resolve_schedule_def(schedule_name).evaluate_tick(context)
-    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
+    except Exception as error:  # WHY-NOT(Exception): 以失敗檢查回報原因，不中斷其餘檢查
         return CheckResult(
             check_name, CheckStatus.FAIL, f"tick evaluation failed: {_summarize(error)}"
         )
