@@ -9,8 +9,9 @@ from unittest.mock import patch
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core import database
+from shiro_mlops.core import schema_migrations
 from shiro_mlops.core.database import ensure_timescale_hypertables
+from tests.helpers import forget_schema_migrations
 
 OBSERVATION_BATCH_TABLE = "raw_cwa_observation_batch"
 FORECAST_RELEASE_TABLE = "raw_cwa_forecast_release"
@@ -66,15 +67,16 @@ def assert_header_status_is_dropped_repeatably(engine: Engine) -> None:
             assert rerun_rows[table] == kept_row, table
 
 
-def assert_header_status_drop_survives_a_concurrent_upgrade(engine: Engine) -> None:
-    """API 與 Dagster 同時啟動：後者檢視時仍見 status 欄，前者已先移除；後者的升級不得失敗。"""
+def assert_header_status_drop_survives_an_unlocked_upgrade(engine: Engine) -> None:
+    """紀錄表出現前的程式版本不取遷移鎖：本程式檢視時仍見 status 欄，對方已先移除；本程式的升級不得失敗。"""
     with _legacy_header_rows(engine):
         stale = inspect(engine)
         for table in CWA_HEADER_TABLES:
             assert LEGACY_STATUS_COLUMN in [column["name"] for column in stale.get_columns(table)]
         ensure_timescale_hypertables(engine)
+        forget_schema_migrations(engine)
 
-        with patch.object(database, "inspect", return_value=stale):
+        with patch.object(schema_migrations, "inspect", return_value=stale):
             ensure_timescale_hypertables(engine)
 
         for table in CWA_HEADER_TABLES:
@@ -83,7 +85,11 @@ def assert_header_status_drop_survives_a_concurrent_upgrade(engine: Engine) -> N
 
 @contextmanager
 def _legacy_header_rows(engine: Engine) -> Iterator[None]:
-    """Restore the pre-#339 header `status` column and seed one header row per table."""
+    """Restore the pre-#339 header `status` column and seed one header row per table.
+
+    The migration record forgets the drop too, as in a database older than the record.
+    """
+    forget_schema_migrations(engine)
     with engine.begin() as connection:
         for table, insert in _LEGACY_HEADER_ROWS.items():
             connection.execute(

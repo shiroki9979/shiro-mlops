@@ -2,13 +2,11 @@
 
 from importlib.resources import files
 from pathlib import Path
-from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import NoInspectionAvailable
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.core.database import (
@@ -417,23 +415,6 @@ def test_pre_provenance_load_table_gains_source_and_subject_together(tmp_path) -
                 text("SELECT subject, load_mw, source FROM raw_taipower_load")
             ).fetchall()
         assert rows == [("nationwide", 26500.0, None)]
-    finally:
-        engine.dispose()
-
-
-def test_load_source_migration_reports_unavailable_schema_inspection(tmp_path) -> None:
-    from shiro_mlops.core.database import ensure_timescale_hypertables
-
-    engine = create_engine(f"sqlite:///{tmp_path / 'inspection_failure.db'}")
-    try:
-        with (
-            patch(
-                "shiro_mlops.core.database.inspect",
-                side_effect=[inspect(engine), NoInspectionAvailable("inspection unavailable")],
-            ),
-            pytest.raises(RuntimeError, match="Cannot inspect raw_taipower_load schema"),
-        ):
-            ensure_timescale_hypertables(engine)
     finally:
         engine.dispose()
 

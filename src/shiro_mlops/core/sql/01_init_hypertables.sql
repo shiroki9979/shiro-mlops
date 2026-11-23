@@ -1,8 +1,19 @@
 -- Initialize TimescaleDB Extension and Hypertables for Shiro MLOps Platform
+--
+-- 本檔是凍結的基線（ADR-0017）：既有表的 CREATE TABLE 不再修改，對既有表的變更一律寫成
+-- src/shiro_mlops/core/schema_migrations.py 的遷移。新增整張表仍直接加在本檔。
 CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 
+-- 0. Schema 遷移紀錄：每筆已套用的遷移一列，由 shiro_mlops.core.schema_migrations 寫入。
+-- 不是 hypertable。查詢資料庫所在版本：SELECT * FROM schema_migration ORDER BY id。
+CREATE TABLE IF NOT EXISTS schema_migration (
+    id VARCHAR(128) NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id)
+);
+
 -- 1. Raw Taipower Load Table & Hypertable
--- 既有資料庫由 shiro_mlops.core.database 補上 nullable source，NULL 標示 d015046 時期舊列；
+-- 既有資料庫由 shiro_mlops.core.schema_migrations 補上 nullable source，NULL 標示 d015046 時期舊列；
 -- 並將 location 改名為 subject（預測對象），全台負載由 'Taipei' 遷移為 'nationwide'（ADR-0009）。
 CREATE TABLE IF NOT EXISTS raw_taipower_load (
     time TIMESTAMPTZ NOT NULL,

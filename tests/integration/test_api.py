@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.schema_migrations import UnknownSchemaMigrationError
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
 from shiro_mlops.data.repository import TimeSeriesRepository
@@ -94,6 +95,19 @@ def test_app_startup_skips_timescale_initialization_in_test_environment(monkeypa
         pass
 
     assert initialization_calls == []
+
+
+def test_app_startup_fails_on_a_database_migrated_by_a_newer_program_version(monkeypatch) -> None:
+    """不支援降版（ADR-0017）：資料庫連得上、資料也在，啟動後 /ready 會回報就緒，所以啟動必須失敗。"""
+
+    def refuse_schema_setup() -> None:
+        raise UnknownSchemaMigrationError("0099_from_newer")
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "local")
+    monkeypatch.setattr("shiro_mlops.core.database.init_db", refuse_schema_setup)
+
+    with pytest.raises(UnknownSchemaMigrationError, match="0099_from_newer"), TestClient(app):
+        pass
 
 
 def test_api_ready_reports_cold_start_without_constructing_a_cwa_client(

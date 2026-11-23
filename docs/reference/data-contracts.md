@@ -67,6 +67,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
   - NOT NULL 時刻欄位讀到 `NULL` 視為儲存損毀並失敗，不以查詢條件代填；nullable 時刻欄位讀回 `None`。
   - SQLite 只用於測試，時刻以文字保存為單一形式 `YYYY-MM-DD HH:MM:SS[.ffffff]+00:00`（小數秒僅在非零時出現），字串比較、排序與跨表等值 join 因此與 TimescaleDB 的時刻比較一致。測試環境註冊的 SQLite adapter 拒絕無時區或非 UTC 的 datetime 綁定，繞過 `shiro_mlops.core.storage_time` 的寫入或查詢會直接失敗。
 - **Payload 契約**：`raw_payload` 與 `missing_*` 等 `JSONB` 欄位一律以同一份序列化寫入合法 JSON 文字：物件與陣列保存為 JSON 物件與陣列（保留非 ASCII 字元），字串 payload（如氣象署預報原始 XML）保存為 JSON 字串字面值，不得原樣寫入。讀回時 TimescaleDB 的 `JSONB` 與 SQLite 的 `TEXT` 一律以 JSON 文字交給 repository，由對應的反序列化解碼一次還原為原值；engine 不得讓驅動預先解析 `JSONB`，否則字串 payload 會被解碼兩次。
+- **Schema 版本**：基線 DDL（`src/shiro_mlops/core/sql/01_init_hypertables.sql`）加上依序套用的遷移即為現行 schema（[ADR-0017](../adr/0017-freeze-baseline-ddl-and-record-schema-migrations.md)），規則見 §3.4。下列主表結構描述現行 schema。
 - **主表結構**：
   1. `raw_taipower_load`:
      - `time` (TIMESTAMPTZ, NOT NULL)
@@ -74,7 +75,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - `load_mw` (DOUBLE PRECISION, NOT NULL)
      - `source` (VARCHAR(32), NOT NULL)：推算來源；目前唯一值為 `regional_snapshot_sum`。
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
-     - **預測對象遷移**：ADR-0009 之前的資料庫以 `location = 'Taipei'` 保存全台負載。服務啟動時的 schema 升級在單一交易內將 `location` 改名為 `subject`，並把 `Taipei` 列改為 `nationwide`；已遷移的資料庫重跑時不改動任何列。新建資料庫直接採 `subject`。升級順序見[遷移全台負載預測對象](../how-to/migrate-load-subject-to-nationwide.md)。
+     - **預測對象遷移**：ADR-0009 之前的資料庫以 `location = 'Taipei'` 保存全台負載。遷移 `0003_migrate_taipower_load_subject` 在單一交易內將 `location` 改名為 `subject`，並把 `Taipei` 列改為 `nationwide`；已遷移的資料庫不改動任何列。新建資料庫直接採 `subject`。升級順序見[遷移全台負載預測對象](../how-to/migrate-load-subject-to-nationwide.md)。
      - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。既有資料庫升級時只補上可為 `NULL` 的 `source`，不改寫或刪除任何列；`source IS NULL` 即 d015046 時期資料列。清除與補上 `NOT NULL` 由操作人員依[移除 d015046 時期舊負載資料列](../how-to/remove-legacy-d015046-load-rows.md)執行後，才開啟 `hourly_actual_load_schedule`。
      - **存取**：由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`）擁有。寫入的每一列由 store 固定帶推算來源；推算序列以台灣本地半開窗 `[start, end)` 讀取，最新推算小時、推算序列與累積盤點都只含推算來源的列，舊列只計入累積盤點的 `legacy_rows`。排程推算以 upsert 更新重算的小時；區間補推只寫入尚無任何列（不論來源）的小時，由 `ON CONFLICT DO NOTHING` 保證不覆寫既有列。推算來源常數 `REGIONAL_SNAPSHOT_SUM_SOURCE` 只在 store 定義。store 以外只有 schema 初始化與遷移、營運資料檢視器的逐時負載資料集定義與預報實績 join（`src/shiro_mlops/data/forecast_track_record.py` 的 `ForecastTrackRecordStore.fetch_pairs`）讀寫此表，後兩者以 store 的常數綁定口徑條件；`tests/unit/test_hourly_actual_load_ownership.py` 掃描 `src/`、`scripts/` 與 `lab/` 檢查此邊界。
      - **Constraint**: `PRIMARY KEY (time, subject)`
@@ -84,7 +85,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - `fetched_at` (TIMESTAMPTZ, NOT NULL)：實際開始擷取時間，為批次識別。
      - `missing_station_ids` (JSONB, NOT NULL)：未出現在成功回應中的 allowlist 測站編號，為批次完整度的唯一事實：空陣列即完整，非空即不完整。header 不保存完整度欄位；批次的 `complete`／`incomplete` 由此清單推導，判定與兩個字面值只由 CWA 擷取模組 `shiro_mlops.data.cwa_client` 擁有，以兩種形式提供：由清單推導的 Python 函式，與以清單欄位為參數的 SQL 運算式；Data Explorer 讀取 header 時使用 SQL 形式，不另行定義判定。批次建立時不接受完整度。
      - `raw_payload` (JSONB, NOT NULL)：完整成功回應。
-     - **完整度欄位遷移**：舊資料庫的 header 帶有 `status` 欄。服務啟動時的 schema 升級移除此欄，其他欄位與資料列不變；已移除時不做任何事，可安全重跑；API 與 Dagster 同時啟動時，PostgreSQL 以 `DROP COLUMN IF EXISTS` 移除，後執行者不因欄位已被移除而失敗。此表不是 hypertable。
+     - **完整度欄位遷移**：舊資料庫的 header 帶有 `status` 欄。遷移 `0004_drop_cwa_header_status_columns` 移除此欄，其他欄位與資料列不變；已移除時不做任何事。PostgreSQL 以 `DROP COLUMN IF EXISTS` 移除：遷移紀錄出現前的程式版本不取遷移鎖，與它同時執行時不因欄位已被移除而失敗。此表不是 hypertable。
      - **Constraint**: `PRIMARY KEY (fetched_at)`。
   3. `raw_cwa_station_observation`:
      - `observed_at` (TIMESTAMPTZ, NOT NULL)：來源 `ObsTime/DateTime`，寫入前轉為 UTC。
@@ -180,6 +181,31 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 - 改用 `F-D0047-091` 仍屬正常預報；只有以觀測填補的數值才使整次預報成為 `mode: degraded`，其餘仍有效的預報數值照常採用。月份／小時常模至少須涵蓋七個不同日期，否則視為無可用替代資料；任一數值無替代資料即無法產出。
 - Data Explorer 狀態的 `latest_release_stale` 只表示該資料集最新發布是否超過同一七小時門檻，屬資料集層級的粗略訊號，不等同單次請求的降級判定。
 - 多氣象代表點（[ADR-0012](../adr/0012-combine-weather-reference-points-into-weighted-weather.md)）：每個代表點各自依上列規則選版、投影與降級，再依任務設定權重逐小時合成加權天氣。任一點降級，整次即為 `mode: degraded`；任一點連替代資料都無法涵蓋某小時，整次即無法產出（HTTP 503），不剔除該點、不重新正規化。
+
+### 3.4 Schema 遷移紀錄 `schema_migration`
+
+決策與未採用的方案見 [ADR-0017](../adr/0017-freeze-baseline-ddl-and-record-schema-migrations.md)。
+
+- **紀錄表**：一般資料表，非 hypertable，由基線 DDL 建立。
+  - `id` (VARCHAR(128), NOT NULL)：遷移識別，四位序號加名稱，例如 `0001_isolate_legacy_cwa_weather`。
+  - `applied_at` (TIMESTAMPTZ, NOT NULL DEFAULT NOW())：套用時刻。
+  - **Constraint**: `PRIMARY KEY (id)`。
+- **查詢**：`SELECT * FROM schema_migration ORDER BY id` 即資料庫已套用的遷移。程式不提供讀取函式。
+- **基線凍結**：基線 DDL 裡既有表的 `CREATE TABLE` 不再修改；對既有表的變更一律在 `src/shiro_mlops/core/schema_migrations.py` 的 `MIGRATIONS` 末尾新增一筆。新增整張表仍直接加進基線 DDL。
+- **套用**：`ensure_timescale_hypertables` 是唯一入口，由 API 啟動與每個建立 repository 的 Dagster run 執行。它先執行基線，再依序套用紀錄表裡沒有的遷移；全新與既有資料庫走同一條路。全部已記錄時只做一次查詢。
+- **已發布的遷移**：
+
+| `id` | 變更 |
+| :--- | :--- |
+| `0001_isolate_legacy_cwa_weather` | `raw_cwa_weather` 的列移入 `legacy_cwa_weather` 後移除該表（§3.1） |
+| `0002_add_taipower_load_source_column` | `raw_taipower_load` 補上可為 `NULL` 的 `source` |
+| `0003_migrate_taipower_load_subject` | `raw_taipower_load.location` 改名為 `subject`，`Taipei` 改為 `nationwide` |
+| `0004_drop_cwa_header_status_columns` | 移除 `raw_cwa_observation_batch` 與 `raw_cwa_forecast_release` 的 `status` |
+
+- **銜接**：`0001` 至 `0004` 早於紀錄表，各自檢視 schema 判斷是否已套用，因此紀錄表出現前的資料庫第一次執行時只補上紀錄、不重做變更。`0005` 起不寫檢視邏輯。
+- **交易**：每筆遷移與它的紀錄列在同一個交易；失敗時一起回滾、例外往外拋，下次執行重試。此原子性只對 TimescaleDB 保證；SQLite 執行 DDL 時即提交，只含 DDL 的遷移在 SQLite 上可能留下變更而沒有紀錄。
+- **同時執行**：TimescaleDB 上有未記錄的遷移時，交易先取 advisory lock（`pg_advisory_xact_lock`），取得後重查紀錄表再決定是否執行，同一筆遷移只執行一次。SQLite 不加鎖。
+- **不支援降版**：紀錄表出現程式不認得的 `id` 時，`ensure_timescale_hypertables` 拋出 `UnknownSchemaMigrationError`，不執行任何遷移；API 啟動失敗，Dagster run 失敗。
 
 ## 4. Feast 特徵庫視圖 (Feature View Schema)
 

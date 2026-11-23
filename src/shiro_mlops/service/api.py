@@ -16,6 +16,7 @@ from shiro_mlops import __version__
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import DATETIME_COL, DEFAULT_HORIZON_HOURS, MAX_HORIZON_HOURS
 from shiro_mlops.core.datetime_utils import taiwan_now
+from shiro_mlops.core.schema_migrations import UnknownSchemaMigrationError
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.service.data_explorer import is_data_explorer_enabled
@@ -375,12 +376,19 @@ def create_app(
 
 
 def _startup_repository() -> TimeSeriesRepository:
-    """The schema is ensured once here, so requests do not rerun its DDL."""
+    """The schema is ensured once here, so requests do not rerun its DDL.
+
+    An unreachable database only logs: readiness then fails on its own until the
+    database is back. A database migrated by a newer program version stops startup
+    instead (ADR-0017), because that database is reachable and readiness would pass.
+    """
     if settings.ENVIRONMENT != "test":
         try:
             from shiro_mlops.core.database import init_db
 
             init_db()
+        except UnknownSchemaMigrationError:
+            raise
         except Exception:
             logger.exception("Database initialization failed; readiness will remain unavailable.")
     return TimeSeriesRepository(auto_init=False)
