@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 1 節拆出。
@@ -293,5 +293,5 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 - `cutoff`：統計截至時刻；`accumulated_days`：累積天數；`metrics`：未滿 7 天時為 `null`。各欄位的計算規則見 §5.1，數值原樣輸出、不另行四捨五入。
 - 還沒有已發布預報時為 `{"cutoff": "<統計截至時刻>", "accumulated_days": 0, "metrics": null}`。
-- `forecast_track_record` 從未 materialize 過時（全新環境）同為此空狀態，`cutoff` 取匯出執行當下的整點，即該時刻彙整在首次發布前會得到的結果。
+- `forecast_track_record` 從未 materialize 過時（全新環境）同為此空狀態，`cutoff` 取匯出 run 建立時刻的整點（同一 run 內的重試不變），即該時刻彙整在首次發布前會得到的結果。
 - 窗內配對數與提前 24 配對數不輸出（只在 §5.1 的 materialization metadata）。
