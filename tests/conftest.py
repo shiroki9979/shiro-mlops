@@ -106,6 +106,13 @@ def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
 
 
 @pytest.fixture
+def isolated_models_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point DATA_DIR at a temporary directory and return its (not yet created) model root."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
+    return settings.models_dir
+
+
+@pytest.fixture
 def dagster_instance(tmp_path: Path) -> Generator:
     """Create an isolated, temporary DagsterInstance for test materializations."""
     from dagster import DagsterInstance

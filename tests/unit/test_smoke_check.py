@@ -35,6 +35,9 @@ from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, 
 from tests.conftest import TEST_MIN_LOAD_HOURS
 from tests.helpers import derived_hourly_load, override_task_policies, write_derived_load
 
+# 監控排程的 tick 讀 DATA_DIR 下的模型目錄；隔離後主機上的 data/models 不會影響判定。
+pytestmark = pytest.mark.usefixtures("isolated_models_dir")
+
 NOW = datetime(2026, 9, 27, 0, 30)
 ISSUED_SCHEDULE = "issued_forecast_schedule"
 # 全新部署上發布排程停用（WAIT）且 tick 因尚無模型略過（WAIT）。

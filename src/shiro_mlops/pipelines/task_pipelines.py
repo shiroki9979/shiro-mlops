@@ -35,6 +35,7 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ, taiwan_now
+from shiro_mlops.pipelines.cold_start import ColdStart, ScheduleDecision, read_cold_start
 from shiro_mlops.pipelines.schedules import (
     CWA_OBSERVATION_ASSET,
     HOURLY_ACTUAL_LOAD_ASSET,
@@ -49,7 +50,6 @@ from shiro_mlops.tasks.runner import (
     MonitoringReport,
     TaskNotReady,
     TaskRuntime,
-    check_training_readiness,
     fit_task,
     load_training_data,
     monitor_task,
@@ -289,10 +289,7 @@ def _training_schedule(
         required_resource_keys={TIME_SERIES_REPO},
     )
     def training_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-        readiness = _schedule_readiness(context, task)
-        if not readiness.ready:
-            return SkipReason(readiness.reason)
-        return RunRequest(run_key=tick_run_key(context))
+        return _run_or_skip(context, _cold_start(context, task).training)
 
     return training_schedule
 
@@ -300,11 +297,6 @@ def _training_schedule(
 def _monitoring_schedule(
     names: TaskPipelineNames, job: Any, task: TaskDefinition
 ) -> ScheduleDefinition:
-    no_model_reason = (
-        f"No {names.model} materialization yet; {names.monitoring_schedule} waits for "
-        f"the first successful {names.training_job} run."
-    )
-
     @schedule(
         name=names.monitoring_schedule,
         job=job,
@@ -314,12 +306,7 @@ def _monitoring_schedule(
         required_resource_keys={TIME_SERIES_REPO},
     )
     def monitoring_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-        readiness = _schedule_readiness(context, task)
-        if not readiness.ready:
-            return SkipReason(readiness.reason)
-        if context.instance.get_latest_materialization_event(AssetKey(names.model)) is None:
-            return SkipReason(no_model_reason)
-        return RunRequest(run_key=tick_run_key(context))
+        return _run_or_skip(context, _cold_start(context, task).monitoring)
 
     return monitoring_schedule
 
@@ -331,10 +318,21 @@ def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> Task
     return TaskRuntime(repository=getattr(context.resources, TIME_SERIES_REPO))
 
 
-def _schedule_readiness(
-    context: ScheduleEvaluationContext, task: TaskDefinition
-) -> TrainingLoadReadiness:
-    return check_training_readiness(task, _runtime(context))
+def _cold_start(context: ScheduleEvaluationContext, task: TaskDefinition) -> ColdStart:
+    return read_cold_start(
+        task,
+        runtime=_runtime(context),
+        instance=context.instance,
+        models_root=settings.models_dir,
+    )
+
+
+def _run_or_skip(
+    context: ScheduleEvaluationContext, decision: ScheduleDecision
+) -> RunRequest | SkipReason:
+    if decision.skip_reason is not None:
+        return SkipReason(decision.skip_reason)
+    return RunRequest(run_key=tick_run_key(context))
 
 
 def _not_ready_failure(readiness: TrainingLoadReadiness) -> Failure:
