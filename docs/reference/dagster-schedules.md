@@ -1,12 +1,26 @@
 # Dagster 資產排程與觸發規格
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 3 節拆出。
 
 ---
+
+## 執行來源與 as_of
+
+帶 as_of 的排程資產由 `src/shiro_mlops/pipelines/execution_origin.py` 把一次 run 解析成執行來源與 as_of，各資產只宣告沒有 tick 時怎麼做。目前採用的資產：`forecast_track_record`（第 7 項，退回現在）；其餘各項的 tick 來源見各項說明。
+
+- **三種來源**：排程 tick 發起的 run、手動執行（含在 launchpad 手動啟動）、重新執行（Dagster UI 的 re-execute 等，以原 run 為 parent 建立的新 run）。`RetryPolicy` 的重試在同一 run 內進行、不產生新 run，沿用該 run 的來源與 as_of。
+- **tick 標籤**：排程以 `tick_run_request` 產生 `RunRequest`：有 tick 時，`run_key` 與 run 標籤 `shiro_mlops/scheduled_tick` 皆為 tick 的台灣本地時間 ISO 字串（例如 `2026-11-20T10:25:00`）；以 `build_schedule_context()` 不帶時間評估時兩者都不帶，不拋錯。一個 run 只有一個 tick，job 內所有資產共用；資產不以設定欄位接收 tick。只用公開的 `RunRequest(tags=...)`，不讀 Dagster scheduler 的隱藏標籤 `.dagster/scheduled_execution_time`。
+- **真偽判定**：tick 只在排程發起的那個 run 才算數：run 必須同時帶 tick 標籤與 `dagster/schedule_name`（Dagster 對排程評估產生的每個 run 加上），且不帶重新執行標籤 `dagster/parent_run_id`、`dagster/root_run_id`。手動執行、在 launchpad 自填 tick 標籤（不帶 `dagster/schedule_name`）、重新執行（沿用原 run 的標籤，tick 標籤與排程名稱也一併沿用）一律視為沒有 tick。
+- **拒絕或退回現在**：資產宣告沒有 tick 時是「拒絕」或「退回現在」。拒絕時 run 以 `Failure` 結束，description 區分「沒有排程 tick」與「重新執行」。
+- **「現在」**：run 的建立時刻（Dagster run 紀錄的建立時間），轉為台灣本地時間；不是每次嘗試的當下，因此同一 run 內的重試得到同一 as_of。
+- **對齊**：module 只交出未取整的 as_of；十分鐘 slot 與整點的取整由各領域函式負責。
+- **新增帶 as_of 的排程資產**：排程回傳 `tick_run_request(context)`（需要略過時另回傳 `SkipReason`）；資產以 `run_as_of(context, without_tick=...)` 取得 as_of，宣告 `WithoutTick.REFUSE` 或 `WithoutTick.FALL_BACK_TO_NOW`。不新增 tick 設定欄位，也不在資產或排程內自取現在時刻、自讀 tick 或 Dagster 的排程名稱與重新執行標籤。
+
+## 資產、job 與排程
 
 1. **任務資產工廠（`pipelines/task_pipelines.py`）**：
    - **生成規則**：Dagster code location 載入時，依 `deployed_tasks()` 為每份任務設定（[ML 任務設定 §1](ml-tasks.md#1-任務設定-schemataskstask_idtoml)）產生下列定義；新增一份任務設定即新增一組，不需改動程式。名稱以 `__` 分隔任務 id 與後綴，資產 group 為 `task_id`。
@@ -66,9 +80,9 @@
    - **冪等性**：同一發布時刻已有紀錄（例如 commit 後崩潰被重跑）時不預報、不寫入、不覆寫，資產成功並以 metadata `already_issued = true` 標示；新寫入時 metadata 另記 `load_anchor`、`status`、`model_sha256` 與步數。
 7. **`forecast_track_record`（預報實績，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
    - **定義**：固定資產 `forecast_track_record`，位於 `pipelines/forecast_track_record.py`，不進任務資產工廠。lineage 依賴 `issued_forecast` 與 `raw_taipower_load`，但不執行它們；任務的兩個 job 與 `issued_forecast_job` 皆不選取它。
-   - **排程**：job `forecast_track_record_job` 與排程 `forecast_track_record_schedule` 同位於 `pipelines/forecast_track_record.py`。排程為 `25 * * * *`（`Asia/Taipei`），排在發布（:15）之後；tick 轉為台灣本地時間 ISO 字串，同時作為 `run_key` 與資產設定 `scheduled_at`。無 tick 的手動排程評估不帶 `run_key` 與設定，run 以執行當下為準。job 只選取 `forecast_track_record`，不選取任何擷取資產，也不選取 `issued_forecast`，因此發布失敗或略過時照常彙整。排程預設停用，冷啟動時與擷取排程一起開啟，不需等待首次訓練。
-   - **重試政策**：`forecast_track_record_job` 失敗時在同一 run 內最多重試兩次，每次間隔六十秒，用盡後仍遠早於下一個 tick。彙整只讀資料庫、從頭重算且不保存歷次結果，可吸收短暫的資料庫中斷。排程觸發的 run 重試時沿用同一 `scheduled_at`，得到同一統計窗；手動執行（未設定 `scheduled_at`）的重試以重試當下取整點，跨過整點時統計窗隨之後移一小時。`issued_forecast` 刻意不重試（第 6 項），是因為重試會沿用原 tick 為 `as_of` 卻讀到其後入庫的負載；彙整沒有 `as_of`，不受此限。
-   - **統計截至時刻 E**：執行時點取整點。資產設定 `scheduled_at`（台灣本地時間 ISO 字串）帶入排程 tick 時，執行時點為該 tick；未設定時（手動 materialize）為執行當下。
+   - **排程**：job `forecast_track_record_job` 與排程 `forecast_track_record_schedule` 同位於 `pipelines/forecast_track_record.py`。排程為 `25 * * * *`（`Asia/Taipei`），排在發布（:15）之後；以 `tick_run_request` 把 tick 同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），資產沒有設定欄位。無 tick 的手動排程評估兩者都不帶，run 以建立時刻為準。job 只選取 `forecast_track_record`，不選取任何擷取資產，也不選取 `issued_forecast`，因此發布失敗或略過時照常彙整。排程預設停用，冷啟動時與擷取排程一起開啟，不需等待首次訓練。
+   - **重試政策**：`forecast_track_record_job` 失敗時在同一 run 內最多重試兩次，每次間隔六十秒，用盡後仍遠早於下一個 tick。彙整只讀資料庫、從頭重算且不保存歷次結果，可吸收短暫的資料庫中斷。重試在同一 run 內、沿用同一 as_of，排程觸發與手動執行的 run 都得到同一統計窗。`issued_forecast` 刻意不重試（第 6 項），是因為重試會沿用原 tick 為預報的 `as_of` 卻讀到其後入庫的負載；彙整的統計截至時刻只界定統計窗，讀到其後入庫的資料不違反 point-in-time，不受此限。
+   - **統計截至時刻 E**：run 的 as_of 取整點。資產宣告沒有 tick 時退回現在（[執行來源與 as_of](#執行來源與-as_of)）：排程 tick 發起的 run 為該 tick，手動執行與重新執行的 run 為 run 建立時刻。重新執行排程 run 時不沿用原 tick，否則會以較早的截至時刻覆蓋最新一次 materialization，讓下一次預報檢視匯出退回舊的統計截至時刻。
    - **統計窗**：目標小時 ∈ [E − 720h, E)，以目標小時判斷，與發布時刻無關；窗開始前發布、目標小時落在窗內的步數也計入。
    - **配對與計入**：提前時數 = ⌈(目標小時 − 發布時刻) / 1h⌉，不大於 0 的步數不計入，例如 10:15 發布時 10:00 不計入、11:00 為提前 1、隔天 10:00 為提前 24。只配對有有效逐時觀測的目標小時，即 `raw_taipower_load` 中 `subject = 'nationwide'`、`source = 'regional_snapshot_sum'` 的列。降級預報照常計入。
    - **有界查詢**：repository `fetch_track_record_pairs` 以一條 SQL join，依目標小時把已發布預報步數對上窗內的有效逐時觀測，只回傳配對成功的列（發布時刻、目標小時、預測值、實際值）。只讀目標小時在窗內、發布時刻晚於窗起點前 168 小時的步數（步數最遠落在負載起點後 168 小時，而負載起點早於發布時刻），不讀整段歷史；提前時數與 MAPE／MAE 等彙總在 Python 計算。
