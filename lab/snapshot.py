@@ -193,11 +193,7 @@ def task_for_selection(task: TaskDefinition, args: argparse.Namespace) -> TaskDe
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     task = task_for_selection(deployed_task(args.task_id), args)
-    repository = TimeSeriesRepository()
-    runtime = TaskRuntime(
-        hourly_actual_load=repository.hourly_actual_load_store,
-        cwa_weather=repository.cwa_weather_store,
-    )
+    runtime = TaskRuntime.from_composition_root(TimeSeriesRepository())
     path = write_snapshot(
         task, runtime, args.as_of, variant=args.variant, snapshots_dir=args.snapshots_dir
     )

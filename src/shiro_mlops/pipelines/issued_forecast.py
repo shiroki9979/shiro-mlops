@@ -99,10 +99,7 @@ def issued_forecast(
     if store.fetch(issued_at) is not None:
         return _issued_result(issued_at, already_issued=True)
     loaded = _load_model()
-    runtime = TaskRuntime(
-        hourly_actual_load=repository.hourly_actual_load_store,
-        cwa_weather=repository.cwa_weather_store,
-    )
+    runtime = TaskRuntime.from_composition_root(repository)
     try:
         outcome = predict_task(
             deployed_task(ISSUED_FORECAST_TASK),

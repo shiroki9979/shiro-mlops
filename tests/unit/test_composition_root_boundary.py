@@ -1,8 +1,9 @@
 """#233: ``TimeSeriesRepository`` is a composition root, imported only where stores are wired.
 
 Its module exports nothing but the root, so every store is imported from its own module.
-In ``src`` only the entry points that build the root or hand it out import it; the runner,
-the served tasks and the Data Explorer receive stores or an engine instead.
+In ``src`` only the entry points that build the root or hand it out import it, plus the runner
+for the one ``TaskRuntime.from_composition_root`` factory that takes the two task stores out of it;
+the task code, the served tasks and the Data Explorer otherwise receive stores or an engine.
 """
 
 import ast
@@ -19,6 +20,7 @@ COMPOSITION_SITES = {
     "src/shiro_mlops/pipelines/definitions.py",
     "src/shiro_mlops/pipelines/smoke_check.py",
     "src/shiro_mlops/service/api.py",
+    "src/shiro_mlops/tasks/runner.py",
 }
 SCANNED_DIRS = (SRC_DIR, REPO_ROOT / "scripts", REPO_ROOT / "lab", REPO_ROOT / "tests")
 

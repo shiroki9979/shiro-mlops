@@ -332,10 +332,7 @@ def create_app(
         app.state.served_tasks = served_tasks or ServedTasks.load(
             deployed_tasks(),
             settings.models_dir,
-            runtime=TaskRuntime(
-                hourly_actual_load=root.hourly_actual_load_store,
-                cwa_weather=root.cwa_weather_store,
-            ),
+            runtime=TaskRuntime.from_composition_root(root),
             clock=taiwan_now,
         )
         yield

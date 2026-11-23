@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -70,6 +71,9 @@ from shiro_mlops.tasks.weighted_weather import (
     weighted_resolution,
 )
 
+if TYPE_CHECKING:
+    from shiro_mlops.data.repository import TimeSeriesRepository
+
 TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
 
 
@@ -83,6 +87,13 @@ class TaskRuntime:
 
     hourly_actual_load: HourlyActualLoadStore
     cwa_weather: CWAWeatherStore
+
+    @classmethod
+    def from_composition_root(cls, root: TimeSeriesRepository) -> TaskRuntime:
+        """Take the two task stores out of the composition root; the runtime keeps no reference to it."""
+        return cls(
+            hourly_actual_load=root.hourly_actual_load_store, cwa_weather=root.cwa_weather_store
+        )
 
 
 class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interface design

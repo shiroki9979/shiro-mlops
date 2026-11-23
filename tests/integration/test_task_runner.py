@@ -71,6 +71,15 @@ def model(task: TaskDefinition, runtime: TaskRuntime) -> TaskModel:
     return train_task(task, runtime, as_of=FRESH_AS_OF).model
 
 
+def test_runtime_from_the_composition_root_reads_the_roots_two_stores(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    runtime = TaskRuntime.from_composition_root(test_repo)
+
+    assert runtime.hourly_actual_load is test_repo.hourly_actual_load_store
+    assert runtime.cwa_weather is test_repo.cwa_weather_store
+
+
 def _fresh_forecast_release() -> CWAForecastRelease:
     issued_at = ANCHOR - pd.Timedelta(hours=1)
     return CWAForecastRelease(
