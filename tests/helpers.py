@@ -52,9 +52,9 @@ from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
 from shiro_mlops.service.data_explorer.datasets import Dataset
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.tasks.definition import TaskDefinition
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
-from shiro_mlops.tasks.model_store import model_directory, save_model
-from shiro_mlops.tasks.runner import TaskRuntime
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
+from shiro_mlops.tasks.model_store import SavedModel, model_directory, save_model
+from shiro_mlops.tasks.runner import TaskRuntime, train_task
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -430,6 +430,30 @@ def override_task_policies(
 def task_runtime(repository: TimeSeriesRepository) -> TaskRuntime:
     """The runtime the deployed entry points build from the composition root."""
     return TaskRuntime.from_composition_root(repository)
+
+
+def train_and_install_forecast_model(
+    repository: TimeSeriesRepository,
+    models_root: Path,
+    *,
+    as_of: datetime,
+    min_training_hours: int,
+    n_estimators: int,
+) -> SavedModel:
+    """Train the dynamic horizon forecast on the persisted load and install it as training would.
+
+    ``n_estimators`` keeps training fast; a different value also yields a different model hash.
+    """
+    shipped = deployed_task(DYNAMIC_HORIZON_FORECAST)
+    task = replace(
+        shipped,
+        params=shipped.params.model_copy(
+            update={"model": shipped.params.model.model_copy(update={"n_estimators": n_estimators})}
+        ),
+        policies=shipped.policies.model_copy(update={"min_training_hours": min_training_hours}),
+    )
+    model = train_task(task, task_runtime(repository), as_of=as_of).model
+    return save_model(models_root, DYNAMIC_HORIZON_FORECAST, model)
 
 
 def upstream_http_500(url: str = "https://example.invalid/source") -> httpx.HTTPStatusError:
