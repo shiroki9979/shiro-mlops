@@ -3,6 +3,7 @@ import { Card, CardContent } from '@shiro-mlops/shared/ui/card'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
+import type { ExplorerRows } from './explorer-query-state'
 import { ExplorerGapList } from './explorer-gap-list'
 import { ExplorerTable } from './explorer-table'
 
@@ -12,8 +13,7 @@ interface ExplorerResultsProps {
   error: unknown
   isError: boolean
   isLoading: boolean
-  canRestart: boolean
-  detailLimitExceeded: boolean
+  rows: ExplorerRows
   onSelect: (row: Record<string, unknown>) => void
   onNextPage: (cursor: string | undefined) => void
   onRestart: () => void
@@ -47,8 +47,7 @@ export function ExplorerResults({
   error,
   isError,
   isLoading,
-  canRestart,
-  detailLimitExceeded,
+  rows,
   onSelect,
   onNextPage,
   onRestart,
@@ -58,14 +57,14 @@ export function ExplorerResults({
   return (
     <Card>
       <CardContent className="pt-6">
-        {detailLimitExceeded ? (
+        {rows.kind === 'overDetailLimit' ? (
           <p className="text-xs text-amber-300">{resultsText.detailLimitExceeded(String(dataset.maxDays))}</p>
         ) : isLoading ? (
           <p className="text-xs text-slate-500">{resultsText.loading}</p>
         ) : isError ? (
           <div>
             <p className="text-xs text-rose-300">{listErrorMessage(error, resultsText)}</p>
-            {canRestart && isCursorRejected(error) && (
+            {rows.kind === 'page' && isCursorRejected(error) && (
               <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </div>
