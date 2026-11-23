@@ -56,7 +56,7 @@ frontend/
   - shadcn UI 元件、設計 token 與 Tailwind 基底樣式。
   - i18n 機制與語系切換元件。語系偏好的 `localStorage` key 只在這裡定義。
   - [前端語系 §4](../reference/frontend-locale.md#4-數字與日期時間) 的數字與日期時間格式函式。
-  - `request()` 與 `ApiError`。
+  - `request()`、`ApiError` 與 `InvalidResponseError`。
   - 查詢畫面狀態 module（`@shiro-mlops/shared/query-view`）：查詢結果（讀取中、離線暫停、更新失敗等）到畫面狀態的轉換。
 - **不收錄，留在各應用**：語系字典、API 端點與 zod schema、外框版面、頁面元件。這些會隨各工作區的需求分道揚鑣；例如 #127 之後，預報檢視可能不再打 `/predict`。
 

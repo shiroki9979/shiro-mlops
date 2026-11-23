@@ -19,8 +19,8 @@ from urllib.request import urlopen
 
 REQUEST_TIMEOUT_SECONDS = 10
 # SYNC(docs/reference/rest-api.md, src/shiro_mlops/data/weather_resolution.py): the modes a ready
-# task reports (`WeatherResolutionMode` minus "unavailable"); this script runs with
-# `uv run --no-project` and cannot import shiro_mlops.
+# task reports (`ForecastMode`); this script runs with `uv run --no-project` and
+# cannot import shiro_mlops.
 READY_MODES = ("normal", "degraded")
 
 

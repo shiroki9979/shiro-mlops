@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 from shiro_mlops.data.repository import IssuedForecastRepository, TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 LOAD_ANCHOR = datetime(2026, 11, 20, 9, 0)
@@ -110,6 +111,31 @@ def test_issued_forecast_repository_works_standalone(sqlite_engine: Engine) -> N
 def test_issued_forecast_rejects_a_status_other_than_normal_or_degraded() -> None:
     with pytest.raises(ValueError, match="status"):
         replace(_issued_forecast(), status="unavailable")
+
+
+def test_issued_forecast_status_is_a_forecast_mode() -> None:
+    assert _issued_forecast().status is ForecastMode.DEGRADED
+
+
+def test_reading_an_issued_forecast_returns_its_status_as_a_forecast_mode(
+    sqlite_engine: Engine,
+) -> None:
+    repository = IssuedForecastRepository(engine=sqlite_engine)
+    repository.insert(_issued_forecast())
+
+    assert repository.fetch(ISSUED_AT).status is ForecastMode.DEGRADED
+
+
+def test_reading_an_issued_forecast_with_an_unknown_status_is_rejected(
+    sqlite_engine: Engine,
+) -> None:
+    repository = IssuedForecastRepository(engine=sqlite_engine)
+    repository.insert(_issued_forecast())
+    with sqlite_engine.begin() as conn:
+        conn.execute(text("UPDATE issued_forecast SET status = 'unavailable'"))
+
+    with pytest.raises(ValueError, match="unavailable"):
+        repository.fetch(ISSUED_AT)
 
 
 def test_issued_forecast_rejects_a_model_identity_that_is_not_a_full_sha256() -> None:

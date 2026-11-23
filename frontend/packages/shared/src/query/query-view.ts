@@ -1,17 +1,16 @@
 // Shared takes TanStack Query's result structurally, so it needs no TanStack dependency. `error` is
 // set exactly while TanStack's `status` is 'error', so `status` is not read.
-// Errors stay `unknown`: pages classify them by shape, so a typed error would buy nothing.
-export interface QueryResultLike<TData> {
+export interface QueryResultLike<TData, TError = unknown> {
   fetchStatus: 'fetching' | 'paused' | 'idle'
   data: TData | undefined
   // null while the last read has not failed.
-  error: unknown
+  error: TError | null
 }
 
 // A query that narrows notifyOnChangeProps must list these, or the view misses changes it depends on.
 export const QUERY_VIEW_FIELDS = ['fetchStatus', 'data', 'error'] as const satisfies readonly QueryViewField[]
 
-type QueryViewField = keyof QueryResultLike<unknown>
+type QueryViewField = keyof QueryResultLike<unknown, unknown>
 
 type QueryViewPolicy = 'data-first' | 'error-first'
 
@@ -36,16 +35,16 @@ export function isNonEmpty<T>(items: T[]): items is NonEmptyArray<T> {
 }
 
 // A refresh paused offline fails with no error object, so `error` is undefined then.
-type Refresh = { refreshFailed: false } | { refreshFailed: true; error: unknown }
+type Refresh<TError> = { refreshFailed: false } | { refreshFailed: true; error: TError | undefined }
 
-export type QueryView<TContent, TReason = never> =
+export type QueryView<TContent, TReason = never, TError = unknown> =
   | { kind: 'loading' }
   // Typed with an absent `error` so a page can render paused and error as one failure.
   | { kind: 'paused'; error?: undefined }
   | { kind: 'disabled' }
-  | { kind: 'error'; error: unknown }
-  | ([TReason] extends [never] ? never : { kind: 'empty'; reason: TReason } & Refresh)
-  | ({ kind: 'content'; content: TContent } & Refresh)
+  | { kind: 'error'; error: TError }
+  | ([TReason] extends [never] ? never : { kind: 'empty'; reason: TReason } & Refresh<TError>)
+  | ({ kind: 'content'; content: TContent } & Refresh<TError>)
 
 type ReasonOf<TSettled> = TSettled extends Empty<infer TReason> ? TReason : never
 
@@ -85,18 +84,18 @@ type ReasonOf<TSettled> = TSettled extends Empty<infer TReason> ? TReason : neve
  *   )
  * }
  */
-export function toQueryView<TData, TSettled = TData>(
-  query: QueryResultLike<TData>,
+export function toQueryView<TData, TError = unknown, TSettled = TData>(
+  query: QueryResultLike<TData, TError>,
   options: { policy: QueryViewPolicy; settle?: (data: TData) => TSettled },
-): QueryView<Exclude<TSettled, Empty<unknown>>, ReasonOf<TSettled>>
-export function toQueryView<TData>(
-  query: QueryResultLike<TData>,
+): QueryView<Exclude<TSettled, Empty<unknown>>, ReasonOf<TSettled>, TError>
+export function toQueryView<TData, TError>(
+  query: QueryResultLike<TData, TError>,
   { policy, settle }: { policy: QueryViewPolicy; settle?: (data: TData) => unknown },
-): QueryView<unknown, unknown> {
+): QueryView<unknown, unknown, TError> {
   const readFailed = query.error !== null || query.fetchStatus === 'paused'
   if (query.data !== undefined && (policy === 'data-first' || !readFailed)) {
     const settled = settle ? settle(query.data) : query.data
-    const refresh: Refresh = readFailed
+    const refresh: Refresh<TError> = readFailed
       ? { refreshFailed: true, error: query.error ?? undefined }
       : { refreshFailed: false }
     return isEmpty(settled)

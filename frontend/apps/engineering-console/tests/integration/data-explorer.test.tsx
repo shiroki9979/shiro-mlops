@@ -183,6 +183,20 @@ describe('Data Explorer routes', () => {
     }, { timeout: status === 503 ? 2500 : 1000 })
   })
 
+  it('reports a list body that breaks the schema as a failed query without retrying', async () => {
+    const requests: URL[] = []
+    server.use(http.get('*/data/power/load', ({ request }) => {
+      requests.push(new URL(request.url))
+      return HttpResponse.json({ timezone: 'Asia/Taipei', items: 'not rows' })
+    }))
+
+    renderPath('/data/power/load?cursor=old')
+
+    expect(await screen.findByText(results.queryFailed)).toBeInTheDocument()
+    expect(requests).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: results.backToFirstPage })).not.toBeInTheDocument()
+  })
+
   it.each([
     ['/data/power/load', 'subject=nationwide', 'subject', 'nationwide'],
     ['/data/weather/forecasts', 'dataset_id=F-D0047-089&issued_at=2026-09-09T08%3A00%3A00%2B08%3A00', 'issued_at', '2026-09-09T08:00:00+08:00'],

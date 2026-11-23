@@ -1,9 +1,11 @@
 """The deployed tasks as this API process serves them: model state, readiness and prediction.
 
-Each task's model is loaded once, keeping the sha256 of the directory version it
-was read from, so the process can report what it serves. Failures come back
-as two kinds: ``ServingUnavailableError`` (no model, or inputs that cannot support a
-prediction right now) and ``ServingFailedError`` (anything unexpected).
+Each task's model is loaded once into its state, keeping the sha256 of the directory
+version it was read from. ``served_models`` hands callers that state itself, not flags derived from it.
+Without a model, the state's ``reason`` is the only source of the text that model
+state, readiness and prediction report. Failures come back as two kinds:
+``ServingUnavailableError`` (no model, or inputs that cannot support a prediction right
+now) and ``ServingFailedError`` (anything unexpected).
 """
 
 from __future__ import annotations
@@ -12,12 +14,13 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import ClassVar, Self
 
 import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import UnknownTaskError
 from shiro_mlops.tasks.model_store import load_model_with_sha256
@@ -42,7 +45,7 @@ class Loaded:
 
 @dataclass(frozen=True)
 class Untrained:
-    pass
+    reason: ClassVar[str] = MODEL_NOT_LOADED_REASON
 
 
 @dataclass(frozen=True)
@@ -54,22 +57,20 @@ ModelState = Loaded | Untrained | LoadFailed
 
 
 @dataclass(frozen=True)
-class TaskModelStatus:
-    """What one task's model state tells a caller; ``reason`` is set whenever no model serves."""
+class ServedModel:
+    """One deployed task's type and the state of its model."""
 
     task_type: str
-    model_loaded: bool
-    model_sha256: str | None
-    reason: str | None
+    state: ModelState
 
 
 @dataclass(frozen=True)
 class ServingReadiness:
-    """Whether a task can serve a full-horizon prediction now, and in which weather mode."""
+    """Whether a task can serve a full-horizon prediction now, and in which forecast mode."""
 
     ready: bool
     model_loaded: bool
-    mode: str | None = None
+    mode: ForecastMode | None = None
     reason: str | None = None
 
 
@@ -121,13 +122,16 @@ class ServedTasks:
             )
         return self._tasks[task_id]
 
-    def model_status(self) -> dict[str, TaskModelStatus]:
-        return {task_id: self._status(task) for task_id, task in self._tasks.items()}
+    def served_models(self) -> dict[str, ServedModel]:
+        return {
+            task_id: ServedModel(task.task_type, self._state(task_id))
+            for task_id, task in self._tasks.items()
+        }
 
     def readiness(self, task_id: str) -> ServingReadiness:
         state = self._state(task_id)
         if not isinstance(state, Loaded):
-            return ServingReadiness(ready=False, model_loaded=False, reason=_missing_reason(state))
+            return ServingReadiness(ready=False, model_loaded=False, reason=state.reason)
         try:
             readiness = check_task_ready(
                 self.task(task_id), state.model, self._runtime, as_of=self._clock()
@@ -142,7 +146,7 @@ class ServedTasks:
     def predict(self, task_id: str, *, horizon_hours: int) -> PredictionOutcome:
         state = self._state(task_id)
         if not isinstance(state, Loaded):
-            raise ServingUnavailableError(_missing_reason(state))
+            raise ServingUnavailableError(state.reason)
         try:
             return predict_task(
                 self.task(task_id),
@@ -162,12 +166,6 @@ class ServedTasks:
     def _state(self, task_id: str) -> ModelState:
         return self._models.get(self.task(task_id).task_id, Untrained())
 
-    def _status(self, task: TaskDefinition) -> TaskModelStatus:
-        state = self._state(task.task_id)
-        if isinstance(state, Loaded):
-            return TaskModelStatus(task.task_type, True, state.sha256, None)
-        return TaskModelStatus(task.task_type, False, None, _missing_reason(state))
-
 
 def _load_state(root: Path, task: TaskDefinition) -> ModelState:
     """A broken model leaves only its own task unserved; the other tasks still load."""
@@ -179,7 +177,3 @@ def _load_state(root: Path, task: TaskDefinition) -> ModelState:
     if loaded is None:
         return Untrained()
     return Loaded(loaded.model, loaded.sha256)
-
-
-def _missing_reason(state: Untrained | LoadFailed) -> str:
-    return state.reason if isinstance(state, LoadFailed) else MODEL_NOT_LOADED_REASON

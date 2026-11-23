@@ -9,6 +9,7 @@ import {
   toQueryView,
 } from '@shiro-mlops/shared/query-view'
 import { type Messages, useMessages } from '@/i18n/messages'
+import type { DataExplorerError } from '@/lib/api-client'
 import type { ListEnvelope } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { ExplorerGapList } from './explorer-gap-list'
@@ -16,7 +17,7 @@ import { ExplorerTable } from './explorer-table'
 
 interface ExplorerResultsProps {
   dataset: ExplorerDatasetConfig
-  list: QueryResultLike<ListEnvelope>
+  list: QueryResultLike<ListEnvelope, DataExplorerError>
   canRestart: boolean
   detailLimitExceeded: boolean
   onSelect: (row: Record<string, unknown>) => void
@@ -24,26 +25,20 @@ interface ExplorerResultsProps {
   onRestart: () => void
 }
 
-const CURSOR_REJECTED_STATUS = 400
-const INVALID_FILTERS_STATUS = 422
-const DATABASE_UNAVAILABLE_STATUS = 503
-
-function errorStatus(error: unknown): unknown {
-  return typeof error === 'object' && error !== null && 'status' in error
-    ? error.status
-    : undefined
-}
-
-function isCursorRejected(error: unknown): boolean {
-  return errorStatus(error) === CURSOR_REJECTED_STATUS
-}
-
-function listErrorMessage(error: unknown, resultsText: Messages['explorer']['results']): string {
-  const status = errorStatus(error)
-  if (status === CURSOR_REJECTED_STATUS) return resultsText.cursorRejected
-  if (status === INVALID_FILTERS_STATUS) return resultsText.invalidFilters
-  if (status === DATABASE_UNAVAILABLE_STATUS) return resultsText.databaseUnavailable
-  return resultsText.queryFailed
+// A read paused offline has no error, so it shows the generic failure.
+function listErrorMessage(error: DataExplorerError | undefined, resultsText: Messages['explorer']['results']): string {
+  switch (error?.kind) {
+    case 'cursorRejected':
+      return resultsText.cursorRejected
+    case 'invalidQuery':
+      return resultsText.invalidFilters
+    case 'databaseUnavailable':
+      return resultsText.databaseUnavailable
+    case 'invalidResponse':
+    case 'other':
+    case undefined:
+      return resultsText.queryFailed
+  }
 }
 
 export function ExplorerResults({
@@ -82,7 +77,7 @@ export function ExplorerResults({
               onSelect={onSelect}
               onNextPage={onNextPage}
             />
-            {canRestart && isCursorRejected(readError) && (
+            {canRestart && readError?.kind === 'cursorRejected' && (
               <Button className="mt-4" variant="outline" onClick={onRestart}>{resultsText.backToFirstPage}</Button>
             )}
           </>
@@ -95,7 +90,7 @@ export function ExplorerResults({
 type ResultsPage = ListEnvelope & { items: NonEmptyArray<ListEnvelope['items'][number]> }
 
 interface ResultsBodyProps {
-  view: QueryView<ResultsPage, 'noRows'>
+  view: QueryView<ResultsPage, 'noRows', DataExplorerError>
   dataset: ExplorerDatasetConfig
   text: Messages['explorer']['results']
   nextPageText: string
