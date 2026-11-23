@@ -65,7 +65,9 @@ def _scheduled_tags() -> dict[str, str]:
     return scheduled_run_tags(forecast_track_record_schedule, TICK)
 
 
-def _compile(repo, tmp_path, instance, run_tags: dict[str, str] | None = None):
+def _compile(
+    repo: TimeSeriesRepository, tmp_path, instance, run_tags: dict[str, str] | None = None
+):
     """Compile in a run tagged ``run_tags``; by default the run the 10:25 tick launches."""
     return materialize(
         [forecast_track_record],
