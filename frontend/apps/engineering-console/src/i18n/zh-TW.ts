@@ -86,6 +86,7 @@ export const zhTW = {
     timeZoneNote: '時區：Asia/Taipei',
     loadingStatus: '載入資料集狀態中...',
     statusError: '無法取得資料集狀態。',
+    statusRefreshFailed: '資料集狀態更新失敗，以下為先前讀到的狀態。',
     navGroups: { power: '電力', weather: '氣象', audit: '審計' },
     datasets: {
       hourly_load: {
@@ -281,6 +282,7 @@ export const zhTW = {
       loading: '載入小圖中...',
       empty: '沒有可繪製的資料。',
       failed: '小圖查詢失敗。',
+      refreshFailed: '小圖更新失敗，顯示先前的結果。',
       lineLabel: (dataset: string, range: string, fields: string, series: string) =>
         `${dataset}${range}走勢；欄位：${fields}；序列：${series}`,
       statusGridLabel: (dataset: string, range: string, summary: string) => `${dataset}${range}每小時狀態：${summary}`,

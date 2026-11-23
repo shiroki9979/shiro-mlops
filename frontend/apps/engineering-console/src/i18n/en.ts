@@ -89,6 +89,7 @@ export const en: Messages = {
     timeZoneNote: 'Time zone: Asia/Taipei',
     loadingStatus: 'Loading dataset status...',
     statusError: 'Unable to load dataset status.',
+    statusRefreshFailed: 'Dataset status could not be refreshed; showing the status read earlier.',
     navGroups: { power: 'Power', weather: 'Weather', audit: 'Audits' },
     datasets: {
       hourly_load: {
@@ -284,6 +285,7 @@ export const en: Messages = {
       loading: 'Loading preview...',
       empty: 'No data to draw.',
       failed: 'Preview query failed.',
+      refreshFailed: 'Preview refresh failed; showing the earlier result.',
       lineLabel: (dataset: string, range: string, fields: string, series: string) =>
         `${dataset} trend, ${range}; fields: ${fields}; series: ${series}`,
       statusGridLabel: (dataset: string, range: string, summary: string) => `${dataset} hourly status, ${range}: ${summary}`,
