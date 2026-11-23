@@ -75,7 +75,6 @@ def _observation(
 def _observation_batch(observations: list[CWAStationObservation]) -> CWAObservationBatch:
     return CWAObservationBatch(
         fetched_at=datetime(2026, 8, 21, 23, 10),
-        status="complete",
         missing_station_ids=(),
         raw_payload={"fixture": "resiliency"},
         observations=tuple(observations),
@@ -102,7 +101,6 @@ def _forecast_release(issued_at: pd.Timestamp, temperature: float) -> CWAForecas
         issued_at=issued_at,
         source_updated_at=issued_at + pd.Timedelta(minutes=10),
         fetched_at=(issued_at + pd.Timedelta(minutes=20)).to_pydatetime(),
-        status="complete",
         missing_geocodes=(),
         raw_payload={"fixture": "resiliency"},
         forecasts=tuple(

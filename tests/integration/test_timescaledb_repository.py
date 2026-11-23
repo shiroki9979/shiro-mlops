@@ -66,7 +66,6 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
     revised_load_df = pd.DataFrame([{"datetime": "2026-08-20T06:00:00Z", "load_mw": 39000.0}])
     observation_batch = CWAObservationBatch(
         fetched_at=fetched_at,
-        status="complete",
         missing_station_ids=(),
         raw_payload={"fixture": "timescaledb-storage-time"},
         observations=(

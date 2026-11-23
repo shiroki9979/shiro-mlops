@@ -133,7 +133,6 @@ def _fresh_forecast_release() -> CWAForecastRelease:
         issued_at=issued_at,
         source_updated_at=issued_at,
         fetched_at=issued_at.to_pydatetime(),
-        status="complete",
         missing_geocodes=(),
         raw_payload={"fixture": "served_tasks"},
         forecasts=tuple(

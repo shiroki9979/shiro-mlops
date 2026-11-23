@@ -15,7 +15,6 @@ def assert_observation_audit_pages(repo: TimeSeriesRepository) -> None:
         repo.upsert_cwa_observation_batch(
             CWAObservationBatch(
                 fetched_at=second.replace(microsecond=microsecond),
-                status="incomplete",
                 missing_station_ids=(station_id,),
                 raw_payload={"private": station_id},
                 observations=(),

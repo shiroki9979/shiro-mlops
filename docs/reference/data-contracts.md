@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 1 節拆出。
@@ -81,7 +81,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
   2. `raw_cwa_observation_batch`:
      - 每次逐時觀測 API 成功回應保存一筆批次 header；完整來源回應僅在此保存一次，不複製到各測站觀測列。
      - `fetched_at` (TIMESTAMPTZ, NOT NULL)：實際開始擷取時間，為批次識別。
-     - `status` (VARCHAR(16), NOT NULL)：`complete` 或 `incomplete`。
+     - `status` (VARCHAR(16), NOT NULL)：`complete` 或 `incomplete`，由 `missing_station_ids` 推導：空陣列即 `complete`，否則 `incomplete`。批次建立時不接受完整度；判定與兩個字面值只定義於 `shiro_mlops.data.cwa_client`。
      - `missing_station_ids` (JSONB, NOT NULL)：未出現在成功回應中的 allowlist 測站編號；完整批次為空陣列。
      - `raw_payload` (JSONB, NOT NULL)：完整成功回應。
      - **Constraint**: `PRIMARY KEY (fetched_at)`。

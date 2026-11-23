@@ -164,7 +164,6 @@ def forecast_release(
         issued_at=pd.Timestamp(issued_at),
         source_updated_at=pd.Timestamp(issued_at),
         fetched_at=issued_at,
-        status="complete",
         missing_geocodes=(),
         raw_payload=raw_payload or {},
         forecasts=forecasts,
@@ -195,11 +194,21 @@ def canonical_observation_batch(frame: pd.DataFrame) -> CWAObservationBatch:
         )
     return CWAObservationBatch(
         fetched_at=pd.Timestamp(frame.datetime.max()).to_pydatetime(),
-        status="complete",
         missing_station_ids=(),
         raw_payload={"fixture": "canonical_observation_batch"},
         observations=tuple(observations),
     )
+
+
+def mark_cwa_headers_incomplete(engine: Engine) -> None:
+    """Mark every stored CWA batch and release header incomplete, leaving its missing list.
+
+    The domain objects derive completeness from the missing list, so they cannot build an
+    incomplete header with an empty one; the header tables can still hold it.
+    """
+    with engine.begin() as connection:
+        for table in ("raw_cwa_observation_batch", "raw_cwa_forecast_release"):
+            connection.execute(text(f"UPDATE {table} SET status = 'incomplete'"))
 
 
 def derived_hourly_load(hours: int, last_hour: datetime) -> pd.DataFrame:

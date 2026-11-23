@@ -19,6 +19,7 @@ from dagster import (
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import (
+    CWA_INGESTION_COMPLETE,
     CWAForecastRelease,
     CWAObservationBatch,
     CWASource,
@@ -93,7 +94,7 @@ def raw_cwa_station_observation(context: AssetExecutionContext) -> CWAObservatio
     repository = getattr(context.resources, TIME_SERIES_REPO)
     persisted = repository.upsert_cwa_observation_batch(batch)
     context.log.info("Persisted %s canonical CWA station observations.", persisted)
-    if batch.status != "complete":
+    if batch.status != CWA_INGESTION_COMPLETE:
         missing = ", ".join(batch.missing_station_ids)
         raise RuntimeError(f"CWA observation batch incomplete; missing station IDs: {missing}")
     return batch
@@ -114,7 +115,7 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
     for dataset_id in ("F-D0047-089", "F-D0047-091"):
         release = source.fetch_forecast_release(dataset_id, locations=settings.cwa_locations)
         releases.append(release)
-        if release.status != "complete":
+        if release.status != CWA_INGESTION_COMPLETE:
             missing[dataset_id] = release.missing_geocodes
     repository.upsert_cwa_forecast_releases(releases)
     if missing:

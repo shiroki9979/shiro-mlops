@@ -13,6 +13,7 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import create_app
 from tests.helpers import (
     forecast_release,
+    mark_cwa_headers_incomplete,
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
@@ -76,49 +77,67 @@ def test_regional_completeness_lists_only_absent_allowlisted_regions(
     assert regional["missing_slot_count"] == 2
 
 
-@pytest.mark.parametrize(
-    ("missing_station_ids", "missing_geocodes", "observation_ids", "forecast_ids"),
-    [
-        (("467490",), ("63000050",), ["467490"], ["63000050"]),
-        ((), (), ["incomplete_batch"], ["incomplete_release"]),
-    ],
-    ids=["named-ids", "placeholders"],
-)
-def test_audit_status_reports_missing_ids_or_an_incomplete_placeholder(
-    client: TestClient,
-    test_repo: TimeSeriesRepository,
+def _persist_cwa_ingestion(
+    repo: TimeSeriesRepository,
+    at: datetime,
+    *,
     missing_station_ids: tuple[str, ...],
     missing_geocodes: tuple[str, ...],
-    observation_ids: list[str],
-    forecast_ids: list[str],
 ) -> None:
-    """觀測缺站、預報缺 geocode；incomplete 卻未列 id 時以 placeholder 揭露。"""
-    observed_at = datetime(2026, 9, 20, 12)
-    test_repo.upsert_cwa_observation_batch(
+    repo.upsert_cwa_observation_batch(
         CWAObservationBatch(
-            fetched_at=observed_at,
-            status="incomplete",
+            fetched_at=at,
             missing_station_ids=missing_station_ids,
             raw_payload={},
-            observations=(_observation(observed_at),),
+            observations=(_observation(at),),
         )
     )
-    test_repo.upsert_cwa_forecast_release(
+    repo.upsert_cwa_forecast_release(
         replace(
-            forecast_release(observed_at, (township_forecast(observed_at, 30.0),)),
-            status="incomplete",
+            forecast_release(at, (township_forecast(at, 30.0),)),
             missing_geocodes=missing_geocodes,
         )
+    )
+
+
+def test_audit_status_reports_the_newest_header_missing_ids(
+    client: TestClient, test_repo: TimeSeriesRepository
+) -> None:
+    """觀測缺站、預報缺 geocode 時，status 列出缺漏 id。"""
+    _persist_cwa_ingestion(
+        test_repo,
+        datetime(2026, 9, 20, 12),
+        missing_station_ids=("467490",),
+        missing_geocodes=("63000050",),
     )
 
     statuses = _status(client)
 
     for dataset_id in ("cwa_observations", "cwa_observation_audits"):
         assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == observation_ids
+        assert statuses[dataset_id]["missing_identifiers"] == ["467490"]
     for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
         assert statuses[dataset_id]["completeness"] == "incomplete"
-        assert statuses[dataset_id]["missing_identifiers"] == forecast_ids
+        assert statuses[dataset_id]["missing_identifiers"] == ["63000050"]
+
+
+def test_audit_status_discloses_an_incomplete_header_without_ids_as_a_placeholder(
+    client: TestClient, test_repo: TimeSeriesRepository
+) -> None:
+    """表頭標 incomplete 卻未列 id 時，status 以 placeholder 揭露。"""
+    _persist_cwa_ingestion(
+        test_repo, datetime(2026, 9, 20, 12), missing_station_ids=(), missing_geocodes=()
+    )
+    mark_cwa_headers_incomplete(test_repo.engine)
+
+    statuses = _status(client)
+
+    for dataset_id in ("cwa_observations", "cwa_observation_audits"):
+        assert statuses[dataset_id]["completeness"] == "incomplete"
+        assert statuses[dataset_id]["missing_identifiers"] == ["incomplete_batch"]
+    for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
+        assert statuses[dataset_id]["completeness"] == "incomplete"
+        assert statuses[dataset_id]["missing_identifiers"] == ["incomplete_release"]
 
 
 def test_national_list_reports_the_ten_minute_hole_between_snapshots(
@@ -145,7 +164,6 @@ def test_observation_list_without_station_expects_every_allowlisted_station_hour
     test_repo.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed,
-            status="complete",
             missing_station_ids=(),
             raw_payload={},
             observations=(_observation(observed),),
@@ -171,7 +189,6 @@ def test_observation_status_without_an_audit_header_is_complete(
     test_repo.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=observed_at,
-            status="incomplete",
             missing_station_ids=("467490",),
             raw_payload={},
             observations=(_observation(observed_at),),

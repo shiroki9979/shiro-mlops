@@ -192,7 +192,6 @@ def cwa_observation_batch(cwa_obs_df: pd.DataFrame) -> CWAObservationBatch:
     """Build a canonical Taipei observation batch from the stable weather fixture."""
     return CWAObservationBatch(
         fetched_at=cwa_obs_df["datetime"].max().to_pydatetime(),
-        status="complete",
         missing_station_ids=(),
         raw_payload={"fixture": "cwa_obs_sample"},
         observations=tuple(

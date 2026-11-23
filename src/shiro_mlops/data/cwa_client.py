@@ -3,9 +3,9 @@
 import json
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args
 from urllib.parse import urlparse
 from xml.etree.ElementTree import Element
 from zoneinfo import ZoneInfo
@@ -53,6 +53,15 @@ DEFAULT_CWA_LOCATIONS: dict[str, CWALocation] = {
 }
 
 CWAIngestionStatus = Literal["complete", "incomplete"]
+CWA_INGESTION_STATUSES: tuple[CWAIngestionStatus, ...] = get_args(CWAIngestionStatus)
+CWA_INGESTION_COMPLETE: CWAIngestionStatus = "complete"
+CWA_INGESTION_INCOMPLETE: CWAIngestionStatus = "incomplete"
+
+
+def _ingestion_status(missing: tuple[str, ...]) -> CWAIngestionStatus:
+    """A CWA ingestion is complete exactly when its missing list is empty."""
+    return CWA_INGESTION_INCOMPLETE if missing else CWA_INGESTION_COMPLETE
+
 
 _CWA_FORECAST_FILE_API = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
 _CWA_FORECAST_FILE_API_HOST = "opendata.cwa.gov.tw"
@@ -78,13 +87,19 @@ class CWAStationObservation:
 
 @dataclass(frozen=True)
 class CWAObservationBatch:
-    """One source response and its canonical observations."""
+    """One source response and its canonical observations.
+
+    `status` is not a constructor argument: it is derived from `missing_station_ids`.
+    """
 
     fetched_at: datetime
-    status: CWAIngestionStatus
+    status: CWAIngestionStatus = field(init=False)
     missing_station_ids: tuple[str, ...]
     raw_payload: Any
     observations: tuple[CWAStationObservation, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", _ingestion_status(self.missing_station_ids))
 
 
 @dataclass(frozen=True)
@@ -106,16 +121,22 @@ class CWATownshipForecast:
 
 @dataclass(frozen=True)
 class CWAForecastRelease:
-    """One versioned CWA forecast response and its typed township rows."""
+    """One versioned CWA forecast response and its typed township rows.
+
+    `status` is not a constructor argument: it is derived from `missing_geocodes`.
+    """
 
     dataset_id: str
     issued_at: pd.Timestamp
     source_updated_at: pd.Timestamp
     fetched_at: datetime
-    status: CWAIngestionStatus
+    status: CWAIngestionStatus = field(init=False)
     missing_geocodes: tuple[str, ...]
     raw_payload: Any
     forecasts: tuple[CWATownshipForecast, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", _ingestion_status(self.missing_geocodes))
 
 
 def _normalize_location_name(name: str) -> str:
@@ -272,7 +293,6 @@ def parse_observation_batch(
     missing = tuple(sorted(set(stations_by_id) - seen_station_ids))
     return CWAObservationBatch(
         fetched_at=fetched_at or datetime.now(ZoneInfo("Asia/Taipei")),
-        status="complete" if not missing else "incomplete",
         missing_station_ids=missing,
         raw_payload=payload,
         observations=tuple(observations),
@@ -501,7 +521,6 @@ def parse_forecast_release(
         issued_at=issued_at,
         source_updated_at=source_updated_at,
         fetched_at=fetch_time,
-        status="complete" if not missing_geocodes else "incomplete",
         missing_geocodes=missing_geocodes,
         raw_payload=payload if raw_payload is None else raw_payload,
         forecasts=tuple(forecasts),
