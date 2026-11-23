@@ -19,7 +19,7 @@ from tests.helpers import supply_demand_snapshot
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
 
-def test_upsert_supply_demand_snapshot_insert_and_fetch(
+def test_upsert_then_fetch_returns_the_supply_demand_snapshot(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """成功快照應可依 observed_at 寫入並讀回 typed 欄位與 raw payload。"""
@@ -38,7 +38,7 @@ def test_upsert_supply_demand_snapshot_insert_and_fetch(
     assert fetched.raw_payload["records"][0]["curr_load"] == "3242.1"
 
 
-def test_upsert_supply_demand_snapshot_is_idempotent_on_observed_at(
+def test_upsert_is_idempotent_on_observed_at(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同觀測 slot 重跑時應更新既有快照而非新增列。"""
@@ -64,7 +64,7 @@ def test_upsert_supply_demand_snapshot_is_idempotent_on_observed_at(
     assert count == 1
 
 
-def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
+def test_fetch_rejects_invalid_raw_payload(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """資料庫中的無效 raw_payload 應明確回報錯誤。"""
@@ -81,7 +81,7 @@ def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
         test_repo.supply_demand_store.fetch(snapshot.observed_at)
 
 
-def test_upsert_supply_demand_snapshot_rejects_corrupted_payload_without_writing(
+def test_upsert_rejects_corrupted_payload_without_writing(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """來源包含格式損壞的 payload 在解析時應被拒絕，且不寫入任何資料至資料庫。"""
@@ -102,7 +102,7 @@ def test_upsert_supply_demand_snapshot_rejects_corrupted_payload_without_writing
     assert count == 0
 
 
-def test_upsert_supply_demand_snapshot_rejects_invalid_snapshot_directly(
+def test_upsert_rejects_invalid_snapshot_directly(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """直接傳入非法 snapshot 至 repository 時應拋出 ValueError。"""
@@ -202,7 +202,7 @@ def _repository_returning(row: dict[str, Any]) -> TaipowerSupplyDemandRepository
     return TaipowerSupplyDemandRepository(engine=engine, auto_init=False)
 
 
-def test_fetch_supply_demand_snapshot_rejects_a_row_without_observed_at() -> None:
+def test_fetch_rejects_a_row_without_observed_at() -> None:
     """NOT NULL 的觀測時刻讀到 NULL 代表儲存毀損，不可拿查詢條件代填。"""
     repository = _repository_returning(_supply_demand_row(observed_at=None))
 
@@ -210,7 +210,7 @@ def test_fetch_supply_demand_snapshot_rejects_a_row_without_observed_at() -> Non
         repository.fetch(datetime(2026, 9, 5, 17, 30))
 
 
-def test_fetch_supply_demand_snapshot_reads_null_optional_instants_as_none() -> None:
+def test_fetch_reads_null_optional_instants_as_none() -> None:
     """nullable 的來源發布時間與實際尖峰時間讀到 NULL 時回傳 None。"""
     repository = _repository_returning(
         _supply_demand_row(source_publish_time=None, real_hr_peak_time=None)

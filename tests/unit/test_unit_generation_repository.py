@@ -19,7 +19,7 @@ from tests.helpers import unit_generation_snapshots
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
 
-def test_upsert_unit_generation_snapshots_insert_and_fetch(
+def test_upsert_then_fetch_returns_the_unit_generation_snapshots(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """多機組快照應可依 (observed_at, unit_type, unit_name) 寫入並讀回。"""
@@ -39,7 +39,7 @@ def test_upsert_unit_generation_snapshots_insert_and_fetch(
     assert offline.remark == "歲修"
 
 
-def test_upsert_unit_generation_snapshots_is_idempotent(
+def test_upsert_is_idempotent(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同機組識別與觀測 slot 重跑時應更新既有快照而非新增列。"""
@@ -65,7 +65,7 @@ def test_upsert_unit_generation_snapshots_is_idempotent(
     assert count == 4
 
 
-def test_upsert_unit_generation_snapshots_excludes_corrupted_and_fake_identity_rows(
+def test_upsert_excludes_corrupted_and_fake_identity_rows(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """含缺失識別鍵與格式損壞列的 payload 經解析後僅有效列入庫，資料庫無任何 None/假識別資料。"""
@@ -200,7 +200,7 @@ def _unit_generation_row(**overrides: Any) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("column", ["observed_at", "source_time"])
-def test_fetch_unit_generation_snapshots_rejects_rows_without_an_instant(column: str) -> None:
+def test_fetch_rejects_rows_without_an_instant(column: str) -> None:
     """NOT NULL 的觀測或來源時刻讀到 NULL 代表儲存毀損，不可拿查詢條件或觀測時刻代填。"""
     engine = MagicMock(spec=Engine)
     connection = engine.connect.return_value.__enter__.return_value

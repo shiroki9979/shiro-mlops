@@ -14,7 +14,7 @@ from shiro_mlops.data.taipower_regional_supply_demand_repository import (
 from tests.helpers import regional_supply_demand_snapshots
 
 
-def test_upsert_regional_snapshots_insert_and_fetch(
+def test_upsert_then_fetch_returns_the_regional_snapshots(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """多區域快照應可依 (observed_at, region) 寫入並讀回萬瓩欄位與 raw payload。"""
@@ -29,7 +29,7 @@ def test_upsert_regional_snapshots_insert_and_fetch(
     assert fetched[0].raw_payload["發電(萬瓩)"] == "1155.4"
 
 
-def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
+def test_upsert_is_idempotent_on_region_and_slot(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """相同區域與觀測 slot 重跑時應更新既有快照而非新增列。"""
@@ -60,7 +60,7 @@ def test_upsert_regional_snapshots_is_idempotent_on_region_and_slot(
     assert count == 4
 
 
-def test_upsert_regional_snapshots_excludes_corrupted_rows(
+def test_upsert_excludes_corrupted_rows(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """含非約定格式錯誤列的 CSV 經解析後僅有效區域寫入資料庫，損壞列不寫入。"""
@@ -129,7 +129,7 @@ def test_standalone_taipower_regional_supply_demand_repository_lifecycle(
         repo.upsert([invalid_snapshot])
 
 
-def test_fetch_regional_snapshots_by_source_time_uses_half_open_window(
+def test_fetch_by_source_time_uses_half_open_window(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """Hourly-load derivation reads snapshots by source time in [start, end), independently of observation slots."""
