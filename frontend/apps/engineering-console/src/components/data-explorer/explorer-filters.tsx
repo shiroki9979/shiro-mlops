@@ -5,7 +5,7 @@ import { Database, Download, RefreshCw } from 'lucide-react'
 import { useMessages } from '@/i18n/messages'
 import type { ExplorerWindow } from '@/lib/explorer-window'
 import type { ExplorerDatasetConfig, ExplorerFieldKey } from './catalog'
-import type { ExplorerFilterValues } from './explorer-query-state'
+import type { ExplorerFilterValue, ExplorerFilterValues } from './explorer-query-state'
 import { ExplorerFilterField } from './explorer-filter-field'
 import { ExplorerWindowNav } from './explorer-window-nav'
 
@@ -21,7 +21,7 @@ interface ExplorerFiltersProps {
   onStartChange: (value: string) => void
   onEndChange: (value: string) => void
   onWindowChange: (window: ExplorerWindow) => void
-  onFilterChange: (key: ExplorerFieldKey, value: string | boolean) => void
+  onFilterChange: (key: ExplorerFieldKey, value: ExplorerFilterValue | undefined) => void
 }
 
 export function ExplorerFilters({

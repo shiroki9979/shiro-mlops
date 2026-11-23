@@ -1,7 +1,7 @@
 import type { ExplorerFieldKey } from './catalog'
 
 // A chart draws at most two units: the first selected unit takes the left axis, the second the right.
-export const MAX_CHART_UNITS = 2
+const MAX_CHART_UNITS = 2
 
 export interface ChartFieldOption {
   field: ExplorerFieldKey
@@ -21,14 +21,29 @@ export function chartFieldChoices(options: readonly ChartFieldOption[], selected
     const checked = selected.includes(option.field)
     const disabled = checked
       ? selected.length === 1
-      : units.length >= MAX_CHART_UNITS && !units.includes(option.unit)
+      : !fitsUnitLimit(units, option.unit)
     return { ...option, checked, disabled }
   })
+}
+
+// What a URL asks for, kept to the offered fields and the unit limit, in selection order.
+export function limitChartFields(options: readonly ChartFieldOption[], requested: readonly unknown[]): ExplorerFieldKey[] {
+  const unitOf = new Map<unknown, string>(options.map((option) => [option.field, option.unit]))
+  return requested.reduce<ExplorerFieldKey[]>((kept, value) => {
+    const field = value as ExplorerFieldKey
+    const unit = unitOf.get(field)
+    if (unit === undefined || kept.includes(field)) return kept
+    return fitsUnitLimit(selectedUnits(options, kept), unit) ? [...kept, field] : kept
+  }, [])
 }
 
 // Added fields go last, so the unit order (and with it the axis side) follows the selection order.
 export function toggleChartField<T extends string>(selected: readonly T[], field: T): T[] {
   return selected.includes(field) ? selected.filter((item) => item !== field) : [...selected, field]
+}
+
+function fitsUnitLimit(units: readonly string[], unit: string): boolean {
+  return units.length < MAX_CHART_UNITS || units.includes(unit)
 }
 
 function selectedUnits(options: readonly ChartFieldOption[], selected: readonly string[]): string[] {

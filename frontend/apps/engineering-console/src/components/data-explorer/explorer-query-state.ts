@@ -1,20 +1,20 @@
 import type { QueryParams } from '@/lib/api-client'
 import { type ExplorerWindow, exceedsDays } from '@/lib/explorer-window'
-import { type Agg, AggSchema, type Bucket, BucketSchema } from '@/schemas/data-explorer'
+import {
+  type Agg,
+  AggSchema,
+  type Bucket,
+  BucketSchema,
+  DEFAULT_AGG,
+  DEFAULT_BUCKET,
+} from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerDatasetConfig, ExplorerFieldKey, ExplorerGroupOption } from './catalog'
-import { MAX_CHART_UNITS } from './chart-fields'
+import { limitChartFields } from './chart-fields'
 
-const DEFAULT_BUCKET = BucketSchema.options[0]
-export const DEFAULT_AGG = AggSchema.options[0]
-
-// Chart settings live in the URL beside the window but never reach the list request or its cursor.
-// They hold resolved values: a URL value that is invalid or does not apply to the chart reads as
-// the default, and a setting equal to its default stays out of the URL. A count chart never
-// sends `agg` and a chart without `groupOptions` never sends `group_by`. An explicit `raw` bucket
-// has no agg, so a shared link never carries one that does not apply; `auto` keeps it because the
-// server may resolve `auto` to an aggregating bucket.
+// An explicit `raw` bucket has no agg, so a shared link never carries one that does not apply;
+// `auto` keeps it because the server may resolve `auto` to an aggregating bucket.
 export type ChartSettings = Omit<ChartChoices, 'bucket' | 'agg'> &
-  ({ bucket: 'raw'; agg?: never } | { bucket: Exclude<Bucket, 'raw'>; agg: Agg })
+  ({ bucket: Bucket; agg?: never } | { bucket: Exclude<Bucket, 'raw'>; agg: Agg })
 
 // What the chart card's selects can ask for; `changeChart` resolves it like a deep link.
 export type ChartSettingsPatch = Partial<ChartChoices>
@@ -44,7 +44,6 @@ export interface ExplorerQueryState<Rows extends ExplorerRows = ExplorerRows> {
   window: ExplorerWindow
   filters: ExplorerFilterValues
   rows: Rows
-  // Undefined for a dataset without a chart.
   chart: ChartSettings | undefined
 }
 
@@ -70,6 +69,7 @@ export function parseExplorerQuery(
     window,
     filters: declaredFilterValues(dataset, search),
     rows: rows.kind === 'firstPage' && cursor ? { kind: 'page', cursor } : rows,
+    // Settings that are invalid or do not apply to the chart read as the default.
     chart: dataset.chart && resolveChart(dataset.chart, {
       bucket: search.bucket,
       agg: search.agg,
@@ -93,15 +93,14 @@ export function changeWindow(
   return { ...state, window, rows: firstRows(dataset, window) }
 }
 
-// `false` or an empty value removes the filter.
 export function changeFilter(
   state: ExplorerQueryState,
   key: ExplorerFieldKey,
-  value: string | boolean,
+  value: ExplorerFilterValue | undefined,
 ): ExplorerQueryState<FirstRows> {
   const rows: FirstRows = state.rows.kind === 'overDetailLimit' ? state.rows : { kind: 'firstPage' }
   const { [key]: _previous, ...others } = state.filters
-  const filters: ExplorerFilterValues = value === false || value === '' ? others : { ...others, [key]: value }
+  const filters: ExplorerFilterValues = value === undefined ? others : { ...others, [key]: value }
   return { ...state, filters, rows }
 }
 
@@ -119,8 +118,9 @@ export function changeChart<Rows extends ExplorerRows>(
   state: ExplorerQueryState<Rows>,
   patch: ChartSettingsPatch,
 ): ExplorerQueryState<Rows> {
-  if (!dataset.chart || !state.chart) return state
-  return { ...state, chart: resolveChart(dataset.chart, { ...state.chart, ...patch }) }
+  const chart = chartOf(dataset, state)
+  if (!chart) return state
+  return { ...state, chart: resolveChart(chart.config, { ...chart.settings, ...patch }) }
 }
 
 // The search object to navigate to: fixed dataset params (the audit type) travel as they are and
@@ -130,7 +130,7 @@ export function toExplorerSearch(dataset: ExplorerDatasetConfig, state: Explorer
     ...dataset.search,
     ...state.window,
     ...state.filters,
-    ...(dataset.chart && state.chart ? chartSearch(dataset.chart, state.chart) : {}),
+    ...chartSearch(chartOf(dataset, state)),
     cursor: state.rows.kind === 'page' ? state.rows.cursor : undefined,
   }))
 }
@@ -143,27 +143,36 @@ export function listRequest(state: ListableQueryState): Record<string, string | 
   }
 }
 
-// Either the chart can be requested, or a switch that is on needs a filter the URL lacks.
 export type SeriesRequest =
   | { kind: 'missingFilter'; filter: ExplorerFieldKey; when: ExplorerFieldKey }
   | { kind: 'ready'; params: QueryParams }
 
+export interface ExplorerChart extends ResolvedChart {
+  series: SeriesRequest
+}
+
+export function explorerChart(dataset: ExplorerDatasetConfig, state: ExplorerQueryState): ExplorerChart | undefined {
+  const chart = chartOf(dataset, state)
+  return chart && { ...chart, series: seriesRequest(chart, state.window, state.filters) }
+}
+
 // The window always travels; dataset filters only those the series endpoint declares, when it
 // declares any. Fields always travel so the request names what the chart draws.
-export function seriesRequest(dataset: ExplorerDatasetConfig, state: ExplorerQueryState): SeriesRequest | undefined {
-  const { chart } = dataset
-  const settings = state.chart
-  if (!chart || !settings) return undefined
+function seriesRequest(
+  { config: chart, settings }: ResolvedChart,
+  window: ExplorerWindow,
+  filters: ExplorerFilterValues,
+): SeriesRequest {
   const required = chart.requiredFilter
-  if (required && state.filters[required.when] === true && !state.filters[required.filter]) {
+  if (required && filters[required.when] === true && !filters[required.filter]) {
     return { kind: 'missingFilter', filter: required.filter, when: required.when }
   }
   const declared = chart.seriesFilters
-  const filters = declared
-    ? Object.fromEntries(Object.entries(state.filters).filter(([key]) => declared.includes(key as ExplorerFieldKey)))
-    : state.filters
-  const { bucket, agg, group_by: groupBy } = chartSearch(chart, settings)
-  const base = { ...state.window, ...filterRequestValues(filters), ...(bucket ? { bucket } : {}) }
+  const sent = declared
+    ? Object.fromEntries(Object.entries(filters).filter(([key]) => declared.includes(key as ExplorerFieldKey)))
+    : filters
+  const { bucket, agg, group_by: groupBy } = chartSearch({ config: chart, settings })
+  const base = { ...window, ...filterRequestValues(sent), ...(bucket ? { bucket } : {}) }
   if (chart.measure === 'count') return { kind: 'ready', params: base }
   return {
     kind: 'ready',
@@ -201,41 +210,30 @@ function searchText(value: unknown): string | undefined {
   return value === undefined || value === null ? undefined : String(value)
 }
 
-interface RawChartSettings {
-  bucket: unknown
-  agg?: unknown
-  groupBy: unknown
-  fields: unknown
-}
+type RawChartSettings = { [K in keyof ChartChoices]?: unknown }
 
 function resolveChart(chart: ExplorerChartConfig, raw: RawChartSettings): ChartSettings {
   const groupOptions = chart.groupOptions
   const groupBy = groupOptions ? optionOr(raw.groupBy, groupOptions, groupOptions[0]) : undefined
   const fields = resolveFields(chart, raw.fields)
   const bucket = optionOr(raw.bucket, BucketSchema.options, DEFAULT_BUCKET)
-  if (bucket === 'raw') return { bucket, groupBy, fields }
-  const agg = chart.measure === 'count' ? DEFAULT_AGG : optionOr(raw.agg, AggSchema.options, DEFAULT_AGG)
-  return { bucket, agg, groupBy, fields }
+  if (bucket === 'raw' || chart.measure === 'count') return { bucket, groupBy, fields }
+  return { bucket, agg: optionOr(raw.agg, AggSchema.options, DEFAULT_AGG), groupBy, fields }
 }
 
-// The URL holds one field as text and several as an array. Only fields the chart offers count,
-// within the same two-unit limit as the field picker, in selection order; none means the default.
+// The URL holds one field as text and several as an array; none that applies means the default.
 function resolveFields(chart: ExplorerChartConfig, raw: unknown): ExplorerFieldKey[] {
-  const options = chart.fieldOptions ?? chart.fields.map((field) => ({ field, unit: undefined }))
-  const unitOf = new Map<unknown, string | undefined>(options.map((option) => [option.field, option.unit]))
-  const units: (string | undefined)[] = []
-  const fields: ExplorerFieldKey[] = []
-  for (const value of Array.isArray(raw) ? raw : [raw]) {
-    const field = value as ExplorerFieldKey
-    if (!unitOf.has(field) || fields.includes(field)) continue
-    const unit = unitOf.get(field)
-    if (!units.includes(unit)) {
-      if (units.length >= MAX_CHART_UNITS) continue
-      units.push(unit)
-    }
-    fields.push(field)
-  }
+  const fields = chart.fieldOptions ? limitChartFields(chart.fieldOptions, Array.isArray(raw) ? raw : [raw]) : []
   return fields.length > 0 ? fields : [...chart.fields]
+}
+
+interface ResolvedChart {
+  config: ExplorerChartConfig
+  settings: ChartSettings
+}
+
+function chartOf(dataset: ExplorerDatasetConfig, state: ExplorerQueryState): ResolvedChart | undefined {
+  return dataset.chart && state.chart ? { config: dataset.chart, settings: state.chart } : undefined
 }
 
 interface ChartSearch {
@@ -246,13 +244,15 @@ interface ChartSearch {
 }
 
 // Settings equal to their default are left out, so two links to the same chart look the same.
-function chartSearch(chart: ExplorerChartConfig, settings: ChartSettings): ChartSearch {
+function chartSearch(chart: ResolvedChart | undefined): ChartSearch {
+  if (!chart) return {}
+  const { config, settings } = chart
   const isDefaultFields =
-    settings.fields.length === chart.fields.length && settings.fields.every((field, index) => field === chart.fields[index])
+    settings.fields.length === config.fields.length && settings.fields.every((field, index) => field === config.fields[index])
   return {
     bucket: settings.bucket === DEFAULT_BUCKET ? undefined : settings.bucket,
     agg: settings.agg === DEFAULT_AGG ? undefined : settings.agg,
-    group_by: settings.groupBy === chart.groupOptions?.[0] ? undefined : settings.groupBy,
+    group_by: settings.groupBy === config.groupOptions?.[0] ? undefined : settings.groupBy,
     fields: isDefaultFields ? undefined : settings.fields,
   }
 }

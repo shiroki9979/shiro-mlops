@@ -13,7 +13,8 @@ const NO_FILTER = '__no_filter__'
 interface ExplorerFilterFieldProps {
   field: FilterField
   value: ExplorerFilterValue | undefined
-  onChange: (value: string | boolean) => void
+  // `undefined` clears the filter, whichever control it comes from.
+  onChange: (value: ExplorerFilterValue | undefined) => void
 }
 
 export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFieldProps) {
@@ -31,7 +32,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
           <Switch
             aria-labelledby={labelId}
             checked={value === true}
-            onCheckedChange={onChange}
+            onCheckedChange={(checked) => onChange(checked || undefined)}
           />
         </div>
       </div>
@@ -43,7 +44,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
     return (
       <div className="text-xs text-slate-400 space-y-1">
         <span id={labelId}>{label}</span>
-        <Select value={text || NO_FILTER} onValueChange={(next) => onChange(next === NO_FILTER ? '' : next)}>
+        <Select value={text || NO_FILTER} onValueChange={(next) => onChange(next === NO_FILTER ? undefined : next)}>
           <SelectTrigger aria-labelledby={labelId} className="h-auto py-2 text-xs">
             <SelectValue />
           </SelectTrigger>
@@ -67,7 +68,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
         className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200"
         placeholder={field.placeholder}
         value={text}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onChange(event.target.value || undefined)}
       />
     </label>
   )
