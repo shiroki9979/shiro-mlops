@@ -251,37 +251,72 @@ def _interval_value(
     return candidates.iloc[-1][column], candidates.iloc[-1]
 
 
-def _fallback_from_observations(
-    observations: pd.DataFrame, moment: pd.Timestamp, column: str
-) -> tuple[object, WeatherSourceKind | None]:
-    if observations.empty:
-        return None, None
-    work = observations.copy()
-    if "observed_at" not in work.columns and "datetime" in work.columns:
-        work = work.rename(columns={"datetime": "observed_at"})
-    if column not in work.columns:
-        column = {"temperature_c": "temperature", "relative_humidity_pct": "relative_humidity"}.get(
-            column, column
-        )
-    if "observed_at" not in work.columns or column not in work.columns:
-        return None, None
-    work["observed_at"] = work["observed_at"].map(_as_timestamp)
-    previous = work[work["observed_at"] == moment - timedelta(days=1)]
-    if not previous.empty and pd.notna(previous.iloc[-1].get(column)):
-        return previous.iloc[-1][column], WeatherSourceKind.PREVIOUS_DAY_OBSERVATION
-    same = work[
-        (work["observed_at"].dt.month == moment.month)
-        & (work["observed_at"].dt.hour == moment.hour)
-    ]
-    same = same[same[column].notna()]
-    if same["observed_at"].dt.date.nunique() < 7:
-        return None, None
-    return float(same[column].mean()), WeatherSourceKind.CLIMATOLOGY
+_CLIMATOLOGY_MIN_DAYS = 7
+_OBSERVATION_COLUMN_ALIASES = {
+    "temperature_c": TEMPERATURE_COL,
+    "relative_humidity_pct": RELATIVE_HUMIDITY_COL,
+}
+
+
+class _ObservationFallback:
+    """Substitute values from one reference point's observations, prepared once per resolution.
+
+    A previous-day observation is the reading exactly 24 hours before the target hour;
+    climatology is the mean of the same month and hour over at least seven distinct days.
+    """
+
+    def __init__(self, observations: pd.DataFrame) -> None:
+        work = observations
+        if "observed_at" not in work.columns and DATETIME_COL in work.columns:
+            work = work.rename(columns={DATETIME_COL: "observed_at"})
+        if work.empty or "observed_at" not in work.columns:
+            work = pd.DataFrame({"observed_at": pd.Series(dtype="datetime64[ns]")})
+        self._frame = work
+        self._observed_at = pd.DatetimeIndex(work["observed_at"].map(_as_timestamp))
+        self._previous_day: dict[str, dict[pd.Timestamp, object]] = {}
+        self._climatology: dict[tuple[str, int, int], float | None] = {}
+
+    def value(self, moment: pd.Timestamp, column: str) -> tuple[object, WeatherSourceKind | None]:
+        if column not in self._frame.columns:
+            column = _OBSERVATION_COLUMN_ALIASES.get(column, column)
+        if column not in self._frame.columns:
+            return None, None
+        previous = self._previous_day_values(column).get(moment - timedelta(days=1))
+        if pd.notna(previous):
+            return previous, WeatherSourceKind.PREVIOUS_DAY_OBSERVATION
+        mean = self._climatology_mean(column, moment.month, moment.hour)
+        if mean is None:
+            return None, None
+        return mean, WeatherSourceKind.CLIMATOLOGY
+
+    def _previous_day_values(self, column: str) -> dict[pd.Timestamp, object]:
+        """The last reading at each observation time, absent values included."""
+        if column not in self._previous_day:
+            self._previous_day[column] = dict(
+                zip(self._observed_at, self._frame[column], strict=True)
+            )
+        return self._previous_day[column]
+
+    def _climatology_mean(self, column: str, month: int, hour: int) -> float | None:
+        key = (column, month, hour)
+        if key not in self._climatology:
+            present = (
+                (self._observed_at.month == month)
+                & (self._observed_at.hour == hour)
+                & self._frame[column].notna().to_numpy()
+            )
+            days = self._observed_at[present].normalize().nunique()
+            self._climatology[key] = (
+                float(self._frame[column].to_numpy()[present].astype(float).mean())
+                if days >= _CLIMATOLOGY_MIN_DAYS
+                else None
+            )
+        return self._climatology[key]
 
 
 def _resolve_value(
     datasets: dict[WeatherSourceKind, pd.DataFrame],
-    observations: pd.DataFrame,
+    fallback: _ObservationFallback,
     moment: pd.Timestamp,
     column: str,
 ) -> tuple[object, WeatherValueSource | None]:
@@ -292,7 +327,7 @@ def _resolve_value(
     value, row = _interval_value(datasets[WeatherSourceKind.WEEKLY], moment, column)
     if value is not None:
         return value, WeatherValueSource.forecast(WeatherSourceKind.WEEKLY, row)
-    value, substitute = _fallback_from_observations(observations, moment, column)
+    value, substitute = fallback.value(moment, column)
     if substitute is None:
         return None, None
     return value, WeatherValueSource.substitute(substitute)
@@ -335,10 +370,12 @@ def resolve_weather(
         ),
         cutoff,
     )
-    observations = store.fetch_cwa_station_observations(
-        start_time=start - timedelta(days=366),
-        end_time=cutoff,
-        station_id=reference_point.station_id,
+    fallback = _ObservationFallback(
+        store.fetch_cwa_station_observations(
+            start_time=start - timedelta(days=366),
+            end_time=cutoff,
+            station_id=reference_point.station_id,
+        )
     )
     datasets = {
         kind: (
@@ -354,9 +391,7 @@ def resolve_weather(
         output: dict[str, object] = {DATETIME_COL: moment, LOCATION_COL: reference_point.alias}
         point_sources: dict[str, WeatherValueSource] = {}
         for output_name in fields:
-            value, source = _resolve_value(
-                datasets, observations, moment, FORECAST_FIELDS[output_name]
-            )
+            value, source = _resolve_value(datasets, fallback, moment, FORECAST_FIELDS[output_name])
             if source is None:
                 raise WeatherCoverageError(
                     f"{reference_point.alias}: No weather coverage for "

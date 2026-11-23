@@ -373,6 +373,159 @@ def test_resolver_uses_previous_day_observation_when_forecast_is_stale() -> None
     assert result.sources[0]["temperature"].kind == "previous_day_observation"
 
 
+def _stale_forecast_store(observations: pd.DataFrame) -> MagicMock:
+    """A store with no forecast at all, so every value has to come from observations."""
+    store = MagicMock(spec=CWAWeatherStore)
+    store.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
+    store.fetch_cwa_station_observations.return_value = observations
+    return store
+
+
+def _same_hour_observations(days: int, *, hour: int = 12) -> pd.DataFrame:
+    """One observation at ``hour`` on each of ``days`` August dates, none on the 19th."""
+    return pd.DataFrame(
+        [
+            {
+                "observed_at": pd.Timestamp(2026, 8, 1 + offset, hour),
+                "station_id": "466920",
+                "temperature_c": 26.0 + offset,
+                "relative_humidity_pct": 60.0 + offset,
+            }
+            for offset in range(days)
+        ]
+    )
+
+
+def test_resolver_uses_climatology_once_seven_days_share_the_month_and_hour() -> None:
+    store = _stale_forecast_store(_same_hour_observations(7))
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+    )
+
+    assert result.mode == "degraded"
+    assert result.dataframe.loc[0, "temperature"] == pytest.approx(29.0)
+    assert result.dataframe.loc[0, "relative_humidity"] == pytest.approx(63.0)
+    assert result.sources[0]["temperature"].kind == "climatology"
+
+
+def test_resolver_refuses_climatology_from_fewer_than_seven_days() -> None:
+    store = _stale_forecast_store(_same_hour_observations(6))
+
+    with pytest.raises(WeatherCoverageError, match="Taipei.*2026-08-20T12:00:00 temperature"):
+        resolve_weather(
+            store,
+            reference_point=TAIPEI,
+            start_time=datetime(2026, 8, 20, 12),
+            horizon_hours=1,
+            as_of=datetime(2026, 8, 20, 12),
+        )
+
+
+def test_climatology_counts_days_not_observations() -> None:
+    """Seven readings on one date are one day of evidence, not seven."""
+    one_day = pd.DataFrame(
+        [
+            {
+                "observed_at": pd.Timestamp("2026-08-05 12:00"),
+                "station_id": "466920",
+                "temperature_c": 30.0,
+                "relative_humidity_pct": 70.0,
+            }
+        ]
+        * 7
+    )
+
+    with pytest.raises(WeatherCoverageError):
+        resolve_weather(
+            _stale_forecast_store(one_day),
+            reference_point=TAIPEI,
+            start_time=datetime(2026, 8, 20, 12),
+            horizon_hours=1,
+            as_of=datetime(2026, 8, 20, 12),
+        )
+
+
+def test_resolver_chooses_the_substitute_per_field_when_the_previous_day_lacks_one() -> None:
+    observations = _same_hour_observations(7)
+    observations.loc[len(observations)] = {
+        "observed_at": pd.Timestamp("2026-08-19 12:00"),
+        "station_id": "466920",
+        "temperature_c": 28.0,
+        "relative_humidity_pct": float("nan"),
+    }
+
+    result = resolve_weather(
+        _stale_forecast_store(observations),
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+    )
+
+    assert result.dataframe.loc[0, "temperature"] == 28.0
+    assert result.sources[0]["temperature"].kind == "previous_day_observation"
+    assert result.dataframe.loc[0, "relative_humidity"] == pytest.approx(63.0)
+    assert result.sources[0]["relative_humidity"].kind == "climatology"
+
+
+def test_resolver_reads_timezone_aware_observation_times_as_taiwan_local() -> None:
+    observations = pd.DataFrame(
+        [
+            {
+                "observed_at": pd.Timestamp("2026-08-19 04:00", tz="UTC"),
+                "station_id": "466920",
+                "temperature_c": 28.0,
+                "relative_humidity_pct": 75.0,
+            }
+        ]
+    )
+
+    result = resolve_weather(
+        _stale_forecast_store(observations),
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+    )
+
+    assert result.sources[0]["temperature"].kind == "previous_day_observation"
+
+
+def test_resolver_degrades_a_whole_week_from_a_year_of_observations() -> None:
+    """The outage path: 168 hours, every value a substitute, from one read of the year."""
+    hours = pd.date_range("2025-08-20 00:00", "2026-08-20 11:00", freq="h")
+    observations = pd.DataFrame(
+        {
+            "observed_at": hours,
+            "station_id": "466920",
+            "temperature_c": 20.0 + hours.hour.to_numpy() / 4,
+            "relative_humidity_pct": 80.0 - hours.hour.to_numpy() / 2,
+        }
+    )
+    store = _stale_forecast_store(observations)
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=168,
+        as_of=datetime(2026, 8, 20, 12),
+    )
+
+    kinds = [source["temperature"].kind for source in result.sources]
+    assert kinds[:24] == ["previous_day_observation"] * 24
+    assert kinds[24:] == ["climatology"] * 144
+    assert result.dataframe["temperature"].tolist() == pytest.approx(
+        [20.0 + moment.hour / 4 for moment in result.dataframe["datetime"]]
+    )
+    assert store.fetch_cwa_station_observations.call_count == 1
+
+
 def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
     """Degraded backtests may only use observations that already existed at prediction time."""
     store = MagicMock(spec=CWAWeatherStore)

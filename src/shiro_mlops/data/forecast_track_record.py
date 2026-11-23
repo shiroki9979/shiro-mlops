@@ -60,6 +60,8 @@ class LeadTimeAccuracy:
     """MAPE (%) and MAE (MW) over every pair in the window at one lead time.
 
     Both are ``None`` when the lead time has no pair; there is no minimum pair count.
+    A pair whose actual load is not positive has no percentage error, so it counts
+    toward MAE only, and MAPE alone is ``None`` when no pair at the lead time has one.
     """
 
     lead_time_hours: int
@@ -218,9 +220,13 @@ def _accuracy(lead_time_hours: int, pairs: Sequence[TrackRecordPair]) -> LeadTim
     if not pairs:
         return LeadTimeAccuracy(lead_time_hours=lead_time_hours, mape=None, mae=None)
     errors = [abs(pair.predicted_load_mw - pair.actual_load_mw) for pair in pairs]
-    percentages = [error / pair.actual_load_mw for error, pair in zip(errors, pairs, strict=True)]
+    percentages = [
+        error / pair.actual_load_mw
+        for error, pair in zip(errors, pairs, strict=True)
+        if pair.actual_load_mw > 0
+    ]
     return LeadTimeAccuracy(
         lead_time_hours=lead_time_hours,
-        mape=sum(percentages) / len(pairs) * 100,
+        mape=sum(percentages) / len(percentages) * 100 if percentages else None,
         mae=sum(errors) / len(pairs),
     )
