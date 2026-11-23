@@ -38,7 +38,12 @@ from shiro_mlops.pipelines.task_pipelines import (
     build_task_pipelines,
 )
 from shiro_mlops.pipelines.tracking import TrackedRun
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.definition import load_task_definitions
+from shiro_mlops.tasks.deployed import (
+    DYNAMIC_HORIZON_FORECAST,
+    TASK_DEFINITIONS_DIR,
+    deployed_tasks,
+)
 from shiro_mlops.tasks.model_store import model_directory_sha256
 from tests.helpers import (
     FixtureCWASource,
@@ -103,11 +108,15 @@ def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository
 def test_task_features_read_weather_from_configured_reference_station(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The weather reference station comes from runtime CWA settings rather than a fixed Taipei code."""
+    """The weather reference station comes from the CWA catalog the tasks load with, not a fixed code."""
     monkeypatch.setattr(
         settings,
         "CWA_LOCATION_ALLOWLIST",
         '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
+    )
+    configured = load_task_definitions(TASK_DEFINITIONS_DIR, settings.cwa_locations)
+    monkeypatch.setitem(
+        deployed_tasks(), DYNAMIC_HORIZON_FORECAST, configured[DYNAMIC_HORIZON_FORECAST]
     )
     override_task_policies(monkeypatch, min_training_hours=2)
     write_derived_load(test_repo.engine, derived_hourly_load(2, LAST_LOAD_HOUR))
@@ -240,7 +249,9 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     persisted_load = derived_load_series(test_repo.engine)
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.cwa_weather_store.fetch_weather_range(reference_point="Taipei")
+    persisted_weather = test_repo.cwa_weather_store.fetch_weather_range(
+        reference_point=settings.cwa_locations["Taipei"]
+    )
     assert len(persisted_weather) == len(cwa_obs_df)
 
 
