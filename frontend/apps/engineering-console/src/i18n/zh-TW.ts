@@ -76,10 +76,10 @@ export const zhTW = {
     availabilityLabel: '可用性',
     freshnessLabel: '資料新鮮度',
     completenessLabel: '資料完整度',
-    availability: { available: '可用', empty: '無資料', unavailable: '不可用' },
+    availability: { available: '可用', empty: '無資料' },
     freshness: { fresh: '新鮮', warning: '警告', unknown: '未知' },
     completeness: { complete: '完整', incomplete: '不完整', unknown: '未知' },
-    overall: { healthy: '健康', warning: '警告', critical: '嚴重', unknown: '未知' },
+    overall: { healthy: '健康', warning: '警告', unknown: '未知' },
   },
   explorer: {
     title: '營運資料檢視器',

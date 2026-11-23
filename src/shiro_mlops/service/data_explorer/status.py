@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-Availability = Literal["available", "empty", "unavailable"]
+Availability = Literal["available", "empty"]
 FreshnessState = Literal["fresh", "warning", "unknown"]
 Completeness = Literal["complete", "incomplete", "unknown"]
-Overall = Literal["healthy", "warning", "critical", "unknown"]
+Overall = Literal["healthy", "warning", "unknown"]
 
 # 超過兩個預期週期未更新才視為過期。
 MISSED_CYCLE_WARNING = 2
@@ -47,8 +47,6 @@ def derive_overall(
     completeness: Completeness,
 ) -> Overall:
     """Derive a single severity from independent status dimensions."""
-    if availability == "unavailable":
-        return "critical"
     if availability == "empty":
         return "warning"
     if freshness == "warning" or completeness == "incomplete":
