@@ -144,7 +144,7 @@ def raw_taipower_supply_demand_snapshot(
         snapshot.observed_at.isoformat(),
         snapshot.curr_load_wan_kw,
     )
-    getattr(context.resources, TIME_SERIES_REPO).upsert_supply_demand_snapshot(snapshot)
+    getattr(context.resources, TIME_SERIES_REPO).supply_demand_store.upsert(snapshot)
     return snapshot
 
 
@@ -169,7 +169,7 @@ def raw_taipower_regional_supply_demand_snapshot(
         len(snapshots),
         snapshots[0].observed_at.isoformat(),
     )
-    getattr(context.resources, TIME_SERIES_REPO).upsert_regional_supply_demand_snapshots(snapshots)
+    getattr(context.resources, TIME_SERIES_REPO).regional_supply_demand_store.upsert(snapshots)
     return snapshots
 
 
@@ -234,7 +234,7 @@ def raw_taipower_unit_generation_snapshot(
         len(snapshots),
         snapshots[0].observed_at.isoformat(),
     )
-    getattr(context.resources, TIME_SERIES_REPO).upsert_unit_generation_snapshots(snapshots)
+    getattr(context.resources, TIME_SERIES_REPO).unit_generation_store.upsert(snapshots)
     return snapshots
 
 

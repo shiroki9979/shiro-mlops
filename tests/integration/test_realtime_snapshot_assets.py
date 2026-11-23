@@ -36,7 +36,7 @@ def _json_fixture(name: str) -> Callable[[], dict]:
 
 
 def _supply_demand_rows(repo: TimeSeriesRepository, slot: datetime) -> list:
-    snapshot = repo.fetch_supply_demand_snapshot(slot)
+    snapshot = repo.supply_demand_store.fetch(slot)
     return [] if snapshot is None else [snapshot]
 
 
@@ -90,7 +90,7 @@ SOURCES = [
             encoding="utf-8"
         ),
         revise=_revise_regional,
-        rows=lambda repo, slot: repo.fetch_regional_supply_demand_snapshots(slot),
+        rows=lambda repo, slot: repo.regional_supply_demand_store.fetch(slot),
         row_count=4,
         revised_value=lambda rows: next(row for row in rows if row.region == "北部").load_wan_kw,
         unparseable_payload="時間,區域,發電(萬瓩),用電(萬瓩)\n,,,\n",
@@ -102,7 +102,7 @@ SOURCES = [
         source_key=TAIPOWER_UNIT_GENERATION_SOURCE,
         payload=_json_fixture("taipower_unit_generation_sample.json"),
         revise=_revise_unit,
-        rows=lambda repo, slot: repo.fetch_unit_generation_snapshots(slot),
+        rows=lambda repo, slot: repo.unit_generation_store.fetch(slot),
         row_count=4,
         revised_value=lambda rows: (
             next(row for row in rows if row.unit_name == "大潭CC#1").net_generation_mw

@@ -466,8 +466,8 @@ def test_national_supply_demand_uses_mw_and_preserves_nullable_fields(explorer_c
     observed = _now().replace(minute=30, second=0, microsecond=0)
     snapshot = supply_demand_snapshot(observed)
     earlier_snapshot = supply_demand_snapshot(observed - timedelta(minutes=20))
-    repo.upsert_supply_demand_snapshot(earlier_snapshot)
-    repo.upsert_supply_demand_snapshot(snapshot)
+    repo.supply_demand_store.upsert(earlier_snapshot)
+    repo.supply_demand_store.upsert(snapshot)
 
     body = client.get(
         "/data/power/supply-demand",
@@ -518,7 +518,7 @@ def test_regional_supply_demand_marks_incomplete_slots(explorer_client) -> None:
             raw_payload={"區域": "北部"},
         )
     )
-    repo.upsert_regional_supply_demand_snapshots(rows)
+    repo.regional_supply_demand_store.upsert(rows)
 
     params = {"start": rfc3339(complete_slot), "end": rfc3339(observed), "limit": 50}
     page = client.get("/data/power/regional", params=params).json()
@@ -581,7 +581,7 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
     """機組零發電必須保留，契約允許空值不得被當成缺失，且不以固定數量判定不完整。"""
     client, repo = explorer_client
     observed = _now().replace(minute=10, second=0, microsecond=0)
-    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(observed))
+    repo.unit_generation_store.upsert(unit_generation_snapshots(observed))
 
     page = client.get(
         "/data/power/units",
@@ -654,12 +654,12 @@ def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
     newer_at = rfc3339(newer)
     older_at = rfc3339(older)
 
-    repo.upsert_supply_demand_snapshot(supply_demand_snapshot(older))
-    repo.upsert_supply_demand_snapshot(supply_demand_snapshot(newer))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(older))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(newer))
-    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(older))
-    repo.upsert_unit_generation_snapshots(unit_generation_snapshots(newer))
+    repo.supply_demand_store.upsert(supply_demand_snapshot(older))
+    repo.supply_demand_store.upsert(supply_demand_snapshot(newer))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(older))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(newer))
+    repo.unit_generation_store.upsert(unit_generation_snapshots(older))
+    repo.unit_generation_store.upsert(unit_generation_snapshots(newer))
 
     pages = (
         ("/data/power/supply-demand", 1),
@@ -690,9 +690,9 @@ def test_regional_completeness_filter_reaches_older_matching_slots(explorer_clie
     newest = _now().replace(minute=30, second=0, microsecond=0)
     middle = newest - timedelta(minutes=10)
     oldest = newest - timedelta(minutes=20)
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(newest))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(middle))
-    repo.upsert_regional_supply_demand_snapshots(regional_supply_demand_snapshots(oldest)[:1])
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(newest))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(middle))
+    repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(oldest)[:1])
 
     response = client.get(
         "/data/power/regional",

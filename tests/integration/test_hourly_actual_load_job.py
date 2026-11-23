@@ -38,7 +38,7 @@ def _store_samples(repo: TimeSeriesRepository, start: datetime, count: int) -> N
             replace(snapshot, source_time=slot)
             for snapshot in regional_supply_demand_snapshots(slot)
         ]
-        repo.upsert_regional_supply_demand_snapshots(snapshots)
+        repo.regional_supply_demand_store.upsert(snapshots)
 
 
 def _run_scheduled_tick(

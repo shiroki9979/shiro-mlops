@@ -113,17 +113,17 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     assert res.success
 
     # 驗證三來源皆以 slot 成功入庫
-    sd_record = test_repo.fetch_supply_demand_snapshot(slot)
+    sd_record = test_repo.supply_demand_store.fetch(slot)
     assert sd_record is not None
     assert sd_record.curr_load_wan_kw == pytest.approx(3242.1)
 
-    reg_records = test_repo.fetch_regional_supply_demand_snapshots(slot)
+    reg_records = test_repo.regional_supply_demand_store.fetch(slot)
     assert len(reg_records) == 4
     north_reg = next(r for r in reg_records if r.region == "北部")
     assert north_reg.load_wan_kw == pytest.approx(1091.7)
     assert north_reg.generation_wan_kw == pytest.approx(1155.4)
 
-    unit_records = test_repo.fetch_unit_generation_snapshots(slot)
+    unit_records = test_repo.unit_generation_store.fetch(slot)
     assert len(unit_records) == 4
     target_unit = next(u for u in unit_records if u.unit_name == "大潭CC#1")
     assert target_unit.net_generation_mw == pytest.approx(670.4)
@@ -139,15 +139,15 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     assert res2.success
 
     # 驗證各快照原位更新，且總列數未重複增加
-    updated_sd = test_repo.fetch_supply_demand_snapshot(slot)
+    updated_sd = test_repo.supply_demand_store.fetch(slot)
     assert updated_sd is not None
     assert updated_sd.curr_load_wan_kw == pytest.approx(3400.0)
 
-    updated_reg = test_repo.fetch_regional_supply_demand_snapshots(slot)
+    updated_reg = test_repo.regional_supply_demand_store.fetch(slot)
     assert len(updated_reg) == 4
     assert next(r for r in updated_reg if r.region == "北部").load_wan_kw == pytest.approx(1300.0)
 
-    updated_unit = test_repo.fetch_unit_generation_snapshots(slot)
+    updated_unit = test_repo.unit_generation_store.fetch(slot)
     assert len(updated_unit) == 4
     assert next(
         u for u in updated_unit if u.unit_name == "大潭CC#1"
@@ -184,9 +184,9 @@ def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
     assert sources.supply_demand.calls == 1
     assert sources.regional.calls == 1
 
-    assert test_repo.fetch_supply_demand_snapshot(slot) is not None
-    assert len(test_repo.fetch_regional_supply_demand_snapshots(slot)) == 4
-    assert len(test_repo.fetch_unit_generation_snapshots(slot)) == 4
+    assert test_repo.supply_demand_store.fetch(slot) is not None
+    assert len(test_repo.regional_supply_demand_store.fetch(slot)) == 4
+    assert len(test_repo.unit_generation_store.fetch(slot)) == 4
 
 
 def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_write(
@@ -206,4 +206,4 @@ def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_
     assert sources.unit.calls == 3
 
     # 驗證失敗的機組來源絕對不寫入任何資料
-    assert len(test_repo.fetch_unit_generation_snapshots(slot)) == 0
+    assert len(test_repo.unit_generation_store.fetch(slot)) == 0

@@ -3,6 +3,10 @@
 All times are Taiwan-local naive datetimes. The window covers target hours in
 ``[cutoff - 720h, cutoff)`` whatever their issue time, so a step issued before
 the window still counts when its target hour falls inside.
+
+``ForecastTrackRecordStore`` reads the database and decides which issued steps
+count and which hourly load row each pairs with; compiling the pairs into the
+published record is pure.
 """
 
 from __future__ import annotations
@@ -13,13 +17,19 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from shiro_mlops.core.constants import MAX_HORIZON_HOURS
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
+from shiro_mlops.core.constants import MAX_HORIZON_HOURS, NATIONWIDE_SUBJECT
+from shiro_mlops.core.storage_time import from_storage_time, half_open_window, to_storage_time
+from shiro_mlops.data.hourly_actual_load_store import REGIONAL_SNAPSHOT_SUM_SOURCE
 
 TRACK_RECORD_WINDOW = timedelta(hours=720)
 TRACK_RECORD_MIN_DAYS = 7
 CURVE_LEAD_TIMES = range(1, MAX_HORIZON_HOURS + 1)
 HEADLINE_LEAD_TIME_HOURS = 24
 _ONE_HOUR = timedelta(hours=1)
+_MAX_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,62 @@ class ForecastTrackRecord:
     cutoff: datetime
     accumulated_days: int
     metrics: TrackRecordMetrics | None
+
+
+class ForecastTrackRecordStore:
+    """Reads the issued steps the track record counts, paired with their hourly load."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def fetch_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
+        """Pair issued steps targeting the window with valid hourly observations.
+
+        Only steps whose target hour is after their issue time count, and only
+        target hours with a nationwide ``regional_snapshot_sum`` load row. One SQL
+        join returns only the paired rows. Pairs are ordered by target hour, then
+        issue time.
+
+        Both hypertables are bounded on their partition column: a step lands at
+        most 168 hours after its load anchor, which precedes its issue time, so a
+        step targeting the window was issued after the window start minus 168 hours.
+        """
+        target_hour = half_open_window("step.target_hour", window.start, window.end)
+        load_time = half_open_window("actual.time", window.start, window.end, param="load_time")
+        params = {
+            **target_hour.params,
+            **load_time.params,
+            "earliest_issued_at": to_storage_time(window.start - _MAX_HORIZON),
+            "latest_issued_at": to_storage_time(window.end),
+            "subject": NATIONWIDE_SUBJECT,
+            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+        }
+        query = text(
+            f"""
+            SELECT step.issued_at, step.target_hour, step.predicted_load_mw, actual.load_mw
+            FROM issued_forecast_step AS step
+            JOIN raw_taipower_load AS actual ON actual.time = step.target_hour
+            WHERE step.issued_at > :earliest_issued_at
+              AND step.issued_at < :latest_issued_at
+              AND {target_hour.sql}
+              AND step.target_hour > step.issued_at
+              AND {load_time.sql}
+              AND actual.subject = :subject
+              AND actual.source = :source
+            ORDER BY step.target_hour, step.issued_at
+            """
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
+        return tuple(
+            TrackRecordPair(
+                issued_at=from_storage_time(row["issued_at"], column="issued_at"),
+                target_hour=from_storage_time(row["target_hour"], column="target_hour"),
+                predicted_load_mw=float(row["predicted_load_mw"]),
+                actual_load_mw=float(row["load_mw"]),
+            )
+            for row in rows
+        )
 
 
 def track_record_cutoff(moment: datetime) -> datetime:

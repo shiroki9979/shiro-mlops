@@ -80,6 +80,23 @@ def test_repository_initialization_reports_database_failure(repository_type, tmp
         engine.dispose()
 
 
+def test_repository_hands_out_taipower_snapshot_stores_on_its_own_engine() -> None:
+    """三個台電快照 store 共用 composition root 的 engine，建構時不各自做 schema init。"""
+    engine = MagicMock(spec=Engine)
+
+    repository = TimeSeriesRepository(engine=engine, auto_init=False)
+
+    stores = {
+        TaipowerSupplyDemandRepository: repository.supply_demand_store,
+        TaipowerRegionalSupplyDemandRepository: repository.regional_supply_demand_store,
+        TaipowerUnitGenerationRepository: repository.unit_generation_store,
+    }
+    for store_type, store in stores.items():
+        assert isinstance(store, store_type)
+        assert store.engine is engine
+    assert engine.mock_calls == []
+
+
 def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_aligned(
     repository: TimeSeriesRepository,
 ) -> None:

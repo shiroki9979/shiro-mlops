@@ -36,7 +36,7 @@ def assert_national_reader_pages(
         observed - timedelta(minutes=20),
     ]
     for index, moment in enumerate(moments):
-        test_repo.upsert_supply_demand_snapshot(
+        test_repo.supply_demand_store.upsert(
             replace(supply_demand_snapshot(moment), curr_load_wan_kw=1000.0 + index)
         )
     params = {
@@ -65,7 +65,7 @@ def assert_regional_reader_pages(
     rows = regional_supply_demand_snapshots(complete)
     rows += [replace(row, observed_at=newer, load_wan_kw=900.0) for row in rows[:1]]
     rows += [replace(row, observed_at=older, load_wan_kw=800.0) for row in rows[:1]]
-    test_repo.upsert_regional_supply_demand_snapshots(rows)
+    test_repo.regional_supply_demand_store.upsert(rows)
     reader = DatasetLister(test_repo.engine, REGIONAL_SUPPLY_DEMAND)
     params = {"start": rfc3339(older), "end": rfc3339(observed + timedelta(seconds=1)), "limit": 1}
 
@@ -119,7 +119,7 @@ def assert_unit_reader_pages(
         replace(seed, unit_type="燃氣", unit_name="B", net_generation_mw=None),
         replace(seed, unit_type="燃氣", unit_name="A", net_generation_mw=1.0),
     ]
-    test_repo.upsert_unit_generation_snapshots(rows)
+    test_repo.unit_generation_store.upsert(rows)
     reader = DatasetLister(test_repo.engine, UNIT_GENERATION)
     params = {
         "start": rfc3339(observed),

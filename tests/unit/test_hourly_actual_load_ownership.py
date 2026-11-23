@@ -1,7 +1,8 @@
 """ADR-0008: the hourly actual load store owns ``raw_taipower_load`` and its derived source.
 
 Outside the store, SQL naming the table appears only in schema init and migration
-(``src/shiro_mlops/core/database.py``) and in the forecast track-record join. The Data
+(``src/shiro_mlops/core/database.py``) and in the forecast track-record join
+(``src/shiro_mlops/data/forecast_track_record.py``). The Data
 Explorer reaches the table through its declarative dataset definition, not SQL of its
 own; it and the join bind the store's source constant rather than spelling the value.
 Comments, docstrings and log text that name the table or the source are not SQL and pass.
@@ -64,7 +65,7 @@ def test_outside_the_store_only_schema_setup_and_track_record_join_touch_load_ta
     assert STORE in sites and SCHEMA_SETUP in sites
     del sites[STORE], sites[SCHEMA_SETUP]
     assert sites == {
-        "src/shiro_mlops/data/repository.py": ["TimeSeriesRepository.fetch_track_record_pairs"]
+        "src/shiro_mlops/data/forecast_track_record.py": ["ForecastTrackRecordStore.fetch_pairs"]
     }
 
 
