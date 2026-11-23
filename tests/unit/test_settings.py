@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.engine import make_url
 
 from shiro_mlops.core.config import Settings
 
@@ -24,3 +25,14 @@ def test_feature_parquet_uris_resolve_under_data_dir(
 
     assert cfg.taipower_parquet_uri == str(tmp_path.resolve() / "taipower_features.parquet")
     assert cfg.weather_parquet_uri == str(tmp_path.resolve() / "weather_features.parquet")
+
+
+def test_timescale_uri_preserves_password_with_url_reserved_characters() -> None:
+    """密碼含 @ 或 % 時，連線設定仍須還原出原密碼與正確主機（#245）。"""
+    password = "p@ss/#?%40"
+    cfg = Settings(_env_file=None, TIMESCALE_PASSWORD=password, TIMESCALE_HOST="db")
+
+    url = make_url(cfg.timescale_uri)
+
+    assert url.password == password
+    assert url.host == "db"
