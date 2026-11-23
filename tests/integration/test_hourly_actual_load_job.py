@@ -34,6 +34,7 @@ from tests.helpers import (
     regional_supply_demand_snapshots,
     run_creation_time,
     scheduled_run_tags,
+    scheduler_launch_tags,
     write_derived_load,
 )
 
@@ -72,7 +73,9 @@ def _run_scheduled_tick(
     [request] = evaluation.run_requests
     with patch("httpx.Client", side_effect=AssertionError("external API must not be called")):
         result = job_def.execute_in_process(
-            run_config=request.run_config, tags=request.tags, instance=instance
+            run_config=request.run_config,
+            tags=scheduler_launch_tags(request),
+            instance=instance,
         )
     assert result.success
     return result

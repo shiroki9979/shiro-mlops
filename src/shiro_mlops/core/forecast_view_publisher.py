@@ -8,6 +8,7 @@ the same file names, and neither side keeps history.
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,13 @@ class ForecastViewPublisher:
 
 def _replace_atomically(path: Path, body: bytes) -> None:
     """Nginx serves the directory while the export runs; a rename never exposes half a file."""
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_bytes(body)
-    os.replace(temporary, path)
+    # WHY-NOT _replace_atomically: the temporary name is unique per call. With one fixed name,
+    # two exports that overlap (a manual materialization during the scheduled run) write the
+    # same file, and the slower one's rename fails because the faster one already moved it.
+    # It is written with write_bytes, not tempfile, so it keeps the default mode Nginx can read.
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(body)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)

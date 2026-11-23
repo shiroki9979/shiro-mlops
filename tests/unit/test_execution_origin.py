@@ -7,6 +7,7 @@ from dagster import AssetExecutionContext, asset, build_schedule_context, materi
 
 from shiro_mlops.pipelines.execution_origin import (
     REEXECUTION_TAGS,
+    RUN_KEY_TAG,
     SCHEDULE_NAME_TAG,
     SCHEDULED_TICK_TAG,
     ExecutionOrigin,
@@ -22,7 +23,14 @@ from tests.helpers import REEXECUTION
 CREATED_AT = datetime(2026, 11, 20, 3, 40, 12, tzinfo=UTC)
 CREATED_AT_IN_TAIWAN = datetime(2026, 11, 20, 11, 40, 12)
 TICK_IN_TAIWAN = datetime(2026, 11, 20, 10, 25)
+# 排程 daemon 發起的 run：排程評估產生的兩個標籤，加上只有 daemon 會加的 run key。
 SCHEDULED = {
+    SCHEDULE_NAME_TAG: "forecast_track_record_schedule",
+    SCHEDULED_TICK_TAG: "2026-11-20T10:25:00",
+    RUN_KEY_TAG: "2026-11-20T10:25:00",
+}
+# Dagster UI 的 tick 預覽按下 Launch 時，只把排程評估產生的標籤複製到手動 run 上。
+LAUNCHED_FROM_TICK_PREVIEW = {
     SCHEDULE_NAME_TAG: "forecast_track_record_schedule",
     SCHEDULED_TICK_TAG: "2026-11-20T10:25:00",
 }
@@ -33,6 +41,21 @@ RUNS_WITHOUT_A_SCHEDULED_TICK = [
         {SCHEDULED_TICK_TAG: "2026-11-20T10:25:00"},
         ExecutionOrigin.MANUAL,
         id="tick-tag-filled-in-by-hand",
+    ),
+    pytest.param(
+        LAUNCHED_FROM_TICK_PREVIEW,
+        ExecutionOrigin.MANUAL,
+        id="launched-from-the-tick-preview",
+    ),
+    pytest.param(
+        {**LAUNCHED_FROM_TICK_PREVIEW, RUN_KEY_TAG: "2026-11-20T09:25:00"},
+        ExecutionOrigin.MANUAL,
+        id="run-key-of-another-tick",
+    ),
+    pytest.param(
+        {**LAUNCHED_FROM_TICK_PREVIEW, RUN_KEY_TAG: ""},
+        ExecutionOrigin.MANUAL,
+        id="empty-run-key",
     ),
     pytest.param(
         {**SCHEDULED, **REEXECUTION},
@@ -71,7 +94,7 @@ def test_a_scheduled_tick_is_the_as_of_whatever_the_asset_does_without_one() -> 
     ],
 )
 def test_a_scheduled_tick_becomes_naive_taiwan_local_time(tick: str) -> None:
-    tags = {**SCHEDULED, SCHEDULED_TICK_TAG: tick}
+    tags = {**SCHEDULED, SCHEDULED_TICK_TAG: tick, RUN_KEY_TAG: tick}
 
     as_of = resolve_as_of(tags, CREATED_AT, without_tick=WithoutTick.REFUSE)
 
@@ -140,6 +163,7 @@ def test_a_refusing_asset_in_a_scheduled_run_gets_the_tick(dagster_instance) -> 
     ("tags", "reason"),
     [
         pytest.param({}, "scheduled tick", id="manual"),
+        pytest.param(LAUNCHED_FROM_TICK_PREVIEW, "scheduled tick", id="tick-preview-launch"),
         pytest.param(
             {**SCHEDULED, **REEXECUTION},
             "re-execut",

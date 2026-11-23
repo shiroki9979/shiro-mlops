@@ -31,6 +31,8 @@ from shiro_mlops.tasks.model_store import SavedModel, model_directory
 from tests.helpers import (
     canonical_observation_batch,
     hourly_load_with_weather,
+    scheduler_launch_tags,
+    tick_preview_launch_tags,
     train_and_install_forecast_model,
     write_derived_load,
 )
@@ -103,7 +105,7 @@ def _issue(
     return _job(repo).execute_in_process(
         run_config=request.run_config,
         instance=instance,
-        tags={**request.tags, **(extra_tags or {})},
+        tags={**scheduler_launch_tags(request), **(extra_tags or {})},
         raise_on_error=False,
     )
 
@@ -228,6 +230,31 @@ def test_hand_launched_run_with_an_issue_time_but_no_tick_issues_nothing(
     assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
 
 
+@pytest.mark.parametrize(
+    "preview_tick",
+    [
+        pytest.param(TICK - timedelta(hours=10), id="oldest-past-tick"),
+        pytest.param(TICK, id="tick-that-has-not-issued"),
+        pytest.param(TICK + timedelta(hours=1), id="next-future-tick"),
+    ],
+)
+def test_run_launched_from_the_schedule_tick_preview_issues_nothing(
+    repo: TimeSeriesRepository, dagster_instance, trained: SavedModel, preview_tick: datetime
+) -> None:
+    """The preview offers past and future ticks; launching one would backfill or pre-issue."""
+    result = _job(repo).execute_in_process(
+        instance=dagster_instance,
+        tags=tick_preview_launch_tags(
+            issued_forecast_schedule, preview_tick, instance=dagster_instance
+        ),
+        raise_on_error=False,
+    )
+
+    assert not result.success
+    assert "scheduled tick" in _failure_description(result)
+    assert repo.issued_forecast_store.fetch(preview_tick.replace(tzinfo=None)) is None
+
+
 def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     repo: TimeSeriesRepository, dagster_instance, trained: SavedModel
 ) -> None:
@@ -240,7 +267,7 @@ def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     result = _job(repo).execute_in_process(
         run_config=request.run_config,
         instance=dagster_instance,
-        tags=request.tags,
+        tags=scheduler_launch_tags(request),
         raise_on_error=False,
     )
 

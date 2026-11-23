@@ -16,6 +16,7 @@ from dagster import (
     Definitions,
     JobDefinition,
     RetryPolicy,
+    RunRequest,
     ScheduleDefinition,
     build_schedule_context,
     define_asset_job,
@@ -47,7 +48,7 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
-from shiro_mlops.pipelines.execution_origin import REEXECUTION_TAGS
+from shiro_mlops.pipelines.execution_origin import REEXECUTION_TAGS, RUN_KEY_TAG
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
 from shiro_mlops.service.data_explorer.datasets import Dataset
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
@@ -344,20 +345,55 @@ def selected_asset_names(job) -> set[str]:
     return {key.to_user_string() for key in job.selection.resolve(all_assets)}
 
 
-def scheduled_run_tags(
+def scheduler_launch_tags(request: RunRequest) -> dict:
+    """The tags the scheduler daemon puts on the run it launches for ``request``.
+
+    Evaluating a tick already merges the schedule name into the request's tags; only
+    the daemon adds the run key, so a run launched from a tick preview never has it.
+    """
+    tags = dict(request.tags)
+    if request.run_key:
+        tags[RUN_KEY_TAG] = request.run_key
+    return tags
+
+
+def _evaluated_request(
     schedule: ScheduleDefinition,
     tick: datetime,
     instance=None,
     resources: dict[str, Any] | None = None,
-) -> dict:
-    """The tags of the run ``schedule`` launches at ``tick``, schedule name included as Dagster adds it."""
+) -> RunRequest:
     execution = schedule.evaluate_tick(
         build_schedule_context(
             instance=instance, scheduled_execution_time=tick, resources=resources
         )
     )
     [request] = execution.run_requests
-    return dict(request.tags)
+    return request
+
+
+def scheduled_run_tags(
+    schedule: ScheduleDefinition,
+    tick: datetime,
+    instance=None,
+    resources: dict[str, Any] | None = None,
+) -> dict:
+    """The tags of the run the scheduler launches for ``schedule`` at ``tick``."""
+    return scheduler_launch_tags(_evaluated_request(schedule, tick, instance, resources))
+
+
+def tick_preview_launch_tags(
+    schedule: ScheduleDefinition,
+    tick: datetime,
+    instance=None,
+    resources: dict[str, Any] | None = None,
+) -> dict:
+    """The tags of a run a person launches from the Dagster UI's tick preview of ``schedule``.
+
+    The preview evaluates the schedule at a past or future tick and its launch button copies
+    the evaluated request's tags, schedule name and tick included, onto a hand-started run.
+    """
+    return dict(_evaluated_request(schedule, tick, instance, resources).tags)
 
 
 # Dagster 重新執行 run 時加上的標籤；與原 run 複製過來的標籤合併即為重新執行的 run。
