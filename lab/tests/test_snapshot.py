@@ -381,3 +381,68 @@ def test_src_never_imports_lab() -> None:
                 offenders.append(str(path.relative_to(src_dir)))
 
     assert offenders == []
+
+
+# --- a snapshot is written whole, once, and never ahead of the clock ------------------------
+
+
+def test_write_snapshot_refuses_an_as_of_the_clock_has_not_reached(
+    task: TaskDefinition, runtime: TaskRuntime, tmp_path: Path
+) -> None:
+    """Frozen under a future label, the file would hold data only up to today and never refresh."""
+    snapshots_dir = tmp_path / "snapshots"
+
+    with pytest.raises(ValueError, match="later than the current time"):
+        write_snapshot(task, runtime, "2999-01-01T00:00:00", snapshots_dir=snapshots_dir)
+
+    assert not snapshots_dir.exists() or list(snapshots_dir.rglob("*.parquet")) == []
+
+
+def test_an_interrupted_write_leaves_no_snapshot_behind(
+    task: TaskDefinition,
+    runtime: TaskRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial file at the final path could never be rewritten and could not be read."""
+    snapshots_dir = tmp_path / "snapshots"
+    real_to_parquet = pd.DataFrame.to_parquet
+
+    def fail_mid_write(frame: pd.DataFrame, path: object, **kwargs: object) -> None:
+        Path(str(path)).write_bytes(b"PAR1-truncated")
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_mid_write)
+    with pytest.raises(OSError, match="No space left"):
+        write_snapshot(task, runtime, AS_OF, snapshots_dir=snapshots_dir)
+    assert [path for path in snapshots_dir.rglob("*") if path.is_file()] == []
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", real_to_parquet)
+    written = write_snapshot(task, runtime, AS_OF, snapshots_dir=snapshots_dir)
+
+    assert [path for path in snapshots_dir.rglob("*") if path.is_file()] == [written]
+    assert not read_snapshot(task, AS_OF, snapshots_dir=snapshots_dir).load.empty
+
+
+def test_a_snapshot_that_appears_during_the_write_is_not_overwritten(
+    task: TaskDefinition,
+    runtime: TaskRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two runs freezing the same snapshot: the second to finish must lose, not replace."""
+    snapshots_dir = tmp_path / "snapshots"
+    target = snapshot_path(task, AS_OF, snapshots_dir=snapshots_dir)
+    real_to_parquet = pd.DataFrame.to_parquet
+
+    def another_run_finishes_first(frame: pd.DataFrame, path: object, **kwargs: object) -> None:
+        real_to_parquet(frame, path, **kwargs)
+        target.write_bytes(b"written-by-the-other-run")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", another_run_finishes_first)
+
+    with pytest.raises(FileExistsError, match=task.task_id):
+        write_snapshot(task, runtime, AS_OF, snapshots_dir=snapshots_dir)
+
+    assert target.read_bytes() == b"written-by-the-other-run"
+    assert [path for path in snapshots_dir.rglob("*") if path.is_file()] == [target]

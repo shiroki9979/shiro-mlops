@@ -491,3 +491,76 @@ def test_rolling_origin_backtest_predicts_as_if_given_all_load_before_the_origin
     assert report.predictions[ORIGIN_1] == pytest.approx(
         tuple(untrimmed["predicted_load_mw"]), abs=1e-9
     )
+
+
+# --- inputs that would silently skew a study -------------------------------------------------
+
+
+def test_rolling_origin_backtest_rejects_a_repeated_origin(fast_task: TaskDefinition) -> None:
+    """A repeated origin is weighted twice in every metric while its forecast is kept once."""
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+
+    with pytest.raises(ValueError, match=f"listed more than once.*{ORIGIN_1.isoformat()}"):
+        rolling_origin_backtest(
+            fast_task,
+            _training_data(load, weather),
+            origins=[ORIGIN_1, ORIGIN_1.isoformat(), ORIGIN_2],
+            horizon_hours=HORIZON_HOURS,
+        )
+
+
+@pytest.mark.parametrize("horizon_hours", [0, -1])
+def test_rolling_origin_backtest_rejects_a_horizon_shorter_than_one_hour(
+    fast_task: TaskDefinition, horizon_hours: int
+) -> None:
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+
+    with pytest.raises(ValueError, match="horizon_hours"):
+        rolling_origin_backtest(
+            fast_task,
+            _training_data(load, weather),
+            origins=[ORIGIN_1],
+            horizon_hours=horizon_hours,
+        )
+
+
+def test_rolling_origin_backtest_rejects_no_origins(fast_task: TaskDefinition) -> None:
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+
+    with pytest.raises(ValueError, match="origins must not be empty"):
+        rolling_origin_backtest(
+            fast_task, _training_data(load, weather), origins=[], horizon_hours=HORIZON_HOURS
+        )
+
+
+@pytest.mark.parametrize("hour_step", [0, -6, 25])
+def test_split_rejects_an_hour_step_outside_one_to_twenty_four(hour_step: int) -> None:
+    eligible = tuple(pd.date_range("2026-10-01 00:00", "2026-10-12 23:00", freq="h"))
+
+    with pytest.raises(ValueError, match="hour_step"):
+        split_search_and_eval_origins(
+            eligible, horizon_hours=24, eval_calendar_days=7, hour_step=hour_step
+        )
+
+
+@pytest.mark.parametrize("eval_calendar_days", [0, -1])
+def test_split_rejects_fewer_than_one_evaluation_day(eval_calendar_days: int) -> None:
+    """`dates[-0:]` is every date and `dates[--1:]` drops only the first, so neither failed."""
+    eligible = tuple(pd.date_range("2026-10-01 00:00", "2026-10-12 23:00", freq="h"))
+
+    with pytest.raises(ValueError, match="eval_calendar_days"):
+        split_search_and_eval_origins(
+            eligible, horizon_hours=24, eval_calendar_days=eval_calendar_days, hour_step=6
+        )
+
+
+def test_split_rejects_a_horizon_shorter_than_one_hour() -> None:
+    eligible = tuple(pd.date_range("2026-10-01 00:00", "2026-10-12 23:00", freq="h"))
+
+    with pytest.raises(ValueError, match="horizon_hours"):
+        split_search_and_eval_origins(eligible, horizon_hours=0, eval_calendar_days=7, hour_step=6)
+
+
+def test_split_of_no_eligible_origins_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no eligible origins"):
+        split_search_and_eval_origins((), horizon_hours=24, eval_calendar_days=7, hour_step=6)

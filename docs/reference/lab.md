@@ -14,7 +14,7 @@
 
 | 介面 | 行為 |
 | :--- | :--- |
-| `write_snapshot(task, runtime, as_of, *, variant=None, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表，並於 parquet 記錄 `task.weather` 的代表點、權重與欄位；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`TaskNotReady` 原樣拋出 |
+| `write_snapshot(task, runtime, as_of, *, variant=None, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表，並於 parquet 記錄 `task.weather` 的代表點、權重與欄位；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`as_of` 晚於現在時拋 `ValueError`（快照不可重寫，以未來時刻命名的檔案內容只到當下）；先完整寫入同目錄的暫存檔再以 hard link 放到定位，寫入中斷不會在目標路徑留下殘缺檔，兩次同時凍結同一快照時後完成者拋 `FileExistsError`；`TaskNotReady` 原樣拋出 |
 | `read_snapshot(task, as_of, *, variant=None, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原；快照記錄的天氣與 `task.weather` 不同時拋 `SnapshotWeatherMismatchError`；未記錄天氣的舊快照不檢查 |
 | `snapshot_path(task, as_of, *, variant=None, snapshots_dir) -> Path` | 無 `variant` 時回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`，有 `variant` 時回傳 `<snapshots_dir>/<task_id>/<variant>/<as_of>.parquet`；`variant` 限小寫英數與連字號，否則拋 `ValueError`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
 
@@ -36,7 +36,7 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 
 `rolling_origin_backtest(task, data, origins, horizon_hours, *, min_history_hours=None) -> BacktestReport` 為純函式，不做 I/O。
 
-- **起點語意**：起點為最後一筆已知實際負載的整點，預報目標為 `origin + 1h .. origin + horizon_hours`（`target_hours(origin, horizon_hours)`）。
+- **起點語意**：起點為最後一筆已知實際負載的整點，預報目標為 `origin + 1h .. origin + horizon_hours`（`target_hours(origin, horizon_hours)`）。`origins` 正規化後不得重複，重複時拋 `ValueError`：重複的起點會在每項指標重複計入，`predictions` 卻只保留一筆。
 - **訓練**：負載與氣象皆截斷為 `datetime <= origin`，`validation_start = origin + 1h`（驗證集為空）。
 - **預報**：`PredictionData` 由預測輸入關卡（`admit_prediction_inputs`，[ML 任務設定 §2](ml-tasks.md#2-任務類型介面taskstypes)）建構，與 serving 相同：`anchor = origin`，`load_history` 只含 `(origin - lookback_hours, origin]` 的負載（含起點當小時）；`weather` 為目標時段的完整逐時軸，由回測以正式的觀測氣象對齊規則（2 小時內向後對齊）填入後交給關卡。
 - **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `ValueError` 並指出起點與條件；關卡的拒絕以 `raise ValueError(...) from error` 包裝，原例外保留於 `__cause__`；訊息含關卡的拒絕訊息，第 2 項另附 lookback 內第一個缺負載的小時（`first missing: ...`），第 3 項的天氣部分由關卡訊息指出第一個缺值的目標小時：
@@ -61,7 +61,7 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 | :--- | :--- |
 | `eligible_origins(task, data, horizon_hours, *, min_history_hours=None)` | 以上述三項起點有效性條件（含預測輸入關卡）逐一檢查快照內每個整點，回傳 `rolling_origin_backtest` 會接受的全部起點 |
 | `origin_runs(origins)` | 將排序後的起點分組為連續整點區間 `(first, last)` |
-| `split_search_and_eval_origins(eligible, *, horizon_hours, eval_calendar_days, hour_step)` | 只取整點為 `hour_step` 倍數的起點；最後 `eval_calendar_days` 個日曆日為評估起點，搜尋起點為 `<= 第一個評估起點 - horizon_hours` 者，並以 `verify_non_overlapping_target_windows` 驗證；沒有可用的評估或搜尋起點時拋 `ValueError` |
+| `split_search_and_eval_origins(eligible, *, horizon_hours, eval_calendar_days, hour_step)` | 只取整點為 `hour_step` 倍數的起點；最後 `eval_calendar_days` 個日曆日為評估起點，搜尋起點為 `<= 第一個評估起點 - horizon_hours` 者，並以 `verify_non_overlapping_target_windows` 驗證；沒有可用的評估或搜尋起點，或 `hour_step` 不在 1–24、`eval_calendar_days`、`horizon_hours` 小於 1 時拋 `ValueError` |
 | `training_row_count(task, data, origin)` | 遞迴回歸任務在 `origin` 截斷後實際訓練的列數（缺任一 lag 或天氣的列已剔除），用於揭露加權天氣嚴格缺值的訓練列損失 |
 
 CLI：`uv run --package lab python -m lab.origins <task_id> --as-of <ISO> [--variant <name> --reference-points ... --weights ...] [--horizon-hours 24] [--eval-days 7] [--hour-step 6]`，輸出合格起點數、日曆日數、連續區間、建議的搜尋／評估切分，以及評估起點是否涵蓋 `--eval-days` 個日曆日（`sufficient: yes|no`）。

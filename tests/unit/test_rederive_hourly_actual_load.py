@@ -200,3 +200,48 @@ def _stored_rows(engine: Engine) -> dict[datetime, tuple[float, str | None]]:
             text("SELECT time, load_mw, source FROM raw_taipower_load WHERE subject = 'nationwide'")
         ).all()
     return {from_storage_time(row.time, column="time"): (row.load_mw, row.source) for row in rows}
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "named"),
+    [
+        ("2026-09-06T18:30:00", "2026-09-06T19:00:00", "--start"),
+        ("2026-09-06T18:00:01", "2026-09-06T19:00:00", "--start"),
+        ("2026-09-06T18:00:00.000001", "2026-09-06T19:00:00", "--start"),
+        ("2026-09-06T18:00:00", "2026-09-06T19:10:00", "--end"),
+    ],
+)
+def test_cli_rejects_a_window_edge_inside_an_hour(start: str, end: str, named: str) -> None:
+    """Half an hour's samples would be stored as that hour's mean and never overwritten."""
+    with pytest.raises(SystemExit, match=f"{named} .* whole hour"):
+        main(["--start", start, "--end", end])
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "named"),
+    [
+        ("2026-09-06T18:00:00+08:00", "2026-09-06T19:00:00", "--start"),
+        ("2026-09-06T18:00:00", "2026-09-06T19:00:00Z", "--end"),
+    ],
+)
+def test_cli_rejects_a_time_with_a_utc_offset_instead_of_crashing(
+    start: str, end: str, named: str
+) -> None:
+    with pytest.raises(SystemExit, match=f"{named} .* without a UTC offset"):
+        main(["--start", start, "--end", end])
+
+
+def test_cli_rejects_a_window_edge_inside_an_hour_before_touching_the_database(
+    legacy_upgraded_engine: Engine,
+) -> None:
+    _store_snapshots(legacy_upgraded_engine, [HOUR_A])
+    inside_the_hour = (HOUR_A + timedelta(minutes=30)).isoformat()
+    stored_before = _stored_rows(legacy_upgraded_engine)
+
+    with pytest.raises(SystemExit):
+        main(
+            ["--start", inside_the_hour, "--end", (HOUR_A + timedelta(hours=1)).isoformat()],
+            engine=legacy_upgraded_engine,
+        )
+
+    assert _stored_rows(legacy_upgraded_engine) == stored_before

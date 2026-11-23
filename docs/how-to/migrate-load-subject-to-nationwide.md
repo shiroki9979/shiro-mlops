@@ -108,6 +108,6 @@ uv run python scripts/rederive_hourly_actual_load.py \
   --start 2026-09-20T03:00:00 --end 2026-09-26T14:00:00 --dry-run
 ```
 
-確認無誤後去掉 `--dry-run` 再執行一次。腳本只讀已入庫的區域快照、只寫入尚無資料的小時，不覆寫既有列。
+確認無誤後去掉 `--dry-run` 再執行一次。腳本只讀已入庫的區域快照、只寫入尚無資料的小時，不覆寫既有列。`--start` 與 `--end` 須為不帶 UTC offset 的整點；落在小時中間的時刻會被拒絕，否則該小時只會以之後的樣本推算並寫入。
 
 完成後，Data Explorer 的逐時用電負載頁（`/data/power/load`）不應再列出停機期間的缺口。

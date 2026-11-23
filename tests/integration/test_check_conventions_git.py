@@ -855,3 +855,149 @@ def test_blob_limits_without_base_exits_2() -> None:
         main(["blob-limits"])
 
     assert exit_info.value.code == 2
+
+
+def _merge_adding(repo: Path, files: dict[str, str | bytes]) -> tuple[str, str]:
+    """A branch that merges its base's newer tip and adds `files` in the merge commit itself."""
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    trunk = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit(repo, {"src/pkg/feature.py": "x = 1\n"}, "2026-11-22")
+    _git(repo, "checkout", "-q", trunk)
+    _commit(repo, {"src/pkg/trunk.py": "y = 2\n"}, "2026-11-22")
+    _git(repo, "checkout", "-q", "feature")
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", trunk)
+    for path, content in files.items():
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "merge trunk")
+    return base, _git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_blob_limits_flags_files_a_merge_commit_itself_adds(repo: Path) -> None:
+    """`git add -A` while a merge is in progress puts untracked files into the merge commit."""
+    base, head = _merge_adding(
+        repo, {"keys/deploy.pem": "-----BEGIN-----\n", "big.bin": b"0" * (BLOB_SIZE_LIMIT + 1)}
+    )
+
+    violations = check_blob_limits(GitRange(repo, base, head))
+
+    assert sorted(_locations(violations)) == [("big.bin", 1), ("keys/deploy.pem", 1)]
+
+
+def test_blob_limits_does_not_blame_a_merge_for_what_its_parents_already_hold(repo: Path) -> None:
+    base, head = _merge_adding(repo, {})
+
+    assert check_blob_limits(GitRange(repo, base, head)) == []
+
+
+def test_blob_limits_flags_a_merge_resolution_that_differs_from_both_parents(repo: Path) -> None:
+    base = _commit(repo, {"data/dump.bin": b"base"}, "2026-11-22")
+    trunk = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit(repo, {"data/dump.bin": b"feature"}, "2026-11-22")
+    _git(repo, "checkout", "-q", trunk)
+    _commit(repo, {"data/dump.bin": b"trunk"}, "2026-11-22")
+    _git(repo, "checkout", "-q", "feature")
+    subprocess.run(["git", "merge", "-q", trunk], cwd=repo, check=False, capture_output=True)
+    (repo / "data/dump.bin").write_bytes(b"0" * (BLOB_SIZE_LIMIT + 1))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "resolve")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    violations = check_blob_limits(GitRange(repo, base, head))
+
+    assert _locations(violations) == [("data/dump.bin", 1)]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "infra/terraform/terraform.tfstate.backup",
+        "infra/terraform/terraform.tfstate.1700000000.backup",
+        "infra/terraform/prod.tfvars.json",
+        "infra/terraform/prod.auto.tfvars",
+        "keys/.pem",
+        ".key",
+        "infra/terraform/tfplan",
+        "infra/terraform/tfplan.json",
+        "infra/terraform/bootstrap/TFPLAN",
+        "infra/terraform/Terraform.TFSTATE.Backup",
+    ],
+)
+def test_blob_limits_flags_secret_bearing_names_whatever_follows_the_suffix(
+    repo: Path, path: str
+) -> None:
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    head = _commit(repo, {path: "{}\n"}, "2026-11-22")
+
+    violations = check_blob_limits(GitRange(repo, base, head))
+
+    assert _locations(violations) == [(path, 1)]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/reference/terraform-state-and-deployment.md",
+        "src/pkg/keyboard.py",
+        "frontend/src/query.keys.ts",
+        "infra/terraform/tfplan.md",
+        "infra/terraform/variables.tf",
+        "tests/fixtures/sample.key.json.txt",
+        "infra/terraform/example.tfvars.md",
+        "docs/pem-and-key-handling.md",
+    ],
+)
+def test_blob_limits_passes_names_that_only_resemble_blocked_ones(repo: Path, path: str) -> None:
+    base = _commit(repo, {"README.md": "# Repo\n"}, "2026-11-22")
+    head = _commit(repo, {path: "text\n"}, "2026-11-22")
+
+    assert check_blob_limits(GitRange(repo, base, head)) == []
+
+
+def test_doc_dates_checks_a_markdown_file_with_a_non_ascii_name(repo: Path) -> None:
+    """git quotes such a path unless asked not to, and the quoted form matches no file."""
+    base = _commit(repo, {"docs/操作指南.md": _doc("2026-11-01")}, "2026-11-01")
+    head = _commit(repo, {"docs/操作指南.md": _doc("2026-11-01", "Changed.")}, "2026-11-22")
+
+    violations = check_doc_dates(GitRange(repo, base, head))
+
+    assert _locations(violations) == [("docs/操作指南.md", 3)]
+
+
+def test_doc_dates_checks_a_markdown_file_with_a_space_in_its_name(repo: Path) -> None:
+    base = _commit(repo, {"docs/how to.md": _doc("2026-11-01")}, "2026-11-01")
+    head = _commit(repo, {"docs/how to.md": _doc("2026-11-01", "Changed.")}, "2026-11-22")
+
+    violations = check_doc_dates(GitRange(repo, base, head))
+
+    assert _locations(violations) == [("docs/how to.md", 3)]
+
+
+def test_comment_kinds_checks_a_python_file_with_a_space_in_its_path(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git ends the `+++ b/` line of such a path with a tab, which hid the `.py` suffix."""
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+
+    status = _comment_kinds(
+        repo, {"scripts/my tool.py": "x = 1\n"}, {"scripts/my tool.py": "# untagged\nx = 1\n"}
+    )
+
+    assert status == 1
+
+
+@pytest.mark.parametrize("name", ["tooling/check.mjs", "tooling/legacy.cjs", "infra/a.tftest.hcl"])
+def test_debt_markers_are_checked_in_node_modules_scripts_and_hcl(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(repo, {name: "// TODO: tidy this up\n"}, "2026-11-22")
+
+    assert main(["debt-markers"]) == 1

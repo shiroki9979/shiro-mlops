@@ -108,9 +108,10 @@ def check_track_record(base_url: str) -> None:
 
 
 def check_missing_published(base_url: str) -> None:
-    """A missing export must not fall back to index.html with 200 (no custom error response)."""
-    if fetch(base_url, MISSING_PUBLISHED_PATH).status == 200:
-        raise CheckFailedError("HTTP 200, expected an error status")
+    """A missing export must not fall back to index.html, served with 200 or by a redirect."""
+    status = fetch(base_url, MISSING_PUBLISHED_PATH).status
+    if status == 200 or 300 <= status < 400:
+        raise CheckFailedError(f"HTTP {status}, expected an error status")
 
 
 def planned_checks(base_url: str, now: datetime) -> list[tuple[str, Callable[[], None]]]:

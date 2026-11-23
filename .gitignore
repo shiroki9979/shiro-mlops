@@ -65,6 +65,10 @@ crash.log
 crash.*.log
 *.tfvars
 *.tfvars.json
+# scripts/plan_terraform.sh writes the saved plan and its JSON here by default; both hold
+# every planned value in plain text, sensitive ones included.
+tfplan
+tfplan.json
 override.tf
 override.tf.json
 *_override.tf

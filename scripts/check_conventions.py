@@ -44,11 +44,15 @@ Checks:
              noqa and type: ignore a reason. When a WHY-NOT name is missing, move the comment
              onto the code it protects or correct the name, or delete it with removed code.
   blob-limits
-             Each commit between --base and --head must not add or modify a file over 5 MiB or
+             Each commit between --base and --head must not add or modify a file over 5 MiB,
              one whose extension is blocked (.parquet .pkl .joblib .onnx .ipynb .tfstate
-             .tfvars .pem .key, any letter case). Every commit is checked, not only --head:
-             a file a later commit deletes stays in history once the branch is merged. Merge
-             commits are skipped; what they bring in is checked in the commits they merge.
+             .tfvars .pem .key, any letter case; also as a dotfile's whole name, and with more
+             after it for terraform.tfstate.backup and prod.tfvars.json), or a saved Terraform
+             plan (tfplan, tfplan.json). Every commit is checked, not only --head: a file a
+             later commit deletes stays in history once the branch is merged. What a merge
+             brings in is checked in the commits it merges; the merge commit itself is checked
+             for the files that differ from every parent, such as an untracked file swept in
+             by `git add -A` while the merge was in progress.
              To fix: rewrite the branch (git rebase) so no commit adds the file, and keep it
              out of git with .gitignore.
 """
@@ -124,7 +128,7 @@ PIP_VALUE_OPTIONS = frozenset(
 DEBT_MARKER = re.compile(r"\b(?P<marker>TODO|FIXME|HACK|XXX)\b(?!\(#\d+\))")
 DEBT_MARKER_SUFFIXES = frozenset(
     {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".sql", ".css", ".html", ".conf"}
-    | {".toml", ".yml", ".yaml", ".tf"}
+    | {".toml", ".yml", ".yaml", ".tf", ".hcl", ".mjs", ".cjs"}
 )
 DEBT_MARKER_FILE_PREFIXES = ("Makefile", "Dockerfile")
 # These files spell the markers out to define and test the check itself.
@@ -178,7 +182,14 @@ BLOB_SIZE_LIMIT = 5 * 1024 * 1024
 BLOCKED_SUFFIXES = frozenset(
     {".parquet", ".pkl", ".joblib", ".onnx", ".ipynb", ".tfstate", ".tfvars", ".pem", ".key"}
 )
+# SYNC(.gitignore): the Terraform and secrets patterns there name the same files; a pattern
+# added to one side only lets a state backup or a saved plan through the other.
+BLOCKED_SUFFIX_FOLLOWERS = {".tfstate": None, ".tfvars": frozenset({".json"})}
+"""Suffixes still blocked when more follow: any after `.tfstate`, only `.json` after `.tfvars`."""
+# SYNC(scripts/plan_terraform.sh): its default --out writes these two names beside the .tf files.
+BLOCKED_NAMES = frozenset({"tfplan", "tfplan.json"})
 GITLINK_MODE = "160000"
+DELETED_MODE = "000000"
 
 LAST_UPDATED = re.compile(
     r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
@@ -863,14 +874,37 @@ def committed_file_problems(committed: CommittedFile) -> list[str]:
     commit = committed.commit[:7]
     fix = "rewrite the branch so no commit adds it (git rebase) and keep it out with .gitignore"
     problems = []
-    suffix = Path(committed.path).suffix
-    if suffix.lower() in BLOCKED_SUFFIXES:
-        problems.append(f"commit {commit} adds a blocked '{suffix}' file; {fix}")
+    blocked = blocked_file_kind(committed.path)
+    if blocked is not None:
+        problems.append(f"commit {commit} adds a blocked '{blocked}' file; {fix}")
     if committed.size > BLOB_SIZE_LIMIT:
         size = committed.size / 1024 / 1024
         limit = BLOB_SIZE_LIMIT // 1024 // 1024
         problems.append(f"commit {commit} adds {size:.1f} MiB, over the {limit} MiB limit; {fix}")
     return problems
+
+
+def blocked_file_kind(path: str) -> str | None:
+    """The suffix or file name that blocks `path`, as the commit spelled it, or None.
+
+    A dotfile's whole name counts as its suffix (`.pem`), and the suffixes in
+    `BLOCKED_SUFFIX_FOLLOWERS` stay blocked with more after them (`terraform.tfstate.backup`,
+    `prod.tfvars.json`), which reading only the last suffix let through.
+    """
+    name = Path(path).name
+    if name.lower() in BLOCKED_NAMES:
+        return name
+    suffixes = Path(name).suffixes or ([name] if name.startswith(".") else [])
+    lowered = [suffix.lower() for suffix in suffixes]
+    if lowered and lowered[-1] in BLOCKED_SUFFIXES:
+        return suffixes[-1]
+    for index, suffix in enumerate(lowered[:-1]):
+        if suffix not in BLOCKED_SUFFIX_FOLLOWERS:
+            continue
+        followers = BLOCKED_SUFFIX_FOLLOWERS[suffix]
+        if followers is None or set(lowered[index + 1 :]) <= followers:
+            return suffixes[index]
+    return None
 
 
 def check_doc_dates(revisions: GitRange) -> list[Violation]:
@@ -894,16 +928,19 @@ class GitRange:
     head: str
 
     def changed_markdown(self) -> list[str]:
+        # WHY-NOT changed_markdown: -z keeps paths as they are. Without it git C-quotes a
+        # non-ASCII name, the quoted form matches no file in the log, and the doc is skipped.
         output = git(
             self.repo_root,
             "diff",
             "--name-only",
+            "-z",
             "--diff-filter=AMR",
             f"{self.base}...{self.head}",
             "--",
             "*.md",
         )
-        return [path for path in output.splitlines() if path and not is_doc_date_excluded(path)]
+        return [path for path in output.split("\0") if path and not is_doc_date_excluded(path)]
 
     def newest_author_date(self, path: str) -> date | None:
         # Author date in the author's own timezone matches the calendar day the header was written.
@@ -925,8 +962,12 @@ class GitRange:
         return git(self.repo_root, "show", f"{self.head}:{path}")
 
     def committed_files(self) -> list[CommittedFile]:
-        """Each file version a non-merge commit in base..head adds or modifies, with its size."""
-        commits = git(self.repo_root, "rev-list", "--no-merges", f"{self.base}..{self.head}")
+        """Each file version a commit in base..head adds or modifies, with its size.
+
+        A merge commit contributes the files that differ from every one of its parents:
+        what `git add -A` swept in while the merge was in progress, and conflict resolutions.
+        """
+        commits = git(self.repo_root, "rev-list", f"{self.base}..{self.head}")
         changes = [
             (commit, path, blob)
             for commit in commits.split()
@@ -935,12 +976,12 @@ class GitRange:
                     self.repo_root,
                     "diff-tree",
                     "-r",
+                    "-c",
                     "-z",
                     "--root",
                     "--no-commit-id",
                     "--no-renames",
                     "--no-abbrev",
-                    "--diff-filter=AMT",
                     commit,
                 )
             )
@@ -998,7 +1039,9 @@ def parse_changed_lines(diff: str) -> dict[str, FileChanges]:
         if line.startswith(DIFF_FILE_HEADER):
             in_file_header = True
         elif in_file_header and line.startswith(DIFF_NEW_PATH):
-            changes = files.setdefault(line.removeprefix(DIFF_NEW_PATH), FileChanges())
+            # git ends this line with a tab when the path holds a space.
+            path = line.removeprefix(DIFF_NEW_PATH).rstrip("\t")
+            changes = files.setdefault(path, FileChanges())
         elif (hunk := HUNK_HEADER.match(line)) is not None:
             in_file_header = False
             start, count = int(hunk["start"]), int(hunk["count"] or 1)
@@ -1010,12 +1053,19 @@ def parse_changed_lines(diff: str) -> dict[str, FileChanges]:
 
 
 def tree_changes(raw: str) -> list[tuple[str, str]]:
-    """Read `git diff-tree -z` raw output into (path, new blob id), skipping submodule commits."""
+    """Read `git diff-tree -c -z` raw output into (path, new blob id).
+
+    A record has one colon, old mode and old blob per parent, so a merge's combined record
+    is wider than an ordinary one; the new mode and blob come last in their groups.
+    Deletions and submodule commits are left out.
+    """
     fields = raw.split("\0")
     changes = []
     for meta, path in zip(fields[0::2], fields[1::2], strict=False):
-        _, new_mode, _, new_blob, _ = meta.split()
-        if new_mode != GITLINK_MODE:
+        parents = len(meta) - len(meta.lstrip(":"))
+        columns = meta.lstrip(":").split()
+        new_mode, new_blob = columns[parents], columns[2 * parents + 1]
+        if new_mode not in (GITLINK_MODE, DELETED_MODE):
             changes.append((path, new_blob))
     return changes
 
