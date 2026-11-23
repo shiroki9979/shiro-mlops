@@ -37,7 +37,7 @@ from shiro_mlops.pipelines.schedules import (
     HOURLY_ACTUAL_LOAD_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
-from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames
+from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import deployed_task, deployed_tasks
 from shiro_mlops.tasks.runner import TaskRuntime, check_training_readiness

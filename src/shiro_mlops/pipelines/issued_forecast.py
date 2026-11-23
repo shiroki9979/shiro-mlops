@@ -39,10 +39,10 @@ from shiro_mlops.pipelines.schedules import (
     HOURLY_ACTUAL_LOAD_ASSET,
     tick_run_key,
 )
+from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.pipelines.task_pipelines import (
     MODEL_SHA256_METADATA,
     TIME_SERIES_REPO,
-    TaskPipelineNames,
     latest_recorded_model,
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task

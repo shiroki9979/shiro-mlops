@@ -40,6 +40,7 @@ from shiro_mlops.pipelines.schedules import (
     HOURLY_ACTUAL_LOAD_ASSET,
     tick_run_key,
 )
+from shiro_mlops.pipelines.task_names import TaskPipelineNames
 from shiro_mlops.pipelines.tracking import log_training_run
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness
 from shiro_mlops.tasks.definition import HOURLY_ACTUAL_LOAD_TARGET, TaskDefinition
@@ -64,41 +65,6 @@ UNTRACKED_RUN_ID = "local_run"
 # `{task}__model` materialization metadata：模型版本識別與 MLflow 版本附註（後者可為空）。
 MODEL_SHA256_METADATA = "model_sha256"
 MLFLOW_MODEL_VERSION_METADATA = "mlflow_model_version"
-
-
-@dataclass(frozen=True)
-class TaskPipelineNames:
-    """Dagster names derived from a task id; the ``__`` separator keeps them task-scoped."""
-
-    task_id: str
-
-    @property
-    def features(self) -> str:
-        return f"{self.task_id}__features"
-
-    @property
-    def model(self) -> str:
-        return f"{self.task_id}__model"
-
-    @property
-    def monitoring(self) -> str:
-        return f"{self.task_id}__monitoring"
-
-    @property
-    def training_job(self) -> str:
-        return f"{self.task_id}__training_job"
-
-    @property
-    def monitoring_job(self) -> str:
-        return f"{self.task_id}__monitoring_job"
-
-    @property
-    def training_schedule(self) -> str:
-        return f"{self.task_id}__training_schedule"
-
-    @property
-    def monitoring_schedule(self) -> str:
-        return f"{self.task_id}__monitoring_schedule"
 
 
 @dataclass(frozen=True)
