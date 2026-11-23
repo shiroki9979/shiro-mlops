@@ -2,8 +2,8 @@ import { useId } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shiro-mlops/shared/ui/select'
 import { Switch } from '@shiro-mlops/shared/ui/switch'
 import { useMessages } from '@/i18n/messages'
-import { isFlagOn } from '@/lib/data-explorer'
 import type { ExplorerFilterField as FilterField } from './catalog'
+import type { ExplorerFilterValue } from './explorer-query-state'
 import { explorerFieldLabel } from './field-format'
 import { EXPLORER_VALUE_LABELS } from './status-text'
 
@@ -12,8 +12,8 @@ const NO_FILTER = '__no_filter__'
 
 interface ExplorerFilterFieldProps {
   field: FilterField
-  value: string
-  onChange: (value: string) => void
+  value: ExplorerFilterValue | undefined
+  onChange: (value: string | boolean) => void
 }
 
 export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFieldProps) {
@@ -21,6 +21,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
   const labelId = useId()
   const label = explorerFieldLabel(field.key, m)
   const control = field.control
+  const text = typeof value === 'string' ? value : ''
 
   if (control?.kind === 'switch') {
     return (
@@ -29,8 +30,8 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
         <div className="flex h-[34px] items-center">
           <Switch
             aria-labelledby={labelId}
-            checked={isFlagOn(value)}
-            onCheckedChange={(checked) => onChange(checked ? 'true' : '')}
+            checked={value === true}
+            onCheckedChange={onChange}
           />
         </div>
       </div>
@@ -42,7 +43,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
     return (
       <div className="text-xs text-slate-400 space-y-1">
         <span id={labelId}>{label}</span>
-        <Select value={value || NO_FILTER} onValueChange={(next) => onChange(next === NO_FILTER ? '' : next)}>
+        <Select value={text || NO_FILTER} onValueChange={(next) => onChange(next === NO_FILTER ? '' : next)}>
           <SelectTrigger aria-labelledby={labelId} className="h-auto py-2 text-xs">
             <SelectValue />
           </SelectTrigger>
@@ -65,7 +66,7 @@ export function ExplorerFilterField({ field, value, onChange }: ExplorerFilterFi
       <input
         className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200"
         placeholder={field.placeholder}
-        value={value}
+        value={text}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>

@@ -91,8 +91,8 @@ describe('Data Explorer weather charts', () => {
     expect(params.has('all_vintages')).toBe(false)
   })
 
-  // Hand-written links may use any spelling the API treats as on, not only the `true` the switch writes.
-  it.each(['true', '1', 'yes', 'TRUE', 'Yes'])(
+  // The full truth table lives in the query-state unit tests; these check the chart reads its result.
+  it.each(['true', 'yes'])(
     'asks for a geocode instead of requesting series when all vintages are on (%s) without one',
     async (allVintages) => {
       const requests = captureSeries('/data/weather/forecasts', [])
@@ -122,5 +122,25 @@ describe('Data Explorer weather charts', () => {
     const params = requests.at(-1)!.searchParams
     expect(params.get('all_vintages')).toBe('true')
     expect(params.get('geocode')).toBe('63000000')
+  })
+
+  it('sends all_vintages=true in the list and series requests for a deep-linked all_vintages=yes', async () => {
+    const lists: URL[] = []
+    const series = captureSeries('/data/weather/forecasts', [
+      temperatureSeries({ geocode: '63000000', dataset_id: 'F-D0047-089', issued_at: LATE_ISSUE }, 22),
+    ])
+    server.use(
+      http.get('*/data/weather/forecasts', ({ request }) => {
+        lists.push(new URL(request.url))
+        return HttpResponse.json(emptyList)
+      }),
+    )
+    renderPath(`/data/weather/forecasts?${WINDOW}&all_vintages=yes&geocode=63000000`)
+
+    await screen.findByText(m.explorer.results.empty)
+    await waitFor(() => expect(series.length).toBeGreaterThan(0))
+    expect(series.at(-1)!.searchParams.get('all_vintages')).toBe('true')
+    expect(lists.at(-1)!.searchParams.get('all_vintages')).toBe('true')
+    expect(screen.getByRole('switch', { name: m.explorer.fields.all_vintages })).toBeChecked()
   })
 })

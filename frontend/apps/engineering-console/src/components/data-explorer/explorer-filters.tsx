@@ -5,6 +5,7 @@ import { Database, Download, RefreshCw } from 'lucide-react'
 import { useMessages } from '@/i18n/messages'
 import type { ExplorerWindow } from '@/lib/explorer-window'
 import type { ExplorerDatasetConfig, ExplorerFieldKey } from './catalog'
+import type { ExplorerFilterValues } from './explorer-query-state'
 import { ExplorerFilterField } from './explorer-filter-field'
 import { ExplorerWindowNav } from './explorer-window-nav'
 
@@ -12,7 +13,7 @@ interface ExplorerFiltersProps {
   dataset: ExplorerDatasetConfig
   start: string
   end: string
-  filterValues: Partial<Record<ExplorerFieldKey, string>>
+  filterValues: ExplorerFilterValues
   fetchedAt: string
   items: Record<string, unknown>[]
   csvDisabled: boolean
@@ -20,7 +21,7 @@ interface ExplorerFiltersProps {
   onStartChange: (value: string) => void
   onEndChange: (value: string) => void
   onWindowChange: (window: ExplorerWindow) => void
-  onFilterChange: (key: ExplorerFieldKey, value: string) => void
+  onFilterChange: (key: ExplorerFieldKey, value: string | boolean) => void
 }
 
 export function ExplorerFilters({
@@ -82,7 +83,7 @@ export function ExplorerFilters({
             <ExplorerFilterField
               key={field.key}
               field={field}
-              value={filterValues[field.key] ?? ''}
+              value={filterValues[field.key]}
               onChange={(value) => onFilterChange(field.key, value)}
             />
           ))}

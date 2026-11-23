@@ -70,14 +70,49 @@ it.each([
   expect(isWithinDetailLimit(state) && listRequest(state)).toEqual(window)
 })
 
-it('keeps declared filter values as the text the router parsed and ignores undeclared keys', () => {
-  const search = { ...WITHIN_LIMIT, geocode: 63000000, all_vintages: true, dataset_id: '007', typo: 'x' }
+it('keeps declared text filters as the text the router parsed and ignores undeclared keys', () => {
+  const search = { ...WITHIN_LIMIT, geocode: 63000000, dataset_id: '007', issued_at: '', typo: 'x' }
 
   expect(parseExplorerQuery(forecasts, search, DEFAULT_WINDOW).filters).toEqual({
     geocode: '63000000',
-    all_vintages: 'true',
     dataset_id: '007',
   })
+})
+
+// The router turns `true` and `1` into a boolean and a number; other spellings arrive as text.
+it.each<[unknown, boolean]>([
+  [true, true],
+  [1, true],
+  ['yes', true],
+  ['TRUE', true],
+  ['Yes', true],
+  [false, false],
+  [0, false],
+  ['', false],
+  ['on', false],
+])('reads all_vintages %j as on: %s', (value, on) => {
+  const state = parseExplorerQuery(forecasts, { ...WITHIN_LIMIT, all_vintages: value }, DEFAULT_WINDOW)
+
+  expect(state.filters).toEqual(on ? { all_vintages: true } : {})
+  expect(toExplorerSearch(forecasts, state)).toEqual(on ? { ...WITHIN_LIMIT, all_vintages: true } : WITHIN_LIMIT)
+  expect(isWithinDetailLimit(state) && listRequest(state)).toEqual(on ? { ...WITHIN_LIMIT, all_vintages: 'true' } : WITHIN_LIMIT)
+})
+
+it('switches a filter on as true and off by removing it', () => {
+  const off = parseExplorerQuery(forecasts, WITHIN_LIMIT, DEFAULT_WINDOW)
+
+  const on = changeFilter(off, 'all_vintages', true)
+  expect(on.filters).toEqual({ all_vintages: true })
+  expect(toExplorerSearch(forecasts, on)).toEqual({ ...WITHIN_LIMIT, all_vintages: true })
+  expect(changeFilter(on, 'all_vintages', false).filters).toEqual({})
+})
+
+it('removes a select or free-text filter set to an empty value', () => {
+  const filtered = parseExplorerQuery(forecasts, { ...WITHIN_LIMIT, geocode: '63000000' }, DEFAULT_WINDOW)
+
+  const cleared = changeFilter(filtered, 'geocode', '')
+  expect(cleared.filters).toEqual({})
+  expect(isWithinDetailLimit(cleared) && listRequest(cleared)).toEqual(WITHIN_LIMIT)
 })
 
 it('changes the window onto the first page and keeps filters and chart settings', () => {
