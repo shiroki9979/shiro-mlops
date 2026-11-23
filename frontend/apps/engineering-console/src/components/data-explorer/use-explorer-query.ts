@@ -11,12 +11,13 @@ import {
   changeFilter,
   changeWindow,
   type ChartSettingsPatch,
+  explorerChart,
+  type ExplorerFilterValue,
   type ExplorerQueryState,
   isWithinDetailLimit,
   listRequest,
   nextPage,
   parseExplorerQuery,
-  seriesRequest,
   toExplorerSearch,
 } from './explorer-query-state'
 
@@ -42,14 +43,13 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
 
   return {
     state,
-    listRequest: request,
-    series: seriesRequest(dataset, state),
+    chart: explorerChart(dataset, state),
     list,
     setStart: (value: string) => navigateTo(changeWindow(dataset, state, { start: value })),
     setEnd: (value: string) => navigateTo(changeWindow(dataset, state, { end: value })),
     // Quick ranges and shifts replace both ends in one navigation so no half-moved window is fetched.
     setWindow: (window: ExplorerWindow) => navigateTo(changeWindow(dataset, state, window)),
-    setFilter: (key: ExplorerFieldKey, value: string | boolean) => navigateTo(changeFilter(state, key, value)),
+    setFilter: (key: ExplorerFieldKey, value: ExplorerFilterValue | undefined) => navigateTo(changeFilter(state, key, value)),
     goToNextPage: (cursor: string | undefined) => {
       if (cursor && isWithinDetailLimit(state)) navigateTo(nextPage(state, cursor))
     },

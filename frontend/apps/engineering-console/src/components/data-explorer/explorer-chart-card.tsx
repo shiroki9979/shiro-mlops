@@ -7,7 +7,14 @@ import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
-import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
+import {
+  AggSchema,
+  BucketSchema,
+  DEFAULT_AGG,
+  type ResolvedBucket,
+  ResolvedBucketSchema,
+  type SeriesResponse,
+} from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { type ChartBrush, useChartBrush } from './chart-brush'
 import { ChartFieldPicker } from './chart-field-picker'
@@ -17,7 +24,7 @@ import { plotSeries } from './plot-series'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { SeriesStackedAreaChart } from './series-stacked-area-chart'
 import { SeriesStatusChart } from './series-status-chart'
-import { type ChartSettings, type ChartSettingsPatch, DEFAULT_AGG, type SeriesRequest } from './explorer-query-state'
+import type { ChartSettings, ChartSettingsPatch, SeriesRequest } from './explorer-query-state'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
@@ -81,10 +88,10 @@ export function ExplorerChartCard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs">
-          {chart.groupOptions && (
+          {chart.groupOptions && settings.groupBy && (
             <ChartSelect
               label={chartText.groupBy}
-              value={settings.groupBy ?? chart.groupOptions[0]}
+              value={settings.groupBy}
               options={chart.groupOptions.map((option) => [option, chartText.groupOptions[option]])}
               onChange={(groupBy) => onChartChange({ groupBy })}
             />

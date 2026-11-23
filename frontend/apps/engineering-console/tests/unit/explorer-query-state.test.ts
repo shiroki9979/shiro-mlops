@@ -5,11 +5,11 @@ import {
   changeChart,
   changeFilter,
   changeWindow,
+  explorerChart,
   isWithinDetailLimit,
   listRequest,
   nextPage,
   parseExplorerQuery,
-  seriesRequest,
   toExplorerSearch,
 } from '@/components/data-explorer/explorer-query-state'
 
@@ -115,13 +115,13 @@ it('switches a filter on as true and off by removing it', () => {
   const on = changeFilter(off, 'all_vintages', true)
   expect(on.filters).toEqual({ all_vintages: true })
   expect(toExplorerSearch(forecasts, on)).toEqual({ ...WITHIN_LIMIT, all_vintages: true })
-  expect(changeFilter(on, 'all_vintages', false).filters).toEqual({})
+  expect(changeFilter(on, 'all_vintages', undefined).filters).toEqual({})
 })
 
-it('removes a select or free-text filter set to an empty value', () => {
+it('removes a select or free-text filter that is cleared', () => {
   const filtered = parseExplorerQuery(forecasts, { ...WITHIN_LIMIT, geocode: '63000000' }, DEFAULT_WINDOW)
 
-  const cleared = changeFilter(filtered, 'geocode', '')
+  const cleared = changeFilter(filtered, 'geocode', undefined)
   expect(cleared.filters).toEqual({})
   expect(isWithinDetailLimit(cleared) && listRequest(cleared)).toEqual(WITHIN_LIMIT)
 })
@@ -190,10 +190,15 @@ it('keeps the page when the chart changes and leaves a default setting out', () 
   expect(toExplorerSearch(load, changed)).toEqual({ ...WITHIN_LIMIT, cursor: 'page-2' })
 })
 
-it('applies the same rules to a chart change as to a deep link', () => {
-  const state = parseExplorerQuery(observationAudits, WITHIN_LIMIT, DEFAULT_WINDOW)
+it('keeps no agg on a count chart, from a deep link or a chart change', () => {
+  const state = parseExplorerQuery(observationAudits, { ...WITHIN_LIMIT, agg: 'max' }, DEFAULT_WINDOW)
 
-  expect(changeChart(observationAudits, state, { agg: 'max', bucket: '1h' }).chart).toMatchObject({ agg: 'avg', bucket: '1h' })
+  expect(state.chart).toStrictEqual({ bucket: 'auto', groupBy: undefined, fields: ['batch_count'] })
+  expect(changeChart(observationAudits, state, { agg: 'max', bucket: '1h' }).chart).toStrictEqual({
+    bucket: '1h',
+    groupBy: undefined,
+    fields: ['batch_count'],
+  })
 })
 
 it('clears agg when the raw bucket is chosen', () => {
@@ -223,7 +228,7 @@ it('keeps the chosen agg under the auto bucket', () => {
 
   const auto = changeChart(load, state, { bucket: 'auto' })
   expect(auto.chart).toEqual({ ...LOAD_CHART, agg: 'max' })
-  expect(seriesRequest(load, auto)).toEqual({
+  expect(explorerChart(load, auto)?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, fields: ['load_mw'], agg: 'max' },
   })
@@ -244,7 +249,6 @@ it.each<[string, typeof load, Record<string, unknown>, Record<string, unknown>]>
   ['a group_by on a chart without grouping', load, { group_by: 'x' }, { groupBy: undefined }],
   ['a group_by outside the options', units, { group_by: 'region' }, { groupBy: 'unit_type' }],
   ['a group_by among the options', units, { group_by: 'none' }, { groupBy: 'none' }],
-  ['an agg on a count chart', observationAudits, { agg: 'max' }, { agg: 'avg' }],
   ['a single field given as text', national, { fields: 'curr_util_rate_pct' }, { fields: ['curr_util_rate_pct'] }],
   ['an unknown field beside a known one', national, { fields: ['typo', 'curr_load_mw'] }, { fields: ['curr_load_mw'] }],
   ['a repeated field', national, { fields: ['curr_load_mw', 'curr_load_mw'] }, { fields: ['curr_load_mw'] }],
@@ -268,7 +272,7 @@ it('ignores chart settings on a dataset without a chart', () => {
 
   expect(state.chart).toBeUndefined()
   expect(toExplorerSearch(loadWithoutChart, state)).toEqual(WITHIN_LIMIT)
-  expect(seriesRequest(loadWithoutChart, state)).toBeUndefined()
+  expect(explorerChart(loadWithoutChart, state)).toBeUndefined()
 })
 
 it('writes only the chart settings that differ from the defaults to the URL', () => {
@@ -284,7 +288,7 @@ it('writes only the chart settings that differ from the defaults to the URL', ()
 it('requests the window, filters and fields with default chart settings left out', () => {
   const state = parseExplorerQuery(load, { ...WITHIN_LIMIT, subject: 'north', cursor: 'page-2' }, DEFAULT_WINDOW)
 
-  expect(seriesRequest(load, state)).toEqual({
+  expect(explorerChart(load, state)?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, subject: 'north', fields: ['load_mw'] },
   })
@@ -293,7 +297,7 @@ it('requests the window, filters and fields with default chart settings left out
 it('requests chart settings that differ from the defaults', () => {
   const state = parseExplorerQuery(units, { ...WITHIN_LIMIT, bucket: '1d', agg: 'min', group_by: 'none' }, DEFAULT_WINDOW)
 
-  expect(seriesRequest(units, state)).toEqual({
+  expect(explorerChart(units, state)?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, fields: ['net_generation_mw'], bucket: '1d', agg: 'min', group_by: 'none' },
   })
@@ -302,7 +306,7 @@ it('requests chart settings that differ from the defaults', () => {
 it('requests no agg under the raw bucket', () => {
   const state = parseExplorerQuery(units, { ...WITHIN_LIMIT, bucket: 'raw', agg: 'min', group_by: 'none' }, DEFAULT_WINDOW)
 
-  expect(seriesRequest(units, state)).toEqual({
+  expect(explorerChart(units, state)?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, fields: ['net_generation_mw'], bucket: 'raw', group_by: 'none' },
   })
@@ -312,7 +316,7 @@ it('requests neither fields nor agg for a count chart', () => {
   const search = { type: 'observations', ...WITHIN_LIMIT, status: 'complete', bucket: '1h', agg: 'max', fields: ['batch_count'] }
   const state = parseExplorerQuery(observationAudits, search, DEFAULT_WINDOW)
 
-  expect(seriesRequest(observationAudits, state)).toEqual({
+  expect(explorerChart(observationAudits, state)?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, status: 'complete', bucket: '1h' },
   })
@@ -321,7 +325,7 @@ it('requests neither fields nor agg for a count chart', () => {
 it('requests only the filters the series endpoint declares', () => {
   const state = parseExplorerQuery(regional, { ...WITHIN_LIMIT, region: '北部', completeness: 'complete' }, DEFAULT_WINDOW)
 
-  expect(seriesRequest(regional, state)).toEqual({
+  expect(explorerChart(regional, state)?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, region: '北部', fields: ['load_mw'] },
   })
@@ -330,8 +334,8 @@ it('requests only the filters the series endpoint declares', () => {
 it('reports the missing required filter instead of a request', () => {
   const state = parseExplorerQuery(forecasts, { ...WITHIN_LIMIT, all_vintages: 'yes' }, DEFAULT_WINDOW)
 
-  expect(seriesRequest(forecasts, state)).toEqual({ kind: 'missingFilter', filter: 'geocode', when: 'all_vintages' })
-  expect(seriesRequest(forecasts, changeFilter(state, 'geocode', '63000000'))).toEqual({
+  expect(explorerChart(forecasts, state)?.series).toEqual({ kind: 'missingFilter', filter: 'geocode', when: 'all_vintages' })
+  expect(explorerChart(forecasts, changeFilter(state, 'geocode', '63000000'))?.series).toEqual({
     kind: 'ready',
     params: { ...WITHIN_LIMIT, all_vintages: 'true', geocode: '63000000', fields: ['temperature_c'] },
   })
