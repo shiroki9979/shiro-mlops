@@ -639,14 +639,6 @@ class TimeSeriesRepository:
         """Fetch unit net-generation snapshots for a Taiwan-local observation slot."""
         return self.unit_generation_repo.fetch(observed_at)
 
-    def insert_issued_forecast(self, forecast: IssuedForecast) -> bool:
-        """Write an issued forecast once; ``False`` when its issue time already exists."""
-        return self.issued_forecast_store.insert(forecast)
-
-    def fetch_issued_forecast(self, issued_at: datetime) -> IssuedForecast | None:
-        """Fetch the forecast issued at a Taiwan-local issue time."""
-        return self.issued_forecast_store.fetch(issued_at)
-
     def fetch_latest_issued_forecast(self) -> IssuedForecast | None:
         """Fetch the forecast with the latest issue time, or ``None`` before the first issue."""
         return self.issued_forecast_store.fetch_latest()

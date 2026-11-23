@@ -235,7 +235,7 @@ def test_api_predict_on_demand_does_not_issue_a_forecast(
     response = client.post("/predict", json={"horizon_hours": 12})
 
     assert response.status_code == 200, response.text
-    repository.insert_issued_forecast.assert_not_called()
+    repository.issued_forecast_store.insert.assert_not_called()
     assert {name for name, _args, _kwargs in repository.method_calls} <= {
         "hourly_actual_load_store.latest_observation",
         "hourly_actual_load_store.series",

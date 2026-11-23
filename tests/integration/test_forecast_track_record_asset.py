@@ -23,7 +23,7 @@ CUTOFF = datetime(2026, 11, 20, 10, 0)
 
 
 def _issue(repo: TimeSeriesRepository, issued_at: datetime, target_hours: list[datetime]) -> None:
-    repo.insert_issued_forecast(
+    repo.issued_forecast_store.insert(
         IssuedForecast(
             issued_at=issued_at,
             load_anchor=issued_at.replace(minute=0) - timedelta(hours=1),
