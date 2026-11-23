@@ -20,7 +20,7 @@ from shiro_mlops.tasks.runner import (
     train_task,
 )
 from shiro_mlops.tasks.types.base import HealthStatus, TaskModel
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather
+from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
 HIGH_LOAD_ALERT = "high_load_alert"
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
@@ -52,7 +52,7 @@ def task(shipped: TaskDefinition) -> TaskDefinition:
 @pytest.fixture
 def runtime(test_repo: TimeSeriesRepository) -> TaskRuntime:
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
@@ -100,14 +100,15 @@ def _drop_load_hours(
     runtime: TaskRuntime, monkeypatch: pytest.MonkeyPatch, start: pd.Timestamp, hours: int
 ) -> None:
     """Serve persisted load without ``hours`` consecutive hours from ``start``."""
-    fetch_load_range = runtime.repository.fetch_load_range
+    store = runtime.hourly_actual_load
+    series = store.series
     end = start + pd.Timedelta(hours=hours - 1)
 
     def gapped(**kwargs):
-        load = fetch_load_range(**kwargs)
-        return load[~pd.to_datetime(load["time"]).between(start, end)]
+        load = series(**kwargs)
+        return load[~load["datetime"].between(start, end)]
 
-    monkeypatch.setattr(runtime.repository, "fetch_load_range", gapped)
+    monkeypatch.setattr(store, "series", gapped)
 
 
 @pytest.mark.parametrize(

@@ -37,6 +37,7 @@ from tests.helpers import (
     override_task_policies,
     upstream_http_500,
     with_dynamic_horizon_lookback,
+    write_derived_load,
 )
 
 # taipower_sample.json 的最後一筆實際負載即為遞迴預報起點。
@@ -133,9 +134,7 @@ def serving_repo(
     test_repo: TimeSeriesRepository, taipower_raw_df: pd.DataFrame
 ) -> TimeSeriesRepository:
     """Persisted nationwide load history, with no weather yet."""
-    test_repo.upsert_taipower_load(
-        with_dynamic_horizon_lookback(taipower_raw_df), default_subject="nationwide"
-    )
+    write_derived_load(test_repo.engine, with_dynamic_horizon_lookback(taipower_raw_df))
     return test_repo
 
 
@@ -326,7 +325,7 @@ def test_newer_legacy_rows_never_anchor_serving(
 ) -> None:
     """Under ADR-0008, newer legacy rows cannot mask a stale derived-load anchor."""
     repository = TimeSeriesRepository(engine=legacy_upgraded_engine, auto_init=False)
-    repository.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
+    write_derived_load(repository.engine, taipower_raw_df)
     insert_legacy_load_row(
         legacy_upgraded_engine, STALE_REQUEST_TIME.floor("h").to_pydatetime(), load_mw=26500.0
     )

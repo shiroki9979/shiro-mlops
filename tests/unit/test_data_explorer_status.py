@@ -13,7 +13,12 @@ from shiro_mlops.service.data_explorer.status import (
     derive_overall,
     evaluate_freshness,
 )
-from tests.helpers import derived_hourly_load, forecast_release, supply_demand_snapshot
+from tests.helpers import (
+    derived_hourly_load,
+    forecast_release,
+    supply_demand_snapshot,
+    write_derived_load,
+)
 
 
 def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
@@ -60,7 +65,7 @@ def test_latest_release_stale_shares_the_resolver_seven_hour_threshold(
 def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
     test_repo: TimeSeriesRepository, minute: int
 ) -> None:
-    test_repo.upsert_taipower_load(derived_hourly_load(24, datetime(2026, 9, 20, 11)))
+    write_derived_load(test_repo.engine, derived_hourly_load(24, datetime(2026, 9, 20, 11)))
 
     status = DatasetQuery(test_repo.engine).status(datetime(2026, 9, 20, 12, minute))
     load = next(dataset for dataset in status.datasets if dataset.id == "hourly_load")

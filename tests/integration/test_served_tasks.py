@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS
 from shiro_mlops.data.cwa_client import CWAForecastRelease, CWATownshipForecast
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.served_tasks import (
     Loaded,
@@ -21,7 +22,7 @@ from shiro_mlops.service.served_tasks import (
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, UnknownTaskError, deployed_task
 from shiro_mlops.tasks.model_store import model_directory, save_model
 from shiro_mlops.tasks.types.base import TaskModel
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather
+from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
 FRESH_AS_OF = pd.Timestamp(LAST_HOUR) + pd.Timedelta(minutes=30)
@@ -32,7 +33,7 @@ UNTRAINED_REASON = "Model is not loaded or trained yet."
 def serving_repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     """Three weeks of fresh nationwide load and Taipei observations, without forecasts."""
     load, weather = hourly_load_with_weather(24 * 21, LAST_HOUR)
-    test_repo.upsert_taipower_load(load)
+    write_derived_load(test_repo.engine, load)
     test_repo.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
@@ -185,7 +186,8 @@ def test_a_stale_load_anchor_makes_the_task_unavailable(
 
 def _broken_repository(error: Exception) -> MagicMock:
     repository = MagicMock(spec=TimeSeriesRepository)
-    repository.fetch_latest_load.side_effect = error
+    repository.hourly_actual_load_store = MagicMock(spec=HourlyActualLoadStore)
+    repository.hourly_actual_load_store.latest_observation.side_effect = error
     return repository
 
 

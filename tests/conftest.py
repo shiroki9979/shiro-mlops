@@ -20,7 +20,7 @@ from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import TaskModel, TrainingData
-from tests.helpers import create_legacy_load_table, override_task_policies
+from tests.helpers import create_legacy_load_table, override_task_policies, write_derived_load
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -150,7 +150,7 @@ def populated_repo(
 ) -> TimeSeriesRepository:
     """Create and populate TimeSeriesRepository with fixture data."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
-    repo.upsert_taipower_load(taipower_raw_df, default_subject="nationwide")
+    write_derived_load(repo.engine, taipower_raw_df)
     repo.upsert_cwa_observation_batch(cwa_observation_batch)
     return repo
 

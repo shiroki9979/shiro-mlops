@@ -4,7 +4,7 @@
 - 建立日期：2026-11-22
 - 最後更新：2026-11-22
 - 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 5 已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；其餘 5 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
+- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 3 已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228) 實作（2026-11-22）；候選 5 已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；其餘 4 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
 - 檢視基準：`45f4b8e9d004e5e316c96d79086b71a9dd0dbebd`
 - 前次檢視：[2026-09-27 架構檢視](2026-09-27-architecture-review.md)
 
@@ -19,7 +19,7 @@
 | :--- | :--- | :--- | :--- |
 | 1. 收斂預測輸入關卡 | Strong | serving 與滾動起點回測拒絕同一批起點 | 修正 [#226](https://github.com/shiroki9979/shiro-mlops/issues/226) 時（[#227](https://github.com/shiroki9979/shiro-mlops/issues/227)） |
 | 2. 集中儲存時刻轉換 | Strong | 單一儲存形式，跨表 SQL join 可用 | 併入 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160)；已實作（2026-11-22，子 issue [#237](https://github.com/shiroki9979/shiro-mlops/issues/237)–[#242](https://github.com/shiroki9979/shiro-mlops/issues/242)） |
-| 3. 由單一 module 擁有全台逐時實際負載的存取 | Strong | ADR-0008 的口徑規則只在一處成立 | 下次修改全台逐時實際負載的推算或讀取時（[#228](https://github.com/shiroki9979/shiro-mlops/issues/228)） |
+| 3. 由單一 module 擁有全台逐時實際負載的存取 | Strong | ADR-0008 的口徑規則只在一處成立 | 下次修改全台逐時實際負載的推算或讀取時（[#228](https://github.com/shiroki9979/shiro-mlops/issues/228)）；已實作（2026-11-22，子 issue [#298](https://github.com/shiroki9979/shiro-mlops/issues/298)、[#300](https://github.com/shiroki9979/shiro-mlops/issues/300)–[#303](https://github.com/shiroki9979/shiro-mlops/issues/303)） |
 | 4. 以資料集定義推導營運資料檢視器的查詢 | Strong | series 端點一次實作，8 個資料集共用 | M9 series 端點開工前（[#229](https://github.com/shiroki9979/shiro-mlops/issues/229)） |
 | 5. 集中已部署任務的模型狀態與預測 | Worth exploring | API 測試不再 patch module 全域 | 下次修改 API 的模型載入或就緒判定時（[#230](https://github.com/shiroki9979/shiro-mlops/issues/230)）；已實作（2026-11-22） |
 | 6. 擷取來源 fetch 改為注入的 adapter | Worth exploring | 擷取 asset 測試不再 patch module 路徑 | 下次新增擷取來源或修改 asset 的 fetch 時（[#231](https://github.com/shiroki9979/shiro-mlops/issues/231)）；已實作（2026-11-22） |
@@ -107,6 +107,10 @@ After ：所有 store 與營運資料檢視器 → 儲存時刻 module〔台灣�
 以 raw SQL 斷言儲存格式的 store 測試與 `SQLITE_NAIVE_UTC_TABLES` 分流可移除。
 
 ## 候選 3：由單一 module 擁有全台逐時實際負載的存取
+
+> **狀態（2026-11-22）**：已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228)（子 issue [#298](https://github.com/shiroki9979/shiro-mlops/issues/298)、[#300](https://github.com/shiroki9979/shiro-mlops/issues/300)–[#303](https://github.com/shiroki9979/shiro-mlops/issues/303)）實作。[hourly_actual_load_store.py](../../src/shiro_mlops/data/hourly_actual_load_store.py) 的 `HourlyActualLoadStore` 擁有 `raw_taipower_load` 與推算來源常數：寫入內建推算來源，以台灣本地半開窗讀推算序列，並提供最新推算小時、累積盤點、依排程推算，以及以 `ON CONFLICT DO NOTHING` 寫入、不覆寫任何既有列的區間補推；`TimeSeriesRepository` 的負載方法已刪除，asset、補推腳本與 runner 只呼叫 store。
+> 與本節方向的差異：營運資料檢視器已由候選 4 改為宣告式資料集定義，維持原樣，只改由 store 匯入口徑常數；預報實績 join 跨已發布預報與負載兩張表，留在 repository，以同一常數綁參數。runner 要含終點的序列，由 runner 在一處把終點換成下一小時再交給 store 的半開窗；`with_datetime_column` 仍供天氣與 Feast 匯出使用。
+> 本節指向的程式位置（`fetch_load_range`、`_valid_hourly_load`、`hourly_load.py`、`catalog.py`、`completeness.py`、各自切出的窄 Protocol 等）記錄檢視基準當時的狀態，僅供歷史參考；現行契約見 [data-contracts.md](../reference/data-contracts.md) §3 與 [ml-tasks.md](../reference/ml-tasks.md)。
 
 ### 現況與證據
 

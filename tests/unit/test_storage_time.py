@@ -18,6 +18,7 @@ from shiro_mlops.core.storage_time import (
     register_sqlite_datetime_adapter,
     to_storage_time,
     to_storage_time_or_none,
+    window_before,
 )
 
 
@@ -181,6 +182,26 @@ def test_half_open_window_includes_start_and_excludes_end_on_sqlite(instants_eng
     assert _select_window(
         instants_engine, datetime(2026, 1, 1, 8, 0), datetime(2026, 1, 1, 10, 0)
     ) == [datetime(2026, 1, 1, 8, 0), datetime(2026, 1, 1, 9, 0)]
+
+
+def test_window_before_reaches_the_earliest_instant_and_excludes_end_on_sqlite(instants_engine):
+    _store(
+        instants_engine,
+        datetime(2020, 1, 1, 0, 0),
+        datetime(2026, 1, 1, 8, 59, 59, 999999),
+        datetime(2026, 1, 1, 9, 0),
+    )
+    window = window_before("observed_at", datetime(2026, 1, 1, 9, 0))
+
+    with instants_engine.connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT observed_at FROM instants WHERE {window.sql} ORDER BY observed_at"),
+            window.params,
+        ).scalars()
+        selected = [from_storage_time(row, column="observed_at") for row in rows]
+
+    assert selected == [datetime(2020, 1, 1, 0, 0), datetime(2026, 1, 1, 8, 59, 59, 999999)]
+    assert window.params == {"observed_at_end": datetime(2026, 1, 1, 1, 0, tzinfo=UTC)}
 
 
 def test_fractional_seconds_order_and_window_correctly_beside_whole_seconds(instants_engine):

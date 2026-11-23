@@ -20,7 +20,6 @@ from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
 )
 
-REGIONAL_SNAPSHOT_SUM_SOURCE = "regional_snapshot_sum"
 SAMPLE_COUNT_COL = "sample_count"
 WAN_KW_TO_MW = 10.0
 ONE_HOUR = timedelta(hours=1)

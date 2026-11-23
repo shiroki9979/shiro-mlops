@@ -9,7 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from shiro_mlops.service.data_explorer.datasets import HOURLY_LOAD
-from tests.helpers import DatasetLister
+from tests.helpers import DatasetLister, insert_other_source_load_row
 from tests.scenarios.data_explorer_windows import (
     assert_all_dataset_windows,
     assert_completeness_windows,
@@ -69,14 +69,7 @@ def test_completeness_windows_on_sqlite(sqlite_engine: Engine) -> None:
 def test_window_acceptance_preserves_existing_rows(
     sqlite_engine: Engine, scenario: Callable[[Engine], None], existing_time: datetime
 ) -> None:
-    with sqlite_engine.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO raw_taipower_load (time, subject, load_mw, source) "
-                "VALUES (:time, 'existing-row', 99, 'legacy')"
-            ),
-            {"time": existing_time},
-        )
+    insert_other_source_load_row(sqlite_engine, existing_time, 99.0, subject="existing-row")
 
     scenario(sqlite_engine)
 

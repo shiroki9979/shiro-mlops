@@ -15,64 +15,17 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-from typing import Protocol
 
-import pandas as pd
+from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.constants import NATIONWIDE_SUBJECT
 from shiro_mlops.core.datetime_utils import taiwan_now
-from shiro_mlops.data.hourly_actual_load import derive_hourly_actual_load, floor_to_hour
+from shiro_mlops.data.hourly_actual_load import HourWindow, floor_to_hour
 from shiro_mlops.data.repository import TimeSeriesRepository
-from shiro_mlops.data.taipower_regional_supply_demand import (
-    TaipowerRegionalSupplyDemandSnapshot,
-)
 
 CLI_DESCRIPTION = (
     "Derive hourly actual load for stored regional snapshots the scheduled asset never covered."
 )
-DATETIME_COL = "datetime"
-
-
-class LoadRepository(Protocol):
-    def fetch_regional_supply_demand_snapshots_by_source_time(
-        self, start_time: datetime, end_time: datetime
-    ) -> list[TaipowerRegionalSupplyDemandSnapshot]: ...
-
-    def fetch_load_range(
-        self,
-        start_time: datetime | None = None,
-        end_time: datetime | None = None,
-        subject: str | None = None,
-        source: str | None = None,
-    ) -> pd.DataFrame: ...
-
-    def upsert_taipower_load(self, df: pd.DataFrame) -> int: ...
-
-
-def rederive_missing_hours(
-    repository: LoadRepository,
-    start: datetime,
-    end: datetime,
-    *,
-    min_samples: int,
-    dry_run: bool,
-) -> pd.DataFrame:
-    """Derive hours in ``[start, end)`` that stored snapshots support but stored load lacks."""
-    missing = _derivable_hours_missing_from_store(repository, start, end, min_samples)
-    if not dry_run and not missing.empty:
-        repository.upsert_taipower_load(missing)
-    return missing
-
-
-def _derivable_hours_missing_from_store(
-    repository: LoadRepository, start: datetime, end: datetime, min_samples: int
-) -> pd.DataFrame:
-    snapshots = repository.fetch_regional_supply_demand_snapshots_by_source_time(start, end)
-    derived = derive_hourly_actual_load(snapshots, completed_before=end, min_samples=min_samples)
-    stored = repository.fetch_load_range(start, end, subject=NATIONWIDE_SUBJECT)
-    stored_hours = pd.to_datetime(stored["time"])
-    return derived[~derived[DATETIME_COL].isin(stored_hours)].reset_index(drop=True)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -95,13 +48,12 @@ def _reject_unfinished_window(start: datetime, end: datetime) -> None:
         raise SystemExit(f"--start {start.isoformat()} must be earlier than --end.")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, engine: Engine | None = None) -> int:
     args = _parse_args(argv)
     _reject_unfinished_window(args.start, args.end)
-    hours = rederive_missing_hours(
-        TimeSeriesRepository(),
-        args.start,
-        args.end,
+    store = TimeSeriesRepository(engine=engine).hourly_actual_load_store
+    hours = store.rederive(
+        HourWindow(start=args.start, end=args.end),
         min_samples=args.min_samples,
         dry_run=args.dry_run,
     )

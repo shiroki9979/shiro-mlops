@@ -4,8 +4,6 @@ Per-task features, model, and monitoring assets come from the asset factory in
 ``pipelines/task_pipelines.py``.
 """
 
-from datetime import datetime
-
 import pandas as pd
 from dagster import (
     AssetExecutionContext,
@@ -25,15 +23,11 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     CWASource,
 )
-from shiro_mlops.data.hourly_actual_load import (
-    ONE_HOUR,
-    catch_up_window,
-    derive_hourly_actual_load,
-    floor_to_hour,
-    resolve_evaluation_time,
-    uncovered_gap,
+from shiro_mlops.data.hourly_actual_load import ONE_HOUR, resolve_evaluation_time
+from shiro_mlops.data.hourly_actual_load_store import (
+    HourlyActualLoadStore,
+    ScheduledDerivationPolicy,
 )
-from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
     RegionalSupplyDemandSource,
     TaipowerRegionalSupplyDemandSnapshot,
@@ -178,16 +172,6 @@ def raw_taipower_regional_supply_demand_snapshot(
     return snapshots
 
 
-def _latest_derived_hour(
-    repository: TimeSeriesRepository, at_or_before: datetime
-) -> datetime | None:
-    """Newest derived nationwide hour a run at this tick could have seen."""
-    latest = repository.fetch_latest_load(at_or_before=at_or_before)
-    if latest.empty:
-        return None
-    return latest["time"].iloc[0].to_pydatetime()
-
-
 @asset(
     group_name="ingestion",
     description="Derive nationwide hourly actual load from regional supply-demand snapshots",
@@ -199,18 +183,18 @@ def raw_taipower_load(
     config: HourlyActualLoadConfig,
 ) -> pd.DataFrame:
     """Asset: recompute recent hours and any after the latest derived hour, then upsert them."""
-    evaluated_at = resolve_evaluation_time(config.evaluated_at)
-    repository = getattr(context.resources, TIME_SERIES_REPO)
-    latest_derived_hour = _latest_derived_hour(
-        repository, at_or_before=floor_to_hour(evaluated_at) - ONE_HOUR
+    store: HourlyActualLoadStore = getattr(
+        context.resources, TIME_SERIES_REPO
+    ).hourly_actual_load_store
+    derivation = store.derive_scheduled(
+        resolve_evaluation_time(config.evaluated_at),
+        ScheduledDerivationPolicy(
+            recompute_hours=settings.HOURLY_LOAD_RECOMPUTE_HOURS,
+            max_catchup_hours=settings.HOURLY_LOAD_CATCHUP_MAX_HOURS,
+            min_samples=settings.HOURLY_LOAD_MIN_SAMPLES,
+        ),
     )
-    window = catch_up_window(
-        evaluated_at,
-        latest_derived_hour,
-        recent_hours=settings.HOURLY_LOAD_RECOMPUTE_HOURS,
-        max_catchup_hours=settings.HOURLY_LOAD_CATCHUP_MAX_HOURS,
-    )
-    gap = uncovered_gap(latest_derived_hour, window)
+    gap = derivation.uncovered_gap
     if gap is not None:
         context.log.warning(
             "Hours in [%s, %s) exceed HOURLY_LOAD_CATCHUP_MAX_HOURS=%s and are not derived; "
@@ -219,24 +203,16 @@ def raw_taipower_load(
             gap.end.isoformat(),
             settings.HOURLY_LOAD_CATCHUP_MAX_HOURS,
         )
-    snapshots = repository.fetch_regional_supply_demand_snapshots_by_source_time(
-        window.start, window.end
-    )
-    hourly_load = derive_hourly_actual_load(
-        snapshots,
-        completed_before=window.end,
-        min_samples=settings.HOURLY_LOAD_MIN_SAMPLES,
-    )
-    upserted = repository.upsert_taipower_load(hourly_load)
+    window = derivation.window
     context.log.info(
         "Derived %s of %s hours in [%s, %s) from %s regional snapshots",
-        upserted,
+        derivation.written_hours,
         (window.end - window.start) // ONE_HOUR,
         window.start.isoformat(),
         window.end.isoformat(),
-        len(snapshots),
+        derivation.snapshot_count,
     )
-    return hourly_load
+    return derivation.hourly_load
 
 
 @asset(
