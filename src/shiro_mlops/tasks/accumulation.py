@@ -9,11 +9,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum, auto
 
 from shiro_mlops.core.constants import HOURS_PER_DAY
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 
 LEGACY_LOAD_GUIDE = "docs/how-to/remove-legacy-d015046-load-rows.md"
+
+
+class AccumulationOutcome(Enum):
+    """The gate's verdict on persisted hourly actual load; exactly one applies.
+
+    ``BLOCKED_BY_LEGACY_ROWS``: ``source IS NULL`` rows remain, whatever the valid
+    hourly observations add up to. ``BELOW_MINIMUM_ACCUMULATION``: valid hourly
+    observations are fewer than the minimum accumulation. ``MINIMUM_ACCUMULATION_REACHED``:
+    the only outcome that permits training.
+    """
+
+    BLOCKED_BY_LEGACY_ROWS = auto()
+    BELOW_MINIMUM_ACCUMULATION = auto()
+    MINIMUM_ACCUMULATION_REACHED = auto()
 
 
 @dataclass(frozen=True)
@@ -26,27 +41,37 @@ class TrainingLoadReadiness:
     latest_hour: datetime | None
 
     @property
+    def outcome(self) -> AccumulationOutcome:
+        if self.legacy_rows:
+            return AccumulationOutcome.BLOCKED_BY_LEGACY_ROWS
+        if self.valid_hours < self.required_hours:
+            return AccumulationOutcome.BELOW_MINIMUM_ACCUMULATION
+        return AccumulationOutcome.MINIMUM_ACCUMULATION_REACHED
+
+    @property
     def ready(self) -> bool:
-        return self.legacy_rows == 0 and self.valid_hours >= self.required_hours
+        return self.outcome is AccumulationOutcome.MINIMUM_ACCUMULATION_REACHED
 
     @property
     def reason(self) -> str:
-        if self.legacy_rows:
-            return (
-                f"raw_taipower_load contains {self.legacy_rows} legacy rows without a "
-                f"derivation source; remove them before training (see {LEGACY_LOAD_GUIDE})."
-            )
-        if self.valid_hours < self.required_hours:
-            missing = self.required_hours - self.valid_hours
-            return (
-                "Insufficient hourly actual load for training: "
-                f"{self.valid_hours} valid hourly observations; {self.required_hours} required "
-                f"(policies.min_training_hours). {_describe_remaining(missing)}"
-            )
-        return (
-            f"Hourly actual load ready for training: {self.valid_hours} valid hourly "
-            f"observations (>= {self.required_hours})."
-        )
+        match self.outcome:
+            case AccumulationOutcome.BLOCKED_BY_LEGACY_ROWS:
+                return (
+                    f"raw_taipower_load contains {self.legacy_rows} legacy rows without a "
+                    f"derivation source; remove them before training (see {LEGACY_LOAD_GUIDE})."
+                )
+            case AccumulationOutcome.BELOW_MINIMUM_ACCUMULATION:
+                missing = self.required_hours - self.valid_hours
+                return (
+                    "Insufficient hourly actual load for training: "
+                    f"{self.valid_hours} valid hourly observations; {self.required_hours} "
+                    f"required (policies.min_training_hours). {_describe_remaining(missing)}"
+                )
+            case AccumulationOutcome.MINIMUM_ACCUMULATION_REACHED:
+                return (
+                    f"Hourly actual load ready for training: {self.valid_hours} valid hourly "
+                    f"observations (>= {self.required_hours})."
+                )
 
 
 def check_training_load_readiness(
