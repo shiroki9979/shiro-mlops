@@ -38,17 +38,26 @@ fork PR 的 workflow 執行時：
 
 ## 3. 安全功能
 
-位置在 **Settings → Advanced Security**，舊介面叫 **Code security**。
+位置在 **Settings → Advanced Security**，舊介面叫 **Code security**。下表依該頁由上到下的順序排列，方便逐項對照。
 
-| 功能 | 狀態 | 說明 |
-| :--- | :--- | :--- |
-| Secret scanning | 開啟 | 掃描整個歷史與之後的推送，發現已知格式的機密時發出 alert |
-| Push protection | 開啟 | 推送內容含已知格式的機密時直接拒絕 |
-| Dependabot alerts | 開啟 | 依賴項有已知漏洞時發出 alert |
-| Dependabot security updates | 關閉 | 單人維護的儲存庫只看 alert，再由人決定是否升級 |
-| Dependabot version updates | 關閉 | 避免大量更新 PR |
-| Code scanning | CodeQL Default setup：Python、JavaScript/TypeScript、GitHub Actions | 結果不列入 rulesets 的必要檢查 |
-| Private vulnerability reporting | 開啟 | 讓回報者以 **Security → Report a vulnerability** 私下回報 |
+| 區塊 | 功能 | 狀態 | 說明 |
+| :--- | :--- | :--- | :--- |
+| — | Private vulnerability reporting | 開啟 | 讓回報者以 **Security → Report a vulnerability** 私下回報 |
+| Dependency Scanning | Dependency graph | 開啟 | Dependabot alerts 需要它 |
+| Dependency Scanning | Automatic dependency submission | Disabled | 只適用於建置時才算得出依賴的生態系；`uv.lock` 與 `pnpm-lock.yaml` 可直接讀取 |
+| Dependabot | Dependabot alerts | 開啟 | 依賴項有已知漏洞時發出 alert |
+| Dependabot | Malware alerts | 關閉 | 依賴項是已知惡意套件時發出 alert；要開時直接切換即可 |
+| Dependabot | Dependabot auto-triage rules | GitHub 預設規則（1 條） | 未自訂規則 |
+| Dependabot | Dependabot security updates | 關閉 | 單人維護的儲存庫只看 alert，再由人決定是否升級 |
+| Dependabot | Grouped security updates | 關閉 | 只在開啟 security updates 時有作用 |
+| Dependabot | Dependabot version updates | 關閉 | 沒有 `.github/dependabot.yml`，避免大量更新 PR |
+| Code Security | CodeQL analysis | Default setup | 語言由 GitHub 自動偵測；結果不列入 rulesets 的必要檢查 |
+| AI Scan | AI Scan for repositories、AI Scan for pull requests、Scan for AI applications | 關閉 | 會消耗 AI credits |
+| AI Scan | Copilot Autofix | 開啟 | 只在 CodeQL alert 中附上修正建議，不會自己開 PR |
+| AI Scan | Agentic autofix | 關閉 | 會消耗 AI credits，並會自動開 PR |
+| Protection rules | Check runs failure threshold | 預設：Security alert severity level **High or higher**，Standard alert severity level **Only errors** | CodeQL 不在必要檢查內，這個門檻不會擋下合併 |
+| Secret Protection | Secret scanning | 開啟 | 掃描整個歷史與之後的推送，發現已知格式的機密時發出 alert |
+| Secret Protection | Push protection | 開啟 | 推送內容含已知格式的機密時直接拒絕 |
 
 ## 4. 維護者帳號
 
