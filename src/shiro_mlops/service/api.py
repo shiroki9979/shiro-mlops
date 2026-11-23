@@ -339,7 +339,7 @@ def create_app(
     )
     # WHY-NOT(repository): 注入的 repository 與 served_tasks 都在建構時放入 app.state，不等 lifespan。
     # 未進入 lifespan 的 TestClient 也會呼叫端點；改等 lifespan 時，get_served_tasks
-    # 與營運資料檢視器的 _repository 讀 app.state 會拋 AttributeError。
+    # 與營運資料檢視器的 _engine 讀 app.state 會拋 AttributeError。
     if repository is not None:
         app.state.repository = repository
     if served_tasks is not None:

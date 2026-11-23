@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
 from shiro_mlops.core.config import settings
@@ -31,8 +32,10 @@ from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import TaskModel, TrainingData
 from tests.helpers import (
     canonical_observation_batch,
+    derived_hourly_load,
     hourly_load_with_weather,
     override_task_policies,
+    rfc3339,
     task_runtime,
     with_dynamic_horizon_lookback,
     write_derived_load,
@@ -453,6 +456,35 @@ def test_a_model_that_fails_to_load_is_reported_apart_from_an_untrained_one(
     assert untrained_ready.status_code == untrained_predict.status_code == 503
     assert untrained_ready.json()["reason"] == MODEL_NOT_LOADED_REASON
     assert untrained_predict.json()["detail"] == MODEL_NOT_LOADED_REASON
+
+
+def test_startup_builds_one_composition_root_for_explorer_and_served_tasks(
+    fitted_task_model: TaskModel, sqlite_engine: Engine, tmp_path: Path, monkeypatch
+) -> None:
+    """Nothing injected: one engine serves both the Data Explorer and every task read (#230)."""
+    latest_hour = datetime(2026, 9, 20, 23, 0)
+    write_derived_load(sqlite_engine, derived_hourly_load(1, latest_hour))
+    opened: list[Engine] = []
+
+    def open_engine(*_args: object, **_kwargs: object) -> Engine:
+        opened.append(sqlite_engine)
+        return sqlite_engine
+
+    monkeypatch.setattr("shiro_mlops.data.repository.get_timescale_engine", open_engine)
+    monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    save_model(settings.models_dir, DYNAMIC_HORIZON_FORECAST, fitted_task_model)
+
+    with TestClient(create_app()) as client:
+        status = client.get("/data/status").json()
+        ready = client.get(f"/tasks/{DYNAMIC_HORIZON_FORECAST}/ready").json()
+
+    hourly_load = next(item for item in status["datasets"] if item["id"] == "hourly_load")
+    assert hourly_load["latest_source_at"] == rfc3339(latest_hour)
+    assert ready["reason"].startswith(
+        f"Stale load anchor: latest actual load at {latest_hour.isoformat()}"
+    )
+    assert opened == [sqlite_engine]
 
 
 def test_openapi_keeps_the_predict_item_contract_for_the_dynamic_horizon_task() -> None:
