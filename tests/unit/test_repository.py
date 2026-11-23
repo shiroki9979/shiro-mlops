@@ -97,7 +97,9 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     )
 
     write_derived_load(repository.engine, load_df)
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(weather_df))
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
+        canonical_observation_batch(weather_df)
+    )
 
     with repository.engine.connect() as conn:
         stored_load_time = pd.read_sql_query("SELECT time FROM raw_taipower_load", conn).iloc[0][
@@ -114,7 +116,7 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     persisted_load = repository.hourly_actual_load_store.series(
         start=datetime(2026, 8, 20, 14, 0), end=datetime(2026, 8, 20, 15, 0)
     )
-    persisted_weather = repository.fetch_weather_range(
+    persisted_weather = repository.cwa_weather_store.fetch_weather_range(
         start_time="2026-08-20T06:00:00Z",
         end_time="2026-08-20T06:00:00Z",
         reference_point="Taipei",
@@ -154,7 +156,7 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
             }
         ),
     )
-    repository.upsert_cwa_observation_batch(
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
         replace(
             canonical_observation_batch(
                 pd.DataFrame(
@@ -177,21 +179,23 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
             fetched_at=datetime(2026, 8, 20, 15, 5, 30, 123456),
         )
     )
-    repository.upsert_cwa_forecast_release(
-        replace(
-            forecast_release(
-                datetime(2026, 8, 20, 11, 0),
-                (
-                    township_forecast(
-                        datetime(2026, 8, 20, 12, 0),
-                        31.0,
-                        valid_to=datetime(2026, 8, 20, 15, 0),
+    repository.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            replace(
+                forecast_release(
+                    datetime(2026, 8, 20, 11, 0),
+                    (
+                        township_forecast(
+                            datetime(2026, 8, 20, 12, 0),
+                            31.0,
+                            valid_to=datetime(2026, 8, 20, 15, 0),
+                        ),
                     ),
                 ),
-            ),
-            source_updated_at=pd.Timestamp("2026-08-20T11:20:00+08:00"),
-            fetched_at=datetime(2026, 8, 20, 11, 25),
-        )
+                source_updated_at=pd.Timestamp("2026-08-20T11:20:00+08:00"),
+                fetched_at=datetime(2026, 8, 20, 11, 25),
+            )
+        ]
     )
 
     assert _stored_text(repository.engine, "raw_taipower_load", "time") == [
@@ -228,20 +232,22 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
 ) -> None:
     """Every load and CWA read hands back Taiwan-local naive instants, bounds included."""
     write_derived_load(repository.engine, derived_hourly_load(3, datetime(2026, 8, 20, 16, 0)))
-    repository.upsert_cwa_forecast_release(
-        replace(
-            forecast_release(
-                datetime(2026, 8, 20, 11, 0),
-                (
-                    township_forecast(
-                        datetime(2026, 8, 20, 12, 0),
-                        31.0,
-                        valid_to=datetime(2026, 8, 20, 15, 0),
+    repository.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            replace(
+                forecast_release(
+                    datetime(2026, 8, 20, 11, 0),
+                    (
+                        township_forecast(
+                            datetime(2026, 8, 20, 12, 0),
+                            31.0,
+                            valid_to=datetime(2026, 8, 20, 15, 0),
+                        ),
                     ),
                 ),
-            ),
-            source_updated_at=pd.Timestamp("2026-08-20 11:20"),
-        )
+                source_updated_at=pd.Timestamp("2026-08-20 11:20"),
+            )
+        ]
     )
 
     store = repository.hourly_actual_load_store
@@ -250,7 +256,7 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
     )
     latest = store.latest_observation(datetime(2026, 8, 20, 15, 30))
     accumulation = store.accumulation(datetime(2026, 8, 20, 15, 0))
-    forecasts = repository.fetch_cwa_forecast_rows(
+    forecasts = repository.cwa_weather_store.fetch_cwa_forecast_rows(
         geocode="63000050",
         issued_before="2026-08-20T03:00:00Z",
         source_updated_before=datetime(2026, 8, 20, 11, 20),
@@ -296,7 +302,7 @@ def test_legacy_weather_upsert_is_rejected_before_it_can_create_canonical_proven
     with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
         repository.upsert_cwa_weather(legacy_weather)
 
-    assert repository.fetch_cwa_station_observations().empty
+    assert repository.cwa_weather_store.fetch_cwa_station_observations().empty
 
 
 def test_legacy_weather_upsert_rejects_an_empty_dataframe(repository: TimeSeriesRepository):

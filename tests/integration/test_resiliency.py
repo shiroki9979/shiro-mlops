@@ -140,8 +140,8 @@ def serving_repo(
 
 @pytest.fixture
 def degraded_weather_repo(serving_repo: TimeSeriesRepository) -> TimeSeriesRepository:
-    serving_repo.upsert_cwa_forecast_release(_stale_forecast_release())
-    serving_repo.upsert_cwa_observation_batch(_degraded_weather_observations())
+    serving_repo.cwa_weather_store.upsert_cwa_forecast_releases([_stale_forecast_release()])
+    serving_repo.cwa_weather_store.upsert_cwa_observation_batch(_degraded_weather_observations())
     return serving_repo
 
 
@@ -208,8 +208,8 @@ def _execute_without_retry_delay(job, repo: TimeSeriesRepository, source, instan
 
 def _persisted_cwa_state(repo: TimeSeriesRepository) -> tuple[pd.DataFrame, pd.DataFrame]:
     return (
-        repo.fetch_cwa_station_observations(station_id=TAIPEI_STATION_ID),
-        repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE),
+        repo.cwa_weather_store.fetch_cwa_station_observations(station_id=TAIPEI_STATION_ID),
+        repo.cwa_weather_store.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE),
     )
 
 
@@ -220,8 +220,8 @@ def test_cwa_http_500_exhausts_retries_fails_run_and_keeps_existing_data(
     cwa_observation_batch: CWAObservationBatch,
     dagster_instance,
 ) -> None:
-    test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
-    test_repo.upsert_cwa_forecast_release(_stale_forecast_release())
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(cwa_observation_batch)
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([_stale_forecast_release()])
     observations_before, forecasts_before = _persisted_cwa_state(test_repo)
     source = _cwa_source_answering_500()
 
@@ -238,8 +238,8 @@ def test_second_cwa_product_failure_keeps_forecast_versions_unchanged(
     test_repo: TimeSeriesRepository,
     dagster_instance,
 ) -> None:
-    test_repo.upsert_cwa_forecast_release(_stale_forecast_release())
-    before = test_repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE)
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([_stale_forecast_release()])
+    before = test_repo.cwa_weather_store.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE)
     source = FixtureCWASource(
         forecast_releases={
             "F-D0047-089": _forecast_release(FRESH_REQUEST_TIME, 32.0),
@@ -250,7 +250,9 @@ def test_second_cwa_product_failure_keeps_forecast_versions_unchanged(
     result = _execute_without_retry_delay(cwa_forecast_job, test_repo, source, dagster_instance)
 
     assert not result.success
-    pd.testing.assert_frame_equal(test_repo.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE), before)
+    pd.testing.assert_frame_equal(
+        test_repo.cwa_weather_store.fetch_cwa_forecast_rows(geocode=TAIPEI_GEOCODE), before
+    )
 
 
 # --- Serving: degraded weather keeps the service up ------------------------------------------
@@ -278,8 +280,8 @@ def test_fresh_forecast_keeps_predict_in_normal_mode(
     serving_repo: TimeSeriesRepository, api: _ServingApi
 ) -> None:
     """Separates request success from forecast quality: the same success status, normal mode."""
-    serving_repo.upsert_cwa_forecast_release(
-        _forecast_release(FRESH_REQUEST_TIME - pd.Timedelta(hours=1), 30.0)
+    serving_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [_forecast_release(FRESH_REQUEST_TIME - pd.Timedelta(hours=1), 30.0)]
     )
     response = api.predict()
 

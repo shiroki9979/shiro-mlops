@@ -111,7 +111,7 @@ def test_task_features_read_weather_from_configured_reference_station(
     )
     override_task_policies(monkeypatch, min_training_hours=2)
     write_derived_load(test_repo.engine, derived_hourly_load(2, LAST_LOAD_HOUR))
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=LAST_LOAD_HOUR,
             status="complete",
@@ -240,7 +240,7 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     persisted_load = derived_load_series(test_repo.engine)
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
+    persisted_weather = test_repo.cwa_weather_store.fetch_weather_range(reference_point="Taipei")
     assert len(persisted_weather) == len(cwa_obs_df)
 
 
@@ -255,7 +255,7 @@ def _trainable_task_definitions(
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     write_derived_load(test_repo.engine, taipower_raw_df)
-    test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(cwa_observation_batch)
     pipelines = build_task_pipelines(deployed_tasks())
     return Definitions(
         assets=[

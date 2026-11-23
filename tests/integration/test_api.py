@@ -101,7 +101,7 @@ def test_api_ready_reports_normal_or_degraded_weather_mode(
     load, weather = hourly_load_with_weather(24 * 21, last_hour)
     write_derived_load(test_repo.engine, load)
     # 沒有鄉鎮預報，只能以測站前日觀測補足視界，故為降級。
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     client = _client(
@@ -581,7 +581,7 @@ def serve_anomaly_task(test_repo, monkeypatch) -> Callable[..., TestClient]:
     hours = 24 * 21
     load, weather = hourly_load_with_weather(hours, ANOMALY_ANCHOR.to_pydatetime())
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     task = override_task_policies(monkeypatch, ANOMALY_TASK, min_training_hours=hours)

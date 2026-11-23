@@ -34,7 +34,7 @@ def snapshots_dir(task: TaskDefinition, tmp_path: Path) -> Path:
     repository = TimeSeriesRepository(engine=engine)
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
     write_derived_load(repository.engine, load)
-    repository.upsert_cwa_observation_batch(
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     directory = tmp_path / "snapshots"

@@ -26,12 +26,14 @@ def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
 ) -> None:
     catalog = DatasetQuery(test_repo.engine)
     for hour, missing, completeness in ((10, ("63000000",), "incomplete"), (11, (), "complete")):
-        test_repo.upsert_cwa_forecast_release(
-            replace(
-                forecast_release(datetime(2026, 9, 20, hour), ()),
-                status=completeness,
-                missing_geocodes=missing,
-            )
+        test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+            [
+                replace(
+                    forecast_release(datetime(2026, 9, 20, hour), ()),
+                    status=completeness,
+                    missing_geocodes=missing,
+                )
+            ]
         )
 
         statuses = catalog.status(datetime(2026, 9, 20, 12)).datasets
@@ -53,7 +55,7 @@ def test_latest_release_stale_shares_the_resolver_seven_hour_threshold(
     test_repo: TimeSeriesRepository, age: timedelta, expected: bool
 ) -> None:
     issued_at = datetime(2026, 9, 20, 5)
-    test_repo.upsert_cwa_forecast_release(forecast_release(issued_at, ()))
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([forecast_release(issued_at, ())])
 
     statuses = DatasetQuery(test_repo.engine).status(issued_at + age).datasets
     forecasts = next(item for item in statuses if item.id == "cwa_forecasts")

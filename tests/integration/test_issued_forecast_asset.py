@@ -44,7 +44,7 @@ MLFLOW_VERSION = "7"
 def repo(test_repo: TimeSeriesRepository) -> TimeSeriesRepository:
     load, weather = hourly_load_with_weather(HOURS, LOAD_ANCHOR)
     write_derived_load(test_repo.engine, load)
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
     )
     return test_repo
