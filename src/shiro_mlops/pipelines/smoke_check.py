@@ -137,7 +137,7 @@ FORECAST_VIEW_EXPORT_SCHEDULES: dict[str, ExpectedSchedule] = {
 }
 
 
-# 兩邊都沒有模型的三個階段為 WAIT：首次訓練前本來就沒有模型。
+# WHY-NOT(_MODEL_STATUS): 兩邊都沒有模型的三個階段刻意不列出、回報 WAIT，首次訓練前本來就沒有模型，不算失敗。
 _MODEL_STATUS = {
     ColdStartStage.TRAINED: CheckStatus.PASS,
     ColdStartStage.RECORD_DIRECTORY_MISMATCH: CheckStatus.FAIL,
@@ -374,7 +374,7 @@ def _check_model(
         models = read_model_presence(
             task.task_id, instance=deployment.instance, models_root=settings.models_dir
         )
-    except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
+    except Exception as error:  # WHY-NOT(Exception): 以失敗檢查回報原因，不中斷其餘檢查
         return CheckResult(
             check_name,
             CheckStatus.FAIL,
