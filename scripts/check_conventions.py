@@ -43,6 +43,14 @@ Checks:
              reminders into SYNC, and to-dos into TODO(#n) once a tech-debt issue exists; give
              noqa and type: ignore a reason. When a WHY-NOT name is missing, move the comment
              onto the code it protects or correct the name, or delete it with removed code.
+  blob-limits
+             Each commit between --base and --head must not add or modify a file over 5 MiB or
+             one whose extension is blocked (.parquet .pkl .joblib .onnx .ipynb .tfstate
+             .tfvars .pem .key, any letter case). Every commit is checked, not only --head:
+             a file a later commit deletes stays in history once the branch is merged. Merge
+             commits are skipped; what they bring in is checked in the commits they merge.
+             To fix: rewrite the branch (git rebase) so no commit adds the file, and keep it
+             out of git with .gitignore.
 """
 
 from __future__ import annotations
@@ -66,7 +74,7 @@ DOCKERFILE_GLOB = "docker/Dockerfile*"
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
 COMMENT_KINDS_DIRS = ("src", "scripts")
-CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds")
+CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
 
 # Single source for terminology: banned term -> preferred replacement.
 BANNED_TERMS = {
@@ -166,6 +174,12 @@ HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))?
 DIFF_FILE_HEADER = "diff --git "
 DIFF_NEW_PATH = "+++ b/"
 
+BLOB_SIZE_LIMIT = 5 * 1024 * 1024
+BLOCKED_SUFFIXES = frozenset(
+    {".parquet", ".pkl", ".joblib", ".onnx", ".ipynb", ".tfstate", ".tfvars", ".pem", ".key"}
+)
+GITLINK_MODE = "160000"
+
 LAST_UPDATED = re.compile(
     r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
     r"(?P<value>\d{4}-\d{2}-\d{2})",
@@ -212,6 +226,15 @@ class HeaderDate:
         return date.fromisoformat(self.raw)
 
 
+@dataclass(frozen=True)
+class CommittedFile:
+    """A file version one commit adds or modifies."""
+
+    commit: str
+    path: str
+    size: int
+
+
 HitT = TypeVar("HitT", SourceLine, UnpinnedInstall)
 
 
@@ -224,6 +247,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
     "comment-refs": lambda args: check_comment_refs(REPO_ROOT),
     "comment-kinds": lambda args: check_comment_kinds(GitRange(REPO_ROOT, args.base, args.head)),
+    "blob-limits": lambda args: check_blob_limits(GitRange(REPO_ROOT, args.base, args.head)),
 }
 
 
@@ -242,11 +266,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("checks", nargs="+", choices=list(CHECKS))
+    range_checks = ", ".join(CHECKS_REQUIRING_BASE)
     parser.add_argument(
-        "--base", help="base ref for doc-dates and comment-kinds, e.g. origin/dev or a PR base SHA"
+        "--base", help=f"base ref for {range_checks}, e.g. origin/dev or a PR base SHA"
     )
     parser.add_argument(
-        "--head", default="HEAD", help="head ref for doc-dates and comment-kinds (default: HEAD)"
+        "--head", default="HEAD", help=f"head ref for {range_checks} (default: HEAD)"
     )
     args = parser.parse_args(argv)
     for name in CHECKS_REQUIRING_BASE:
@@ -826,6 +851,28 @@ def decorated_definition(code: list[LogicalLine], index: int) -> tuple[CodeToken
     return tuple(token for line in code[index : end + 1] for token in line.tokens)
 
 
+def check_blob_limits(revisions: GitRange) -> list[Violation]:
+    return [
+        Violation(committed.path, 1, problem)
+        for committed in revisions.committed_files()
+        for problem in committed_file_problems(committed)
+    ]
+
+
+def committed_file_problems(committed: CommittedFile) -> list[str]:
+    commit = committed.commit[:7]
+    fix = "rewrite the branch so no commit adds it (git rebase) and keep it out with .gitignore"
+    problems = []
+    suffix = Path(committed.path).suffix
+    if suffix.lower() in BLOCKED_SUFFIXES:
+        problems.append(f"commit {commit} adds a blocked '{suffix}' file; {fix}")
+    if committed.size > BLOB_SIZE_LIMIT:
+        size = committed.size / 1024 / 1024
+        limit = BLOB_SIZE_LIMIT // 1024 // 1024
+        problems.append(f"commit {commit} adds {size:.1f} MiB, over the {limit} MiB limit; {fix}")
+    return problems
+
+
 def check_doc_dates(revisions: GitRange) -> list[Violation]:
     violations = []
     for path in revisions.changed_markdown():
@@ -876,6 +923,30 @@ class GitRange:
 
     def read_at_head(self, path: str) -> str:
         return git(self.repo_root, "show", f"{self.head}:{path}")
+
+    def committed_files(self) -> list[CommittedFile]:
+        """Each file version a non-merge commit in base..head adds or modifies, with its size."""
+        commits = git(self.repo_root, "rev-list", "--no-merges", f"{self.base}..{self.head}")
+        changes = [
+            (commit, path, blob)
+            for commit in commits.split()
+            for path, blob in tree_changes(
+                git(
+                    self.repo_root,
+                    "diff-tree",
+                    "-r",
+                    "-z",
+                    "--root",
+                    "--no-commit-id",
+                    "--no-renames",
+                    "--no-abbrev",
+                    "--diff-filter=AMT",
+                    commit,
+                )
+            )
+        ]
+        sizes = blob_sizes(self.repo_root, {blob for _, _, blob in changes})
+        return [CommittedFile(commit, path, sizes[blob]) for commit, path, blob in changes]
 
     def changed_lines(self, *pathspecs: str) -> dict[str, FileChanges]:
         """Where the diff adds, modifies or removes lines in each changed file, renames followed."""
@@ -936,6 +1007,29 @@ def parse_changed_lines(diff: str) -> dict[str, FileChanges]:
             else:
                 changes.deleted_after.add(start)
     return files
+
+
+def tree_changes(raw: str) -> list[tuple[str, str]]:
+    """Read `git diff-tree -z` raw output into (path, new blob id), skipping submodule commits."""
+    fields = raw.split("\0")
+    changes = []
+    for meta, path in zip(fields[0::2], fields[1::2], strict=False):
+        _, new_mode, _, new_blob, _ = meta.split()
+        if new_mode != GITLINK_MODE:
+            changes.append((path, new_blob))
+    return changes
+
+
+def blob_sizes(repo_root: Path, blobs: set[str]) -> dict[str, int]:
+    if not blobs:
+        return {}
+    output = git(
+        repo_root,
+        "cat-file",
+        "--batch-check=%(objectname) %(objectsize)",
+        stdin="".join(f"{blob}\n" for blob in sorted(blobs)),
+    )
+    return {blob: int(size) for blob, size in (line.split() for line in output.splitlines())}
 
 
 def is_doc_date_excluded(path: str) -> bool:
@@ -1043,9 +1137,15 @@ def python_tokens(source: str) -> Iterator[tokenize.TokenInfo]:
         raise ValueError(f"cannot tokenize Python source: {error}") from error
 
 
-def git(repo_root: Path, *args: str) -> str:
+def git(repo_root: Path, *args: str, stdin: str | None = None) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=repo_root, check=True, capture_output=True, text=True, encoding="utf-8"
+        ["git", *args],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        input=stdin,
     )
     return result.stdout
 

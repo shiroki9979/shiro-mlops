@@ -8,6 +8,8 @@
 
 本文件記錄儲存庫在 GitHub 上設定的 Rulesets：保護哪些分支與標籤、合併前要通過哪些檢查，以及哪些角色可以繞過規則。各 ruleset 的完整設定以 GitHub 匯出的 JSON 存放在 `.github/rulesets/`，JSON 是實際設定的副本，GitHub 上的設定才是生效的版本。範圍與完成標準見 [GitHub #145](https://github.com/shiroki9979/shiro-mlops/issues/145)。
 
+GitHub Free 方案只在 public 儲存庫強制執行 rulesets；儲存庫依 [ADR-0016](../adr/0016-make-repository-public.md) 改為 public 後，這些規則才真正生效。rulesets 以外的儲存庫設定見 [GitHub 儲存庫設定](github-repository-settings.md)。
+
 ## 1. 總覽
 
 | Ruleset | 對象 | 保護的 ref | JSON |
@@ -16,7 +18,7 @@
 | `protect-main` | 分支 | `main` | [`.github/rulesets/protect-main.json`](../../.github/rulesets/protect-main.json) |
 | `protect-release-tags` | 標籤 | `v*` | [`.github/rulesets/protect-release-tags.json`](../../.github/rulesets/protect-release-tags.json) |
 
-尚未建立限制檔案大小與副檔名的 Push Ruleset：目前方案只提供 branch 與 tag ruleset，追蹤於 [GitHub #261](https://github.com/shiroki9979/shiro-mlops/issues/261)。
+沒有 Push Ruleset：private 改為 public 時，GitHub 會停用所有 push ruleset。限制檔案大小與副檔名改由 `lint-and-test` 中的 `scripts/check_conventions.py blob-limits` 在 PR 上檢查：PR 範圍內任何一個 commit 加入超過上限的檔案或受限副檔名，檢查就失敗。上限與副檔名清單見 `uv run python scripts/check_conventions.py --help`（[GitHub #261](https://github.com/shiroki9979/shiro-mlops/issues/261)）。
 
 ## 2. `protect-dev` 與 `protect-main`：整合分支與發布分支
 
@@ -37,7 +39,7 @@
 
 | 檢查 | Workflow | 內容 |
 | :--- | :--- | :--- |
-| `lint-and-test` | `.github/workflows/ci.yml` | Ruff lint 與 format、儲存庫慣例檢查、`tests/` 與 `lab/tests` 的 pytest |
+| `lint-and-test` | `.github/workflows/ci.yml` | Ruff lint 與 format、儲存庫慣例檢查（PR 上另檢查每個 commit 的檔案大小與副檔名）、`tests/` 與 `lab/tests` 的 pytest |
 | `frontend` | `.github/workflows/ci.yml` | 前端 lint、測試、建置，以及預報檢視 bundle 檢查 |
 | `nginx` | `.github/workflows/ci.yml` | 建置 nginx 映像檔，smoke test 兩個前端應用與 API gateway |
 | `backend` | `.github/workflows/ci.yml` | 建置後端映像檔，smoke test API 資料狀態、API readiness 與 MLflow health |
