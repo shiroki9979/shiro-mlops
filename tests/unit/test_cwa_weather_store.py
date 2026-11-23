@@ -149,7 +149,6 @@ def test_observation_batch_upsert_preserves_non_null_fields_on_partial_update(
     )
     store.upsert_cwa_observation_batch(canonical_observation_batch(initial_df))
 
-    # Partial update: new temperature, relative_humidity is None/NaN
     partial_df = pd.DataFrame(
         [
             {
@@ -165,7 +164,6 @@ def test_observation_batch_upsert_preserves_non_null_fields_on_partial_update(
     fetched_df = store.fetch_weather_range(reference_point=TAIPEI)
     assert len(fetched_df) == 1
     assert fetched_df.iloc[0]["temperature"] == pytest.approx(31.0)
-    # Relative humidity preserved from initial insert
     assert fetched_df.iloc[0]["relative_humidity"] == pytest.approx(80.0)
 
 

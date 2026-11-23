@@ -358,11 +358,8 @@ def override_task_policies(
 
 
 def task_runtime(repository: TimeSeriesRepository) -> TaskRuntime:
-    """The runtime the deployed entry points build from the composition root's two stores."""
-    return TaskRuntime(
-        hourly_actual_load=repository.hourly_actual_load_store,
-        cwa_weather=repository.cwa_weather_store,
-    )
+    """The runtime the deployed entry points build from the composition root."""
+    return TaskRuntime.from_composition_root(repository)
 
 
 def upstream_http_500(url: str = "https://example.invalid/source") -> httpx.HTTPStatusError:
