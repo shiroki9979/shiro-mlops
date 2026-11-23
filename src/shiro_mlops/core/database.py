@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # ADR-0009 之前全台負載借用氣象代表點名稱保存；只用於辨識待遷移的舊值。
 LEGACY_NATIONWIDE_SUBJECT = "Taipei"
 
+CWA_HEADER_TABLES = ("raw_cwa_observation_batch", "raw_cwa_forecast_release")
+LEGACY_CWA_HEADER_STATUS_COLUMN = "status"
+
 # DDL 隨套件安裝，不依賴 repo 目錄結構：API 映像只含 src/（#112）。
 # docker-compose 亦把同一目錄掛為資料庫容器的 init-db，兩者共用單一來源。
 INIT_SQL_PATH: Traversable = files(__package__).joinpath("sql", "01_init_hypertables.sql")
@@ -191,6 +194,30 @@ def _migrate_taipower_load_subject(engine: Engine) -> None:
         )
 
 
+def _drop_cwa_header_status_columns(engine: Engine) -> None:
+    """Drop the stored ``status`` column from CWA batch and release headers (#291).
+
+    The missing list is the only record of CWA ingestion completeness; a stored status
+    could contradict it. Neither header table is a hypertable, so a plain ``DROP COLUMN``
+    works on SQLite and PostgreSQL alike. Tables already without the column are skipped,
+    which keeps every restart safe to repeat.
+    """
+    inspector = inspect(engine)
+    for table in CWA_HEADER_TABLES:
+        columns = {column["name"] for column in inspector.get_columns(table)}
+        if LEGACY_CWA_HEADER_STATUS_COLUMN not in columns:
+            continue
+        with engine.begin() as connection:
+            connection.execute(
+                text(f"ALTER TABLE {table} DROP COLUMN {LEGACY_CWA_HEADER_STATUS_COLUMN}")
+            )
+        logger.warning(
+            "Dropped %s.%s; CWA ingestion completeness now derives from the missing list.",
+            table,
+            LEGACY_CWA_HEADER_STATUS_COLUMN,
+        )
+
+
 def convert_timescale_ddl_to_sqlite(ddl: str) -> list[str]:
     """Convert TimescaleDB/PostgreSQL DDL script into executable SQLite DDL statements.
 
@@ -259,6 +286,7 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
         _isolate_legacy_cwa_weather(db_engine)
         _add_taipower_load_source_column(db_engine)
         _migrate_taipower_load_subject(db_engine)
+        _drop_cwa_header_status_columns(db_engine)
         return
 
     # PostgreSQL / TimescaleDB
@@ -267,6 +295,7 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
     _isolate_legacy_cwa_weather(db_engine)
     _add_taipower_load_source_column(db_engine)
     _migrate_taipower_load_subject(db_engine)
+    _drop_cwa_header_status_columns(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 
 

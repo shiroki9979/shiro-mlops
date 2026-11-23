@@ -13,7 +13,7 @@ from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
-from tests.helpers import contradict_cwa_header_statuses, rfc3339
+from tests.helpers import rfc3339
 from tests.scenarios.data_explorer_series import series_client
 
 OBSERVATION_AUDIT_PATH = "/data/audits/cwa-observations"
@@ -215,14 +215,13 @@ def _listed(client: TestClient, path: str, key: str, params: dict[str, str]) -> 
 
 
 def assert_observation_audits_follow_the_missing_list(repo: TimeSeriesRepository) -> None:
-    """表頭 status 與缺漏清單矛盾時，列表、status 篩選與 series 分組皆依缺漏清單。"""
+    """觀測批次的列表、status 篩選與 series 分組皆依缺漏清單判定完整度。"""
     batches = {
         AUDIT_HOUR + timedelta(minutes=5): NOTHING_MISSING,
         AUDIT_HOUR + timedelta(minutes=25): ONE_MISSING,
         AUDIT_HOUR + timedelta(minutes=45): NOTHING_MISSING,
     }
     with _seeded_batches(repo, batches) as client:
-        contradict_cwa_header_statuses(repo.engine)
         listed = _listed(client, OBSERVATION_AUDIT_PATH, "fetched_at", _hour_window())
         complete = _listed(
             client, OBSERVATION_AUDIT_PATH, "fetched_at", _hour_window(status="complete")
@@ -249,7 +248,7 @@ def assert_observation_audits_follow_the_missing_list(repo: TimeSeriesRepository
 
 
 def assert_forecast_audits_follow_the_missing_list(repo: TimeSeriesRepository) -> None:
-    """表頭 status 與缺漏清單矛盾時，預報版本的列表、篩選與 series 分組皆依缺漏清單。"""
+    """預報版本的列表、status 篩選與 series 分組皆依缺漏清單判定完整度。"""
     issued = AUDIT_HOUR
     versions = [
         (issued, issued + timedelta(minutes=10), NOTHING_MISSING),
@@ -257,7 +256,6 @@ def assert_forecast_audits_follow_the_missing_list(repo: TimeSeriesRepository) -
         (issued + timedelta(minutes=30), issued + timedelta(minutes=50), NOTHING_MISSING),
     ]
     with _seeded_versions(repo, versions) as (client, dataset_id):
-        contradict_cwa_header_statuses(repo.engine)
         key = "source_updated_at"
         listed = _listed(client, FORECAST_AUDIT_PATH, key, _hour_window(dataset_id=dataset_id))
         complete = _listed(

@@ -291,7 +291,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 
 #### CWA audit series
 
-兩個 audit series 回傳狀態時間軸：每個 `status`（`complete`、`incomplete`）一條 series，`v` 為該 bucket 內的批次數（依 `fetched_at`）或版本數（依 `issued_at`，版本以 `dataset_id`、`issued_at`、`source_updated_at` 識別）。`status` 由各批次或版本的缺漏清單（`missing_station_ids`、`missing_geocodes`）推導：清單為空為 `complete`，否則為 `incomplete`；list 項目的 `status`、`status` 篩選與 `GET /data/status` 的完整度採同一推導，不讀 header 表儲存的 `status` 欄。
+兩個 audit series 回傳狀態時間軸：每個 `status`（`complete`、`incomplete`）一條 series，`v` 為該 bucket 內的批次數（依 `fetched_at`）或版本數（依 `issued_at`，版本以 `dataset_id`、`issued_at`、`source_updated_at` 識別）。`status` 由各批次或版本的缺漏清單（`missing_station_ids`、`missing_geocodes`）推導：清單為空為 `complete`，否則為 `incomplete`；list 項目的 `status`、`status` 篩選與 `GET /data/status` 的完整度採同一推導；header 表不保存完整度欄位。
 
 - 不接受 `fields` 與 `agg`，帶了就回 HTTP 422（未宣告的參數）；回應的 `agg` 固定為 `null`。
 - `1h`、`1d` 的 `v` 為該 bucket 的列數；`raw` 時每個批次或版本各是一個 `v = 1` 的點，`issued_at` 相同的版本各自成點，因此 `t` 可能重複。

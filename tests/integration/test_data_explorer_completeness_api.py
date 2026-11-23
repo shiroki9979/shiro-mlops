@@ -12,7 +12,6 @@ from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservati
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.api import create_app
 from tests.helpers import (
-    contradict_cwa_header_statuses,
     forecast_release,
     regional_supply_demand_snapshots,
     rfc3339,
@@ -126,23 +125,22 @@ def test_audit_status_reports_the_newest_header_missing_ids(
 @pytest.mark.parametrize(
     ("missing_station_ids", "missing_geocodes", "completeness"),
     [((), (), "complete"), (("467490",), ("63000050",), "incomplete")],
-    ids=["header-says-incomplete", "header-says-complete"],
+    ids=["nothing-missing", "some-missing"],
 )
-def test_audit_status_follows_the_missing_list_over_the_header_status(
+def test_audit_status_judges_completeness_by_the_missing_list(
     client: TestClient,
     test_repo: TimeSeriesRepository,
     missing_station_ids: tuple[str, ...],
     missing_geocodes: tuple[str, ...],
     completeness: str,
 ) -> None:
-    """表頭 status 與缺漏清單矛盾時，status 只依缺漏清單判定完整度。"""
+    """status 只依缺漏清單是否為空判定 CWA 擷取完整度。"""
     _persist_cwa_ingestion(
         test_repo,
         datetime(2026, 9, 20, 12),
         missing_station_ids=missing_station_ids,
         missing_geocodes=missing_geocodes,
     )
-    contradict_cwa_header_statuses(test_repo.engine)
 
     statuses = _status(client)
 
