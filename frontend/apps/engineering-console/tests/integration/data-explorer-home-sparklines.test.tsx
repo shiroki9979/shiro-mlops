@@ -41,14 +41,16 @@ const allStatuses = {
   datasets: DATASETS.map(([id, href]) => ({
     id,
     label: m.explorer.datasets[id].label,
-    availability: 'available',
+    kind: 'populated',
     freshness: 'fresh',
     completeness: 'complete',
     overall: 'healthy',
     latest_source_at: '2026-09-09T20:00:00+08:00',
     latest_ingested_at: '2026-09-09T20:01:00+08:00',
+    ingestion_age_seconds: 120,
+    source_age_seconds: 180,
     missing_identifiers: [],
-    missing_slot_count: 0,
+    latest_release_stale: null,
     href,
   })),
 }

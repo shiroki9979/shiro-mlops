@@ -178,10 +178,7 @@ class LatestSlot:
 
 @dataclass(frozen=True)
 class AlwaysComplete:
-    """Status completeness: complete whenever rows exist, since the member count varies.
-
-    Status also reports how many rows share the newest instant.
-    """
+    """Status completeness: complete whenever rows exist, since the member count varies."""
 
 
 @dataclass(frozen=True, kw_only=True)

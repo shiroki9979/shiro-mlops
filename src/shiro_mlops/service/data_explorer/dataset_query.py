@@ -106,7 +106,7 @@ class DatasetQuery:
         return SeriesReader(self.db, dataset, options).read(request)
 
     def status(self, as_of: datetime | None = None) -> StatusResponse:
-        """Availability, freshness and completeness of every dataset, in `DATASETS` order."""
+        """Every dataset's status, empty or populated, in `DATASETS` order."""
         clock = as_of or now_taiwan()
         try:
             return StatusResponse(

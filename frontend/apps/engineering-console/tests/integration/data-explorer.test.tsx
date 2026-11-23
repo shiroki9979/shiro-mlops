@@ -55,9 +55,11 @@ describe('Data Explorer routes', () => {
     server.use(http.get('*/data/status', () => HttpResponse.json({
       timezone: 'Asia/Taipei',
       datasets: [{
-        id: 'hourly_load', label: 'Hourly load', href: '/data/power/load',
-        availability: 'available', freshness: 'warning', completeness: 'complete',
-        overall: 'warning', ingestion_age_seconds: 9000,
+        kind: 'populated', id: 'hourly_load', label: 'Hourly load', href: '/data/power/load',
+        freshness: 'warning', completeness: 'complete', overall: 'warning',
+        latest_source_at: '2026-09-09T17:30:00+08:00', latest_ingested_at: '2026-09-09T17:31:00+08:00',
+        ingestion_age_seconds: 9000, source_age_seconds: 9060,
+        missing_identifiers: [], latest_release_stale: null,
       }],
     })))
 
@@ -438,6 +440,22 @@ describe('Monitoring Data Source Status', () => {
 })
 
 describe('CWA observation explorer', () => {
+  it('omits the latest audit line and the age lines while both datasets are empty', async () => {
+    server.use(http.get('*/data/status', () => HttpResponse.json({
+      timezone: 'Asia/Taipei',
+      datasets: [
+        { kind: 'empty', id: 'cwa_observations', label: 'obs', overall: 'warning', href: '/data/weather/observations' },
+        { kind: 'empty', id: 'cwa_observation_audits', label: 'audits', overall: 'warning', href: '/data/audits?type=observations' },
+      ],
+    })))
+
+    renderPath('/data/weather/observations')
+
+    expect(await screen.findByText(m.status.empty)).toBeInTheDocument()
+    expect(screen.getByText(m.explorer.datasetStatus.auditHistory)).toBeInTheDocument()
+    expect(screen.queryByText(/最新審計|經過時間/)).not.toBeInTheDocument()
+  })
+
   it('shows latest audit fetch time and missing identifiers', async () => {
     renderPath('/data/weather/observations')
     await waitFor(() => {

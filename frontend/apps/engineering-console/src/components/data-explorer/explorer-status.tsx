@@ -1,12 +1,12 @@
 import { consoleHref } from '@/lib/console-href'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
+import { formatTimestamp } from '@shiro-mlops/shared/i18n/format'
 import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { useMessages } from '@/i18n/messages'
 import type { DatasetStatus } from '@/schemas/data-explorer'
 import type { ExplorerDatasetConfig } from './catalog'
 import { StatusBadges } from './status-badges'
 import { DatasetStatusDetails } from './status-details'
-import { optionalTimestamp, translateCompleteness } from './status-text'
 
 interface ExplorerStatusProps {
   dataset: ExplorerDatasetConfig
@@ -27,13 +27,13 @@ export function ExplorerStatus({ dataset, status, auditStatus }: ExplorerStatusP
       </CardHeader>
       <CardContent className="space-y-2 text-xs text-slate-400">
         <StatusBadges status={status} />
-        <DatasetStatusDetails status={status} />
-        {auditStatus && (
+        {status.kind === 'populated' && <DatasetStatusDetails status={status} />}
+        {auditStatus?.kind === 'populated' && (
           <>
             <p>
               {datasetStatusText.latestAudit(
-                translateCompleteness(auditStatus.completeness, m),
-                optionalTimestamp(auditStatus.latest_source_at, locale),
+                m.status.completeness[auditStatus.completeness],
+                formatTimestamp(auditStatus.latest_source_at, locale),
               )}
             </p>
             {auditStatus.missing_identifiers.length > 0 && (

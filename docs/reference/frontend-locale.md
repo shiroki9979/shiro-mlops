@@ -23,7 +23,7 @@
 
 | 類別 | 範圍 |
 | :--- | :--- |
-| 經字典翻譯 | UI 字串、錯誤與空狀態訊息、Data Explorer 欄名與布林值、API 狀態 enum（`overall`、`availability`、`freshness`、`completeness`、audit `status`） |
+| 經字典翻譯 | UI 字串、錯誤與空狀態訊息、Data Explorer 欄名與布林值、API 狀態 enum（`overall`、`freshness`、`completeness`、audit `status`）與無資料的標示 |
 | 維持原值 | 區域名、測站編號、機組名稱、`dataset_id` 等資料內容值；篩選 placeholder 中的合法輸入值；後端 `ApiError` 訊息（`detail`）與回應不符 schema 的 `InvalidResponseError` 訊息；CSV 表頭與內容；請求參數與 cursor |
 
 `GET /data/status` 回傳的 `label` 不直接顯示；前端以 dataset `id` 查字典，僅在 id 不在 catalog 時回退為 `label`。

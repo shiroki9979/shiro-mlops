@@ -1,4 +1,4 @@
-"""Judge one dataset's availability, freshness and completeness from its `StatusPolicy`."""
+"""Judge one dataset's freshness and completeness from its `StatusPolicy`."""
 
 from __future__ import annotations
 
@@ -22,40 +22,47 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import sort_order
 from shiro_mlops.service.data_explorer.query import TimeWindow
-from shiro_mlops.service.data_explorer.schemas import DatasetStatus
-from shiro_mlops.service.data_explorer.status import derive_overall, evaluate_freshness
+from shiro_mlops.service.data_explorer.schemas import (
+    DatasetStatus,
+    EmptyDatasetStatus,
+    PopulatedDatasetStatus,
+)
+from shiro_mlops.service.data_explorer.status import (
+    Completeness,
+    derive_overall,
+    evaluate_freshness,
+)
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import json_list, row_time
 
 
 def judge_status(db: ExplorerDb, dataset: Dataset, as_of: datetime) -> DatasetStatus:
-    """The dataset's status at `as_of`; completeness is judged only once a newest row exists."""
+    """The dataset's status at `as_of`; a dataset with no newest row is empty and not judged."""
     latest = _latest_row(db, dataset.freshness_source)
-    newest = row_time(latest, "source_at") if latest is not None else None
+    if latest is None:
+        return EmptyDatasetStatus(id=dataset.id, label=dataset.label, href=dataset.href)
+    newest = row_time(latest, "source_at")
     scan = GapScan(db, dataset)
     match dataset.status_policy:
         case LastCompletedHours(hours=hours):
             completed = recent_completed_hours(as_of, hours)
             window = TimeWindow(completed.start, completed.end)
-            missing = scan.due_missing_slots(window, as_of) if newest is not None else []
-            return _compose_status(dataset, as_of, latest, missing)
+            missing = scan.due_missing_slots(window, as_of)
+            return _populated_status(dataset, as_of, latest, missing)
         case TrailingWindow(span=span):
-            missing = _trailing_gaps(db, scan, newest, span) if newest is not None else []
-            return _compose_status(dataset, as_of, latest, missing)
+            missing = _trailing_gaps(db, scan, newest, span)
+            return _populated_status(dataset, as_of, latest, missing)
         case LatestSlot(incomplete_href=href):
-            missing = _absent_at(scan, newest) if newest is not None else []
-            return _compose_status(dataset, as_of, latest, missing, href=href if missing else None)
+            missing = _absent_at(scan, newest)
+            return _populated_status(
+                dataset, as_of, latest, missing, href=href if missing else None
+            )
         case AlwaysComplete():
-            count = _newest_instant_count(db, dataset) if newest is not None else 0
-            return _compose_status(dataset, as_of, latest, [], record_count=count)
+            return _populated_status(dataset, as_of, latest, [])
         case LatestAudit(header=header, flags_stale_release=flags_stale_release):
             missing = _audit_missing_identifiers(_latest_audit(db, header))
-            stale = (
-                forecast_is_stale(newest, as_of)
-                if flags_stale_release and newest is not None
-                else None
-            )
-            return _compose_status(dataset, as_of, latest, missing, latest_release_stale=stale)
+            stale = forecast_is_stale(newest, as_of) if flags_stale_release else None
+            return _populated_status(dataset, as_of, latest, missing, latest_release_stale=stale)
 
 
 def _trailing_gaps(db: ExplorerDb, scan: GapScan, newest: datetime, span: timedelta) -> list[str]:
@@ -80,14 +87,6 @@ def _earliest(db: ExplorerDb, dataset: Dataset, window: TimeWindow) -> datetime 
     if row is None or row["earliest"] is None:
         return None
     return row_time(row, "earliest")
-
-
-def _newest_instant_count(db: ExplorerDb, dataset: Dataset) -> int:
-    column, relation = dataset.time_column, dataset.relation
-    count = db.scalar(
-        f"SELECT COUNT(*) FROM {relation} WHERE {column} = (SELECT MAX({column}) FROM {relation})"
-    )
-    return int(count or 0)
 
 
 def _latest_row(db: ExplorerDb, source: FreshnessSource) -> Row | None:
@@ -118,46 +117,36 @@ def _audit_missing_identifiers(audit: Row | None) -> list[str]:
     return [str(item) for item in json_list(audit["missing_ids"])]
 
 
-def _compose_status(
+def _populated_status(
     dataset: Dataset,
     as_of: datetime,
-    latest: Row | None,
+    latest: Row,
     missing: list[str],
     *,
     href: str | None = None,
-    record_count: int | None = None,
     latest_release_stale: bool | None = None,
-) -> DatasetStatus:
-    """An empty dataset is `empty` with unknown completeness, whatever `missing` holds.
-
-    `href` replaces the dataset's own link when given.
-    """
-    source_at = row_time(latest, "source_at") if latest is not None else None
-    ingested_at = row_time(latest, "ingested_at") if latest is not None else None
+) -> PopulatedDatasetStatus:
+    """Status of a dataset whose newest row is `latest`; `href` replaces its own link when given."""
+    source_at = row_time(latest, "source_at")
+    ingested_at = row_time(latest, "ingested_at")
     freshness = evaluate_freshness(
         cadence_seconds=int(dataset.cadence.total_seconds()),
         as_of=as_of,
         latest_source_at=source_at,
         latest_ingested_at=ingested_at,
     )
-    if latest is None:
-        availability, completeness, missing = "empty", "unknown", []
-    else:
-        availability, completeness = "available", "incomplete" if missing else "complete"
-    return DatasetStatus(
+    completeness: Completeness = "incomplete" if missing else "complete"
+    return PopulatedDatasetStatus(
         id=dataset.id,
         label=dataset.label,
-        availability=availability,
         freshness=freshness.state,
         completeness=completeness,
-        overall=derive_overall(availability, freshness.state, completeness),
-        latest_source_at=format_taiwan_time(source_at) if source_at is not None else None,
-        latest_ingested_at=format_taiwan_time(ingested_at) if ingested_at is not None else None,
+        overall=derive_overall(freshness.state, completeness),
+        latest_source_at=format_taiwan_time(source_at),
+        latest_ingested_at=format_taiwan_time(ingested_at),
         ingestion_age_seconds=freshness.ingestion_age_seconds,
         source_age_seconds=freshness.source_age_seconds,
         missing_identifiers=missing,
-        missing_slot_count=len(missing),
-        record_count=record_count,
         latest_release_stale=latest_release_stale,
         href=href or dataset.href,
     )
