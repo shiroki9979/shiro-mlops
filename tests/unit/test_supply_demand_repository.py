@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import (
-    TaipowerSupplyDemandRepository,
-    TimeSeriesRepository,
-)
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_supply_demand import parse_supply_demand_payload
+from shiro_mlops.data.taipower_supply_demand_repository import (
+    TaipowerSupplyDemandRepository,
+)
 from tests.helpers import supply_demand_snapshot
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"

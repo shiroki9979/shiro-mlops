@@ -12,11 +12,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from shiro_mlops.data.cwa_client import CWAObservationBatch
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
-from shiro_mlops.data.repository import (
+from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.taipower_regional_supply_demand_repository import (
     TaipowerRegionalSupplyDemandRepository,
+)
+from shiro_mlops.data.taipower_supply_demand_repository import (
     TaipowerSupplyDemandRepository,
+)
+from shiro_mlops.data.taipower_unit_generation_repository import (
     TaipowerUnitGenerationRepository,
-    TimeSeriesRepository,
 )
 from shiro_mlops.features.transformers import merge_weather_features
 from tests.helpers import (

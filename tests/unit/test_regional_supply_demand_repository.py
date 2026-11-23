@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.data.repository import (
-    TaipowerRegionalSupplyDemandRepository,
-    TimeSeriesRepository,
-)
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import parse_regional_supply_demand_csv
+from shiro_mlops.data.taipower_regional_supply_demand_repository import (
+    TaipowerRegionalSupplyDemandRepository,
+)
 from tests.helpers import regional_supply_demand_snapshots
 
 

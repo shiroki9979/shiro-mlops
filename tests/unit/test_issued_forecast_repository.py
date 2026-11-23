@@ -8,7 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
-from shiro_mlops.data.repository import IssuedForecastRepository, TimeSeriesRepository
+from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
+from shiro_mlops.data.repository import TimeSeriesRepository
 
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 LOAD_ANCHOR = datetime(2026, 11, 20, 9, 0)
