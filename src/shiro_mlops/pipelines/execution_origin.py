@@ -1,7 +1,10 @@
 """Resolve a Dagster run into its execution origin and as_of.
 
 A schedule tags the run its tick launches with that tick, in Taiwan-local ISO
-time, through ``tick_run_request``; assets never read the tick from config. The
+time, through ``tick_run_request``; assets never read the tick from config. One
+schedule is the exception: the Forecast View export schedule keys its runs with
+``tick_run_key`` but deliberately carries no tick, so the export's as_of is
+always the run's creation time. The
 tick counts only in the run the schedule launched: one Dagster also tagged with
 the schedule name, and not a re-execution, which copies the original run's tags.
 Any other run has no tick, and each asset with an as_of declares what it does
