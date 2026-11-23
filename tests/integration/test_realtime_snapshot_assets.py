@@ -2,15 +2,16 @@
 
 import json
 import math
+import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from dagster import AssetsDefinition, materialize
+from dagster import AssetsDefinition, RetryPolicy, graph, materialize
 
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import RegionalSupplyDemandParseError
@@ -116,6 +117,16 @@ SOURCES = [
 REVISED_VALUES = [3400.5, 1100.0, 680.0]
 
 
+def _without_retries(asset: AssetsDefinition) -> AssetsDefinition:
+    """``asset`` whose op runs once: invoked in a one-op graph with a no-retry policy."""
+
+    @graph(name=f"{asset.op.name}_without_retries")
+    def once():
+        return asset.op.with_retry_policy(RetryPolicy(max_retries=0))()
+
+    return AssetsDefinition.from_graph(once, keys_by_output_name={"result": asset.key})
+
+
 def _materialize(source: SnapshotSource, adapter: FixtureSource, repo, instance, **kwargs):
     """Materialize ``source``'s asset in the run the schedule launches at ``TICK``."""
     return materialize(
@@ -159,12 +170,11 @@ def test_a_failed_fetch_writes_nothing(
     failure: str,
     test_repo: TimeSeriesRepository,
     dagster_instance,
-    monkeypatch,
 ) -> None:
     """來源回應錯誤或 payload 無法解析時 asset 失敗，且該 slot 不寫入任何快照。"""
-    # WHY-NOT(_retry_policy): 區域快照的重試政策實際等待約 110 秒退避；觀測 slot 需要真實 run，
-    # 不能再直接呼叫 asset，因此只在這個測試拿掉重試。
-    monkeypatch.setattr(source.asset.op, "_retry_policy", None)
+    # 區域快照的重試政策實際等待約 110 秒退避；觀測 slot 需要真實 run，
+    # 不能直接呼叫 asset，因此只在這個測試以不重試的同一個 op 執行。
+    source = replace(source, asset=_without_retries(source.asset))
     if failure == "http_500":
         adapter = FixtureSource(source.payload(), fail_first=math.inf)
         expected_error: type[Exception] = httpx.HTTPStatusError
@@ -174,7 +184,12 @@ def test_a_failed_fetch_writes_nothing(
         expected_error = source.parse_error
         match = source.parse_error_match
 
-    with pytest.raises(expected_error, match=match):
-        _materialize(source, adapter, test_repo, dagster_instance)
+    result = _materialize(source, adapter, test_repo, dagster_instance, raise_on_error=False)
 
+    assert not result.success
+    [failure_event] = result.get_step_failure_events()
+    # 重試政策用盡時 Dagster 以「超過重試次數」包住 asset 拋出的錯誤。
+    raised = failure_event.step_failure_data.error.cause
+    assert raised.cls_name == expected_error.__name__
+    assert re.search(match, raised.message)
     assert source.rows(test_repo, OBSERVED_SLOT) == []
