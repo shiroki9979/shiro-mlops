@@ -4,6 +4,8 @@ Per-task features, model, and monitoring assets come from the asset factory in
 ``pipelines/task_pipelines.py``.
 """
 
+from datetime import datetime
+
 import pandas as pd
 from dagster import (
     AssetExecutionContext,
@@ -11,7 +13,6 @@ from dagster import (
     AssetKey,
     AssetOut,
     Backoff,
-    Config,
     RetryPolicy,
     asset,
     multi_asset,
@@ -36,8 +37,8 @@ from shiro_mlops.data.taipower_regional_supply_demand import (
 from shiro_mlops.data.taipower_supply_demand import (
     SupplyDemandSource,
     TaipowerSupplyDemandSnapshot,
+    floor_to_ten_minutes,
     parse_supply_demand_payload,
-    resolve_snapshot_observed_at,
 )
 from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
@@ -57,12 +58,6 @@ CWA_SOURCE = "cwa_source"
 TAIPOWER_SUPPLY_DEMAND_SOURCE = "taipower_supply_demand_source"
 TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE = "taipower_regional_supply_demand_source"
 TAIPOWER_UNIT_GENERATION_SOURCE = "taipower_unit_generation_source"
-
-
-class SnapshotObservationConfig(Config):
-    """提供選用的排程 tick，讓即時快照共用同一個觀測 slot。"""
-
-    observed_at: str | None = None
 
 
 # 區域快照是全台逐時實際負載的唯一來源且無法回補，故重試比其他即時快照更久；
@@ -120,6 +115,15 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
     return releases
 
 
+def _observation_slot(context: AssetExecutionContext) -> datetime:
+    """The ten-minute slot of the run's as_of, shared by all three realtime snapshots.
+
+    Without a tick the slot falls back to the run's creation time, so a manual run or a
+    re-execution writes what the realtime API serves now into the slot it is served in.
+    """
+    return floor_to_ten_minutes(run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW))
+
+
 @asset(
     group_name="ingestion",
     description="Fetch current Taipower power supply-demand snapshot",
@@ -127,10 +131,9 @@ def raw_cwa_township_forecast(context: AssetExecutionContext) -> list[CWAForecas
 )
 def raw_taipower_supply_demand_snapshot(
     context: AssetExecutionContext,
-    config: SnapshotObservationConfig,
 ) -> TaipowerSupplyDemandSnapshot:
     """Asset: Taipower supply-demand snapshot upserted by observation slot."""
-    observed_at = resolve_snapshot_observed_at(config.observed_at)
+    observed_at = _observation_slot(context)
     source: SupplyDemandSource = getattr(context.resources, TAIPOWER_SUPPLY_DEMAND_SOURCE)
     snapshot = parse_supply_demand_payload(source.fetch_payload(), observed_at=observed_at)
     context.log.info(
@@ -150,10 +153,9 @@ def raw_taipower_supply_demand_snapshot(
 )
 def raw_taipower_regional_supply_demand_snapshot(
     context: AssetExecutionContext,
-    config: SnapshotObservationConfig,
 ) -> list[TaipowerRegionalSupplyDemandSnapshot]:
     """Asset: regional supply-demand snapshots upserted by observation slot and region."""
-    observed_at = resolve_snapshot_observed_at(config.observed_at)
+    observed_at = _observation_slot(context)
     source: RegionalSupplyDemandSource = getattr(
         context.resources, TAIPOWER_REGIONAL_SUPPLY_DEMAND_SOURCE
     )
@@ -219,10 +221,9 @@ def raw_taipower_load(context: AssetExecutionContext) -> pd.DataFrame:
 )
 def raw_taipower_unit_generation_snapshot(
     context: AssetExecutionContext,
-    config: SnapshotObservationConfig,
 ) -> list[TaipowerUnitGenerationSnapshot]:
     """Asset: unit net-generation snapshots upserted by observation slot and unit identity."""
-    observed_at = resolve_snapshot_observed_at(config.observed_at)
+    observed_at = _observation_slot(context)
     source: UnitGenerationSource = getattr(context.resources, TAIPOWER_UNIT_GENERATION_SOURCE)
     snapshots = parse_unit_generation_payload(source.fetch_payload(), observed_at=observed_at)
     context.log.info(
