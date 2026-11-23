@@ -134,3 +134,35 @@ def test_feast_load_export_marks_days_off_beside_the_weekend_flag() -> None:
     assert exported["is_day_off"].tolist() == [0, 1, 1]
     assert exported["is_weekend"].tolist() == [0, 0, 1]
     assert exported["is_day_off"].dtype == "int64"
+
+
+def test_feast_weather_export_leaves_missing_readings_missing() -> None:
+    """A fabricated 25 °C / 70 % is indistinguishable from a real reading once exported."""
+    times = pd.date_range("2026-09-01 00:00", periods=3, freq="h")
+    load = pd.DataFrame({"datetime": times, "load_mw": [30000.0, 30100.0, 30200.0]})
+    weather = pd.DataFrame(
+        {
+            "datetime": times,
+            "temperature": [28.0, None, 29.0],
+            "relative_humidity": [None, 71.0, "not-a-number"],
+        }
+    )
+
+    exported = build_feast_feature_frames(load, weather).weather
+
+    assert exported["temperature"].isna().tolist() == [False, True, False]
+    assert exported["relative_humidity"].isna().tolist() == [True, False, True]
+    assert exported["temperature"].dtype == "float32"
+    assert exported.loc[1, "relative_humidity"] == 71.0
+
+
+def test_feast_weather_export_keeps_an_absent_field_as_a_missing_column() -> None:
+    times = pd.date_range("2026-09-01 00:00", periods=2, freq="h")
+    load = pd.DataFrame({"datetime": times, "load_mw": [30000.0, 30100.0]})
+    weather = pd.DataFrame({"datetime": times, "temperature": [28.0, 28.5]})
+
+    exported = build_feast_feature_frames(load, weather).weather
+
+    assert list(exported.columns) == ["datetime", "location", "temperature", "relative_humidity"]
+    assert exported["relative_humidity"].isna().all()
+    assert exported["relative_humidity"].dtype == "float32"

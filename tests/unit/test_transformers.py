@@ -529,3 +529,25 @@ def test_calendar_features_add_day_off_only_when_requested() -> None:
     frame = pd.DataFrame({"datetime": pd.date_range("2026-10-09", periods=3, freq="h")})
 
     assert "is_day_off" not in create_calendar_features(frame).columns
+
+
+def test_merge_weather_adds_only_the_fields_the_weather_carries() -> None:
+    times = pd.date_range("2026-08-01 00:00", periods=3, freq="h")
+    load = pd.DataFrame({"datetime": times, "load_mw": [30000.0, 30100.0, 30200.0]})
+    weather = pd.DataFrame({"datetime": times, "temperature": [28.0, 28.5, 29.0]})
+
+    merged = merge_weather_features(load, weather)
+
+    assert merged["temperature"].tolist() == [28.0, 28.5, 29.0]
+    assert "relative_humidity" not in merged.columns
+
+
+def test_feature_pipeline_keeps_rows_when_the_task_has_one_weather_field() -> None:
+    times = pd.date_range("2026-08-01 00:00", periods=72, freq="h")
+    load = pd.DataFrame({"datetime": times, "load_mw": 30000.0 + times.hour.to_numpy() * 10.0})
+    weather = pd.DataFrame({"datetime": times, "relative_humidity": 70.0})
+
+    features = build_feature_pipeline(load, weather, lags=[1, 24], windows=[6])
+
+    assert len(features) == 72 - 24
+    assert "temperature" not in features.columns

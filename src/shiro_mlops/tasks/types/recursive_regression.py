@@ -15,12 +15,8 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL
-from shiro_mlops.features.transformers import (
-    build_feature_pipeline,
-    create_calendar_features,
-    create_lag_features,
-    create_rolling_features,
-)
+from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
+from shiro_mlops.features.transformers import build_feature_pipeline, create_calendar_features
 from shiro_mlops.models.evaluator import evaluate_forecast
 from shiro_mlops.tasks.types.base import (
     HealthAssessment,
@@ -186,27 +182,19 @@ class RecursiveRegressionModel:
         weather = _sorted_by_time(data.weather)
         if data.horizon_hours is not None:
             weather = weather.head(data.horizon_hours)
-        buffer = _sorted_by_time(data.load_history[[DATETIME_COL, LOAD_MW_COL]])
-        predictions: list[dict[str, object]] = []
-        for _, step in weather.iterrows():
-            value = self._predict_step(buffer, step)
-            predictions.append({DATETIME_COL: step[DATETIME_COL], PREDICTION_COL: value})
-            next_row = pd.DataFrame([{DATETIME_COL: step[DATETIME_COL], LOAD_MW_COL: value}])
-            buffer = pd.concat([buffer, next_row], ignore_index=True)
-        return pd.DataFrame(predictions, columns=[DATETIME_COL, PREDICTION_COL])
-
-    def _predict_step(self, buffer: pd.DataFrame, step: pd.Series) -> float:
-        candidate = pd.DataFrame([{DATETIME_COL: step[DATETIME_COL], LOAD_MW_COL: np.nan}])
-        extended = pd.concat([buffer, candidate], ignore_index=True)
-        extended = create_calendar_features(extended, day_off=self.day_off)
-        extended = create_lag_features(extended, value_col=LOAD_MW_COL, lags=self.lags)
-        extended = create_rolling_features(
-            extended, value_col=LOAD_MW_COL, windows=self.rolling_windows
-        )
-        row = extended.iloc[[-1]].copy()
+        step_inputs = create_calendar_features(weather[[DATETIME_COL]], day_off=self.day_off)
         for column in self.weather_columns:
-            row[column] = float(step[column])
-        return float(self.booster.predict(row[self.feature_names])[0])
+            step_inputs[column] = weather[column].astype(float)
+        history = _LoadHistory.from_frame(data.load_history)
+        predictions: list[float] = []
+        for step in step_inputs.to_dict("records"):
+            moment = step[DATETIME_COL]
+            step.update(history.features_at(moment, self.lags, self.rolling_windows))
+            row = np.array([[step[name] for name in self.feature_names]], dtype=float)
+            value = float(self.booster.predict(row)[0])
+            history.append(moment, value)
+            predictions.append(value)
+        return pd.DataFrame({DATETIME_COL: weather[DATETIME_COL], PREDICTION_COL: predictions})
 
     def save(self, directory: Path) -> None:
         metadata = {
@@ -245,7 +233,74 @@ def training_features(params: RecursiveRegressionParams, data: TrainingData) -> 
     )
 
 
+_HOUR_NS = 3_600_000_000_000
+
+
+class _LoadHistory:
+    """Time-ordered load that yields one hour's lag and rolling features without a full recompute.
+
+    The values match ``create_lag_features`` and ``create_rolling_features``: a lag is the load
+    exactly that many hours earlier or missing, and a rolling statistic covers the observed
+    loads in ``[moment - window, moment)``. Recomputing those transformers over the whole
+    buffer at every step made a 168-hour forecast spend most of its time rebuilding features
+    of hours it had already predicted.
+    """
+
+    def __init__(self, times: np.ndarray, loads: np.ndarray) -> None:
+        self._times = times
+        self._loads = loads
+
+    @classmethod
+    def from_frame(cls, load_history: pd.DataFrame) -> _LoadHistory:
+        times = _nanoseconds(standardize_taiwan_datetime(load_history[DATETIME_COL]))
+        order = np.argsort(times, kind="stable")
+        loads = load_history[LOAD_MW_COL].to_numpy(dtype=float)
+        return cls(times[order], loads[order])
+
+    def append(self, moment: pd.Timestamp, load: float) -> None:
+        position = np.searchsorted(self._times, moment.value, side="right")
+        self._times = np.insert(self._times, position, moment.value)
+        self._loads = np.insert(self._loads, position, load)
+
+    def features_at(
+        self, moment: pd.Timestamp, lags: list[int], rolling_windows: list[int]
+    ) -> dict[str, float]:
+        now = moment.value
+        features: dict[str, float] = {}
+        for lag in lags:
+            features[f"{LOAD_MW_COL}_lag_{lag}"] = self._load_at(now - lag * _HOUR_NS)
+        end = np.searchsorted(self._times, now, side="left")
+        for window in rolling_windows:
+            start = np.searchsorted(self._times, now - window * _HOUR_NS, side="left")
+            observed = self._loads[start:end]
+            observed = observed[~np.isnan(observed)]
+            features[f"{LOAD_MW_COL}_rolling_mean_{window}"] = (
+                float(observed.mean()) if observed.size else np.nan
+            )
+            features[f"{LOAD_MW_COL}_rolling_std_{window}"] = _sample_std(observed)
+        return features
+
+    def _load_at(self, instant: int) -> float:
+        position = np.searchsorted(self._times, instant, side="right") - 1
+        if position < 0 or self._times[position] != instant:
+            return np.nan
+        return float(self._loads[position])
+
+
+def _nanoseconds(times: pd.Series) -> np.ndarray:
+    return pd.DatetimeIndex(times).as_unit("ns").asi8
+
+
+def _sample_std(observed: np.ndarray) -> float:
+    """Sample standard deviation as the rolling feature defines it: 0 for a lone observation."""
+    if observed.size == 0:
+        return np.nan
+    if observed.size == 1:
+        return 0.0
+    return float(observed.std(ddof=1))
+
+
 def _sorted_by_time(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
-    result[DATETIME_COL] = pd.to_datetime(result[DATETIME_COL])
+    result[DATETIME_COL] = standardize_taiwan_datetime(result[DATETIME_COL])
     return result.sort_values(DATETIME_COL).reset_index(drop=True)

@@ -114,6 +114,8 @@ class _WeatherSection(BaseModel):
         points = self.reference_points
         if len(set(points)) != len(points):
             raise ValueError("a weather reference point is listed more than once")
+        if len(set(self.fields)) != len(self.fields):
+            raise ValueError("a weather field is listed more than once")
         if self.weights is None:
             if len(points) > 1:
                 raise ValueError("multiple weather reference points need weights")

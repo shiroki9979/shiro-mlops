@@ -7,6 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from shiro_mlops.features.transformers import (
+    create_calendar_features,
+    create_lag_features,
+    create_rolling_features,
+)
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthStatus,
@@ -14,7 +19,11 @@ from shiro_mlops.tasks.types.base import (
     TrainingData,
     WeatherInput,
 )
-from shiro_mlops.tasks.types.recursive_regression import RecursiveRegressionParams
+from shiro_mlops.tasks.types.recursive_regression import (
+    RecursiveRegressionModel,
+    RecursiveRegressionParams,
+    training_features,
+)
 from tests.helpers import OFFICIAL_2026_WEEKDAY_DAYS_OFF, hourly_load_with_weather
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
@@ -99,6 +108,36 @@ def test_missing_weather_field_fails_instead_of_using_a_constant(trained) -> Non
 
     with pytest.raises(KeyError, match="relative_humidity"):
         trained.model.predict(without_humidity)
+
+
+@pytest.mark.parametrize("field", ["temperature", "relative_humidity"])
+def test_trains_and_predicts_with_a_single_weather_field(field: str) -> None:
+    """A task may declare one weather field; the absent one must not empty the training rows."""
+    full = _training_data()
+    data = TrainingData(
+        load=full.load,
+        weather=full.weather[["datetime", field]],
+        validation_start=full.validation_start,
+    )
+
+    trained = task_type.train(PARAMS, data)
+
+    assert trained.model.weather_columns == [field]
+    assert field in trained.model.feature_names
+    absent = {"temperature", "relative_humidity"} - {field}
+    assert absent.isdisjoint(trained.model.feature_names)
+    assert trained.metrics["mape"] < 5.0
+    prediction_data = _prediction_data(full.load)
+    forecast = trained.model.predict(
+        PredictionData(
+            anchor=prediction_data.anchor,
+            load_history=prediction_data.load_history,
+            weather=prediction_data.weather[["datetime", field]],
+            horizon_hours=HORIZON_HOURS,
+        )
+    )
+    assert len(forecast) == HORIZON_HOURS
+    assert forecast["predicted_load_mw"].notna().all()
 
 
 def test_saved_model_reloads_with_identical_predictions(trained, tmp_path: Path) -> None:
@@ -221,3 +260,121 @@ def test_day_off_recipe_survives_save_and_load(tmp_path: Path) -> None:
     reloaded = task_type.load(tmp_path)
 
     pd.testing.assert_frame_equal(reloaded.predict(data), trained.model.predict(data))
+
+
+# --- step features against the training recipe ---------------------------------------------
+
+
+def _recompute_everything_each_step(
+    model: RecursiveRegressionModel, data: PredictionData
+) -> list[float]:
+    """The roll-forward spelled out with the training transformers over the whole buffer."""
+    buffer = data.load_history[["datetime", "load_mw"]].sort_values("datetime")
+    predictions: list[float] = []
+    for _, step in data.weather.sort_values("datetime").head(data.horizon_hours).iterrows():
+        candidate = pd.DataFrame([{"datetime": step["datetime"], "load_mw": np.nan}])
+        extended = pd.concat([buffer, candidate], ignore_index=True)
+        extended = create_calendar_features(extended, day_off=model.day_off)
+        extended = create_lag_features(extended, lags=model.lags)
+        extended = create_rolling_features(extended, windows=model.rolling_windows)
+        row = extended.iloc[[-1]].copy()
+        for column in model.weather_columns:
+            row[column] = float(step[column])
+        value = float(model.booster.predict(row[model.feature_names])[0])
+        predictions.append(value)
+        buffer = pd.concat(
+            [buffer, pd.DataFrame([{"datetime": step["datetime"], "load_mw": value}])],
+            ignore_index=True,
+        )
+    return predictions
+
+
+def _week_ahead(load: pd.DataFrame, history: pd.DataFrame) -> PredictionData:
+    anchor = load["datetime"].max()
+    future = pd.date_range(anchor + pd.Timedelta(hours=1), periods=168, freq="h")
+    _, weather = hourly_load_with_weather(168, future[-1].to_pydatetime())
+    return PredictionData(anchor=anchor, load_history=history, weather=weather, horizon_hours=168)
+
+
+def test_week_ahead_forecast_matches_recomputing_every_feature_each_step(trained) -> None:
+    load = _training_data().load
+    data = _week_ahead(load, load.tail(PARAMS.lookback_hours))
+
+    forecast = trained.model.predict(data)
+
+    assert forecast["datetime"].tolist() == data.weather["datetime"].tolist()
+    assert forecast["predicted_load_mw"].to_numpy() == pytest.approx(
+        _recompute_everything_each_step(trained.model, data), rel=1e-9
+    )
+
+
+def test_forecast_over_gappy_history_matches_recomputing_every_feature(trained) -> None:
+    """Missing hours stay missing for lags and thin out the rolling windows; nothing shifts."""
+    load = _training_data().load
+    history = load.tail(PARAMS.lookback_hours).reset_index(drop=True)
+    history = history.drop(index=[3, 4, 5, 100, 166]).sample(frac=1.0, random_state=3)
+    history.loc[history.index[10], "load_mw"] = np.nan
+    data = _week_ahead(load, history)
+
+    forecast = trained.model.predict(data)
+
+    assert forecast["predicted_load_mw"].to_numpy() == pytest.approx(
+        _recompute_everything_each_step(trained.model, data), rel=1e-9
+    )
+
+
+def test_one_step_features_equal_the_training_row_for_that_hour(trained) -> None:
+    """Train/serve parity: an hour forecast from actual history sees its own training features."""
+    data = _training_data()
+    features = training_features(PARAMS, data)
+    target = features.iloc[-1]
+    history = data.load[data.load["datetime"] < target["datetime"]]
+    weather = data.weather[data.weather["datetime"] == target["datetime"]]
+
+    forecast = trained.model.predict(
+        PredictionData(
+            anchor=history["datetime"].max(),
+            load_history=history,
+            weather=weather,
+            horizon_hours=1,
+        )
+    )
+
+    expected = trained.model.booster.predict(features.iloc[[-1]][trained.model.feature_names])
+    assert forecast["predicted_load_mw"].iloc[0] == pytest.approx(expected[0], rel=1e-9)
+
+
+def test_forecast_reads_timezone_aware_times_as_taiwan_local(trained) -> None:
+    load = _training_data().load
+    naive = _week_ahead(load, load.tail(PARAMS.lookback_hours))
+    aware = PredictionData(
+        anchor=naive.anchor,
+        load_history=naive.load_history.assign(
+            datetime=naive.load_history["datetime"].dt.tz_localize("Asia/Taipei")
+        ),
+        weather=naive.weather,
+        horizon_hours=24,
+    )
+
+    forecast = trained.model.predict(aware)
+
+    assert forecast["predicted_load_mw"].to_numpy() == pytest.approx(
+        trained.model.predict(naive)["predicted_load_mw"].to_numpy()[:24], rel=1e-9
+    )
+
+
+def test_empty_weather_yields_an_empty_forecast(trained) -> None:
+    load = _training_data().load
+    data = _prediction_data(load)
+
+    forecast = trained.model.predict(
+        PredictionData(
+            anchor=data.anchor,
+            load_history=data.load_history,
+            weather=data.weather.head(0),
+            horizon_hours=HORIZON_HOURS,
+        )
+    )
+
+    assert list(forecast.columns) == ["datetime", "predicted_load_mw"]
+    assert forecast.empty

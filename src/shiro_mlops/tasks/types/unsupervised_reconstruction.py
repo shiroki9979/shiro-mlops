@@ -68,7 +68,6 @@ FALSE_POSITIVE_RATE_METRIC = "false_positive_rate"
 # 合成異常強度以常態負載的比例表示；對應颱風停班停課、大規模停電等用電型態異常的量級。
 SUDDEN_DROP_HOURS = 6
 SUDDEN_DROP_FRACTION = 0.2
-PATTERN_SWAP_SHIFT_HOURS = 12
 LEVEL_SHIFT_FRACTION = 0.1
 
 
@@ -237,8 +236,13 @@ class _Scaler:
 
     @classmethod
     def fit(cls, features: np.ndarray) -> _Scaler:
-        scale = features.std(axis=0)
-        return cls(mean=features.mean(axis=0), scale=np.where(scale > 0.0, scale, 1.0))
+        # WHY-NOT _Scaler: constant features are found by their range, not by std > 0; the std of
+        # a repeated inexact float (70.1) is round-off near 1e-14, and dividing by it turns the
+        # first different reading at serving into a score trillions of times the threshold.
+        is_constant = np.ptp(features, axis=0) == 0.0
+        return cls(
+            mean=features.mean(axis=0), scale=np.where(is_constant, 1.0, features.std(axis=0))
+        )
 
     def transform(self, features: np.ndarray) -> np.ndarray:
         return (features - self.mean) / self.scale
@@ -518,11 +522,13 @@ def _sudden_drop(features: np.ndarray, window_hours: int) -> np.ndarray:
 
 
 def _pattern_swap(features: np.ndarray, window_hours: int) -> np.ndarray:
-    """The same load values in a shifted daily shape, e.g. night-time demand at noon."""
+    """The same load values rotated by half the window, e.g. night-time demand at noon.
+
+    Half the window is twelve hours for a day-long window; a fixed twelve would hand a
+    6- or 12-hour window back unchanged and report the false positive rate as recall.
+    """
     injected = features.copy()
-    injected[:, :window_hours] = np.roll(
-        features[:, :window_hours], PATTERN_SWAP_SHIFT_HOURS, axis=1
-    )
+    injected[:, :window_hours] = np.roll(features[:, :window_hours], window_hours // 2, axis=1)
     return injected
 
 

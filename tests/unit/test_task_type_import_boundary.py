@@ -1,10 +1,14 @@
 """ADR-0009: task types never touch the data layer and never see Dagster or Feast.
 
-Only direct imports are scanned. Package initialisers pull in Dagster and Feast at
-runtime, so a check on loaded modules would fail for reasons outside task types.
+Direct imports are scanned, because package initialisers still pull in Dagster at runtime
+and a check on loaded modules would fail for reasons outside task types. Feast is the
+exception: nothing a task type, the API or a Dagster step imports may load it, so that one
+is checked on the modules a fresh interpreter ends up with.
 """
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,3 +103,23 @@ def test_scan_rejects_forbidden_direct_import(source: str) -> None:
 )
 def test_scan_allows_imports_outside_the_boundary(source: str) -> None:
     assert _forbidden_imports(source, "shiro_mlops.tasks.types") == []
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "shiro_mlops.features",
+        "shiro_mlops.tasks.types",
+        "shiro_mlops.service.api",
+        "shiro_mlops.pipelines.definitions",
+    ],
+)
+def test_importing_the_runtime_entry_points_does_not_load_feast(module: str) -> None:
+    """Feast costs over a second to import and every Dagster step process would pay it."""
+    probe = f"import sys, {module}; sys.exit('feast' in sys.modules)"
+
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=False
+    )
+
+    assert completed.returncode == 0, completed.stderr

@@ -33,6 +33,9 @@ def standardize_taiwan_datetime(s: pd.Series) -> pd.Series:
     if getattr(s.dtype, "tz", None) is not None:
         return s.dt.tz_convert(TAIWAN_TZ).dt.tz_localize(None)
 
+    if pd.api.types.is_datetime64_dtype(s.dtype):
+        return s.astype("datetime64[ns]")
+
     def to_taiwan_local(value: object) -> pd.Timestamp:
         if pd.isna(value):
             return pd.NaT

@@ -17,8 +17,10 @@ from shiro_mlops.tasks.types.base import (
     WeatherInput,
 )
 from shiro_mlops.tasks.types.unsupervised_reconstruction import (
+    SYNTHETIC_ANOMALIES,
     NumpyMLP,
     UnsupervisedReconstructionParams,
+    _Scaler,
 )
 
 LAST_HOUR = datetime(2026, 9, 20, 23, 0)
@@ -317,3 +319,56 @@ def test_health_without_a_required_metric_warns_instead_of_passing(missing: str)
 
     assert assessment.status is HealthStatus.WARNING
     assert missing in assessment.reason
+
+
+# --- boundary inputs -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("constant", [70.1, 0.1, 1e-9, 31234.567, 0.0])
+def test_scaler_keeps_scale_one_for_a_constant_feature(constant: float) -> None:
+    """The std of a repeated inexact float is round-off, not zero; it must not become the scale."""
+    features = np.column_stack([np.full(537, constant), np.linspace(0.0, 1.0, 537)])
+
+    scaler = _Scaler.fit(features)
+
+    assert scaler.scale[0] == 1.0
+    assert scaler.scale[1] == pytest.approx(features[:, 1].std())
+    moved = scaler.transform(np.array([[constant + 0.1, 0.5]]))
+    assert moved[0, 0] == pytest.approx(0.1)
+
+
+def test_a_sensor_stuck_through_training_does_not_flag_every_later_reading(
+    tmp_path: Path,
+) -> None:
+    data = _training_data()
+    stuck = replace(data, weather=data.weather.assign(relative_humidity=70.1))
+    model = task_type.train(PARAMS, stuck).model
+    serving = _prediction_data(horizon_hours=24)
+    weather = serving.weather.assign(relative_humidity=70.1)
+    weather.loc[weather["datetime"] == ANCHOR, "relative_humidity"] = 70.2
+
+    scored = model.predict(replace(serving, weather=weather))
+
+    assert scored["anomaly_score"].max() < 100 * model.threshold
+    assert not scored["is_anomaly"].all()
+
+
+@pytest.mark.parametrize("window_hours", [6, 7, 12, 24, 36])
+def test_pattern_swap_changes_the_window_whatever_its_length(window_hours: int) -> None:
+    """A swap that returns the same window measures the false positive rate, not recall."""
+    load = np.arange(window_hours, dtype=float).reshape(1, -1)
+    features = np.hstack([load, np.full((1, 4), 9.0)])
+
+    swapped = SYNTHETIC_ANOMALIES["pattern_swap"](features, window_hours)
+
+    assert not np.array_equal(swapped[:, :window_hours], load)
+    assert sorted(swapped[0, :window_hours]) == sorted(load[0])
+    assert np.array_equal(swapped[:, window_hours:], features[:, window_hours:])
+
+
+def test_pattern_swap_still_shifts_a_day_long_window_by_twelve_hours() -> None:
+    load = np.arange(24, dtype=float).reshape(1, -1)
+
+    swapped = SYNTHETIC_ANOMALIES["pattern_swap"](load, 24)
+
+    assert np.array_equal(swapped, np.roll(load, 12, axis=1))
