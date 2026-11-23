@@ -1,7 +1,7 @@
 """Time-series database repository for CWA weather, issued forecasts and Taipower snapshots."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, NamedTuple
 
 import pandas as pd
@@ -11,8 +11,6 @@ from sqlalchemy.engine import Connection, Engine
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.constants import (
     LOCATION_COL,
-    MAX_HORIZON_HOURS,
-    NATIONWIDE_SUBJECT,
     RELATIVE_HUMIDITY_COL,
     TEMPERATURE_COL,
 )
@@ -20,7 +18,6 @@ from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescal
 from shiro_mlops.core.storage_time import (
     from_storage_time,
     from_storage_time_series,
-    half_open_window,
     to_storage_time,
     to_storage_time_or_none,
 )
@@ -29,11 +26,8 @@ from shiro_mlops.data.cwa_client import (
     CWAObservationBatch,
     resolve_cwa_location,
 )
-from shiro_mlops.data.forecast_track_record import TrackRecordPair, TrackRecordWindow
-from shiro_mlops.data.hourly_actual_load_store import (
-    REGIONAL_SNAPSHOT_SUM_SOURCE,
-    HourlyActualLoadStore,
-)
+from shiro_mlops.data.forecast_track_record import ForecastTrackRecordStore
+from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload
@@ -51,9 +45,6 @@ from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationSnap
 from shiro_mlops.data.taipower_unit_generation_repository import (
     TaipowerUnitGenerationRepository,
 )
-
-_TRACK_RECORD_HORIZON = timedelta(hours=MAX_HORIZON_HOURS)
-
 
 FORECAST_ROW_COLUMNS = [
     "dataset_id",
@@ -305,6 +296,7 @@ class TimeSeriesRepository:
         )
         self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
         self.hourly_actual_load_store = HourlyActualLoadStore(self.engine)
+        self.forecast_track_record_store = ForecastTrackRecordStore(self.engine)
 
     def upsert_cwa_weather(
         self,
@@ -650,55 +642,6 @@ class TimeSeriesRepository:
     def fetch_latest_issued_forecast(self) -> IssuedForecast | None:
         """Fetch the forecast with the latest issue time, or ``None`` before the first issue."""
         return self.issued_forecast_repo.fetch_latest()
-
-    def fetch_track_record_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
-        """Pair issued steps targeting the window with valid hourly observations.
-
-        Only steps whose target hour is after their issue time count, and only
-        target hours with a nationwide ``regional_snapshot_sum`` load row. One SQL
-        join returns only the paired rows. Pairs are ordered by target hour, then
-        issue time.
-
-        Both hypertables are bounded on their partition column: a step lands at
-        most 168 hours after its load anchor, which precedes its issue time, so a
-        step targeting the window was issued after the window start minus 168 hours.
-        """
-        target_hour = half_open_window("step.target_hour", window.start, window.end)
-        load_time = half_open_window("actual.time", window.start, window.end, param="load_time")
-        params = {
-            **target_hour.params,
-            **load_time.params,
-            "earliest_issued_at": to_storage_time(window.start - _TRACK_RECORD_HORIZON),
-            "latest_issued_at": to_storage_time(window.end),
-            "subject": NATIONWIDE_SUBJECT,
-            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
-        }
-        query = text(
-            f"""
-            SELECT step.issued_at, step.target_hour, step.predicted_load_mw, actual.load_mw
-            FROM issued_forecast_step AS step
-            JOIN raw_taipower_load AS actual ON actual.time = step.target_hour
-            WHERE step.issued_at > :earliest_issued_at
-              AND step.issued_at < :latest_issued_at
-              AND {target_hour.sql}
-              AND step.target_hour > step.issued_at
-              AND {load_time.sql}
-              AND actual.subject = :subject
-              AND actual.source = :source
-            ORDER BY step.target_hour, step.issued_at
-            """
-        )
-        with self.engine.connect() as conn:
-            rows = conn.execute(query, params).mappings().all()
-        return tuple(
-            TrackRecordPair(
-                issued_at=from_storage_time(row["issued_at"], column="issued_at"),
-                target_hour=from_storage_time(row["target_hour"], column="target_hour"),
-                predicted_load_mw=float(row["predicted_load_mw"]),
-                actual_load_mw=float(row["load_mw"]),
-            )
-            for row in rows
-        )
 
 
 __all__ = [
