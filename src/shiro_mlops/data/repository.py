@@ -1,16 +1,13 @@
 """Time-series database repository for issued forecasts and Taipower snapshots."""
 
 from datetime import datetime, timedelta
-from typing import Any
 
-import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS, NATIONWIDE_SUBJECT
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.storage_time import from_storage_time, half_open_window, to_storage_time
-from shiro_mlops.data.cwa_client import CWAForecastRelease, CWAObservationBatch
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.forecast_track_record import TrackRecordPair, TrackRecordWindow
 from shiro_mlops.data.hourly_actual_load_store import (
@@ -79,55 +76,6 @@ class TimeSeriesRepository:
         self.issued_forecast_repo = IssuedForecastRepository(engine=self.engine, auto_init=False)
         self.hourly_actual_load_store = HourlyActualLoadStore(self.engine)
         self.cwa_weather_store = CWAWeatherStore(self.engine)
-
-    def upsert_cwa_weather(
-        self,
-        df: pd.DataFrame,
-        default_location: str | None = None,
-    ) -> int:
-        """Reject deprecated weather writes that do not carry source StationId provenance."""
-        del df, default_location
-        raise RuntimeError(
-            "Legacy CWA weather writes are not supported; use upsert_cwa_observation_batch."
-        )
-
-    def upsert_cwa_observation_batch(self, batch: CWAObservationBatch) -> int:
-        """Persist one canonical CWA observation batch and its typed children atomically."""
-        return self.cwa_weather_store.upsert_cwa_observation_batch(batch)
-
-    def fetch_cwa_station_observations(
-        self,
-        start_time: datetime | str | None = None,
-        end_time: datetime | str | None = None,
-        station_id: str | None = None,
-    ) -> pd.DataFrame:
-        """Fetch canonical CWA station observations in Taiwan local time."""
-        return self.cwa_weather_store.fetch_cwa_station_observations(
-            start_time=start_time, end_time=end_time, station_id=station_id
-        )
-
-    def upsert_cwa_forecast_release(self, release: CWAForecastRelease) -> int:
-        """Persist one CWA forecast vintage and all typed township rows atomically."""
-        return self.cwa_weather_store.upsert_cwa_forecast_releases([release])
-
-    def upsert_cwa_forecast_releases(self, releases: list[CWAForecastRelease]) -> int:
-        """Persist all products from one forecast ingestion run in one transaction."""
-        return self.cwa_weather_store.upsert_cwa_forecast_releases(releases)
-
-    def fetch_cwa_forecast_rows(self, **filters: Any) -> pd.DataFrame:
-        """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff."""
-        return self.cwa_weather_store.fetch_cwa_forecast_rows(**filters)
-
-    def fetch_weather_range(
-        self,
-        start_time: datetime | str | None = None,
-        end_time: datetime | str | None = None,
-        reference_point: str | None = None,
-    ) -> pd.DataFrame:
-        """Fetch historical CWA station observations for one weather reference point."""
-        return self.cwa_weather_store.fetch_weather_range(
-            start_time=start_time, end_time=end_time, reference_point=reference_point
-        )
 
     def upsert_supply_demand_snapshot(self, snapshot: TaipowerSupplyDemandSnapshot) -> int:
         """Upsert a Taipower supply-demand snapshot keyed by observed_at."""

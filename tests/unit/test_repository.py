@@ -282,31 +282,3 @@ def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
             "valid_to": pd.Timestamp("2026-08-20 15:00"),
         }
     ]
-
-
-def test_legacy_weather_upsert_is_rejected_before_it_can_create_canonical_provenance(
-    repository: TimeSeriesRepository,
-) -> None:
-    """Legacy location labels must never be converted into canonical station identities."""
-    legacy_weather = pd.DataFrame(
-        [
-            {
-                "datetime": "2026-08-20 00:00:00",
-                "location": "Unknown",
-                "temperature": 27.0,
-                "relative_humidity": 80.0,
-            }
-        ]
-    )
-
-    with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
-        repository.upsert_cwa_weather(legacy_weather)
-
-    assert repository.cwa_weather_store.fetch_cwa_station_observations().empty
-
-
-def test_legacy_weather_upsert_rejects_an_empty_dataframe(repository: TimeSeriesRepository):
-    """An empty frame is rejected like any legacy weather write rather than counted as zero rows."""
-    empty_df = pd.DataFrame()
-    with pytest.raises(RuntimeError, match="Legacy CWA weather writes are not supported"):
-        repository.upsert_cwa_weather(empty_df)
