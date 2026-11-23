@@ -26,6 +26,14 @@ export const en: Messages = {
   localeSwitcher: {
     label: 'Interface language',
   },
+  attribution: {
+    sourceLabel: 'Data sources: ',
+    providers: 'Taiwan Power Company; Central Weather Administration, Ministry of Transportation and Communications',
+    statement:
+      'The Open Data is made available to the public under the Open Government Data License. Users can make use of it when complying with the conditions and obligations of its terms.',
+    licenseLabel: 'License: ',
+    licenseLink: 'Open Government Data License, version 1.0',
+  },
   dashboard: {
     unavailable: 'The forecast is unavailable right now',
     horizon: {

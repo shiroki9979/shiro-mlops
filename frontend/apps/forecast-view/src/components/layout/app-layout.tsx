@@ -1,3 +1,4 @@
+import { Footer } from './footer'
 import { Header } from './header'
 import { Sidebar } from './sidebar'
 
@@ -14,6 +15,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         <main className="flex-1 p-6 overflow-y-auto max-w-7xl w-full mx-auto space-y-6">
           {children}
         </main>
+        <Footer />
       </div>
     </div>
   )
