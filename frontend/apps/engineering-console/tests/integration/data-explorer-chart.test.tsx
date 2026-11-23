@@ -106,6 +106,19 @@ describe('Data Explorer chart card', () => {
     expect(params.has('agg')).toBe(false)
   })
 
+  // Hourly load has no grouping selector, so a hand-written `group_by` is not applicable.
+  it('draws the chart without sending an inapplicable group_by from the URL', async () => {
+    const requests = captureRequests()
+    renderPath(`/data/power/load?${WINDOW}&group_by=x`)
+
+    await screen.findByRole('figure', {
+      name: chart.figureLabel(m.explorer.datasets.hourly_load.label, m.explorer.fields.load_mw, 'nationwide'),
+    })
+    expect(screen.queryByText(chart.invalidQuery)).not.toBeInTheDocument()
+    expect(requests.series.length).toBeGreaterThan(0)
+    for (const series of requests.series) expect(series.searchParams.has('group_by')).toBe(false)
+  })
+
   it('describes the chart by dataset, field, and series name', async () => {
     captureRequests()
     renderPath(`/data/power/load?${WINDOW}`)

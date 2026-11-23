@@ -14,12 +14,6 @@ export interface ChartFieldChoice extends ChartFieldOption {
   disabled: boolean
 }
 
-// The URL holds one field as text and several as an array; neither means the dataset default.
-export function selectedChartFields(value: string | string[] | undefined, defaults: readonly string[]): string[] {
-  if (Array.isArray(value)) return value.length > 0 ? value : [...defaults]
-  return value ? [value] : [...defaults]
-}
-
 // The last selected field cannot be cleared, and a field of a third unit cannot be added.
 export function chartFieldChoices(options: readonly ChartFieldOption[], selected: readonly string[]): ChartFieldChoice[] {
   const units = selectedUnits(options, selected)
@@ -33,12 +27,8 @@ export function chartFieldChoices(options: readonly ChartFieldOption[], selected
 }
 
 // Added fields go last, so the unit order (and with it the axis side) follows the selection order.
-export function toggleChartField(selected: readonly string[], field: string): string[] {
+export function toggleChartField<T extends string>(selected: readonly T[], field: T): T[] {
   return selected.includes(field) ? selected.filter((item) => item !== field) : [...selected, field]
-}
-
-export function isDefaultFieldSelection(selected: readonly string[], defaults: readonly string[]): boolean {
-  return selected.length === defaults.length && selected.every((field, index) => field === defaults[index])
 }
 
 function selectedUnits(options: readonly ChartFieldOption[], selected: readonly string[]): string[] {

@@ -6,28 +6,18 @@ import { useLocale } from '@shiro-mlops/shared/i18n/locale-store'
 import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
-import type { QueryParams } from '@/lib/api-client'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
 import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
 import { type ChartBrush, useChartBrush } from './chart-brush'
 import { ChartFieldPicker } from './chart-field-picker'
-import { isDefaultFieldSelection, selectedChartFields } from './chart-fields'
 import { bucketBands, type ChartBands, gapRanges, type PlottedSeries } from './chart-series'
 import { explorerFieldLabel } from './field-format'
 import { plotSeries } from './plot-series'
 import { type ChartBodyProps, SeriesLineChart } from './series-line-chart'
 import { SeriesStackedAreaChart } from './series-stacked-area-chart'
 import { SeriesStatusChart } from './series-status-chart'
-import {
-  CHART_DEFAULTS,
-  type ChartSearch,
-  type ChartSearchKey,
-  DEFAULT_AGG,
-  DEFAULT_BUCKET,
-  type ExplorerFilterValues,
-  filterRequestValues,
-} from './explorer-query-state'
+import type { ChartSettings, SeriesRequest } from './explorer-query-state'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
   line: SeriesLineChart,
@@ -41,11 +31,10 @@ const DATABASE_UNAVAILABLE_STATUS = 503
 interface ExplorerChartCardProps {
   dataset: ExplorerDatasetConfig
   chart: ExplorerChartConfig
-  // The same window and filters the table uses, so chart and table always show one slice.
-  window: ExplorerWindow
-  filters: ExplorerFilterValues
-  chartSearch: ChartSearch
-  onSettingChange: (key: ChartSearchKey, value: string | string[] | undefined) => void
+  settings: ChartSettings
+  // Built from the same window and filters the table uses, so chart and table show one slice.
+  series: SeriesRequest
+  onChartChange: (patch: Partial<ChartSettings>) => void
   // A brushed range becomes the shared window, the same URL path as the quick ranges and shifts.
   onWindowChange: (window: ExplorerWindow) => void
 }
@@ -53,21 +42,16 @@ interface ExplorerChartCardProps {
 export function ExplorerChartCard({
   dataset,
   chart,
-  window,
-  filters,
-  chartSearch,
-  onSettingChange,
+  settings,
+  series,
+  onChartChange,
   onWindowChange,
 }: ExplorerChartCardProps) {
   const m = useMessages()
   const locale = useLocale()
   const chartText = m.explorer.chart
-  const query = { ...window, ...filterRequestValues(filters) }
-  const bucket = optionOr(chartSearch.bucket, BucketSchema.options, DEFAULT_BUCKET)
-  const agg = optionOr(chartSearch.agg, AggSchema.options, DEFAULT_AGG)
-  const fields = selectedChartFields(chartSearch.fields, chart.fields)
-  const prompt = missingFilterPrompt(chart, filters, m)
-  const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch, fields), !prompt)
+  const prompt = series.kind === 'missingFilter' ? missingFilterPrompt(series, m) : undefined
+  const seriesQuery = useDatasetSeries(chart.seriesApiPath, series.kind === 'ready' ? series.params : {}, !prompt)
   const plotted = seriesQuery.data && !prompt ? plotSeries(seriesQuery.data.series, chart, m, locale) : []
   const resolvedBucket = seriesQuery.data?.bucket
   const brush = useChartBrush((selection) => {
@@ -100,32 +84,31 @@ export function ExplorerChartCard({
           {chart.groupOptions && (
             <ChartSelect
               label={chartText.groupBy}
-              value={optionOr(chartSearch.group_by, chart.groupOptions, chart.groupOptions[0])}
+              value={settings.groupBy ?? chart.groupOptions[0]}
               options={chart.groupOptions.map((option) => [option, chartText.groupOptions[option]])}
-              // The API default grouping stays out of the URL, like the default bucket and agg.
-              onChange={(value) => onSettingChange('group_by', value === chart.groupOptions?.[0] ? '' : value)}
+              onChange={(groupBy) => onChartChange({ groupBy })}
             />
           )}
           {chart.fieldOptions && chart.fieldOptions.length > 1 && (
             <ChartFieldPicker
               options={chart.fieldOptions}
-              selected={fields}
-              onChange={(next) => onSettingChange('fields', isDefaultFieldSelection(next, chart.fields) ? undefined : next)}
+              selected={settings.fields}
+              onChange={(fields) => onChartChange({ fields })}
             />
           )}
           <ChartSelect
             label={chartText.bucket}
-            value={bucket}
+            value={settings.bucket}
             options={BucketSchema.options.map((option) => [option, chartText.buckets[option]])}
-            onChange={(value) => onSettingChange('bucket', value)}
+            onChange={(bucket) => onChartChange({ bucket })}
           />
           {chart.measure !== 'count' && (
             <ChartSelect
               label={chartText.agg}
-              value={agg}
-              disabled={bucket === 'raw'}
+              value={settings.agg}
+              disabled={settings.bucket === 'raw'}
               options={AggSchema.options.map((option) => [option, chartText.aggs[option]])}
-              onChange={(value) => onSettingChange('agg', value)}
+              onChange={(agg) => onChartChange({ agg })}
             />
           )}
         </div>
@@ -178,22 +161,23 @@ function ChartBody({ chart, query, plotted, brush, text }: ChartBodyStateProps) 
   )
 }
 
-interface ChartSelectProps {
+interface ChartSelectProps<T extends string> {
   label: string
-  value: string
-  options: [string, string][]
+  value: T
+  options: [T, string][]
   disabled?: boolean
-  onChange: (value: string) => void
+  onChange: (value: T) => void
 }
 
-function ChartSelect({ label, value, options, disabled, onChange }: ChartSelectProps) {
+// Radix reports the chosen value as a string; it is always one of `options`.
+function ChartSelect<T extends string>({ label, value, options, disabled, onChange }: ChartSelectProps<T>) {
   const labelId = useId()
   return (
     <span className="flex items-center gap-2">
       <span id={labelId} className="text-slate-400">
         {label}
       </span>
-      <Select value={value} disabled={disabled} onValueChange={onChange}>
+      <Select value={value} disabled={disabled} onValueChange={(next) => onChange(next as T)}>
         <SelectTrigger aria-labelledby={labelId} className="h-auto w-auto gap-2 px-2 py-1 text-xs">
           <SelectValue />
         </SelectTrigger>
@@ -209,47 +193,13 @@ function ChartSelect({ label, value, options, disabled, onChange }: ChartSelectP
   )
 }
 
-function seriesParams(
-  chart: ExplorerChartConfig,
-  query: Record<string, string | undefined>,
-  chartSearch: ChartSearch,
-  fields: string[],
-): QueryParams {
-  if (chart.measure === 'count') return { ...seriesFilterValues(chart, query), bucket: withoutDefault('bucket', chartSearch.bucket) }
-  return {
-    ...seriesFilterValues(chart, query),
-    fields,
-    group_by: chartSearch.group_by,
-    bucket: withoutDefault('bucket', chartSearch.bucket),
-    agg: withoutDefault('agg', chartSearch.agg),
-  }
-}
-
 function appliedAggText(chart: ExplorerChartConfig, agg: SeriesResponse['agg'], text: Messages['explorer']['chart']): string {
   if (chart.measure === 'count') return text.count
   return agg ? text.aggs[agg] : EMPTY_VALUE
 }
 
-// The window always travels; dataset filters only when the series endpoint declares them.
-function seriesFilterValues(chart: ExplorerChartConfig, query: Record<string, string | undefined>) {
-  const allowed = chart.seriesFilters
-  if (!allowed) return query
-  const { start, end } = query
-  return { start, end, ...Object.fromEntries(allowed.map((key) => [key, query[key]])) }
-}
-
-function withoutDefault(key: ChartSearchKey, value: string | string[] | undefined): string | undefined {
-  return typeof value === 'string' && value !== CHART_DEFAULTS[key] ? value : undefined
-}
-
-function optionOr<T extends string>(value: unknown, options: readonly T[], fallback: T): T {
-  return options.includes(value as T) ? (value as T) : fallback
-}
-
-function missingFilterPrompt(chart: ExplorerChartConfig, filters: ExplorerFilterValues, m: Messages): string | undefined {
-  const required = chart.requiredFilter
-  if (!required || filters[required.when] !== true || filters[required.filter]) return undefined
-  return m.explorer.chart.requiresFilter(explorerFieldLabel(required.filter, m), explorerFieldLabel(required.when, m))
+function missingFilterPrompt(missing: Extract<SeriesRequest, { kind: 'missingFilter' }>, m: Messages): string {
+  return m.explorer.chart.requiresFilter(explorerFieldLabel(missing.filter, m), explorerFieldLabel(missing.when, m))
 }
 
 function seriesErrorMessage(error: unknown, text: Messages['explorer']['chart']): string {
