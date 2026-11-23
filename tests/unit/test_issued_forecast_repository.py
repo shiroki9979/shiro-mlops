@@ -8,7 +8,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
-from shiro_mlops.data.repository import IssuedForecastRepository, TimeSeriesRepository
+from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
+from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.weather_resolution import ForecastMode
 
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
 LOAD_ANCHOR = datetime(2026, 11, 20, 9, 0)
@@ -37,18 +39,18 @@ def _issued_forecast(
 def test_issued_forecast_reads_back_exactly_as_issued(test_repo: TimeSeriesRepository) -> None:
     forecast = _issued_forecast()
 
-    assert test_repo.insert_issued_forecast(forecast) is True
+    assert test_repo.issued_forecast_store.insert(forecast) is True
 
-    assert test_repo.fetch_issued_forecast(ISSUED_AT) == forecast
+    assert test_repo.issued_forecast_store.fetch(ISSUED_AT) == forecast
 
 
 def test_issued_forecast_keeps_steps_at_or_before_the_issue_time(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """The anchor precedes the issue time, so the first step (10:00) is not after 10:15."""
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
-    fetched = test_repo.fetch_issued_forecast(ISSUED_AT)
+    fetched = test_repo.issued_forecast_store.fetch(ISSUED_AT)
 
     assert fetched is not None
     assert fetched.steps[0].target_hour == datetime(2026, 11, 20, 10, 0)
@@ -78,7 +80,7 @@ def test_issuing_the_same_issue_time_again_leaves_the_record_unchanged(
     test_repo: TimeSeriesRepository,
 ) -> None:
     original = _issued_forecast()
-    test_repo.insert_issued_forecast(original)
+    test_repo.issued_forecast_store.insert(original)
     reissue = replace(
         _issued_forecast(first_load_mw=99999.0),
         status="normal",
@@ -86,17 +88,17 @@ def test_issuing_the_same_issue_time_again_leaves_the_record_unchanged(
         mlflow_model_version="7",
     )
 
-    assert test_repo.insert_issued_forecast(reissue) is False
+    assert test_repo.issued_forecast_store.insert(reissue) is False
 
-    assert test_repo.fetch_issued_forecast(ISSUED_AT) == original
+    assert test_repo.issued_forecast_store.fetch(ISSUED_AT) == original
 
 
 def test_fetching_an_issue_time_that_was_never_issued_returns_none(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
-    assert test_repo.fetch_issued_forecast(ISSUED_AT + timedelta(hours=1)) is None
+    assert test_repo.issued_forecast_store.fetch(ISSUED_AT + timedelta(hours=1)) is None
 
 
 def test_issued_forecast_repository_works_standalone(sqlite_engine: Engine) -> None:
@@ -112,6 +114,31 @@ def test_issued_forecast_rejects_a_status_other_than_normal_or_degraded() -> Non
         replace(_issued_forecast(), status="unavailable")
 
 
+def test_issued_forecast_status_is_a_forecast_mode() -> None:
+    assert _issued_forecast().status is ForecastMode.DEGRADED
+
+
+def test_reading_an_issued_forecast_returns_its_status_as_a_forecast_mode(
+    sqlite_engine: Engine,
+) -> None:
+    repository = IssuedForecastRepository(engine=sqlite_engine)
+    repository.insert(_issued_forecast())
+
+    assert repository.fetch(ISSUED_AT).status is ForecastMode.DEGRADED
+
+
+def test_reading_an_issued_forecast_with_an_unknown_status_is_rejected(
+    sqlite_engine: Engine,
+) -> None:
+    repository = IssuedForecastRepository(engine=sqlite_engine)
+    repository.insert(_issued_forecast())
+    with sqlite_engine.begin() as conn:
+        conn.execute(text("UPDATE issued_forecast SET status = 'unavailable'"))
+
+    with pytest.raises(ValueError, match="unavailable"):
+        repository.fetch(ISSUED_AT)
+
+
 def test_issued_forecast_rejects_a_model_identity_that_is_not_a_full_sha256() -> None:
     with pytest.raises(ValueError, match="model_sha256"):
         replace(_issued_forecast(), model_sha256="abc")
@@ -122,13 +149,13 @@ def test_latest_issued_forecast_is_the_one_with_the_latest_issue_time(
 ) -> None:
     """Insertion order does not matter: an earlier issue written later is not the latest."""
     latest = _issued_forecast(ISSUED_AT + timedelta(hours=1))
-    test_repo.insert_issued_forecast(latest)
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(latest)
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
-    assert test_repo.fetch_latest_issued_forecast() == latest
+    assert test_repo.issued_forecast_store.fetch_latest() == latest
 
 
 def test_latest_issued_forecast_is_none_before_the_first_issue(
     test_repo: TimeSeriesRepository,
 ) -> None:
-    assert test_repo.fetch_latest_issued_forecast() is None
+    assert test_repo.issued_forecast_store.fetch_latest() is None

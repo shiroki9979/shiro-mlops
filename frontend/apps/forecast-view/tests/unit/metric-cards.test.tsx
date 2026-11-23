@@ -4,19 +4,15 @@ import { MetricCards } from '@/components/dashboard/metric-cards'
 import { zhTW } from '@/i18n/zh-TW'
 
 describe('MetricCards Component', () => {
-  it('renders skeleton cards when loading', () => {
-    const { container } = render(<MetricCards isLoading={true} steps={[]} />)
-    const cards = container.querySelectorAll('.animate-pulse')
-    expect(cards.length).toBe(3)
-  })
-
   it('renders peak, avg, and valley metrics from the steps accurately', () => {
-    const steps = [
-      { target_hour: '2026-08-25T12:00:00Z', predicted_load_mw: 35000 },
-      { target_hour: '2026-08-25T13:00:00Z', predicted_load_mw: 25000 },
-    ]
-
-    render(<MetricCards isLoading={false} steps={steps} />)
+    render(
+      <MetricCards
+        steps={[
+          { target_hour: '2026-08-25T12:00:00Z', predicted_load_mw: 35000 },
+          { target_hour: '2026-08-25T13:00:00Z', predicted_load_mw: 25000 },
+        ]}
+      />,
+    )
 
     // Check titles
     const metrics = zhTW.dashboard.metrics

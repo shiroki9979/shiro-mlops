@@ -11,6 +11,15 @@ from zoneinfo import ZoneInfo
 import httpx
 import numpy as np
 import pandas as pd
+from dagster import (
+    AssetsDefinition,
+    Definitions,
+    JobDefinition,
+    RetryPolicy,
+    ScheduleDefinition,
+    build_schedule_context,
+    define_asset_job,
+)
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -25,6 +34,7 @@ from shiro_mlops.data.cwa_client import (
     CWATownshipForecast,
 )
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
+from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand import (
     TaipowerRegionalSupplyDemandSnapshot,
     parse_regional_supply_demand_csv,
@@ -37,11 +47,14 @@ from shiro_mlops.data.taipower_unit_generation import (
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
+from shiro_mlops.pipelines.execution_origin import REEXECUTION_TAGS
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
 from shiro_mlops.service.data_explorer.datasets import Dataset
 from shiro_mlops.service.data_explorer.schemas import ListEnvelope
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.model_store import model_directory, save_model
+from shiro_mlops.tasks.runner import TaskRuntime
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TAIWAN = ZoneInfo(TAIWAN_TZ)
@@ -217,6 +230,24 @@ def derived_hourly_load(hours: int, last_hour: datetime) -> pd.DataFrame:
     return pd.DataFrame({"datetime": times, "load_mw": [30000.0 + i for i in range(hours)]})
 
 
+class _ModelFilesDouble:
+    """A task model whose saved files stand in for a trained one; presence checks never load it."""
+
+    def save(self, directory: Path) -> None:
+        directory.mkdir(parents=True)
+        (directory / "model.txt").write_text("trained", encoding="utf-8")
+
+
+def install_model_double(root: Path, task_id: str = DYNAMIC_HORIZON_FORECAST) -> None:
+    """Install a model directory through the model store, as training would, without training."""
+    save_model(root, task_id, _ModelFilesDouble())
+
+
+def hand_copied_model_double(root: Path, task_id: str = DYNAMIC_HORIZON_FORECAST) -> None:
+    """Write a model directory the model store did not install."""
+    _ModelFilesDouble().save(model_directory(root, task_id))
+
+
 def write_derived_load(
     engine: Engine, hourly_load: pd.DataFrame, *, subject: str = NATIONWIDE_SUBJECT
 ) -> None:
@@ -314,6 +345,47 @@ def selected_asset_names(job) -> set[str]:
     return {key.to_user_string() for key in job.selection.resolve(all_assets)}
 
 
+def scheduled_run_tags(
+    schedule: ScheduleDefinition,
+    tick: datetime,
+    instance=None,
+    resources: dict[str, Any] | None = None,
+) -> dict:
+    """The tags of the run ``schedule`` launches at ``tick``, schedule name included as Dagster adds it."""
+    execution = schedule.evaluate_tick(
+        build_schedule_context(
+            instance=instance, scheduled_execution_time=tick, resources=resources
+        )
+    )
+    [request] = execution.run_requests
+    return dict(request.tags)
+
+
+# Dagster 重新執行 run 時加上的標籤；與原 run 複製過來的標籤合併即為重新執行的 run。
+REEXECUTION = dict.fromkeys(REEXECUTION_TAGS, "tick-run")
+
+
+def job_retrying_once_at_once(asset: AssetsDefinition, resources: dict[str, Any]) -> JobDefinition:
+    """A job materializing ``asset`` that retries a failed op once, without waiting."""
+    return Definitions(
+        assets=[asset],
+        jobs=[
+            define_asset_job(
+                "retrying_once_at_once",
+                selection=[asset.key],
+                op_retry_policy=RetryPolicy(max_retries=1),
+            )
+        ],
+        resources=resources,
+    ).resolve_job_def("retrying_once_at_once")
+
+
+def run_creation_time(instance, run_id: str) -> datetime:
+    """The naive Taiwan-local time at which Dagster created the run; callers floor it themselves."""
+    created = instance.get_run_record_by_id(run_id).create_timestamp
+    return created.astimezone(TAIWAN).replace(tzinfo=None)
+
+
 def task_jobs() -> list:
     """Build training and monitoring jobs for every deployed task through the asset factory."""
     from shiro_mlops.pipelines.definitions import task_pipelines
@@ -362,6 +434,11 @@ def override_task_policies(
     updated = replace(task, policies=task.policies.model_copy(update=updates))
     monkeypatch.setitem(tasks, task_id, updated)
     return updated
+
+
+def task_runtime(repository: TimeSeriesRepository) -> TaskRuntime:
+    """The runtime the deployed entry points build from the composition root."""
+    return TaskRuntime.from_composition_root(repository)
 
 
 def upstream_http_500(url: str = "https://example.invalid/source") -> httpx.HTTPStatusError:

@@ -29,13 +29,14 @@ from shiro_mlops.pipelines.assets import (
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
-from shiro_mlops.tasks.runner import TaskRuntime, load_training_data
+from shiro_mlops.tasks.runner import load_training_data
 from shiro_mlops.tasks.types.base import TrainingData
 from tests.helpers import (
     FixtureCWASource,
     canonical_observation_batch,
     insert_other_source_load_row,
     override_task_policies,
+    task_runtime,
     write_derived_load,
 )
 
@@ -49,7 +50,7 @@ def _training_data(
     """Read training data through the runner with a threshold the fixture satisfies."""
     override_task_policies(monkeypatch, min_training_hours=1)
     return load_training_data(
-        deployed_task(DYNAMIC_HORIZON_FORECAST), TaskRuntime(repository=repository), as_of=as_of
+        deployed_task(DYNAMIC_HORIZON_FORECAST), task_runtime(repository), as_of=as_of
     )
 
 
@@ -107,7 +108,9 @@ def test_training_data_excludes_other_load_provenance(
     insert_other_source_load_row(
         test_repo.engine, derived["datetime"].iloc[1] + pd.Timedelta(minutes=30), 99999.0
     )
-    test_repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
+        canonical_observation_batch(cwa_obs_df)
+    )
 
     data = _training_data(test_repo, monkeypatch)
 
@@ -124,7 +127,7 @@ def test_training_data_isolates_subject_and_weather_reference_point(
     """Only the task's subject trains, and weather comes only from its reference point."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
     write_derived_load(repo.engine, taipower_raw_df)
-    repo.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
+    repo.cwa_weather_store.upsert_cwa_observation_batch(canonical_observation_batch(cwa_obs_df))
 
     north_load = taipower_raw_df.copy()
     north_load["load_mw"] = north_load["load_mw"] * 0.6
@@ -133,7 +136,7 @@ def test_training_data_isolates_subject_and_weather_reference_point(
     kh_weather = cwa_obs_df.copy()
     kh_weather["temperature"] = kh_weather["temperature"] + 30.0
     kh_weather["location"] = "Kaohsiung"
-    repo.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
+    repo.cwa_weather_store.upsert_cwa_observation_batch(canonical_observation_batch(kh_weather))
 
     data = _training_data(repo, monkeypatch)
 
@@ -187,7 +190,9 @@ def test_training_data_excludes_rows_after_as_of(sqlite_engine: Engine, monkeypa
         ]
     )
     write_derived_load(repository.engine, source_load)
-    repository.upsert_cwa_observation_batch(canonical_observation_batch(source_weather))
+    repository.cwa_weather_store.upsert_cwa_observation_batch(
+        canonical_observation_batch(source_weather)
+    )
 
     data = _training_data(repository, monkeypatch, as_of=pd.Timestamp("2026-08-20 12:00"))
 

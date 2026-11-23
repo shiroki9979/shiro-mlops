@@ -36,8 +36,9 @@ allowlist 使用單一結構化 mapping 設定，每個項目同時包含對外 
 `F-D0047-089`／`F-D0047-091` 縣市 `Geocode`：`Taipei: 466920 / 63000000`、
 `Taichung: 467490 / 66000000`、`Kaohsiung: 467441 / 64000000`。
 
-allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 引用氣象代表點，
-再由目錄取得其 `station_id` 與 `geocode`；測站編號與鄉鎮代碼不得寫死於目錄以外的程式碼。
+allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代表點，載入時由目錄取得其
+`station_id` 與 `geocode`；觀測天氣讀取與天氣解析只收解析出的代表點，不再查目錄。
+測站編號與鄉鎮代碼不得寫死於目錄以外的程式碼。
 動態視界預報目前使用氣象代表點 `Taipei`；引用不存在的 alias 時直接失敗。
 
 ### 2.1 氣象署逐時測站觀測
@@ -75,7 +76,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
      - `created_at` (TIMESTAMPTZ DEFAULT NOW())
      - **預測對象遷移**：ADR-0009 之前的資料庫以 `location = 'Taipei'` 保存全台負載。服務啟動時的 schema 升級在單一交易內將 `location` 改名為 `subject`，並把 `Taipei` 列改為 `nationwide`；已遷移的資料庫重跑時不改動任何列。新建資料庫直接採 `subject`。升級順序見[遷移全台負載預測對象](../how-to/migrate-load-subject-to-nationwide.md)。
      - 啟用推算前須確認並清除 d015046 時期留下的資料列，不得與推算序列混用。既有資料庫升級時只補上可為 `NULL` 的 `source`，不改寫或刪除任何列；`source IS NULL` 即 d015046 時期資料列。清除與補上 `NOT NULL` 由操作人員依[移除 d015046 時期舊負載資料列](../how-to/remove-legacy-d015046-load-rows.md)執行後，才開啟 `hourly_actual_load_schedule`。
-     - **存取**：由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`）擁有。寫入的每一列由 store 固定帶推算來源；推算序列以台灣本地半開窗 `[start, end)` 讀取，最新推算小時、推算序列與累積盤點都只含推算來源的列，舊列只計入累積盤點的 `legacy_rows`。排程推算以 upsert 更新重算的小時；區間補推只寫入尚無任何列（不論來源）的小時，由 `ON CONFLICT DO NOTHING` 保證不覆寫既有列。推算來源常數 `REGIONAL_SNAPSHOT_SUM_SOURCE` 只在 store 定義。store 以外只有 schema 初始化與遷移、營運資料檢視器的逐時負載資料集定義與預報實績 join（`TimeSeriesRepository.fetch_track_record_pairs`）讀寫此表，後兩者以 store 的常數綁定口徑條件；`tests/unit/test_hourly_actual_load_ownership.py` 掃描 `src/`、`scripts/` 與 `lab/` 檢查此邊界。
+     - **存取**：由全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`）擁有。寫入的每一列由 store 固定帶推算來源；推算序列以台灣本地半開窗 `[start, end)` 讀取，最新推算小時、推算序列與累積盤點都只含推算來源的列，舊列只計入累積盤點的 `legacy_rows`。排程推算以 upsert 更新重算的小時；區間補推只寫入尚無任何列（不論來源）的小時，由 `ON CONFLICT DO NOTHING` 保證不覆寫既有列。推算來源常數 `REGIONAL_SNAPSHOT_SUM_SOURCE` 只在 store 定義。store 以外只有 schema 初始化與遷移、營運資料檢視器的逐時負載資料集定義與預報實績 join（`src/shiro_mlops/data/forecast_track_record.py` 的 `ForecastTrackRecordStore.fetch_pairs`）讀寫此表，後兩者以 store 的常數綁定口徑條件；`tests/unit/test_hourly_actual_load_ownership.py` 掃描 `src/`、`scripts/` 與 `lab/` 檢查此邊界。
      - **Constraint**: `PRIMARY KEY (time, subject)`
      - **Hypertable**: `create_hypertable('raw_taipower_load', 'time')`
   2. `raw_cwa_observation_batch`:
@@ -142,7 +143,7 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
      - 每個發布時刻一列，由 `issued_forecast_job`（[Dagster 排程](dagster-schedules.md)）寫入；隨需 `/predict` 不寫入。一般資料表，非 hypertable。
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：發布時刻，即排程 tick 時刻與預報的 `as_of`，不取整點（例如 `10:15`）。
      - `load_anchor` (TIMESTAMPTZ, NOT NULL)：負載起點，即遞迴預報起算的最新實際負載小時。
-     - `status` (VARCHAR(16), NOT NULL)：運行狀態 `normal`／`degraded`，即預報當時的天氣解析模式（§3.3）。
+     - `status` (VARCHAR(16), NOT NULL)：預報運行狀態（[GLOSSARY](../../GLOSSARY.md) §3）`normal`／`degraded`，由預報當時各天氣數值的來源推導（§3.3）。資料庫不設 CHECK 約束；`IssuedForecast` 建構時以 `ForecastMode` 驗證，寫入與讀出遇到其他值皆拒絕（`ValueError`）。
      - `model_sha256` (VARCHAR(64), NOT NULL)：模型版本識別，發布時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)），不依賴 MLflow。
      - `mlflow_model_version` (VARCHAR(64))：MLflow 版本附註，可為 `NULL`；只作參考，模型版本以 `model_sha256` 為準。發布時從 Dagster instance 讀 `dynamic_horizon_forecast__model` 最新一次 materialization 的 metadata（[Dagster 排程](dagster-schedules.md)）：只有其 `model_sha256` 等於本次實際載入模型的雜湊時，才填入其 `mlflow_model_version`；雜湊不符（例如訓練恰在載入模型後完成）、缺少 metadata 或 MLflow 版本為空時為 `NULL`（寧缺勿錯）。不另呼叫 MLflow，附註的有無不影響是否發布。
      - **Constraint**: `PRIMARY KEY (issued_at)`；只新增、沒有更新路徑。同一發布時刻已存在時以 `ON CONFLICT (issued_at) DO NOTHING` 略過，header 與步數皆不改動。
@@ -293,5 +294,5 @@ allowlist 同時是氣象代表點目錄：天氣特徵與天氣解析以 alias 
 
 - `cutoff`：統計截至時刻；`accumulated_days`：累積天數；`metrics`：未滿 7 天時為 `null`。各欄位的計算規則見 §5.1，數值原樣輸出、不另行四捨五入。
 - 還沒有已發布預報時為 `{"cutoff": "<統計截至時刻>", "accumulated_days": 0, "metrics": null}`。
-- `forecast_track_record` 從未 materialize 過時（全新環境）同為此空狀態，`cutoff` 取匯出執行當下的整點，即該時刻彙整在首次發布前會得到的結果。
+- `forecast_track_record` 從未 materialize 過時（全新環境）同為此空狀態，`cutoff` 取匯出 run 建立時刻的整點（同一 run 內的重試不變），即該時刻彙整在首次發布前會得到的結果。
 - 窗內配對數與提前 24 配對數不輸出（只在 §5.1 的 materialization metadata）。

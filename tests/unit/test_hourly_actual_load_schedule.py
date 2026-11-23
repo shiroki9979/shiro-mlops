@@ -7,6 +7,7 @@ from dagster import Backoff, RetryPolicy, build_schedule_context
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.pipelines import assets as assets_module
+from shiro_mlops.pipelines.execution_origin import SCHEDULE_NAME_TAG, SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.schedules import (
     hourly_actual_load_job,
     hourly_actual_load_schedule,
@@ -36,7 +37,8 @@ def test_task_jobs_do_not_run_the_snapshot_derivation() -> None:
         assert HOURLY_ACTUAL_LOAD_ASSET not in selected_asset_names(job), job.name
 
 
-def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> None:
+def test_hourly_actual_load_schedule_tags_the_run_with_its_taiwan_local_tick() -> None:
+    """The tick reaches the asset as a run tag, never as config an operator could type in."""
     assert hourly_actual_load_schedule.cron_schedule == "5 * * * *"
     assert hourly_actual_load_schedule.execution_timezone == "Asia/Taipei"
 
@@ -46,21 +48,24 @@ def test_hourly_actual_load_schedule_passes_taiwan_tick_as_evaluation_time() -> 
     execution = hourly_actual_load_schedule.evaluate_tick(context)
 
     assert execution.run_requests is not None
-    request = execution.run_requests[0]
+    [request] = execution.run_requests
     assert request.run_key == "2026-09-26T14:05:00"
-    assert request.run_config == {
-        "ops": {HOURLY_ACTUAL_LOAD_ASSET: {"config": {"evaluated_at": "2026-09-26T14:05:00"}}}
+    assert request.tags == {
+        SCHEDULE_NAME_TAG: "hourly_actual_load_schedule",
+        SCHEDULED_TICK_TAG: "2026-09-26T14:05:00",
     }
+    assert not request.run_config
 
 
-def test_hourly_actual_load_schedule_without_tick_time_lets_the_run_use_current_time() -> None:
-    """Manual evaluation without a tick uses current time for its window and does not deduplicate runs."""
+def test_hourly_actual_load_schedule_without_tick_lets_the_run_use_its_creation_time() -> None:
+    """Manual evaluation has no tick to deduplicate on; the asset falls back to now."""
     execution = hourly_actual_load_schedule.evaluate_tick(build_schedule_context())
 
     assert execution.run_requests is not None
-    request = execution.run_requests[0]
+    [request] = execution.run_requests
     assert request.run_key is None
-    assert request.run_config == {}
+    assert SCHEDULED_TICK_TAG not in request.tags
+    assert not request.run_config
 
 
 def test_regional_snapshot_retries_with_exponential_backoff_while_others_keep_job_policy() -> None:

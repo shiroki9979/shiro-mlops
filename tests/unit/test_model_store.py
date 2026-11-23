@@ -5,6 +5,7 @@ import ctypes
 import errno
 import io
 import os
+import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -19,6 +20,7 @@ from shiro_mlops.tasks import model_store
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import (
     MissingModelLockError,
+    has_installed_model,
     load_model,
     load_model_with_sha256,
     model_directory_sha256,
@@ -399,3 +401,24 @@ def test_first_training_finishing_while_a_reader_looks_for_the_lock_still_loads(
 
     assert loaded is not None
     assert loaded.model.version == "v1"
+
+
+def test_presence_counts_only_a_model_the_store_installed(root: Path) -> None:
+    """Presence follows the load rule without loading: untrained and hand-copied tasks have none."""
+    assert not has_installed_model(root / "absent_root", "sample_task")
+    assert not has_installed_model(root, "sample_task")
+
+    _RecordingModel("hand-copied").save(root / "sample_task")
+    assert not has_installed_model(root, "sample_task")
+
+    save_model(root, "other_task", _RecordingModel("v1"))
+    assert has_installed_model(root, "other_task")
+
+
+def test_presence_ends_when_the_installed_directory_is_removed(root: Path) -> None:
+    """The lock file stays behind; without the directory the task has no model to load."""
+    saved = save_model(root, "sample_task", _RecordingModel("v1"))
+    shutil.rmtree(saved.directory)
+
+    assert not has_installed_model(root, "sample_task")
+    assert load_model_with_sha256(root, _RECORDING_TASK) is None

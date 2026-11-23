@@ -38,17 +38,19 @@ def assert_forecast_pages_pin_microsecond_vintage(repo: TimeSeriesRepository) ->
     issued = second.replace(microsecond=501)
     source = second.replace(microsecond=703)
     valid = second + timedelta(hours=2)
-    repo.upsert_cwa_forecast_release(
-        _release(
-            "F-D0047-089",
-            issued,
-            source,
-            forecasts=(
-                township_forecast(valid.replace(microsecond=1), 40.0),
-                township_forecast(valid, 31.0, valid_to=valid.replace(microsecond=900)),
-                township_forecast(valid, 28.0, valid_to=valid.replace(microsecond=100)),
-            ),
-        )
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            _release(
+                "F-D0047-089",
+                issued,
+                source,
+                forecasts=(
+                    township_forecast(valid.replace(microsecond=1), 40.0),
+                    township_forecast(valid, 31.0, valid_to=valid.replace(microsecond=900)),
+                    township_forecast(valid, 28.0, valid_to=valid.replace(microsecond=100)),
+                ),
+            )
+        ]
     )
     newer_release = _release(
         "F-D0047-089",
@@ -68,7 +70,7 @@ def assert_forecast_pages_pin_microsecond_vintage(repo: TimeSeriesRepository) ->
     }
 
     first = reader.list(params)
-    repo.upsert_cwa_forecast_release(newer_release)
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([newer_release])
     with patch(
         "shiro_mlops.service.data_explorer.query.now_taiwan",
         return_value=second + timedelta(days=3),
@@ -102,11 +104,13 @@ def assert_forecast_audit_pages_keep_complete_sort_key(repo: TimeSeriesRepositor
         ("C", high, low),
         ("D", low, high),
     ):
-        repo.upsert_cwa_forecast_release(
-            _release(dataset_id, issued, source, missing_geocodes=("63000050",))
+        repo.cwa_weather_store.upsert_cwa_forecast_releases(
+            [_release(dataset_id, issued, source, missing_geocodes=("63000050",))]
         )
-    repo.upsert_cwa_forecast_release(_release("E", high, low))
-    repo.upsert_cwa_forecast_release(_release("F", high, low, missing_geocodes=("other",)))
+    repo.cwa_weather_store.upsert_cwa_forecast_releases([_release("E", high, low)])
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [_release("F", high, low, missing_geocodes=("other",))]
+    )
     reader = DatasetLister(repo.engine, CWA_FORECAST_AUDITS)
     params = {
         "start": "2026-09-27T11:59:59+08:00",

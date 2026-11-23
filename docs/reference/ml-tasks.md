@@ -1,7 +1,7 @@
 # ML 任務設定與任務類型介面
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-22
+- 最後更新：2026-11-23
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 5 節拆出。
@@ -80,7 +80,7 @@
 不在關卡內的規則：
 
 - **負載起點過舊**：屬於 runner 依請求時刻挑選起點的那一步（`StaleLoadAnchorError`）；沒有任何負載時的 `MissingLoadHistoryError` 亦同。
-- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。runner 的順序為：挑選並檢查負載起點、讀取 lookback 內負載、以 `require_load_coverage` 判定負載（不足時不讀天氣）、取得天氣、交給 `admit_prediction_inputs`。因此負載與天氣同時不足時回報負載不足。天氣取得結果為不可用（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，取得步驟直接以其原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`，不進入關卡。
+- **天氣的取得**：預報或降級來源的解析、`OBSERVED` 任務的測站觀測讀取仍由 runner 負責；滾動起點回測則以 2 小時內向後對齊觀測氣象，兩者刻意不同。runner 的順序為：挑選並檢查負載起點、讀取 lookback 內負載、以 `require_load_coverage` 判定負載（不足時不讀天氣）、取得天氣、交給 `admit_prediction_inputs`。因此負載與天氣同時不足時回報負載不足。天氣無法取得（任一代表點無法涵蓋視界，或 lookback 內沒有任何觀測）時，取得步驟直接以其原因（指出代表點或觀測區間）拋 `WeatherUnavailableError`，不進入關卡。
 - **`OBSERVED` 任務的天氣與時間窗完整性**：由任務類型組窗後判定；runner 的 readiness probe 與 `ObservedInputsIncompleteError` 照舊。
 
 拒絕沿用 `TaskUnavailableError` 子類別；`TaskUnavailableError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError` 定義於關卡模組，`tasks/runner.py` 重新匯出，既有匯入路徑與 API 的 503 對應不變。
@@ -91,7 +91,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 
 | 函式 | 行為 |
 | :--- | :--- |
-| `check_training_readiness(task, runtime, *, as_of=None)` | 回傳累積摘要；傳入 `as_of` 時只計該時間以前的有效逐時負載，全表任何時間的 legacy 列仍阻擋訓練；未傳入時供排程 skip 與 smoke check 檢查目前累積量 |
+| `check_training_readiness(task, runtime, *, as_of=None)` | 回傳累積摘要，其 `outcome`（`AccumulationOutcome`）為三種結果之一：`BLOCKED_BY_LEGACY_ROWS`（有 `source IS NULL` 的舊列，不論有效逐時觀測是否已達門檻）、`BELOW_MINIMUM_ACCUMULATION`（有效逐時觀測未達最低累積）、`MINIMUM_ACCUMULATION_REACHED`（唯一可訓練的結果）；`ready` 與 `reason` 皆由 `outcome` 導出。傳入 `as_of` 時只計該時間以前的有效逐時負載，全表任何時間的 legacy 列仍阻擋訓練；未傳入時供排程 skip 與 smoke check 檢查目前累積量 |
 | `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`；讀取 `as_of` 以前的目標序列與同期觀測天氣，並以 `validation_fraction` 推導 `validation_start`。觀測天氣為加權天氣：各代表點在同一觀測整點皆有值才合成，任一點缺少的整點沒有加權值，交由任務類型既有的缺值規則處理 |
 | `train_task(task, runtime, *, as_of) -> Trained` | `load_training_data` 後交由 `fit_task` |
 | `fit_task(task, data) -> Trained` | 以已讀取且通過門檻的 `TrainingData` 交由任務類型訓練 |
@@ -100,11 +100,21 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 | `check_task_ready(task, model, runtime, *, as_of) -> Readiness` | 呼叫端須提供已載入的模型；負載起點、任務類型宣告的 `history_coverage` 與完整 168 小時天氣皆可用時 `ready`，並回報 `mode`；`OBSERVED` 任務只需 lookback 內有測站觀測，`mode` 固定 `normal` |
 | `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；資料庫錯誤（`SQLAlchemyError`）原樣拋出，不得轉為空資料而偽裝成資料缺口（API 同樣對應 503）；結果含負載起點 `load_anchor`、`mode`、預測、逐時天氣與其來源，後三者逐列對應 |
 
+`TaskRuntime` 只持有 runner 讀取的兩個 store，即全台逐時實際負載（`hourly_actual_load`）與 CWA 天氣（`cwa_weather`），不持有 `TimeSeriesRepository`。Dagster 任務管線與已發布預報 asset、API 的 `ServedTasks`、smoke check 與 lab snapshot 都以 `TaskRuntime.from_composition_root(root)` 建構它：這個唯一的 factory 從 composition root（`src/shiro_mlops/data/repository.py` 的 `TimeSeriesRepository`）取出這兩個 store，不保留 root 的參照；`ServedTasks` 只收 `TaskRuntime`。
+
 runner 經 `TaskRuntime.hourly_actual_load` 取得全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`），目標序列、負載起點與累積摘要都只由它讀取，只含推算來源的列。store 的序列只接受台灣本地半開窗 `[start, end)`；訓練序列（至 `as_of`，含）與 serving 歷史（至負載起點，含）都包含終點所在的小時，由 runner 在單一處把終點換成該小時的下一小時。
 
 serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是否過舊，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史、取得天氣，交由[預測輸入關卡](#預測輸入關卡tasksprediction_inputspy)判定並裁切負載歷史後才交給任務類型。
 
+天氣經 `TaskRuntime.cwa_weather` 取得 CWA 天氣 store（`src/shiro_mlops/data/cwa_weather_store.py` 的 `CWAWeatherStore`）：訓練與 `OBSERVED` 任務的觀測天氣由它讀取各代表點的測站觀測，預報天氣的解析則把它交給 `resolve_weather`。兩者都直接收任務設定載入時解析出的氣象代表點（`CWALocation`），測站與預報區皆取自它，觀測結果的 `location` 標其 alias；store 不讀全域 settings 的 CWA 擷取目錄。
+
 `OBSERVED` 任務的 serving 路徑：負載起點過舊檢查照常適用；天氣改讀同一區間 `[anchor - lookback_hours, anchor]` 的測站觀測（加權規則同 `load_training_data`），不讀預報也不降級，`mode` 固定 `normal`。區間內沒有任何觀測時拋 `WeatherUnavailableError`；任務類型未能評分任何請求的結束小時（負載或天氣缺口）時拋 `ObservedInputsIncompleteError`。`PredictionOutcome.weather` 與 `weather_sources` 對齊至每個被評分的結束小時，取該小時以前最新一筆觀測，來源為 `station_observation` 並附 `observed_at`。
+
+天氣數值的來源：預報天氣路徑（`resolve_weather`）、觀測天氣路徑與加權天氣（`tasks/weighted_weather.py`）逐值傳遞 `data/weather_resolution.py` 的 `WeatherValueSource`，不自行組來源字串。來源種類 `WeatherSourceKind` 是封閉集合：`three_day`、`weekly`（預報，帶產生該值的預報版本 `dataset_id`、`issued_at`、`source_updated_at`）、`previous_day_observation`、`climatology`（替代來源，不帶欄位）、`station_observation`（測站觀測，帶 `observed_at`）；只有兩種替代來源的 `is_substitute` 為真。欄位與種類不符的來源在建構時即拋 `ValueError`，`WeatherValueSource.substitute` 也拒絕非替代來源的種類。`predict_task` 把來源以 `as_dict()` 序列化為 `PredictionOutcome.weather_sources`，即 API `weather_sources` 的 JSON 形狀（[REST API §3](rest-api.md#3-隨需動態視界負載預報)）。
+
+預報天氣的無覆蓋只以拒絕表達：`resolve_weather` 遇到某代表點某小時的某欄位既沒有七小時內的預報版本、也沒有替代來源時，拋 `WeatherCoverageError`，訊息為 `"{代表點}: No weather coverage for {時刻} {欄位}"`；解析結果 `WeatherResolution` 只在每小時、每欄位皆有值時存在。`horizon_hours < 1` 屬呼叫端違反介面契約，拋一般的 `ValueError`。runner 依任務設定的代表點順序逐點解析，第一個無覆蓋的代表點即中止；`_resolve_future_weather` 是唯一把 `WeatherCoverageError` 轉成 `WeatherUnavailableError`（同一訊息）的地方，`data/` 不依賴 `tasks/`。加權天氣只接收完整的解析結果，不處理無覆蓋。
+
+預報運行狀態（[GLOSSARY](../../GLOSSARY.md) §3）只有一個出處：`data/weather_resolution.py` 的 `ForecastMode`（StrEnum，`normal`、`degraded` 兩值；無法產出不是運行狀態，只以上述拒絕表達）。`forecast_mode(sources)` 接受以序列或 mapping 巢狀的來源，在任一數值的來源 `is_substitute` 時回傳 `degraded`，否則 `normal`；`WeatherResolution.mode` 與加權天氣 `WeightedWeather.mode` 都是由各自來源推導的 property，不另存欄位或旗標。多代表點時加權天氣保留每個代表點的來源，因此任一點降級即整次降級（ADR-0012）；觀測天氣路徑的來源全為 `station_observation`，不是替代值，所以 `mode` 為 `normal`。`PredictionOutcome.mode` 型別為 `ForecastMode`，在來源序列化為 `weather_sources` 前由加權天氣推導；`Readiness.mode` 為 `ForecastMode | None`。
 
 ## 4. 模型保存（`tasks/model_store.py`）
 
@@ -112,5 +122,6 @@ serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是
 - `save_model(root, task_id, model) -> SavedModel`：回傳 `SavedModel(directory, sha256)`，`sha256` 取自暫存目錄（即安裝的同一組檔案）。模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗；僅程序於兩次 rename 之間中止時，任務於下次訓練成功前沒有模型，遺留的舊目錄 `.<task_id>.previous` 於下次保存（持排他鎖、安裝前）清除。每任務檔案鎖 `root/.<task_id>.lock` 保護交換與讀取：只有保存端（排他鎖）會建立鎖檔，且於首次安裝模型目錄前建立；讀取端（共享鎖）以唯讀模式開啟既有鎖檔、不建立鎖檔，因此 `root` 可唯讀掛載（本機 compose 的 API 即唯讀掛載）。交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
 - `load_model_with_sha256(root, task) -> LoadedModel | None`：在同一把共享鎖下讀取 `root/<task_id>` 並計算該目錄雜湊，回傳 `LoadedModel(model, sha256)`；交換須等鎖釋放，故載入的模型與雜湊必屬同一目錄版本，不會是半新半舊的組合。目錄不存在時回傳 `None`（任務尚未訓練；鎖檔是否存在皆同，舊版讀取端曾為未訓練任務建立鎖檔）；目錄存在而鎖檔不存在時再找一次鎖檔（涵蓋首次訓練恰於此時建立鎖檔並安裝目錄），仍不存在則拋 `MissingModelLockError`（該目錄非由 `save_model` 安裝，例如手動複製，重新訓練即取代）；既有 `model.joblib` 不載入。
 - `load_model(root, task) -> TaskModel | None`：同上，只回傳模型；替換期間只會載入完整的前一版或新模型。
+- `has_installed_model(root, task_id) -> bool`：以與 `load_model_with_sha256` 相同的規則（同一把共享鎖、鎖檔與目錄皆須存在）判斷任務有沒有可載入的模型，但不載入模型、不計算雜湊；非由 `save_model` 安裝的目錄（載入時會拋 `MissingModelLockError`）視為沒有模型。冷啟動階段（[Dagster 排程 §1](dagster-schedules.md)）以此判斷模型目錄。
 - 模型檔只使用原生非執行格式：`recursive_regression` 為 `model.txt`（LightGBM Booster 文字格式）與 `metadata.json`（格式版本、任務類型、lag、rolling window、特徵名稱、氣象欄位）；`direct_classification` 同為 `model.txt`（二元分類 Booster 文字格式）與 `metadata.json`（格式版本、任務類型、完整 `[params]`、`max_lead_hours`、特徵名稱、氣象欄位）；`unsupervised_reconstruction` 為 `model.npz`（`coef_{i}`、`intercept_{i}` 各層權重與偏差，`scaler_mean`、`scaler_scale` 標準化參數；以 `allow_pickle=False` 讀取）與 `metadata.json`（格式版本、任務類型、激活函數、層數、`window_hours`、氣象欄位、特徵名稱、`threshold`），推論以 numpy 前向計算，不重建 sklearn 物件。
 - `src/` 不得 import `pickle` 或 `joblib`，由測試強制。

@@ -1,8 +1,10 @@
 """Integration tests for Dagster ingestion assets and database persistence."""
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -11,6 +13,7 @@ from dagster import (
     Definitions,
     Failure,
     MetadataValue,
+    ScheduleDefinition,
     build_asset_context,
     load_assets_from_modules,
     materialize,
@@ -19,6 +22,7 @@ from dagster import (
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.io_managers import get_feast_parquet_io_manager, get_parquet_io_manager
 from shiro_mlops.data.cwa_client import CWAObservationBatch, CWAStationObservation
+from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines import assets as assets_module
 from shiro_mlops.pipelines.assets import (
@@ -33,42 +37,54 @@ from shiro_mlops.pipelines.task_pipelines import (
     build_task_pipelines,
 )
 from shiro_mlops.pipelines.tracking import TrackedRun
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
+from shiro_mlops.tasks.definition import load_task_definitions
+from shiro_mlops.tasks.deployed import (
+    DYNAMIC_HORIZON_FORECAST,
+    TASK_DEFINITIONS_DIR,
+    deployed_tasks,
+)
 from shiro_mlops.tasks.model_store import model_directory_sha256
 from tests.helpers import (
+    REEXECUTION,
     FixtureCWASource,
     derived_hourly_load,
     derived_load_series,
     forecast_release,
     insert_other_source_load_row,
     override_task_policies,
+    scheduled_run_tags,
     township_forecast,
     unfetched_source_resources,
     write_derived_load,
 )
 
 LAST_LOAD_HOUR = datetime(2026, 9, 26, 13, 0)
+TAIPEI = ZoneInfo("Asia/Taipei")
+TRACKED = TrackedRun(run_id="run-1", model_version="1")
 NAMES = TaskPipelineNames(DYNAMIC_HORIZON_FORECAST)
 
 
 def _features(repository: TimeSeriesRepository) -> pd.DataFrame:
-    """Invoke the task's features asset the way a training run does."""
+    """Materialize the task's features asset in a manual run; a failure raises its ``Failure``."""
     features_asset = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST).assets[0]
-    with build_asset_context(resources={"time_series_repo": repository}) as context:
-        return features_asset(context).value
+    result = materialize([features_asset], resources={"time_series_repo": repository})
+    return result.output_for_node(NAMES.features)
 
 
 def test_canonical_cwa_observation_asset_persists_batch_and_returns_complete():
     batch = CWAObservationBatch(
         fetched_at=LAST_LOAD_HOUR, missing_station_ids=(), raw_payload={}, observations=()
     )
-    repository = MagicMock(spec=TimeSeriesRepository)
-    resources = {"time_series_repo": repository, CWA_SOURCE: FixtureCWASource(batch)}
+    store = MagicMock(spec=CWAWeatherStore)
+    resources = {
+        "time_series_repo": SimpleNamespace(cwa_weather_store=store),
+        CWA_SOURCE: FixtureCWASource(batch),
+    }
     with build_asset_context(resources=resources) as context:
         result = raw_cwa_station_observation(context)
 
     assert result is batch
-    repository.upsert_cwa_observation_batch.assert_called_once_with(batch)
+    store.upsert_cwa_observation_batch.assert_called_once_with(batch)
 
 
 def test_canonical_cwa_forecast_asset_persists_both_products():
@@ -79,13 +95,13 @@ def test_canonical_cwa_forecast_asset_persists_both_products():
     source = FixtureCWASource(
         forecast_releases={"F-D0047-089": releases[0], "F-D0047-091": releases[1]}
     )
-    repository = MagicMock(spec=TimeSeriesRepository)
-    resources = {"time_series_repo": repository, CWA_SOURCE: source}
+    store = MagicMock(spec=CWAWeatherStore)
+    resources = {"time_series_repo": SimpleNamespace(cwa_weather_store=store), CWA_SOURCE: source}
     with build_asset_context(resources=resources) as context:
         result = raw_cwa_township_forecast(context)
 
     assert result == releases
-    repository.upsert_cwa_forecast_releases.assert_called_once_with(releases)
+    store.upsert_cwa_forecast_releases.assert_called_once_with(releases)
 
 
 def test_incomplete_cwa_observation_batch_is_persisted_before_the_run_fails(
@@ -106,7 +122,7 @@ def test_incomplete_cwa_observation_batch_is_persisted_before_the_run_fails(
     ):
         raw_cwa_station_observation(context)
 
-    stored = test_repo.fetch_cwa_station_observations(station_id="466920")
+    stored = test_repo.cwa_weather_store.fetch_cwa_station_observations(station_id="466920")
     assert list(stored["temperature_c"]) == [30.0]
 
 
@@ -126,7 +142,7 @@ def test_incomplete_cwa_forecast_release_is_persisted_before_the_run_fails(
     ):
         raw_cwa_township_forecast(context)
 
-    stored = test_repo.fetch_cwa_forecast_rows(geocode="63000050")
+    stored = test_repo.cwa_weather_store.fetch_cwa_forecast_rows(geocode="63000050")
     assert sorted(stored["dataset_id"]) == ["F-D0047-089", "F-D0047-091"]
 
 
@@ -139,15 +155,19 @@ def test_task_features_fail_without_derived_load(test_repo: TimeSeriesRepository
 def test_task_features_read_weather_from_configured_reference_station(
     test_repo: TimeSeriesRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The weather reference station comes from runtime CWA settings rather than a fixed Taipei code."""
+    """The weather reference station comes from the CWA catalog the tasks load with, not a fixed code."""
     monkeypatch.setattr(
         settings,
         "CWA_LOCATION_ALLOWLIST",
         '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
     )
+    configured = load_task_definitions(TASK_DEFINITIONS_DIR, settings.cwa_locations)
+    monkeypatch.setitem(
+        deployed_tasks(), DYNAMIC_HORIZON_FORECAST, configured[DYNAMIC_HORIZON_FORECAST]
+    )
     override_task_policies(monkeypatch, min_training_hours=2)
     write_derived_load(test_repo.engine, derived_hourly_load(2, LAST_LOAD_HOUR))
-    test_repo.upsert_cwa_observation_batch(
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(
         CWAObservationBatch(
             fetched_at=LAST_LOAD_HOUR,
             missing_station_ids=(),
@@ -274,7 +294,9 @@ def test_dagster_materialize_ingestion_and_feature_pipeline(
     persisted_load = derived_load_series(test_repo.engine)
     assert len(persisted_load) == len(taipower_raw_df)
 
-    persisted_weather = test_repo.fetch_weather_range(reference_point="Taipei")
+    persisted_weather = test_repo.cwa_weather_store.fetch_weather_range(
+        reference_point=settings.cwa_locations["Taipei"]
+    )
     assert len(persisted_weather) == len(cwa_obs_df)
 
 
@@ -289,7 +311,7 @@ def _trainable_task_definitions(
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     override_task_policies(monkeypatch, min_training_hours=len(taipower_raw_df))
     write_derived_load(test_repo.engine, taipower_raw_df)
-    test_repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    test_repo.cwa_weather_store.upsert_cwa_observation_batch(cwa_observation_batch)
     pipelines = build_task_pipelines(deployed_tasks())
     return Definitions(
         assets=[
@@ -407,3 +429,121 @@ def test_training_then_monitoring_jobs_read_latest_persisted_actual_load(
     assert report["latest_target_time"] == next_hour.isoformat()
     assert report["target_hours"] == len(taipower_raw_df) + 1
     assert report["training_rows"] == len(taipower_raw_df)
+
+
+def _task_schedule(name: str) -> ScheduleDefinition:
+    """The deployed dynamic horizon forecast schedule called ``name``."""
+    pipeline = build_task_pipeline(deployed_tasks(), DYNAMIC_HORIZON_FORECAST)
+    return next(schedule for schedule in pipeline.schedules if schedule.name == name)
+
+
+def _persist_hours_after(repository: TimeSeriesRepository, tick: datetime, hours: int) -> datetime:
+    """Persist ``hours`` derived hours after ``tick``, as if derived while the run was queued."""
+    last_hour = tick.replace(tzinfo=None) + timedelta(hours=hours)
+    write_derived_load(repository.engine, derived_hourly_load(hours, last_hour))
+    return last_hour
+
+
+def test_scheduled_training_reads_features_and_monitors_as_of_its_tick(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run that starts late trains and reports on what was known at the tick, both from one as_of."""
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+    last_hour_at_tick = taipower_raw_df["datetime"].max()
+    # 動態視界預報每日 00:00 訓練；tick 之後才入庫的小時不得進入這次訓練與監控。
+    tick = (last_hour_at_tick + pd.Timedelta(hours=1)).to_pydatetime().replace(tzinfo=TAIPEI)
+    tags = scheduled_run_tags(
+        _task_schedule(NAMES.training_schedule),
+        tick,
+        dagster_instance,
+        resources={"time_series_repo": test_repo},
+    )
+    _persist_hours_after(test_repo, tick, hours=2)
+
+    with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance, tags=tags
+        )
+
+    assert training.success
+    assert training.output_for_node(NAMES.features)["datetime"].max() == last_hour_at_tick
+    report = training.output_for_node(NAMES.monitoring)
+    assert report["latest_target_time"] == last_hour_at_tick.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df)
+
+
+def test_scheduled_monitoring_reports_on_the_target_known_at_its_tick(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+    with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
+        job_defs.resolve_job_def(NAMES.training_job).execute_in_process(instance=dagster_instance)
+    last_hour_at_tick = taipower_raw_df["datetime"].max()
+    tick = (last_hour_at_tick + pd.Timedelta(minutes=30)).to_pydatetime().replace(tzinfo=TAIPEI)
+    tags = scheduled_run_tags(
+        _task_schedule(NAMES.monitoring_schedule),
+        tick,
+        dagster_instance,
+        resources={"time_series_repo": test_repo},
+    )
+    _persist_hours_after(test_repo, tick.replace(minute=0), hours=2)
+
+    monitoring = job_defs.resolve_job_def(NAMES.monitoring_job).execute_in_process(
+        instance=dagster_instance, tags=tags
+    )
+
+    assert monitoring.success
+    report = monitoring.output_for_node(NAMES.monitoring)
+    assert report["latest_target_time"] == last_hour_at_tick.isoformat()
+    assert report["target_hours"] == len(taipower_raw_df)
+
+
+@pytest.mark.parametrize("reexecuted", [False, True], ids=["manual", "re-execution-of-tick-run"])
+def test_training_without_a_scheduled_tick_reads_as_of_the_run_creation_time(
+    test_repo: TimeSeriesRepository,
+    taipower_raw_df: pd.DataFrame,
+    cwa_observation_batch: CWAObservationBatch,
+    dagster_instance,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    reexecuted: bool,
+) -> None:
+    """A re-execution copies the tick run's tags but runs later, so the tick is not its as_of."""
+    job_defs = _trainable_task_definitions(
+        test_repo, taipower_raw_df, cwa_observation_batch, tmp_path, monkeypatch
+    )
+    last_hour_at_tick = taipower_raw_df["datetime"].max()
+    tick = (last_hour_at_tick + pd.Timedelta(hours=1)).to_pydatetime().replace(tzinfo=TAIPEI)
+    tick_tags = scheduled_run_tags(
+        _task_schedule(NAMES.training_schedule),
+        tick,
+        dagster_instance,
+        resources={"time_series_repo": test_repo},
+    )
+    tags = {**tick_tags, **REEXECUTION} if reexecuted else {}
+    # 測試資料皆早於 run 建立時刻，所以建立時刻的 as_of 讀得到 tick 之後才入庫的小時。
+    last_persisted_hour = _persist_hours_after(test_repo, tick, hours=2)
+
+    with patch("shiro_mlops.pipelines.task_pipelines.log_training_run", return_value=TRACKED):
+        training = job_defs.resolve_job_def(NAMES.training_job).execute_in_process(
+            instance=dagster_instance, tags=tags
+        )
+
+    assert training.success
+    assert training.output_for_node(NAMES.features)["datetime"].max() == last_persisted_hour
+    report = training.output_for_node(NAMES.monitoring)
+    assert report["latest_target_time"] == last_persisted_hour.isoformat()

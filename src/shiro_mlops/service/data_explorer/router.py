@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.data_explorer.access import is_data_explorer_enabled
 from shiro_mlops.service.data_explorer.cursor import CursorError
 from shiro_mlops.service.data_explorer.dataset_query import DatasetQuery
@@ -46,12 +45,8 @@ from shiro_mlops.service.data_explorer.series import Agg, Bucket, TooManyPointsE
 router = APIRouter(prefix="/data", tags=["data-explorer"])
 
 
-def _repository(request: Request) -> TimeSeriesRepository:
-    return request.app.state.repository
-
-
 def _engine(request: Request) -> Engine:
-    return _repository(request).engine
+    return request.app.state.repository.engine
 
 
 def _ensure_enabled() -> None:

@@ -439,9 +439,9 @@ def test_forecast_parser_treats_hyphen_as_missing_numeric_and_text() -> None:
 def test_repository_persists_canonical_observation_batch(test_repo: TimeSeriesRepository) -> None:
     batch = parse_observation_batch(_observation_payload(), fetched_at=datetime(2026, 8, 20, 14, 5))
 
-    assert test_repo.upsert_cwa_observation_batch(batch) == 1
+    assert test_repo.cwa_weather_store.upsert_cwa_observation_batch(batch) == 1
 
-    observations = test_repo.fetch_cwa_station_observations(station_id="466920")
+    observations = test_repo.cwa_weather_store.fetch_cwa_station_observations(station_id="466920")
 
     assert len(observations) == 1
     assert observations.iloc[0]["station_id"] == "466920"
@@ -710,9 +710,9 @@ def test_repository_persists_forecast_vintages_without_overwriting(
         dataset_id="F-D0047-089",
     )
 
-    assert test_repo.upsert_cwa_forecast_release(first) == 1
-    assert test_repo.upsert_cwa_forecast_release(corrected) == 1
-    rows = test_repo.fetch_cwa_forecast_rows(geocode="63000000")
+    assert test_repo.cwa_weather_store.upsert_cwa_forecast_releases([first]) == 1
+    assert test_repo.cwa_weather_store.upsert_cwa_forecast_releases([corrected]) == 1
+    rows = test_repo.cwa_weather_store.fetch_cwa_forecast_rows(geocode="63000000")
 
     assert len(rows) == 2
     assert set(rows["source_updated_at"].dt.hour) == {11}
@@ -735,7 +735,7 @@ def test_forecast_product_write_failure_rolls_back_entire_batch(
     invalid_second = replace(first, dataset_id=None)
 
     with pytest.raises(IntegrityError):
-        test_repo.upsert_cwa_forecast_releases([first, invalid_second])
+        test_repo.cwa_weather_store.upsert_cwa_forecast_releases([first, invalid_second])
 
     headers = pd.read_sql_query("SELECT * FROM raw_cwa_forecast_release", test_repo.engine)
     assert headers.empty
@@ -758,7 +758,7 @@ def test_repository_json_encodes_xml_forecast_raw_payload(
         raw_payload=source_xml,
     )
 
-    assert test_repo.upsert_cwa_forecast_release(release) == 0
+    assert test_repo.cwa_weather_store.upsert_cwa_forecast_releases([release]) == 0
     stored = pd.read_sql_query("SELECT raw_payload FROM raw_cwa_forecast_release", test_repo.engine)
 
     assert json.loads(stored.iloc[0]["raw_payload"]) == source_xml
@@ -800,15 +800,17 @@ def test_forecast_query_uses_previous_complete_release_when_latest_lacks_request
             ),
         )
 
-    test_repo.upsert_cwa_forecast_release(release("2026-08-20 10:00", (), "63000050", 30.0))
-    test_repo.upsert_cwa_forecast_release(
-        release("2026-08-20 11:00", ("63000050",), "64000040", 31.0)
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [release("2026-08-20 10:00", (), "63000050", 30.0)]
     )
-    test_repo.upsert_cwa_forecast_release(
-        release("2026-08-20 12:00", ("63000050",), "64000040", 32.0)
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [release("2026-08-20 11:00", ("63000050",), "64000040", 31.0)]
+    )
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [release("2026-08-20 12:00", ("63000050",), "64000040", 32.0)]
     )
 
-    rows = test_repo.fetch_cwa_forecast_rows(
+    rows = test_repo.cwa_weather_store.fetch_cwa_forecast_rows(
         geocode="63000050",
         issued_before="2026-08-20 12:00",
         source_updated_before="2026-08-20 12:00",

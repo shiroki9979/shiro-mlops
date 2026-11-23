@@ -14,7 +14,6 @@ from statistics import fmean
 import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL
-from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.taipower_regional_supply_demand import (
     REGIONAL_SUPPLY_DEMAND_REGIONS,
     TaipowerRegionalSupplyDemandSnapshot,
@@ -98,13 +97,6 @@ def uncovered_gap(latest_derived_hour: datetime | None, window: HourWindow) -> H
     if gap_start >= window.start:
         return None
     return HourWindow(start=gap_start, end=window.start)
-
-
-def resolve_evaluation_time(evaluated_at: str | None = None) -> datetime:
-    """Resolve a schedule tick (Taiwan-local ISO string) or the current Taiwan-local time."""
-    if evaluated_at is None:
-        return taiwan_now().to_pydatetime()
-    return datetime.fromisoformat(evaluated_at)
 
 
 def derive_hourly_actual_load(

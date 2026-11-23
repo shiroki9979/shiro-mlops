@@ -3,6 +3,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -19,18 +20,22 @@ from shiro_mlops.data.forecast_view import (
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.forecast_track_record import (
-    FORECAST_TRACK_RECORD_ASSET,
     forecast_track_record,
+    forecast_track_record_schedule,
 )
 from shiro_mlops.pipelines.forecast_view_export import (
     FORECAST_VIEW_EXPORT_ASSET,
     forecast_view_export,
+    forecast_view_export_schedule,
 )
-from tests.helpers import write_derived_load
+from tests.helpers import run_creation_time, scheduled_run_tags, write_derived_load
 
 # 預報實績在 10:25 彙整（統計截至 10:00），匯出排在其後。
-TRACK_RECORD_TICK = "2026-11-20T10:25:00"
+TAIPEI = ZoneInfo("Asia/Taipei")
+TRACK_RECORD_TICK = datetime(2026, 11, 20, 10, 25, tzinfo=TAIPEI)
 ISSUED_AT = datetime(2026, 11, 20, 10, 15)
+# 匯出排程的 tick 只用於去重複，不進 run 標籤；統計截至時刻與它無關。
+EXPORT_TICK = datetime(2026, 11, 20, 10, 35, tzinfo=TAIPEI)
 BUCKET = "shiro-mlops-forecast-view"
 
 
@@ -77,9 +82,7 @@ def _export(
     materialize(
         [forecast_track_record],
         resources=resources,
-        run_config={
-            "ops": {FORECAST_TRACK_RECORD_ASSET: {"config": {"scheduled_at": TRACK_RECORD_TICK}}}
-        },
+        tags=scheduled_run_tags(forecast_track_record_schedule, TRACK_RECORD_TICK),
         instance=instance,
     )
     return materialize(
@@ -99,7 +102,7 @@ def test_without_s3_settings_the_export_writes_only_the_local_directory(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, mocker
 ) -> None:
     boto3_client = mocker.patch("boto3.client")
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
     result = _export(test_repo, tmp_path, dagster_instance)
 
@@ -142,7 +145,7 @@ def _expect_upload(stubber: Stubber, data_dir: Path, name: str) -> None:
 def test_with_a_bucket_set_the_export_uploads_the_local_files_to_the_published_prefix(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
     # 先以純地端匯出產生期望的位元組，再讓上傳端比對同一份內容。
     _export(test_repo, tmp_path, dagster_instance)
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
@@ -163,7 +166,7 @@ def test_a_failed_upload_fails_the_export_after_the_local_directory_is_current(
 ) -> None:
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
     stubber.add_client_error("put_object", service_error_code="AccessDenied", http_status_code=403)
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
     with stubber:
         result = _export(test_repo, tmp_path, dagster_instance, publisher, raise_on_error=False)
@@ -182,7 +185,7 @@ def test_latest_forecast_publishes_only_issue_time_target_hours_and_predicted_lo
 
     No run status, load anchor, weather value, weather source or model version is published.
     """
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
 
     _export(test_repo, tmp_path, dagster_instance)
 
@@ -198,8 +201,8 @@ def test_latest_forecast_publishes_only_issue_time_target_hours_and_predicted_lo
 def test_the_latest_issue_time_wins_over_earlier_issues(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT))
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT - timedelta(hours=1)))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT - timedelta(hours=1)))
 
     result = _export(test_repo, tmp_path, dagster_instance)
 
@@ -225,18 +228,25 @@ def test_before_the_first_issue_both_documents_are_empty_states(
     }
 
 
+@pytest.mark.parametrize(
+    "run_tags",
+    [
+        pytest.param({}, id="manual"),
+        pytest.param(
+            scheduled_run_tags(forecast_view_export_schedule, EXPORT_TICK), id="scheduled"
+        ),
+    ],
+)
 def test_before_the_track_record_first_compiles_the_export_still_publishes_the_forecast(
-    test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, mocker
+    test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance, run_tags: dict[str, str]
 ) -> None:
     """A fresh instance whose track record has never materialized still uploads the forecast.
 
-    The track record file is the not-yet-accumulated state, cut off at the export's hour.
+    The track record file is the not-yet-accumulated state, cut off at the hour the export
+    run was created: the export schedule carries no tick, so a scheduled run falls back to
+    now just as a manual one does.
     """
-    mocker.patch(
-        "shiro_mlops.pipelines.forecast_view_export.taiwan_now",
-        return_value=pd.Timestamp("2026-11-20T10:35:12"),
-    )
-    test_repo.insert_issued_forecast(_issued_forecast())
+    test_repo.issued_forecast_store.insert(_issued_forecast())
     publisher, stubber = _stubbed_s3_publisher(tmp_path)
     for name in (LATEST_ISSUED_FORECAST_FILE, FORECAST_TRACK_RECORD_FILE):
         stubber.add_response(
@@ -254,6 +264,7 @@ def test_before_the_track_record_first_compiles_the_export_still_publishes_the_f
                 "io_manager": get_parquet_io_manager(data_dir=tmp_path),
                 "forecast_view_publisher": publisher,
             },
+            tags=run_tags,
             instance=dagster_instance,
         )
 
@@ -263,7 +274,9 @@ def test_before_the_track_record_first_compiles_the_export_still_publishes_the_f
         "2026-11-20T10:15:00+08:00"
     )
     assert _published(tmp_path, FORECAST_TRACK_RECORD_FILE) == {
-        "cutoff": "2026-11-20T10:00:00+08:00",
+        "cutoff": run_creation_time(dagster_instance, result.run_id)
+        .replace(minute=0, second=0, microsecond=0, tzinfo=TAIPEI)
+        .isoformat(),
         "accumulated_days": 0,
         "metrics": None,
     }
@@ -279,7 +292,7 @@ def test_track_record_publishes_its_public_fields_and_cutoff(
     for day in range(8):
         issued_at = datetime(2026, 11, 12, 9, 15) + timedelta(days=day)
         anchor = issued_at.replace(minute=0) - timedelta(hours=1)
-        test_repo.insert_issued_forecast(
+        test_repo.issued_forecast_store.insert(
             IssuedForecast(
                 issued_at=issued_at,
                 load_anchor=anchor,
@@ -323,9 +336,9 @@ def test_track_record_publishes_its_public_fields_and_cutoff(
 def test_each_export_overwrites_the_same_file_names(
     test_repo: TimeSeriesRepository, tmp_path: Path, dagster_instance
 ) -> None:
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT))
     _export(test_repo, tmp_path, dagster_instance)
-    test_repo.insert_issued_forecast(_issued_forecast(ISSUED_AT + timedelta(hours=1)))
+    test_repo.issued_forecast_store.insert(_issued_forecast(ISSUED_AT + timedelta(hours=1)))
 
     _export(test_repo, tmp_path, dagster_instance)
 

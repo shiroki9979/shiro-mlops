@@ -219,6 +219,33 @@ def save_model(root: Path, task_id: str, model: TaskModel) -> SavedModel:
     return SavedModel(directory=target, sha256=sha256)
 
 
+@contextmanager
+def _installed_directory(root: Path, task_id: str) -> Iterator[Path | None]:
+    """Hold the task's lock as a reader and yield its installed model directory, ``None`` when untrained.
+
+    Raises ``MissingModelLockError`` for a model directory the store did not install.
+    """
+    if not root.is_dir():
+        yield None
+        return
+    directory = model_directory(root, task_id)
+    with _shared_lock(root, task_id) as locked:
+        yield directory if locked and directory.is_dir() else None
+
+
+def has_installed_model(root: Path, task_id: str) -> bool:
+    """Whether loading would find a model, judged by the loader's rule without loading it.
+
+    A directory the store did not install counts as no model: loading it raises
+    ``MissingModelLockError`` and only retraining replaces it.
+    """
+    try:
+        with _installed_directory(root, task_id) as directory:
+            return directory is not None
+    except MissingModelLockError:
+        return False
+
+
 def load_model_with_sha256(root: Path, task: TaskDefinition) -> LoadedModel | None:
     """Load the task's current model and hash its directory under one shared lock.
 
@@ -226,11 +253,8 @@ def load_model_with_sha256(root: Path, task: TaskDefinition) -> LoadedModel | No
     directory version. ``None`` when the task has never been trained; raises
     ``MissingModelLockError`` for a model directory the store did not install.
     """
-    if not root.is_dir():
-        return None
-    directory = model_directory(root, task.task_id)
-    with _shared_lock(root, task.task_id) as locked:
-        if not locked or not directory.is_dir():
+    with _installed_directory(root, task.task_id) as directory:
+        if directory is None:
             return None
         model = get_task_type(task.task_type).load(directory)
         return LoadedModel(model=model, sha256=model_directory_sha256(directory))

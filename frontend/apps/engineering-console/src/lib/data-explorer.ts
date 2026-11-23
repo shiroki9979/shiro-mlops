@@ -25,13 +25,6 @@ function csvCell(value: unknown): string {
   return `"${text.replaceAll('"', '""')}"`
 }
 
-// SYNC(src/shiro_mlops/service/data_explorer/values.py): is_truthy.
-const TRUTHY_VALUES = new Set(['1', 'true', 'yes'])
-
-export function isFlagOn(value: string | undefined): boolean {
-  return value !== undefined && TRUTHY_VALUES.has(value.toLowerCase())
-}
-
 export function toRfc3339(localValue: string): string {
   if (!localValue) return ''
   return localValue.length === 16 ? `${localValue}:00+08:00` : localValue

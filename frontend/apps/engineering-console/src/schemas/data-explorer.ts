@@ -55,6 +55,8 @@ export type Series = z.infer<typeof SeriesSchema>
 export const BucketSchema = z.enum(['auto', 'raw', '1h', '1d'])
 export const ResolvedBucketSchema = BucketSchema.exclude(['auto'])
 export const AggSchema = z.enum(['avg', 'min', 'max'])
+export const DEFAULT_BUCKET = BucketSchema.options[0]
+export const DEFAULT_AGG = AggSchema.options[0]
 
 export type Bucket = z.infer<typeof BucketSchema>
 export type ResolvedBucket = z.infer<typeof ResolvedBucketSchema>

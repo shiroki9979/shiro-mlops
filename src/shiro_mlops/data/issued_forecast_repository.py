@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
 from shiro_mlops.core.storage_time import from_storage_time, to_storage_time
 from shiro_mlops.data.issued_forecast import IssuedForecast, IssuedForecastStep
+from shiro_mlops.data.weather_resolution import ForecastMode
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class IssuedForecastRepository:
         header = {
             "issued_at": issued_at,
             "load_anchor": to_storage_time(forecast.load_anchor),
-            "status": forecast.status,
+            "status": forecast.status.value,
             "model_sha256": forecast.model_sha256,
             "mlflow_model_version": forecast.mlflow_model_version,
         }
@@ -108,7 +109,7 @@ class IssuedForecastRepository:
         return IssuedForecast(
             issued_at=from_storage_time(header["issued_at"], column="issued_at"),
             load_anchor=from_storage_time(header["load_anchor"], column="load_anchor"),
-            status=header["status"],
+            status=ForecastMode(header["status"]),
             model_sha256=header["model_sha256"],
             mlflow_model_version=header["mlflow_model_version"],
             steps=tuple(

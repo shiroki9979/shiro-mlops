@@ -106,6 +106,13 @@ def min_hours(monkeypatch: pytest.MonkeyPatch) -> int:
 
 
 @pytest.fixture
+def isolated_models_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point DATA_DIR at a temporary directory and return its (not yet created) model root."""
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
+    return settings.models_dir
+
+
+@pytest.fixture
 def dagster_instance(tmp_path: Path) -> Generator:
     """Create an isolated, temporary DagsterInstance for test materializations."""
     from dagster import DagsterInstance
@@ -151,7 +158,7 @@ def populated_repo(
     """Create and populate TimeSeriesRepository with fixture data."""
     repo = TimeSeriesRepository(engine=sqlite_engine)
     write_derived_load(repo.engine, taipower_raw_df)
-    repo.upsert_cwa_observation_batch(cwa_observation_batch)
+    repo.cwa_weather_store.upsert_cwa_observation_batch(cwa_observation_batch)
     return repo
 
 
