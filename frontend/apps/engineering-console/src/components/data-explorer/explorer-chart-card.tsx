@@ -7,7 +7,6 @@ import { LineChart as LineChartIcon } from 'lucide-react'
 import { useDatasetSeries } from '@/hooks/use-data-explorer'
 import { type Messages, useMessages } from '@/i18n/messages'
 import type { QueryParams } from '@/lib/api-client'
-import { isFlagOn } from '@/lib/data-explorer'
 import { brushWindow, type ExplorerWindow } from '@/lib/explorer-window'
 import { AggSchema, BucketSchema, type ResolvedBucket, ResolvedBucketSchema, type SeriesResponse } from '@/schemas/data-explorer'
 import type { ExplorerChartConfig, ExplorerChartType, ExplorerDatasetConfig } from './catalog'
@@ -27,6 +26,7 @@ import {
   DEFAULT_AGG,
   DEFAULT_BUCKET,
   type ExplorerFilterValues,
+  filterRequestValues,
 } from './explorer-query-state'
 
 const CHART_RENDERERS: Record<ExplorerChartType, ComponentType<ChartBodyProps>> = {
@@ -62,11 +62,11 @@ export function ExplorerChartCard({
   const m = useMessages()
   const locale = useLocale()
   const chartText = m.explorer.chart
-  const query = { ...window, ...filters }
+  const query = { ...window, ...filterRequestValues(filters) }
   const bucket = optionOr(chartSearch.bucket, BucketSchema.options, DEFAULT_BUCKET)
   const agg = optionOr(chartSearch.agg, AggSchema.options, DEFAULT_AGG)
   const fields = selectedChartFields(chartSearch.fields, chart.fields)
-  const prompt = missingFilterPrompt(chart, query, m)
+  const prompt = missingFilterPrompt(chart, filters, m)
   const seriesQuery = useDatasetSeries(chart.seriesApiPath, seriesParams(chart, query, chartSearch, fields), !prompt)
   const plotted = seriesQuery.data && !prompt ? plotSeries(seriesQuery.data.series, chart, m, locale) : []
   const resolvedBucket = seriesQuery.data?.bucket
@@ -246,9 +246,9 @@ function optionOr<T extends string>(value: unknown, options: readonly T[], fallb
   return options.includes(value as T) ? (value as T) : fallback
 }
 
-function missingFilterPrompt(chart: ExplorerChartConfig, query: Record<string, string | undefined>, m: Messages): string | undefined {
+function missingFilterPrompt(chart: ExplorerChartConfig, filters: ExplorerFilterValues, m: Messages): string | undefined {
   const required = chart.requiredFilter
-  if (!required || !isFlagOn(query[required.when]) || query[required.filter]) return undefined
+  if (!required || filters[required.when] !== true || filters[required.filter]) return undefined
   return m.explorer.chart.requiresFilter(explorerFieldLabel(required.filter, m), explorerFieldLabel(required.when, m))
 }
 

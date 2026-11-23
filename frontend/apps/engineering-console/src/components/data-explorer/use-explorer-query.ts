@@ -46,7 +46,7 @@ export function useExplorerQuery(dataset: ExplorerDatasetConfig) {
     setEnd: (value: string) => navigateTo(changeWindow(dataset, state, { end: value })),
     // Quick ranges and shifts replace both ends in one navigation so no half-moved window is fetched.
     setWindow: (window: ExplorerWindow) => navigateTo(changeWindow(dataset, state, window)),
-    setFilter: (key: ExplorerFieldKey, value: string) => navigateTo(changeFilter(state, key, value)),
+    setFilter: (key: ExplorerFieldKey, value: string | boolean) => navigateTo(changeFilter(state, key, value)),
     goToNextPage: (cursor: string | undefined) => {
       if (cursor && isWithinDetailLimit(state)) navigateTo(nextPage(state, cursor))
     },

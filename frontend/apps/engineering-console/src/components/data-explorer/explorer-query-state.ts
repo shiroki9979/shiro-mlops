@@ -20,7 +20,9 @@ export type ExplorerRows = { kind: 'overDetailLimit' } | FirstPageRows | PageRow
 type FirstRows = Exclude<ExplorerRows, PageRows>
 type ListableRows = FirstPageRows | PageRows
 
-export type ExplorerFilterValues = Partial<Record<ExplorerFieldKey, string>>
+// A switch is on (`true`) or absent; select and free-text values are non-empty text the API judges.
+export type ExplorerFilterValue = string | true
+export type ExplorerFilterValues = Partial<Record<ExplorerFieldKey, ExplorerFilterValue>>
 
 export interface ExplorerQueryState<Rows extends ExplorerRows = ExplorerRows> {
   window: ExplorerWindow
@@ -32,8 +34,10 @@ export interface ExplorerQueryState<Rows extends ExplorerRows = ExplorerRows> {
 export type ListableQueryState = ExplorerQueryState<ListableRows>
 
 // `search` is what the router parsed, so `all_vintages=true` or `geocode=63000000` arrive as a
-// boolean or a number. The window and filters stay text the API judges; a missing end falls back
-// to `defaultWindow`, which the caller computes once per page visit.
+// boolean or a number. The window and select or free-text filters stay text the API judges; a
+// missing end falls back to `defaultWindow`, which the caller computes once per page visit.
+// Switches are the one place the truth rule applies, so every spelling of "on" reaches the URL
+// and the requests as `true`.
 export function parseExplorerQuery(
   dataset: ExplorerDatasetConfig,
   search: Record<string, unknown>,
@@ -67,9 +71,16 @@ export function changeWindow(
   return { ...state, window, rows: firstRows(dataset, window) }
 }
 
-export function changeFilter(state: ExplorerQueryState, key: ExplorerFieldKey, value: string): ExplorerQueryState<FirstRows> {
+// `false` or an empty value removes the filter.
+export function changeFilter(
+  state: ExplorerQueryState,
+  key: ExplorerFieldKey,
+  value: string | boolean,
+): ExplorerQueryState<FirstRows> {
   const rows: FirstRows = state.rows.kind === 'overDetailLimit' ? state.rows : { kind: 'firstPage' }
-  return { ...state, filters: { ...state.filters, [key]: value }, rows }
+  const { [key]: _previous, ...others } = state.filters
+  const filters: ExplorerFilterValues = value === false || value === '' ? others : { ...others, [key]: value }
+  return { ...state, filters, rows }
 }
 
 export function nextPage(state: ListableQueryState, cursor: string): ExplorerQueryState<PageRows> {
@@ -106,7 +117,7 @@ export function toExplorerSearch(dataset: ExplorerDatasetConfig, state: Explorer
 export function listRequest(state: ListableQueryState): Record<string, string | undefined> {
   return {
     ...state.window,
-    ...state.filters,
+    ...filterRequestValues(state.filters),
     ...(state.rows.kind === 'page' ? { cursor: state.rows.cursor } : {}),
   }
 }
@@ -115,13 +126,26 @@ function firstRows(dataset: ExplorerDatasetConfig, window: ExplorerWindow): Firs
   return exceedsDays(window, dataset.maxDays) ? { kind: 'overDetailLimit' } : { kind: 'firstPage' }
 }
 
+export function filterRequestValues(filters: ExplorerFilterValues): Partial<Record<ExplorerFieldKey, string>> {
+  return Object.fromEntries(Object.entries(filters).map(([key, value]) => [key, String(value)]))
+}
+
 function declaredFilterValues(dataset: ExplorerDatasetConfig, search: Record<string, unknown>): ExplorerFilterValues {
   return Object.fromEntries(
-    dataset.filters.flatMap((field) => {
-      const value = searchText(search[field.key])
-      return value === undefined ? [] : [[field.key, value]]
+    dataset.filters.flatMap((field): [ExplorerFieldKey, ExplorerFilterValue][] => {
+      const raw = search[field.key]
+      if (field.control?.kind === 'switch') return isTruthy(raw) ? [[field.key, true]] : []
+      const value = searchText(raw)
+      return value ? [[field.key, value]] : []
     }),
   )
+}
+
+// SYNC(src/shiro_mlops/service/data_explorer/values.py): is_truthy.
+const TRUTHY_VALUES = new Set(['1', 'true', 'yes'])
+
+function isTruthy(value: unknown): boolean {
+  return value !== undefined && value !== null && TRUTHY_VALUES.has(String(value).toLowerCase())
 }
 
 function searchText(value: unknown): string | undefined {
