@@ -15,9 +15,12 @@ from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.service.served_tasks import (
     Loaded,
+    LoadFailed,
+    ServedModel,
     ServedTasks,
     ServingFailedError,
     ServingUnavailableError,
+    Untrained,
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, UnknownTaskError, deployed_task
 from shiro_mlops.tasks.model_store import model_directory, save_model
@@ -87,12 +90,9 @@ def test_an_untrained_task_is_not_ready_and_refuses_to_predict(
     assert not readiness.ready
     assert not readiness.model_loaded
     assert readiness.reason == UNTRAINED_REASON
-    status = served.model_status()[DYNAMIC_HORIZON_FORECAST]
-    assert (status.model_loaded, status.model_sha256, status.reason) == (
-        False,
-        None,
-        UNTRAINED_REASON,
-    )
+    model = served.served_models()[DYNAMIC_HORIZON_FORECAST]
+    assert model == ServedModel(deployed_task(DYNAMIC_HORIZON_FORECAST).task_type, Untrained())
+    assert model.state.reason == UNTRAINED_REASON
 
 
 def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
@@ -114,14 +114,16 @@ def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
     )
 
     failed = "Model failed to load: MissingModelLockError: "
-    status = served.model_status()
-    assert not status[broken.task_id].model_loaded
-    assert status[broken.task_id].reason.startswith(failed)
-    assert served.readiness(broken.task_id).reason == status[broken.task_id].reason
+    models = served.served_models()
+    load_failure = models[broken.task_id].state
+    assert isinstance(load_failure, LoadFailed)
+    assert load_failure.reason.startswith(failed)
+    assert served.readiness(broken.task_id).reason == load_failure.reason
     with pytest.raises(ServingUnavailableError, match=f"^{failed}"):
         served.predict(broken.task_id, horizon_hours=3)
-    assert (status[other.task_id].model_loaded, status[other.task_id].reason) == (True, None)
-    assert status[other.task_id].model_sha256 == saved.sha256
+    loaded = models[other.task_id].state
+    assert isinstance(loaded, Loaded)
+    assert loaded.sha256 == saved.sha256
 
 
 def _fresh_forecast_release() -> CWAForecastRelease:
