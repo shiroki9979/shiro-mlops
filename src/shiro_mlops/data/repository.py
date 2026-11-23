@@ -34,7 +34,6 @@ from shiro_mlops.data.hourly_actual_load_store import (
     REGIONAL_SNAPSHOT_SUM_SOURCE,
     HourlyActualLoadStore,
 )
-from shiro_mlops.data.issued_forecast import IssuedForecast
 from shiro_mlops.data.issued_forecast_repository import IssuedForecastRepository
 from shiro_mlops.data.repository_utils import serialize_raw_payload
 from shiro_mlops.data.taipower_regional_supply_demand import (
@@ -638,10 +637,6 @@ class TimeSeriesRepository:
     ) -> list[TaipowerUnitGenerationSnapshot]:
         """Fetch unit net-generation snapshots for a Taiwan-local observation slot."""
         return self.unit_generation_repo.fetch(observed_at)
-
-    def fetch_latest_issued_forecast(self) -> IssuedForecast | None:
-        """Fetch the forecast with the latest issue time, or ``None`` before the first issue."""
-        return self.issued_forecast_store.fetch_latest()
 
     def fetch_track_record_pairs(self, window: TrackRecordWindow) -> tuple[TrackRecordPair, ...]:
         """Pair issued steps targeting the window with valid hourly observations.
