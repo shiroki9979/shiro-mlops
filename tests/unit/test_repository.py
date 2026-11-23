@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from shiro_mlops.data.cwa_client import CWAObservationBatch
+from shiro_mlops.data.cwa_client import DEFAULT_CWA_LOCATIONS, CWAObservationBatch
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.taipower_regional_supply_demand_repository import (
@@ -140,7 +140,7 @@ def test_repository_stores_taiwan_local_timestamps_as_utc_and_reads_them_back_al
     persisted_weather = repository.cwa_weather_store.fetch_weather_range(
         start_time="2026-08-20T06:00:00Z",
         end_time="2026-08-20T06:00:00Z",
-        reference_point="Taipei",
+        reference_point=DEFAULT_CWA_LOCATIONS["Taipei"],
     )
 
     assert persisted_load.iloc[0]["datetime"] == pd.Timestamp("2026-08-20 14:00:00")

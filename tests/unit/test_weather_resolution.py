@@ -232,7 +232,7 @@ def test_resolver_interpolates_short_horizon_between_persisted_forecast_points(
 
 
 def test_resolver_prefers_three_day_and_falls_back_to_weekly_per_field() -> None:
-    store = MagicMock()
+    store = MagicMock(spec=CWAWeatherStore)
     store.fetch_cwa_forecast_rows.return_value = pd.DataFrame(
         [
             {
@@ -282,7 +282,7 @@ def test_resolver_uses_configured_taipei_forecast_and_observation_sources(
         "CWA_LOCATION_ALLOWLIST",
         '{"Taipei": {"station_id": "999999", "geocode": "99999999"}}',
     )
-    store = MagicMock()
+    store = MagicMock(spec=CWAWeatherStore)
     forecast = pd.DataFrame(
         [
             {
@@ -327,7 +327,7 @@ def test_resolver_uses_configured_taipei_forecast_and_observation_sources(
 
 
 def test_resolver_uses_previous_day_observation_when_forecast_is_stale() -> None:
-    store = MagicMock()
+    store = MagicMock(spec=CWAWeatherStore)
     store.fetch_cwa_forecast_rows.return_value = pd.DataFrame(
         [
             {
@@ -369,7 +369,7 @@ def test_resolver_uses_previous_day_observation_when_forecast_is_stale() -> None
 
 def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
     """Degraded backtests may only use observations that already existed at prediction time."""
-    store = MagicMock()
+    store = MagicMock(spec=CWAWeatherStore)
     store.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
     store.fetch_cwa_station_observations.return_value = pd.DataFrame()
     as_of = datetime(2026, 8, 20, 12)
@@ -388,7 +388,7 @@ def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
 
 def test_resolver_does_not_interpolate_wind_direction() -> None:
     """Categorical wind direction may be exact but must never be fabricated between points."""
-    store = MagicMock()
+    store = MagicMock(spec=CWAWeatherStore)
     store.fetch_cwa_forecast_rows.return_value = pd.DataFrame(
         [
             {
@@ -427,7 +427,7 @@ def test_resolver_does_not_interpolate_wind_direction() -> None:
 
 def test_resolver_reads_forecasts_and_observations_of_the_weather_reference_point() -> None:
     """Resolve weather from the reference point's forecast geocode and station, not a fixed Taipei code."""
-    store = MagicMock()
+    store = MagicMock(spec=CWAWeatherStore)
     store.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
     store.fetch_cwa_station_observations.return_value = pd.DataFrame(
         [

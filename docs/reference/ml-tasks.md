@@ -106,7 +106,7 @@ runner 經 `TaskRuntime.hourly_actual_load` 取得全台逐時實際負載 store
 
 serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是否過舊，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史、取得天氣，交由[預測輸入關卡](#預測輸入關卡tasksprediction_inputspy)判定並裁切負載歷史後才交給任務類型。
 
-天氣經 `TaskRuntime.cwa_weather` 取得 CWA 天氣 store（`src/shiro_mlops/data/cwa_weather_store.py` 的 `CWAWeatherStore`）：訓練與 `OBSERVED` 任務的觀測天氣由它讀取各代表點的測站觀測，預報天氣的解析則把它交給 `resolve_weather`。
+天氣經 `TaskRuntime.cwa_weather` 取得 CWA 天氣 store（`src/shiro_mlops/data/cwa_weather_store.py` 的 `CWAWeatherStore`）：訓練與 `OBSERVED` 任務的觀測天氣由它讀取各代表點的測站觀測，預報天氣的解析則把它交給 `resolve_weather`。兩者都直接收任務設定載入時解析出的氣象代表點（`CWALocation`），測站與預報區皆取自它，觀測結果的 `location` 標其 alias；store 不讀全域 settings 的 CWA 擷取目錄。
 
 `OBSERVED` 任務的 serving 路徑：負載起點過舊檢查照常適用；天氣改讀同一區間 `[anchor - lookback_hours, anchor]` 的測站觀測（加權規則同 `load_training_data`），不讀預報也不降級，`mode` 固定 `normal`。區間內沒有任何觀測時拋 `WeatherUnavailableError`；任務類型未能評分任何請求的結束小時（負載或天氣缺口）時拋 `ObservedInputsIncompleteError`。`PredictionOutcome.weather` 與 `weather_sources` 對齊至每個被評分的結束小時，取該小時以前最新一筆觀測，來源為 `station_observation` 並附 `observed_at`。
 

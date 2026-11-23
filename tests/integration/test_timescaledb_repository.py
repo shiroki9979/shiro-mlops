@@ -1,6 +1,5 @@
 """Opt-in integration tests for TimescaleDB repository time semantics."""
 
-import json
 import os
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -10,9 +9,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from shiro_mlops.core.config import settings
 from shiro_mlops.core.database import get_timescale_engine
 from shiro_mlops.data.cwa_client import (
+    CWALocation,
     CWAObservationBatch,
     CWAStationObservation,
     parse_forecast_release,
@@ -46,20 +45,14 @@ def timescaledb_engine() -> Engine:
 
 def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_queries(
     timescaledb_engine: Engine,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Taiwan-local and UTC inputs represent one instant through storage, readback, and merge."""
     run_id = uuid4()
     subject = f"integration-{run_id.hex}"
     station_id = f"it-{run_id.hex[:13]}"
-    reference_point = f"Integration-{run_id.hex}"
+    reference_point = CWALocation(f"Integration-{run_id.hex}", station_id, "63000000")
     # 批次以 fetched_at 為主鍵且 upsert 會覆寫，取遠離實際擷取時刻的唯一瞬間，免得蓋掉本機真實批次。
     fetched_at = datetime(2000, 1, 1, tzinfo=UTC) + timedelta(microseconds=run_id.int % 10**12)
-    monkeypatch.setattr(
-        settings,
-        "CWA_LOCATION_ALLOWLIST",
-        json.dumps({reference_point: {"station_id": station_id, "geocode": "63000000"}}),
-    )
     repository = TimeSeriesRepository(engine=timescaledb_engine, auto_init=False)
     load_store = repository.hourly_actual_load_store
     load_df = pd.DataFrame([{"datetime": "2026-08-20T14:00:00", "load_mw": 38000.0}])
@@ -73,7 +66,7 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
             CWAStationObservation(
                 observed_at=pd.Timestamp("2026-08-20T06:00:00Z"),
                 station_id=station_id,
-                station_name=reference_point,
+                station_name=reference_point.alias,
                 town_code="63000000",
                 temperature_c=35.5,
                 relative_humidity_pct=55.0,
@@ -119,7 +112,7 @@ def test_repository_preserves_taiwan_instant_across_timescaledb_storage_and_quer
         assert persisted_load.iloc[0]["load_mw"] == pytest.approx(39000.0)
         assert len(persisted_weather) == 1
         assert persisted_weather.iloc[0]["time"] == pd.Timestamp("2026-08-20T14:00:00")
-        assert persisted_weather.iloc[0]["location"] == reference_point
+        assert persisted_weather.iloc[0]["location"] == reference_point.alias
 
         merged = merge_weather_features(
             persisted_load, persisted_weather.rename(columns={"time": "datetime"})

@@ -222,7 +222,7 @@ def load_observed_weather(
     points = []
     for point in task.weather.reference_points:
         observed = runtime.cwa_weather.fetch_weather_range(
-            start_time=start, end_time=end, reference_point=point.location.alias
+            reference_point=point.location, start_time=start, end_time=end
         )
         observed = with_datetime_column(observed)[[DATETIME_COL, *task.weather.fields]]
         points.append(PointWeather(point.location.alias, point.weight, observed))
