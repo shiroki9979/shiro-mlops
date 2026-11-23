@@ -8,11 +8,8 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
 import httpx
-
-from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 
 DEFAULT_SUPPLY_DEMAND_URL = (
     "https://service.taipower.com.tw/data/opendata/apply/file/d006020/001.json"
@@ -87,24 +84,8 @@ class TaipowerSupplyDemandSnapshot:
 
 
 def floor_to_ten_minutes(moment: datetime) -> datetime:
-    """Floor a timestamp to the start of its 10-minute observation slot."""
+    """Floor a run's as_of to the start of its 10-minute observation slot."""
     return moment.replace(minute=(moment.minute // 10) * 10, second=0, microsecond=0)
-
-
-def resolve_manual_observed_at(now: datetime | None = None) -> datetime:
-    """Resolve the Taiwan-local observation slot used by manual materialize runs."""
-    if now is None:
-        now = datetime.now(tz=ZoneInfo(TAIWAN_TZ)).replace(tzinfo=None)
-    return floor_to_ten_minutes(now)
-
-
-def resolve_snapshot_observed_at(observed_at: str | datetime | None = None) -> datetime:
-    """Resolve observation slot from a schedule tick, ISO string, or manual fallback."""
-    if observed_at is None:
-        return resolve_manual_observed_at()
-    if isinstance(observed_at, str):
-        return floor_to_ten_minutes(datetime.fromisoformat(observed_at))
-    return floor_to_ten_minutes(observed_at)
 
 
 def parse_roc_datetime(value: str) -> datetime:

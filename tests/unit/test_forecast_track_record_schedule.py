@@ -8,6 +8,7 @@ from dagster import DefaultScheduleStatus, build_schedule_context, materialize
 from shiro_mlops.core.io_managers import get_parquet_io_manager
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.pipelines.definitions import defs
+from shiro_mlops.pipelines.execution_origin import SCHEDULE_NAME_TAG, SCHEDULED_TICK_TAG
 from shiro_mlops.pipelines.forecast_track_record import (
     FORECAST_TRACK_RECORD_ASSET,
     forecast_track_record,
@@ -48,13 +49,16 @@ def test_schedule_is_off_until_an_operator_turns_it_on() -> None:
     assert schedule.default_status == DefaultScheduleStatus.STOPPED
 
 
-def test_schedule_tick_becomes_the_taiwan_local_run_time() -> None:
+def test_schedule_tags_the_run_with_its_taiwan_local_tick() -> None:
+    """The tick reaches the asset as a run tag, never as config an operator could type in."""
     [request] = _evaluate().run_requests
 
     assert request.run_key == "2026-11-20T10:25:00"
-    assert request.run_config == {
-        "ops": {FORECAST_TRACK_RECORD_ASSET: {"config": {"scheduled_at": "2026-11-20T10:25:00"}}}
+    assert request.tags == {
+        SCHEDULE_NAME_TAG: "forecast_track_record_schedule",
+        SCHEDULED_TICK_TAG: "2026-11-20T10:25:00",
     }
+    assert not request.run_config
 
 
 def test_scheduled_run_cuts_off_at_the_taiwan_local_tick_hour(
@@ -68,7 +72,7 @@ def test_scheduled_run_cuts_off_at_the_taiwan_local_tick_hour(
             "time_series_repo": test_repo,
             "io_manager": get_parquet_io_manager(data_dir=tmp_path),
         },
-        run_config=request.run_config,
+        tags=request.tags,
         instance=dagster_instance,
     )
 
@@ -77,11 +81,12 @@ def test_scheduled_run_cuts_off_at_the_taiwan_local_tick_hour(
     assert record.accumulated_days == 0
 
 
-def test_schedule_evaluated_without_a_tick_lets_the_run_use_the_current_hour() -> None:
+def test_schedule_evaluated_without_a_tick_lets_the_run_use_its_creation_hour() -> None:
     """A manual evaluation has no tick to deduplicate on; the asset falls back to now."""
     [request] = _evaluate(tick=None).run_requests
 
     assert request.run_key is None
+    assert SCHEDULED_TICK_TAG not in request.tags
     assert not request.run_config
 
 
