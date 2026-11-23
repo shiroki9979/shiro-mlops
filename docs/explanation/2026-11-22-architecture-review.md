@@ -111,6 +111,7 @@ After ：所有 store 與營運資料檢視器 → 儲存時刻 module〔台灣�
 > **狀態（2026-11-22）**：已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228)（子 issue [#298](https://github.com/shiroki9979/shiro-mlops/issues/298)、[#300](https://github.com/shiroki9979/shiro-mlops/issues/300)–[#303](https://github.com/shiroki9979/shiro-mlops/issues/303)）實作。[hourly_actual_load_store.py](../../src/shiro_mlops/data/hourly_actual_load_store.py) 的 `HourlyActualLoadStore` 擁有 `raw_taipower_load` 與推算來源常數：寫入內建推算來源，以台灣本地半開窗讀推算序列，並提供最新推算小時、累積盤點、依排程推算，以及以 `ON CONFLICT DO NOTHING` 寫入、不覆寫任何既有列的區間補推；`TimeSeriesRepository` 的負載方法已刪除，asset、補推腳本與 runner 只呼叫 store。
 > 與本節方向的差異：營運資料檢視器已由候選 4 改為宣告式資料集定義，維持原樣，只改由 store 匯入口徑常數；預報實績 join 跨已發布預報與負載兩張表，留在 repository，以同一常數綁參數。runner 要含終點的序列，由 runner 在一處把終點換成下一小時再交給 store 的半開窗；`with_datetime_column` 仍供天氣與 Feast 匯出使用。
 > 本節指向的程式位置（`fetch_load_range`、`_valid_hourly_load`、`hourly_load.py`、`catalog.py`、`completeness.py`、各自切出的窄 Protocol 等）記錄檢視基準當時的狀態，僅供歷史參考；現行契約見 [data-contracts.md](../reference/data-contracts.md) §3 與 [ml-tasks.md](../reference/ml-tasks.md)。
+> **狀態（2026-11-23）**：「預報實績 join 留在 repository」一句記錄 #228 完成當時的狀態；[#313](https://github.com/shiroki9979/shiro-mlops/issues/313) 已把這個 join 移入 [forecast_track_record.py](../../src/shiro_mlops/data/forecast_track_record.py) 的 `ForecastTrackRecordStore`，`TimeSeriesRepository` 只交出這個 store。
 
 ### 現況與證據
 
