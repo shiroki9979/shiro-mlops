@@ -52,7 +52,7 @@ def test_regional_completeness_lists_only_absent_allowlisted_regions(
     """區域完整度只看北中南東 allowlist：列表逐列標出缺的區，狀態只看最新 slot。"""
     partial = datetime(2026, 9, 5, 17, 30)
     complete = partial - timedelta(minutes=10)
-    test_repo.upsert_regional_supply_demand_snapshots(
+    test_repo.regional_supply_demand_store.upsert(
         regional_supply_demand_snapshots(complete) + regional_supply_demand_snapshots(partial)[:2]
     )
 
@@ -127,8 +127,8 @@ def test_national_list_reports_the_ten_minute_hole_between_snapshots(
     """全台供需每個 slot 預期一筆；20 分鐘間隔必須揭露中間缺口。"""
     later = datetime(2026, 9, 5, 17, 30)
     earlier = later - timedelta(minutes=20)
-    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(earlier))
-    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot(later))
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot(earlier))
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot(later))
 
     page = client.get(
         "/data/power/supply-demand", params={"start": rfc3339(earlier), "end": rfc3339(later)}

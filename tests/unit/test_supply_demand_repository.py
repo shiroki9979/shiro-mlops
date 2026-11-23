@@ -24,9 +24,9 @@ def test_upsert_supply_demand_snapshot_insert_and_fetch(
 ) -> None:
     """成功快照應可依 observed_at 寫入並讀回 typed 欄位與 raw payload。"""
     snapshot = supply_demand_snapshot()
-    assert test_repo.upsert_supply_demand_snapshot(snapshot) == 1
+    assert test_repo.supply_demand_store.upsert(snapshot) == 1
 
-    fetched = test_repo.fetch_supply_demand_snapshot(snapshot.observed_at)
+    fetched = test_repo.supply_demand_store.fetch(snapshot.observed_at)
     assert fetched is not None
     assert fetched.observed_at == snapshot.observed_at
     assert fetched.curr_load_wan_kw == pytest.approx(3242.1)
@@ -43,16 +43,16 @@ def test_upsert_supply_demand_snapshot_is_idempotent_on_observed_at(
 ) -> None:
     """相同觀測 slot 重跑時應更新既有快照而非新增列。"""
     first = supply_demand_snapshot(datetime(2026, 9, 5, 17, 30))
-    test_repo.upsert_supply_demand_snapshot(first)
+    test_repo.supply_demand_store.upsert(first)
 
     with open(FIXTURES_DIR / "taipower_supply_demand_sample.json", encoding="utf-8") as f:
         payload = json.load(f)
     payload["records"][0]["curr_load"] = "3300.0"
     payload["records"][0]["curr_util_rate"] = "80"
     revised = parse_supply_demand_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
-    assert test_repo.upsert_supply_demand_snapshot(revised) == 1
+    assert test_repo.supply_demand_store.upsert(revised) == 1
 
-    fetched = test_repo.fetch_supply_demand_snapshot(datetime(2026, 9, 5, 17, 30))
+    fetched = test_repo.supply_demand_store.fetch(datetime(2026, 9, 5, 17, 30))
     assert fetched is not None
     assert fetched.curr_load_wan_kw == pytest.approx(3300.0)
     assert fetched.curr_util_rate_pct == pytest.approx(80.0)
@@ -69,7 +69,7 @@ def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
 ) -> None:
     """資料庫中的無效 raw_payload 應明確回報錯誤。"""
     snapshot = supply_demand_snapshot()
-    test_repo.upsert_supply_demand_snapshot(snapshot)
+    test_repo.supply_demand_store.upsert(snapshot)
 
     with test_repo.engine.begin() as conn:
         conn.exec_driver_sql(
@@ -78,7 +78,7 @@ def test_fetch_supply_demand_snapshot_rejects_invalid_raw_payload(
         )
 
     with pytest.raises(ValueError, match="raw_payload"):
-        test_repo.fetch_supply_demand_snapshot(snapshot.observed_at)
+        test_repo.supply_demand_store.fetch(snapshot.observed_at)
 
 
 def test_upsert_supply_demand_snapshot_rejects_corrupted_payload_without_writing(
@@ -109,7 +109,7 @@ def test_upsert_supply_demand_snapshot_rejects_invalid_snapshot_directly(
     snapshot = supply_demand_snapshot()
     object.__setattr__(snapshot, "curr_load_wan_kw", float("nan"))
     with pytest.raises(ValueError, match="curr_load_wan_kw"):
-        test_repo.upsert_supply_demand_snapshot(snapshot)
+        test_repo.supply_demand_store.upsert(snapshot)
 
 
 def test_standalone_taipower_supply_demand_repository_lifecycle(
@@ -150,7 +150,7 @@ def test_supply_demand_snapshot_stores_every_instant_as_aware_utc(
     test_repo: TimeSeriesRepository,
 ) -> None:
     """快照的所有應用程式寫入時刻皆存為帶 +00:00 的 UTC 字串。"""
-    test_repo.upsert_supply_demand_snapshot(supply_demand_snapshot())
+    test_repo.supply_demand_store.upsert(supply_demand_snapshot())
 
     with test_repo.engine.connect() as conn:
         stored = conn.exec_driver_sql(
