@@ -362,7 +362,11 @@ def _monitoring_schedule(
 
 
 def _runtime(context: AssetExecutionContext | ScheduleEvaluationContext) -> TaskRuntime:
-    return TaskRuntime(repository=getattr(context.resources, TIME_SERIES_REPO))
+    repository = getattr(context.resources, TIME_SERIES_REPO)
+    return TaskRuntime(
+        hourly_actual_load=repository.hourly_actual_load_store,
+        cwa_weather=repository.cwa_weather_store,
+    )
 
 
 def _schedule_readiness(

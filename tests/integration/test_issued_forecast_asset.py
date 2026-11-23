@@ -24,8 +24,13 @@ from shiro_mlops.pipelines.task_pipelines import (
 )
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import SavedModel, save_model
-from shiro_mlops.tasks.runner import TaskRuntime, train_task
-from tests.helpers import canonical_observation_batch, hourly_load_with_weather, write_derived_load
+from shiro_mlops.tasks.runner import train_task
+from tests.helpers import (
+    canonical_observation_batch,
+    hourly_load_with_weather,
+    task_runtime,
+    write_derived_load,
+)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 LOAD_ANCHOR = datetime(2026, 11, 20, 9, 0)
@@ -77,7 +82,7 @@ def _train_and_save(repo: TimeSeriesRepository, *, n_estimators: int) -> SavedMo
         ),
         policies=shipped.policies.model_copy(update={"min_training_hours": HOURS}),
     )
-    model = train_task(task, TaskRuntime(repository=repo), as_of=ISSUED_AT).model
+    model = train_task(task, task_runtime(repo), as_of=ISSUED_AT).model
     return save_model(settings.models_dir, DYNAMIC_HORIZON_FORECAST, model)
 
 

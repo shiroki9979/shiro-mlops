@@ -332,8 +332,12 @@ def _check_task_readiness(deployment: Deployment, task: TaskDefinition) -> list[
     names = TaskPipelineNames(task.task_id)
     accumulation, freshness = _readiness_check_names(task)
     ticks = (names.training_schedule, names.monitoring_schedule)
+    runtime = TaskRuntime(
+        hourly_actual_load=deployment.repository.hourly_actual_load_store,
+        cwa_weather=deployment.repository.cwa_weather_store,
+    )
     try:
-        readiness = check_training_readiness(task, TaskRuntime(repository=deployment.repository))
+        readiness = check_training_readiness(task, runtime)
     except Exception as error:  # 以失敗檢查回報原因，不中斷其餘檢查
         detail = f"Cannot read raw_taipower_load: {_summarize(error)}"
         return [

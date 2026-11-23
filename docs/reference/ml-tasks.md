@@ -100,6 +100,8 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 | `check_task_ready(task, model, runtime, *, as_of) -> Readiness` | 呼叫端須提供已載入的模型；負載起點、任務類型宣告的 `history_coverage` 與完整 168 小時天氣皆可用時 `ready`，並回報 `mode`；`OBSERVED` 任務只需 lookback 內有測站觀測，`mode` 固定 `normal` |
 | `predict_task(task, model, runtime, *, as_of, horizon_hours) -> PredictionOutcome` | 拋出 `MissingLoadHistoryError`、`StaleLoadAnchorError`、`InsufficientLoadHistoryError`、`WeatherUnavailableError`、`ObservedInputsIncompleteError`（皆為 `TaskUnavailableError`，API 對應 HTTP 503）；資料庫錯誤（`SQLAlchemyError`）原樣拋出，不得轉為空資料而偽裝成資料缺口（API 同樣對應 503）；結果含負載起點 `load_anchor`、`mode`、預測、逐時天氣與其來源，後三者逐列對應 |
 
+`TaskRuntime` 只持有 runner 讀取的兩個 store，即全台逐時實際負載（`hourly_actual_load`）與 CWA 天氣（`cwa_weather`），不持有 `TimeSeriesRepository`。Dagster 任務管線與已發布預報 asset、API 的 `ServedTasks`、smoke check 與 lab snapshot 都從 composition root（`src/shiro_mlops/data/repository.py` 的 `TimeSeriesRepository`）取出這兩個 store 來建構它；`ServedTasks` 只收 `TaskRuntime`。
+
 runner 經 `TaskRuntime.hourly_actual_load` 取得全台逐時實際負載 store（`src/shiro_mlops/data/hourly_actual_load_store.py` 的 `HourlyActualLoadStore`），目標序列、負載起點與累積摘要都只由它讀取，只含推算來源的列。store 的序列只接受台灣本地半開窗 `[start, end)`；訓練序列（至 `as_of`，含）與 serving 歷史（至負載起點，含）都包含終點所在的小時，由 runner 在單一處把終點換成該小時的下一小時。
 
 serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是否過舊，再只讀 `[anchor - lookback_hours, anchor]` 的負載歷史、取得天氣，交由[預測輸入關卡](#預測輸入關卡tasksprediction_inputspy)判定並裁切負載歷史後才交給任務類型。

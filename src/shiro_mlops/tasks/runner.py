@@ -27,7 +27,6 @@ from shiro_mlops.core.datetime_utils import with_datetime_column
 from shiro_mlops.data.cwa_weather_store import CWAWeatherStore
 from shiro_mlops.data.hourly_actual_load import ONE_HOUR, floor_to_hour, is_stale_load_anchor
 from shiro_mlops.data.hourly_actual_load_store import HourlyActualLoadStore, HourlyLoadObservation
-from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.data.weather_resolution import WeatherResolutionMode, resolve_weather
 from shiro_mlops.tasks.accumulation import TrainingLoadReadiness, check_training_load_readiness
 from shiro_mlops.tasks.definition import TaskDefinition
@@ -69,19 +68,14 @@ TARGET_COLUMNS = [DATETIME_COL, SUBJECT_COL, LOAD_MW_COL]
 
 @dataclass(frozen=True)
 class TaskRuntime:
-    """Process resources the runner reads task data through."""
+    """The only stores the runner reads task data through.
 
-    repository: TimeSeriesRepository
+    ``hourly_actual_load`` holds the hourly actual load every task targets;
+    ``cwa_weather`` holds the CWA observations and forecasts every task reads weather from.
+    """
 
-    @property
-    def hourly_actual_load(self) -> HourlyActualLoadStore:
-        """The store of the hourly actual load every task targets."""
-        return self.repository.hourly_actual_load_store
-
-    @property
-    def cwa_weather(self) -> CWAWeatherStore:
-        """The store of the CWA observations and forecasts every task reads weather from."""
-        return self.repository.cwa_weather_store
+    hourly_actual_load: HourlyActualLoadStore
+    cwa_weather: CWAWeatherStore
 
 
 class TaskNotReady(RuntimeError):  # noqa: N818 - name fixed by the #66 interface design
@@ -311,7 +305,7 @@ def predict_task(
 
 @dataclass(frozen=True)
 class _ServingRequest:
-    """One point-in-time prediction: the task, its store, the request time, and the horizon."""
+    """One point-in-time prediction: the task, its stores, the request time, and the horizon."""
 
     task: TaskDefinition
     runtime: TaskRuntime

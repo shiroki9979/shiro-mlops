@@ -29,13 +29,14 @@ from shiro_mlops.pipelines.assets import (
 from shiro_mlops.pipelines.task_pipelines import TaskPipelineNames, build_task_pipeline
 from shiro_mlops.pipelines.tracking import TrackedRun
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task, deployed_tasks
-from shiro_mlops.tasks.runner import TaskRuntime, load_training_data
+from shiro_mlops.tasks.runner import load_training_data
 from shiro_mlops.tasks.types.base import TrainingData
 from tests.helpers import (
     FixtureCWASource,
     canonical_observation_batch,
     insert_other_source_load_row,
     override_task_policies,
+    task_runtime,
     write_derived_load,
 )
 
@@ -49,7 +50,7 @@ def _training_data(
     """Read training data through the runner with a threshold the fixture satisfies."""
     override_task_policies(monkeypatch, min_training_hours=1)
     return load_training_data(
-        deployed_task(DYNAMIC_HORIZON_FORECAST), TaskRuntime(repository=repository), as_of=as_of
+        deployed_task(DYNAMIC_HORIZON_FORECAST), task_runtime(repository), as_of=as_of
     )
 
 
