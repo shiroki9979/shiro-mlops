@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { NonEmptyArray } from '@shiro-mlops/shared/query-view'
 import type { ForecastStep } from '@/schemas/published'
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
@@ -16,13 +17,11 @@ import { useMessages } from '@/i18n/messages'
 import { Download, FileSpreadsheet } from 'lucide-react'
 
 interface ForecastTableProps {
-  // Not empty once loading has finished: the page shows its own notice for a forecast without steps.
-  steps: ForecastStep[]
-  isLoading: boolean
-  issuedAt: string | null
+  steps: NonEmptyArray<ForecastStep>
+  issuedAt: string
 }
 
-export function ForecastTable({ steps, isLoading, issuedAt }: ForecastTableProps) {
+export function ForecastTable({ steps, issuedAt }: ForecastTableProps) {
   const [page, setPage] = useState(0)
   const m = useMessages()
   const locale = useLocale()
@@ -30,8 +29,6 @@ export function ForecastTable({ steps, isLoading, issuedAt }: ForecastTableProps
   const pageSize = 10
 
   const handleExportCSV = () => {
-    if (steps.length === 0 || issuedAt === null) return
-
     // Values stay as published: target hours keep their +08:00 offset, whatever the interface locale.
     const headers = ['Target Hour', 'Predicted Load (MW)']
     const rows = steps.map((step) => [step.target_hour, step.predicted_load_mw.toFixed(2)])
@@ -46,21 +43,6 @@ export function ForecastTable({ steps, isLoading, issuedAt }: ForecastTableProps
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-  }
-
-  if (isLoading) {
-    return (
-      <Card className="border-slate-800 bg-slate-900/60">
-        <CardHeader>
-          <CardTitle className="text-base font-semibold text-slate-200">
-            {tableText.loadingTitle}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="h-48 flex items-center justify-center text-xs text-slate-500">
-          {tableText.loading}
-        </CardContent>
-      </Card>
-    )
   }
 
   const totalPages = Math.ceil(steps.length / pageSize)
