@@ -122,6 +122,17 @@ describe('Forecast View /history track record', () => {
     expect(screen.queryByText(/^0(\.0+)?%?$/)).not.toBeInTheDocument()
   })
 
+  // The statistics window belongs to the exporter (data contract §6): a deployed page must keep
+  // reading the track record after the window grows past today's 30 days.
+  it('shows the metrics whatever the accumulated day count is', async () => {
+    serveTrackRecord({ ...TRACK_RECORD, accumulated_days: 45 })
+    const text = renderHistory()
+
+    const mapeCard = await screen.findByRole('group', { name: text.metrics.lead24Mape })
+    expect(within(mapeCard).getByText('4.87%')).toBeInTheDocument()
+    expect(screen.queryByText(text.loadError)).not.toBeInTheDocument()
+  })
+
   it.each([
     ['a 500 response', () => new HttpResponse(null, { status: 500 })],
     ['a 403 response', () => new HttpResponse(null, { status: 403 })],

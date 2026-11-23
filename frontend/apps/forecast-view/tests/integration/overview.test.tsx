@@ -257,6 +257,22 @@ describe('Overview page states', () => {
     expect(screen.queryByText(/預報時刻/)).not.toBeInTheDocument()
   })
 
+  // Steps without a forecast time contradict themselves (data contract §6.1): the exporter is
+  // broken, so the page must not pass the document off as "nothing issued yet".
+  it('shows the neutral error, not the empty state, when steps come without a forecast time', async () => {
+    servePublished({
+      issued_at: null,
+      steps: [{ target_hour: '2026-11-20T11:00:00+08:00', predicted_load_mw: 30000 }],
+    })
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+
+    renderOverview()
+
+    expect(await screen.findByText(dashboard.unavailable)).toBeInTheDocument()
+    expect(screen.queryByText(dashboard.empty)).not.toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
   // An issued forecast may cover fewer than 168 hours (data contract §6.1), down to none at all, or
   // none within the selected preset. Either way the read has finished: the page must settle, not spin.
   const stepless: Array<[string, () => { issued_at: string; steps: Step[] }]> = [

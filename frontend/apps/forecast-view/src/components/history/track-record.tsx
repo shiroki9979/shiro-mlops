@@ -45,7 +45,7 @@ function TrackRecord({ trackRecord }: { trackRecord: ForecastTrackRecord }) {
           <Lead24SeriesChart series={trackRecord.metrics.lead_24_series} />
         </>
       ) : (
-        // Fewer than 7 days accumulated: a neutral empty state, 0 days included.
+        // Accumulated days fall short: a neutral empty state, 0 days included.
         <p className="text-sm text-slate-300">{m.history.accumulatedDays(trackRecord.accumulated_days)}</p>
       )}
     </div>
