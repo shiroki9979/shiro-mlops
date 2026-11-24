@@ -1,7 +1,7 @@
 # Domain Docs
 
-- 建立日期：2026-08-25
-- 最後更新：2026-10-25
+> - Created: 2026-08-25
+> - Last Updated: 2026-10-25
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 

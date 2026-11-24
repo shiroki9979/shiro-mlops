@@ -1,7 +1,7 @@
 # Tech Debt
 
-- 建立日期：2026-11-16
-- 最後更新：2026-11-20
+> - Created: 2026-11-16
+> - Last Updated: 2026-11-20
 
 How this repo records, triages, and pays down tech debt. The registry is the GitHub issue tracker (see [issue-tracker.md](issue-tracker.md)); there is no separate Markdown list to drift out of date.
 

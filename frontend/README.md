@@ -1,7 +1,7 @@
 # shiro-mlops Frontend
 
-- 建立日期：2026-08-23
-- 最後更新：2026-11-24
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-24
 
 React 19 + TypeScript + Vite + TanStack 的 pnpm workspace，依 [ADR-0014](../docs/adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) 拆成兩個應用與一個共用套件：
 
