@@ -249,7 +249,7 @@ def _releases_every_six_hours(days: int, *, last_issue: pd.Timestamp) -> list:
 
 
 LAST_ISSUE = pd.Timestamp("2026-08-20 11:00")
-CUTOFF = LAST_ISSUE + pd.Timedelta(minutes=30)
+CUTOFF = pd.Timestamp("2026-08-20 11:30")
 
 
 @pytest.fixture
