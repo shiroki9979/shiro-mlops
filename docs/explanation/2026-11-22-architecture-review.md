@@ -1,19 +1,19 @@
-<!-- markdownlint-disable MD024 -->
 # 架構檢視：module 加深候選紀錄（2026-11-22）
 
-- 建立日期：2026-11-22
-- 最後更新：2026-11-23
-- 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 2 已由 [#160](https://github.com/shiroki9979/shiro-mlops/issues/160) 實作（2026-11-22）；候選 3 已由 [#228](https://github.com/shiroki9979/shiro-mlops/issues/228) 實作（2026-11-22）；候選 5 已由 [#230](https://github.com/shiroki9979/shiro-mlops/issues/230) 實作（2026-11-22）；候選 6 已由 [#231](https://github.com/shiroki9979/shiro-mlops/issues/231) 實作（2026-11-22）；候選 8 已由 [#233](https://github.com/shiroki9979/shiro-mlops/issues/233) 實作（2026-11-23）；其餘 3 個候選待評估，各自登記為技術債或併入既有 issue（見下表）；候選 1 揭露的預報錯誤另登記為 bug [#226](https://github.com/shiroki9979/shiro-mlops/issues/226)
-- 檢視基準：`45f4b8e9d004e5e316c96d79086b71a9dd0dbebd`
-- 前次檢視：[2026-09-27 架構檢視](2026-09-27-architecture-review.md)
+> - Created: 2026-11-22
+> - Last Updated: 2026-11-24
+> - Status: Open
+> - Related: [2026-09-27 架構檢視](2026-09-27-architecture-review.md)
+
+<!-- markdownlint-disable MD024 -->
 
 ## 範圍與結論
 
-本次沿 2026-09-01 以來的非 merge commits 追查變更熱點：
+本次以 `45f4b8e9d004e5e316c96d79086b71a9dd0dbebd` 為檢視基準，沿 2026-09-01 以來的非 merge commits 追查變更熱點：
 `repository.py`、`assets.py`、`api.py`、`runner.py` 分別出現在 36、29、19、17 個 commits，`service/data_explorer/` 合計 30 個。
 檢視分兩路：資料擷取、儲存與編排；ML 任務、serving 與預報發布。
 前次已處理或暫緩的項目（[#102](https://github.com/shiroki9979/shiro-mlops/issues/102)、[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)、[#104](https://github.com/shiroki9979/shiro-mlops/issues/104)）不重複列入。
+各候選的處理進度記在下表的「建議時機」欄。
 
 | 候選 | 建議強度 | 主要收益 | 建議時機 |
 | :--- | :--- | :--- | :--- |

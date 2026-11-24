@@ -116,6 +116,7 @@ DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
 DOC_METADATA_MIGRATED_SCOPE = (
     "docs/adr/",
     "docs/reference/markdown-metadata.md",
+    "docs/explanation/",
 )
 """Docs already in the metadata format, one directory (ending in /) or file per line."""
 COMMENT_KINDS_DIRS = ("src", "scripts")
