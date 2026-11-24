@@ -65,7 +65,13 @@ def test_safe_plan_is_saved_exported_and_summarised_without_applying(tmp_path: P
 
     assert result.returncode == 0, result.stderr
     assert calls == [
-        ["init", "-input=false", "-reconfigure", f"-backend-config={BACKEND_CONFIG}"],
+        [
+            "init",
+            "-input=false",
+            "-reconfigure",
+            "-lockfile=readonly",
+            f"-backend-config={BACKEND_CONFIG}",
+        ],
         ["plan", "-input=false", f"-out={plan_file}"],
         ["show", "-json", str(plan_file)],
     ]

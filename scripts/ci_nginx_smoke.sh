@@ -18,7 +18,7 @@ readonly HOST_PORT="$2"
 readonly GATEWAY_TIMEOUT_SECONDS=30
 readonly PROBE_TIMEOUT_SECONDS=2
 readonly PROBE_INTERVAL_SECONDS=1
-readonly STUB_IMAGE="python:3.11-alpine"
+readonly STUB_IMAGE="python:3.11.18-alpine@sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1"
 # Must match the upstream host in frontend/nginx.conf.
 readonly API_ALIAS="api"
 # Must match `listen` in frontend/nginx.conf.
