@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, SupportsFloat
 
 import pandas as pd
 
@@ -31,13 +31,13 @@ def optional_time(value: object) -> str | None:
     return None if taiwan is None else format_taiwan_time(taiwan)
 
 
-def to_float(value: object) -> float | None:
+def to_float(value: SupportsFloat | str | None) -> float | None:
     if value is None or pd.isna(value):
         return None
     return float(value)
 
 
-def to_mw(value: object) -> float | None:
+def to_mw(value: SupportsFloat | str | None) -> float | None:
     wan_kw = to_float(value)
     if wan_kw is None:
         return None

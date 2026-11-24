@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
@@ -61,7 +61,7 @@ MAX_LEAD_HOURS = MAX_HORIZON_HOURS
 ALERT_PROBABILITY = 0.5
 METRIC_NAMES = ("precision", "recall", "f1")
 NON_FEATURE_COLUMNS = frozenset({ANCHOR_COL, DATETIME_COL, LOAD_MW_COL, LABEL_COL})
-FIXED_LIGHTGBM_PARAMS = {**LIGHTGBM_BASE_PARAMS, "objective": "binary"}
+FIXED_LIGHTGBM_PARAMS: dict[str, Any] = {**LIGHTGBM_BASE_PARAMS, "objective": "binary"}
 
 
 class HighLoadThresholdParams(BaseModel):
@@ -119,7 +119,7 @@ class DirectClassification:
 
     name: ClassVar[str] = TASK_TYPE_NAME
     params_model: ClassVar[type[DirectClassificationParams]] = DirectClassificationParams
-    prediction_item: ClassVar[type[DirectClassificationPrediction]] = DirectClassificationPrediction
+    prediction_item: ClassVar[type[BaseModel]] = DirectClassificationPrediction
     health_model: ClassVar[type[DirectClassificationHealth]] = DirectClassificationHealth
 
     def requirements(self, params: DirectClassificationParams) -> InputRequirements:

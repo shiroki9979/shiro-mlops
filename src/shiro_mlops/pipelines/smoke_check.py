@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -72,7 +72,7 @@ class ExpectedSchedule:
     """
 
     job_name: str
-    cron_schedule: str
+    cron_schedule: str | Sequence[str]
     execution_timezone: str | None
     status_when_stopped: CheckStatus = field(default=CheckStatus.FAIL, compare=False, repr=False)
     turn_on_after: str | None = field(default=None, compare=False, repr=False)
@@ -200,7 +200,11 @@ def check_schedule_configuration(
     defs: Definitions, running: frozenset[str], tasks: Tasks | None = None
 ) -> list[CheckResult]:
     """Each expected schedule is registered with its job, cron, and timezone, and is running."""
-    registered = {schedule.name: schedule for schedule in defs.schedules or ()}
+    registered = {
+        schedule.name: schedule
+        for schedule in defs.schedules or ()
+        if isinstance(schedule, ScheduleDefinition)
+    }
     return [
         _check_schedule(name, expected, registered.get(name), running)
         for name, expected in expected_schedules(tasks).items()

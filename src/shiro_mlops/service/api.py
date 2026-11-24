@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache, reduce
-from typing import Annotated, Literal, Self, assert_never
+from typing import Annotated, Any, Literal, Self, assert_never
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, create_model
@@ -143,7 +143,7 @@ def _prediction_item(schema: _ItemSchema, name: str) -> type[BaseModel]:
     item = get_task_type(schema.task_type).prediction_item
     if not issubclass(item, WeatherEchoingItem):
         return item
-    weather_fields = {field: (float, ...) for field in schema.weather_fields}
+    weather_fields: dict[str, Any] = {field: (float, ...) for field in schema.weather_fields}
     return create_model(
         name,
         __base__=item,
@@ -163,7 +163,7 @@ class PredictionResponse(BaseModel):
     horizon_hours: int
     subject: str = Field(description="Prediction subject whose load is forecast")
     mode: ForecastMode = Field(description=FORECAST_MODE_DESCRIPTION)
-    predictions: list[PredictionItem]
+    predictions: list[PredictionItem]  # type: ignore[valid-type]  # 執行期才由任務設定建出的 model
 
 
 class TaskPredictionEnvelope(BaseModel):
@@ -179,13 +179,14 @@ class TaskPredictionEnvelope(BaseModel):
 def _task_prediction_response(task_id: str, schema: _ItemSchema) -> type[TaskPredictionEnvelope]:
     """Response model of one task, told apart from the others by its ``task_id`` constant."""
     name = "".join(part.title() for part in task_id.split("_"))
+    item = _prediction_item(schema, f"{name}PredictionItem")
     return create_model(
         f"{name}TaskPredictionResponse",
         __base__=TaskPredictionEnvelope,
         __doc__=f"Prediction of task {task_id}; items follow its task type and weather fields.",
         task_id=(Literal[task_id], ...),
         task_type=(Literal[schema.task_type], ...),
-        predictions=(list[_prediction_item(schema, f"{name}PredictionItem")], ...),
+        predictions=(list[item], ...),  # type: ignore[valid-type]  # 執行期才由任務設定建出的 model
     )
 
 
@@ -214,13 +215,13 @@ def health_check(served: Served) -> HealthResponse:
 
 
 @routes.get("/ready", response_model=ReadyResponse)
-def readiness_check(served: Served) -> ReadyResponse:
+def readiness_check(served: Served) -> ReadyResponse | JSONResponse:
     """Report whether a model and full normal/degraded weather horizon are available."""
     return _readiness(served, DYNAMIC_HORIZON_FORECAST)
 
 
 @routes.get("/tasks/{task_id}/ready", response_model=ReadyResponse)
-def task_readiness_check(task_id: str, served: Served) -> ReadyResponse:
+def task_readiness_check(task_id: str, served: Served) -> ReadyResponse | JSONResponse:
     """Report whether one task can serve a full-horizon prediction now."""
     return _readiness(served, _task_or_404(served, task_id).task_id)
 
@@ -284,7 +285,7 @@ def _task_or_404(served: ServedTasks, task_id: str) -> TaskDefinition:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
-def _readiness(served: ServedTasks, task_id: str) -> ReadyResponse:
+def _readiness(served: ServedTasks, task_id: str) -> ReadyResponse | JSONResponse:
     """A failed readiness check answers 503 like any other not-ready state, never 500."""
     match served.readiness(task_id):
         case Ready(mode=mode):

@@ -1,7 +1,7 @@
 # GitHub Rulesets
 
 - 建立日期：2026-11-22
-- 最後更新：2026-11-22
+- 最後更新：2026-11-24
 - 專案版本：`0.4.0`
 
 ---
@@ -39,7 +39,7 @@ GitHub Free 方案只在 public 儲存庫強制執行 rulesets；儲存庫依 [A
 
 | 檢查 | Workflow | 內容 |
 | :--- | :--- | :--- |
-| `lint-and-test` | `.github/workflows/ci.yml` | Ruff lint 與 format、儲存庫慣例檢查（PR 上另檢查每個 commit 的檔案大小與副檔名）、`tests/` 與 `lab/tests` 的 pytest |
+| `lint-and-test` | `.github/workflows/ci.yml` | Ruff lint 與 format、`src/` 的 mypy 型別檢查、儲存庫慣例檢查（PR 上另檢查每個 commit 的檔案大小與副檔名）、`tests/` 與 `lab/tests` 的 pytest |
 | `frontend` | `.github/workflows/ci.yml` | 前端 lint、測試、建置，以及預報檢視 bundle 檢查 |
 | `nginx` | `.github/workflows/ci.yml` | 建置 nginx 映像檔，smoke test 兩個前端應用與 API gateway |
 | `backend` | `.github/workflows/ci.yml` | 建置後端映像檔，smoke test API 資料狀態、API readiness 與 MLflow health |

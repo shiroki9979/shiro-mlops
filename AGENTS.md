@@ -52,6 +52,9 @@ uv run --package lab python -m lab.snapshot dynamic_horizon_forecast --as-of 202
 uv run ruff check .
 uv run ruff format --check .
 
+# Type check src/ (settings in pyproject.toml [tool.mypy])
+uv run mypy
+
 # Repository convention & Markdown checks (also run in CI)
 uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates comment-kinds blob-limits --base origin/dev
 npx markdownlint-cli2 "**/*.md"

@@ -5,6 +5,7 @@ Status judgement lives in `dataset_status` and gap finding in `gap_scan`.
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Mapping
 from datetime import datetime
 from functools import cached_property
@@ -89,8 +90,10 @@ class DatasetQuery:
                 if dataset.resolve_version is not None
                 else params
             )
-            query = ExplorerQuery.from_params(dataset, query_params, cursor_filters=cursor_filters)
-            return paginate_raw_list(query, self._fetch_rows, self._project_page)
+            explorer_query = ExplorerQuery.from_params(
+                dataset, query_params, cursor_filters=cursor_filters
+            )
+            return paginate_raw_list(explorer_query, self._fetch_rows, self._project_page)
         except SQLAlchemyError as exc:
             raise DatabaseUnavailableError(str(exc)) from exc
 
@@ -99,7 +102,7 @@ class DatasetQuery:
         dataset: Dataset,
         query: Mapping[str, str],
         *,
-        fields: list[str] | None,
+        fields: builtins.list[str] | None,
         bucket: Bucket,
         agg: Agg | None = None,
     ) -> SeriesResponse:
@@ -128,7 +131,7 @@ class DatasetQuery:
 
     def _fetch_rows(
         self, query: ExplorerQuery, cursor: dict[str, Any] | None, limit: int
-    ) -> list[Row]:
+    ) -> builtins.list[Row]:
         dataset = query.dataset
         clauses, params = self.db.time_window(dataset.time_column, query.window)
         filter_clauses, filter_params = dataset.clauses(self.db, query.filters)
@@ -142,8 +145,8 @@ class DatasetQuery:
         return self.db.fetch(sql, {**params, **filter_params, **cursor_params, "limit": limit})
 
     def _project_page(
-        self, query: ExplorerQuery, rows: list[Row]
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+        self, query: ExplorerQuery, rows: builtins.list[Row]
+    ) -> tuple[builtins.list[dict[str, Any]], builtins.list[str]]:
         scan = GapScan(self.db, query.dataset, query.filters)
         items = query.dataset.project(_WindowPage(scan, query.window), rows)
         return items, _list_gaps(scan, query)
