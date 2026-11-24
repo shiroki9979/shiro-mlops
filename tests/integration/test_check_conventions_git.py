@@ -52,6 +52,25 @@ def _doc(updated_on: str, body: str = "Body.") -> str:
     return f"# Guide\n\n- 最後更新：{updated_on}\n\n{body}\n"
 
 
+def _adr(status: str, updated_on: str = "2026-10-01", body: str = "Body.") -> str:
+    return (
+        "# ADR-0001: Title\n\n"
+        f"> - Created: 2026-10-01\n> - Last Updated: {updated_on}\n> - Status: {status}\n\n"
+        f"---\n\n## Context\n\n{body}\n"
+    )
+
+
+_LEGACY_ADR = (
+    "# ADR-0001: Title\n\n"
+    "- 建立日期：2026-10-01\n- 最後更新：2026-10-01\n- 狀態：已接受 (Accepted)\n\n"
+    "---\n\n## Context\n\nBody.\n"
+)
+
+_LONG_BODY = "\n\n".join(
+    f"Paragraph {number} explains one step of the guide." for number in range(8)
+)
+
+
 def _locations(violations) -> list[tuple[str, int]]:
     return [(violation.path, violation.line) for violation in violations]
 
@@ -83,13 +102,97 @@ def test_changed_doc_without_header_is_a_violation(repo: Path) -> None:
     assert _locations(violations) == [("docs/notes.md", 1)]
 
 
-def test_renamed_doc_must_update_its_header(repo: Path) -> None:
+def test_pure_rename_does_not_require_updating_the_header(repo: Path) -> None:
     base = _commit(repo, {"docs/old.md": _doc("2026-10-01")}, "2026-10-01")
     head = _commit(repo, {"docs/old.md": None, "docs/new.md": _doc("2026-10-01")}, "2026-10-25")
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
+
+
+def test_renamed_doc_with_a_body_change_must_update_its_header(repo: Path) -> None:
+    base = _commit(repo, {"docs/old.md": _doc("2026-10-01", _LONG_BODY)}, "2026-10-01")
+    head = _commit(
+        repo,
+        {"docs/old.md": None, "docs/new.md": _doc("2026-10-01", f"{_LONG_BODY}\n\nAdded.")},
+        "2026-10-25",
+    )
 
     violations = check_doc_dates(GitRange(repo, base, head))
 
     assert _locations(violations) == [("docs/new.md", 3)]
+
+
+def test_commit_that_only_changes_the_status_does_not_count(repo: Path) -> None:
+    base = _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-01")
+    head = _commit(repo, {"docs/adr/0001-title.md": _adr("Superseded")}, "2026-10-25")
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
+
+
+def test_converting_a_legacy_header_to_the_metadata_block_does_not_count(repo: Path) -> None:
+    base = _commit(repo, {"docs/adr/0001-title.md": _LEGACY_ADR}, "2026-10-01")
+    head = _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-25")
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
+
+
+@pytest.mark.parametrize(
+    ("updated_on", "expected"),
+    [("2026-10-23", []), ("2026-10-21", [("docs/adr/0001-title.md", 4)])],
+)
+def test_body_change_sets_the_date_when_a_later_commit_only_changes_metadata(
+    repo: Path, updated_on: str, expected: list[tuple[str, int]]
+) -> None:
+    path = "docs/adr/0001-title.md"
+    base = _commit(repo, {path: _adr("Accepted")}, "2026-10-01")
+    _commit(repo, {path: _adr("Accepted", updated_on, "Revised.")}, "2026-10-22")
+    head = _commit(repo, {path: _adr("Superseded", updated_on, "Revised.")}, "2026-10-25")
+
+    violations = check_doc_dates(GitRange(repo, base, head))
+
+    assert _locations(violations) == expected
+
+
+@pytest.mark.parametrize(
+    ("added_on", "expected"),
+    [("2026-10-01", []), ("2026-10-25", [("docs/adr/0002-copy.md", 3)])],
+)
+def test_added_doc_must_not_be_created_before_the_commit_that_adds_it(
+    repo: Path, added_on: str, expected: list[tuple[str, int]]
+) -> None:
+    """A doc copied from an older one as a template keeps that doc's created date."""
+    base = _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-01")
+    head = _commit(
+        repo, {"docs/adr/0002-copy.md": _adr("Proposed", updated_on="2026-10-25")}, added_on
+    )
+
+    violations = check_doc_dates(GitRange(repo, base, head))
+
+    assert _locations(violations) == expected
+
+
+def test_created_date_is_checked_against_the_commit_that_adds_the_doc(repo: Path) -> None:
+    path = "docs/adr/0002-new.md"
+    base = _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-01")
+    _commit(repo, {path: _adr("Proposed")}, "2026-10-01")
+    head = _commit(repo, {path: _adr("Accepted", "2026-10-25", "Revised.")}, "2026-10-25")
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
+
+
+def test_added_doc_renamed_later_in_the_range_keeps_the_date_it_was_added(repo: Path) -> None:
+    base = _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-01")
+    _commit(repo, {"docs/adr/0002-draft.md": _adr("Proposed", body=_LONG_BODY)}, "2026-10-01")
+    head = _commit(
+        repo,
+        {
+            "docs/adr/0002-draft.md": None,
+            "docs/adr/0002-final.md": _adr("Proposed", body=_LONG_BODY),
+        },
+        "2026-10-25",
+    )
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
 
 
 def test_deleted_doc_is_not_checked(repo: Path) -> None:

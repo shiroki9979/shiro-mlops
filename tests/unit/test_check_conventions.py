@@ -219,6 +219,13 @@ def test_lab_markdown_without_header_is_excluded_from_doc_dates() -> None:
     assert violation is None
 
 
+@pytest.mark.parametrize(
+    "path", ["data/raw/notes.md", "frontend/node_modules/pkg/README.md", ".venv/lib/README.md"]
+)
+def test_markdown_that_markdownlint_ignores_is_excluded_from_doc_dates(path: str) -> None:
+    assert doc_date_violation(path, "# Notes\n", changed_on=date(2026, 11, 8)) is None
+
+
 def test_debt_marker_without_issue_reference_is_flagged() -> None:
     source = "def load():\n    # TODO: retry on timeout\n    return None\n"
 
