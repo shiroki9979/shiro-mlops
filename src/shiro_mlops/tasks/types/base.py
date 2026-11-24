@@ -10,7 +10,7 @@ judges the frames, so every ``PredictionData`` a task type receives has passed i
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -141,6 +141,30 @@ class HealthAssessment:
     reason: str
 
 
+class ModelRecipeMismatchError(ValueError):
+    """A saved model was trained with other inputs than the task definition now declares.
+
+    The runner reads history and weather for the declared recipe while the model builds its
+    own features, so serving it anyway predicts from missing lags without any error.
+    """
+
+
+def require_trained_recipe(
+    directory: Path, *, trained: Mapping[str, object], declared: Mapping[str, object]
+) -> None:
+    """Refuse a model whose input recipe differs from the declared one, naming each difference."""
+    differences = [
+        f"{name} is {trained.get(name)!r} in the model but {value!r} in the task definition"
+        for name, value in declared.items()
+        if trained.get(name) != value
+    ]
+    if differences:
+        raise ModelRecipeMismatchError(
+            f"Model in {directory} was trained with another input recipe: "
+            f"{'; '.join(differences)}; retrain the task before serving it"
+        )
+
+
 class TaskType(Protocol[P]):
     """How one family of tasks builds labels, trains, evaluates, predicts, and persists."""
 
@@ -156,7 +180,10 @@ class TaskType(Protocol[P]):
 
     def train(self, params: P, data: TrainingData) -> Trained: ...
 
-    def load(self, directory: Path) -> TaskModel: ...
+    def load(self, directory: Path, params: P, weather_fields: Sequence[str]) -> TaskModel:
+        """Read the saved model, refusing it when ``params`` and ``weather_fields`` declare
+        other inputs than it was trained with (``ModelRecipeMismatchError``)."""
+        ...
 
     def assess_health(
         self, thresholds: BaseModel, metrics: Mapping[str, float]

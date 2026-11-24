@@ -1,7 +1,7 @@
 # ML 任務設定與任務類型介面
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-23
+- 最後更新：2026-11-24
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 5 節拆出。
@@ -52,7 +52,7 @@
 - `requirements(params) -> InputRequirements(weather, lookback_hours, history_coverage)`：預測時使用預報（`FORECAST`）或觀測（`OBSERVED`）天氣，以及 runner 有界讀取歷史所需的小時數。`history_coverage`（必填、無預設值，型別為 `HistoryCoverage(window_hours, min_valid_hours) | None`；漏寫時建構 `InputRequirements` 即拋出 `TypeError`，不會靜默跳過檢查）要求錨點往前 `window_hours`（`(anchor - window_hours, anchor]`）內至少 `min_valid_hours` 個有實際負載的小時（`HistoryCoverage.complete(window_hours)` 表示每小時都要有）；不足時預測輸入關卡拋出 `InsufficientLoadHistoryError`，`/tasks/{task_id}/ready` 與 predict 皆回 503，任務類型不會收到歷史不足的 `PredictionData`（見下方預測輸入關卡）。明寫 `history_coverage=None` 表示刻意不檢查負載 lookback 完整性，任務類型須在旁以註解說明原因（例如容許缺口、自行跳過受影響的時間窗）。
 - `train(params, TrainingData) -> Trained(model, metrics)`：負責特徵、標籤、fit 與評估。`TrainingData` 含 `load`（`datetime`、`subject`、`load_mw`）、`weather`（`datetime` 與 `weather.fields`，一律為觀測天氣）與 `validation_start`；target 時間 `>= validation_start` 者為驗證列，任務類型不得自行切分。
 - `health_model`、`assess_health(thresholds, metrics) -> HealthAssessment(status, reason)`：健康判定規則屬於任務類型，門檻來自任務設定 `[health]`；`status` 為 `HealthStatus.HEALTHY` 或 `WARNING`，`reason` 指出決定判定的指標與門檻。缺少判定所需指標時必須回報 `WARNING`，不得視為健康。
-- `load(directory) -> TaskModel`；`TaskModel.predict(PredictionData) -> DataFrame`、`TaskModel.save(directory)`。`PredictionData` 含 `anchor`、`load_history`、`weather`、`horizon_hours`，一律經預測輸入關卡交付：負載 lookback 完整性（依 `history_coverage`）與 `FORECAST` 任務目標時段的天氣欄位完整由關卡保證；負載起點新鮮則是 serving 的 runner 依請求時刻挑選起點時的規則，不在關卡內（滾動起點回測的起點由研究指定）。任務類型不得以常數補值；`load_history` 只含 `(anchor - lookback_hours, anchor]` 的列。`FORECAST` 任務的 `weather` 為錨點之後的預報（或降級來源）；`OBSERVED` 任務的 `weather` 為 `[anchor - lookback_hours, anchor]` 內的測站觀測，`horizon_hours` 表示評分最近幾個結束小時（[REST API §4](rest-api.md#4-通用任務推論)），`None` 表示評分 `load_history` 內所有完整時間窗。
+- `load(directory, params, weather_fields) -> TaskModel`：讀取模型，並比對模型訓練時的輸入配方與任務設定目前宣告的 `[params]`、`weather.fields`；不一致即拋 `ModelRecipeMismatchError`（`ValueError` 的子類別），訊息逐一列出不同的項目並要求重新訓練。比對的項目只限決定輸入的部分：`recursive_regression` 為 `lags`、`rolling_windows`、`day_off`；`direct_classification` 為 `threshold`、`lags`、`rolling_windows`、`day_off`；`unsupervised_reconstruction` 為 `window_hours`；三者都比對氣象欄位。清單順序與模型超參數（`[params.model]`）不比對；`unsupervised_reconstruction` 的 `threshold_quantile` 也不比對，其門檻已在訓練時固定，新的分位數在下一次訓練生效。runner 依任務設定讀取歷史與天氣、模型卻用自己的配方建特徵，兩者不一致時不會有錯誤而是預測失真（例如任務設定拿掉 lag 168 後只讀 48 小時歷史，模型的 `lag_168` 全為缺值），因此改由載入時拒絕。`TaskModel.predict(PredictionData) -> DataFrame`、`TaskModel.save(directory)`。`PredictionData` 含 `anchor`、`load_history`、`weather`、`horizon_hours`，一律經預測輸入關卡交付：負載 lookback 完整性（依 `history_coverage`）與 `FORECAST` 任務目標時段的天氣欄位完整由關卡保證；負載起點新鮮則是 serving 的 runner 依請求時刻挑選起點時的規則，不在關卡內（滾動起點回測的起點由研究指定）。任務類型不得以常數補值；`load_history` 只含 `(anchor - lookback_hours, anchor]` 的列。`FORECAST` 任務的 `weather` 為錨點之後的預報（或降級來源）；`OBSERVED` 任務的 `weather` 為 `[anchor - lookback_hours, anchor]` 內的測站觀測，`horizon_hours` 表示評分最近幾個結束小時（[REST API §4](rest-api.md#4-通用任務推論)），`None` 表示評分 `load_history` 內所有完整時間窗。
 
 已註冊任務類型：
 

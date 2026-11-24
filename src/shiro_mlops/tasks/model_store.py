@@ -256,7 +256,7 @@ def load_model_with_sha256(root: Path, task: TaskDefinition) -> LoadedModel | No
     with _installed_directory(root, task.task_id) as directory:
         if directory is None:
             return None
-        model = get_task_type(task.task_type).load(directory)
+        model = get_task_type(task.task_type).load(directory, task.params, task.weather.fields)
         return LoadedModel(model=model, sha256=model_directory_sha256(directory))
 
 

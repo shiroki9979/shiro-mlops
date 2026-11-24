@@ -30,6 +30,7 @@ from shiro_mlops.tasks.runner import (
     TaskUnavailableError,
     predict_task,
 )
+from shiro_mlops.tasks.types.base import ModelRecipeMismatchError
 from shiro_mlops.tasks.types.recursive_regression import PREDICTION_COL
 
 # SYNC(src/shiro_mlops/pipelines/smoke_check.py, docs/reference/dagster-schedules.md): 排程名稱由
@@ -52,7 +53,8 @@ class AlreadyIssued:
 
 @dataclass(frozen=True)
 class ModelUnavailable:
-    """The model directory held no model to issue with; ``reason`` is the schedule's skip reason."""
+    """No model can issue: none is installed (``reason`` is the schedule's skip reason), or the
+    installed one was trained with another input recipe than the task definition declares."""
 
     reason: str
 
@@ -117,7 +119,10 @@ def _load_model(instance: DagsterInstance, models_root: Path) -> LoadedModel | M
     """
     decision = issuing_decision(instance, models_root=models_root)
     if decision.runs:
-        loaded = load_model_with_sha256(models_root, deployed_task(ISSUED_FORECAST_TASK))
+        try:
+            loaded = load_model_with_sha256(models_root, deployed_task(ISSUED_FORECAST_TASK))
+        except ModelRecipeMismatchError as error:
+            return ModelUnavailable(str(error))
         if loaded is not None:
             return loaded
         decision = issuing_decision(instance, models_root=models_root)

@@ -5,6 +5,7 @@ Here: which runs issue, and how each issuing outcome becomes a materialization o
 """
 
 import shutil
+from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -26,7 +27,7 @@ from shiro_mlops.pipelines.task_pipelines import (
     MODEL_SHA256_METADATA,
     TaskPipelineNames,
 )
-from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST
+from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_tasks
 from shiro_mlops.tasks.model_store import SavedModel, model_directory
 from tests.helpers import (
     canonical_observation_batch,
@@ -276,4 +277,28 @@ def test_model_directory_removed_after_the_tick_fails_with_the_stage_reason(
     assert "Training record and model directory disagree" in failure.description
     assert f"Run {NAMES.training_job} once" in failure.description
     assert failure.metadata["issued_at"] == MetadataValue.text(ISSUED_AT.isoformat())
+    assert repo.issued_forecast_store.fetch(ISSUED_AT) is None
+
+
+def test_a_model_trained_with_another_feature_recipe_issues_nothing(
+    repo: TimeSeriesRepository,
+    dagster_instance,
+    trained: SavedModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An issued forecast is kept for good; one made with mismatched inputs could never be fixed."""
+    tasks = deployed_tasks()
+    shipped = tasks[DYNAMIC_HORIZON_FORECAST]
+    monkeypatch.setitem(
+        tasks,
+        DYNAMIC_HORIZON_FORECAST,
+        replace(shipped, params=shipped.params.model_copy(update={"lags": [1, 2, 24, 48]})),
+    )
+
+    result = _issue(repo, dagster_instance)
+
+    assert not result.success
+    description = _failure_description(result)
+    assert "lags" in description
+    assert "retrain" in description
     assert repo.issued_forecast_store.fetch(ISSUED_AT) is None

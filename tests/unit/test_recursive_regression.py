@@ -1,5 +1,6 @@
 """Public-interface tests for the recursive_regression task type, fed with in-memory frames."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from shiro_mlops.features.transformers import (
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthStatus,
+    ModelRecipeMismatchError,
     PredictionData,
     TrainingData,
     WeatherInput,
@@ -37,6 +39,7 @@ PARAMS = RecursiveRegressionParams.model_validate(
     }
 )
 task_type = get_task_type("recursive_regression")
+WEATHER_FIELDS = ("temperature", "relative_humidity")
 
 
 def _training_data(validation_start: pd.Timestamp | None = None) -> TrainingData:
@@ -144,7 +147,7 @@ def test_saved_model_reloads_with_identical_predictions(trained, tmp_path: Path)
     data = _prediction_data(_training_data().load)
 
     trained.model.save(tmp_path / "model")
-    reloaded = task_type.load(tmp_path / "model")
+    reloaded = task_type.load(tmp_path / "model", PARAMS, WEATHER_FIELDS)
 
     pd.testing.assert_frame_equal(reloaded.predict(data), trained.model.predict(data))
     assert sorted(path.name for path in (tmp_path / "model").iterdir()) == [
@@ -257,7 +260,7 @@ def test_day_off_recipe_survives_save_and_load(tmp_path: Path) -> None:
     )
 
     trained.model.save(tmp_path)
-    reloaded = task_type.load(tmp_path)
+    reloaded = task_type.load(tmp_path, DAY_OFF_PARAMS, WEATHER_FIELDS)
 
     pd.testing.assert_frame_equal(reloaded.predict(data), trained.model.predict(data))
 
@@ -378,3 +381,65 @@ def test_empty_weather_yields_an_empty_forecast(trained) -> None:
 
     assert list(forecast.columns) == ["datetime", "predicted_load_mw"]
     assert forecast.empty
+
+
+# --- a saved model serves only the recipe it was trained with ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("changed", "named"),
+    [
+        ({"lags": [1, 2, 24, 48]}, "lags"),
+        ({"rolling_windows": [6]}, "rolling_windows"),
+        ({"day_off": True}, "day_off"),
+    ],
+)
+def test_a_model_trained_with_another_feature_recipe_is_refused_on_load(
+    trained, tmp_path: Path, changed: dict, named: str
+) -> None:
+    """Lookback follows the task definition and features the model: dropping lag 168 from the
+    definition left the model reading a 168-hour lag from a 48-hour history."""
+    trained.model.save(tmp_path)
+
+    with pytest.raises(ModelRecipeMismatchError, match=f"{named}.*retrain"):
+        task_type.load(tmp_path, PARAMS.model_copy(update=changed), WEATHER_FIELDS)
+
+
+def test_a_model_trained_on_other_weather_fields_is_refused_on_load(
+    trained, tmp_path: Path
+) -> None:
+    trained.model.save(tmp_path)
+
+    with pytest.raises(ModelRecipeMismatchError, match="weather_fields"):
+        task_type.load(tmp_path, PARAMS, ("temperature",))
+
+
+def test_hyperparameters_and_list_order_do_not_stop_a_model_serving(
+    trained, tmp_path: Path
+) -> None:
+    """Only what decides the model's inputs is compared; the order of a list decides nothing."""
+    trained.model.save(tmp_path)
+    declared = PARAMS.model_copy(
+        update={
+            "lags": list(reversed(PARAMS.lags)),
+            "model": PARAMS.model.model_copy(update={"n_estimators": 999}),
+        }
+    )
+
+    reloaded = task_type.load(tmp_path, declared, tuple(reversed(WEATHER_FIELDS)))
+
+    assert reloaded.lags == list(PARAMS.lags)
+
+
+def test_a_model_saved_before_day_off_existed_serves_a_definition_without_it(
+    trained, tmp_path: Path
+) -> None:
+    trained.model.save(tmp_path)
+    metadata_file = tmp_path / "metadata.json"
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    del metadata["day_off"]
+    metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+
+    assert task_type.load(tmp_path, PARAMS, WEATHER_FIELDS).day_off is False
+    with pytest.raises(ModelRecipeMismatchError, match="day_off"):
+        task_type.load(tmp_path, PARAMS.model_copy(update={"day_off": True}), WEATHER_FIELDS)

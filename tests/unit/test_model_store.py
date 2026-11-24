@@ -149,14 +149,20 @@ def test_reader_waits_for_model_replacement(root: Path, monkeypatch: pytest.Monk
 
     def read_model() -> _RecordingModel | None:
         reading.set()
-        return load_model(root, SimpleNamespace(task_id="sample_task", task_type="recording"))
+        task = SimpleNamespace(
+            task_id="sample_task",
+            task_type="recording",
+            params=None,
+            weather=SimpleNamespace(fields=()),
+        )
+        return load_model(root, task)
 
     _stub_renameat2(monkeypatch, pause_then_report_unsupported)
     monkeypatch.setattr(
         model_store,
         "get_task_type",
         lambda _name: SimpleNamespace(
-            load=lambda directory: _RecordingModel(
+            load=lambda directory, _params, _weather_fields: _RecordingModel(
                 (directory / "version.txt").read_text(encoding="utf-8")
             )
         ),
@@ -253,7 +259,7 @@ def _hash_of_saved(tmp_path: Path, version: str) -> str:
 def _stub_recording_task_type(
     monkeypatch: pytest.MonkeyPatch, on_load: Callable[[], None] = lambda: None
 ) -> None:
-    def load(directory: Path) -> _RecordingModel:
+    def load(directory: Path, _params: object, _weather_fields: object) -> _RecordingModel:
         model = _RecordingModel((directory / "version.txt").read_text(encoding="utf-8"))
         on_load()
         return model
@@ -261,7 +267,9 @@ def _stub_recording_task_type(
     monkeypatch.setattr(model_store, "get_task_type", lambda _name: SimpleNamespace(load=load))
 
 
-_RECORDING_TASK = SimpleNamespace(task_id="sample_task", task_type="recording")
+_RECORDING_TASK = SimpleNamespace(
+    task_id="sample_task", task_type="recording", params=None, weather=SimpleNamespace(fields=())
+)
 
 
 def test_saving_reports_the_hash_of_the_installed_model(root: Path, tmp_path: Path) -> None:

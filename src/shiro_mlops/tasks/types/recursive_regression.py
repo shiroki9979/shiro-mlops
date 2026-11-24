@@ -6,7 +6,7 @@ persisted as LightGBM's native text format plus JSON metadata (ADR-0010).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -28,6 +28,7 @@ from shiro_mlops.tasks.types.base import (
     TrainingData,
     WeatherEchoingItem,
     WeatherInput,
+    require_trained_recipe,
     split_at_validation,
 )
 from shiro_mlops.tasks.types.lightgbm_common import (
@@ -105,8 +106,18 @@ class RecursiveRegression:
         model = RecursiveRegressionModel.fit(params, training_rows, data.weather_columns)
         return Trained(model=model, metrics=model.evaluate(validation_rows))
 
-    def load(self, directory: Path) -> RecursiveRegressionModel:
-        return RecursiveRegressionModel.load(directory)
+    def load(
+        self, directory: Path, params: RecursiveRegressionParams, weather_fields: Sequence[str]
+    ) -> RecursiveRegressionModel:
+        model = RecursiveRegressionModel.load(directory)
+        require_trained_recipe(
+            directory,
+            trained=_recipe(
+                model.lags, model.rolling_windows, model.day_off, model.weather_columns
+            ),
+            declared=_recipe(params.lags, params.rolling_windows, params.day_off, weather_fields),
+        )
+        return model
 
     def assess_health(
         self, thresholds: RecursiveRegressionHealth, metrics: Mapping[str, float]
@@ -218,6 +229,18 @@ class RecursiveRegressionModel:
             # 放假日特徵加入前保存的模型沒有此鍵，即未使用該特徵。
             day_off=metadata.get("day_off", False),
         )
+
+
+def _recipe(
+    lags: Sequence[int], rolling_windows: Sequence[int], day_off: bool, weather: Sequence[str]
+) -> dict[str, object]:
+    """What decides a model's inputs; list order and hyperparameters decide nothing."""
+    return {
+        "lags": sorted(lags),
+        "rolling_windows": sorted(rolling_windows),
+        "day_off": day_off,
+        "weather_fields": sorted(weather),
+    }
 
 
 def training_features(params: RecursiveRegressionParams, data: TrainingData) -> pd.DataFrame:

@@ -12,6 +12,7 @@ from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthStatus,
     HistoryCoverage,
+    ModelRecipeMismatchError,
     PredictionData,
     TrainingData,
     WeatherInput,
@@ -37,6 +38,7 @@ PARAMS = DirectClassificationParams.model_validate(
     }
 )
 task_type = get_task_type("direct_classification")
+WEATHER_FIELDS = ("temperature", "relative_humidity")
 HEALTH = {"min_precision": 0.6, "min_recall": 0.5, "min_f1": 0.55}
 
 
@@ -196,7 +198,7 @@ def test_saved_model_reloads_with_identical_predictions(trained, tmp_path: Path)
     data = _prediction_data(_training_data().load)
 
     trained.model.save(tmp_path / "model")
-    reloaded = task_type.load(tmp_path / "model")
+    reloaded = task_type.load(tmp_path / "model", PARAMS, WEATHER_FIELDS)
 
     pd.testing.assert_frame_equal(reloaded.predict(data), trained.model.predict(data))
     assert sorted(path.name for path in (tmp_path / "model").iterdir()) == [
@@ -215,7 +217,7 @@ def test_loading_another_task_types_model_fails(tmp_path: Path) -> None:
     recursive.train(params, TrainingData(load, weather, split)).model.save(tmp_path / "m")
 
     with pytest.raises(ValueError, match="recursive_regression"):
-        task_type.load(tmp_path / "m")
+        task_type.load(tmp_path / "m", PARAMS, WEATHER_FIELDS)
 
 
 def test_validation_split_after_all_rows_reports_no_metrics_so_health_warns() -> None:
@@ -300,3 +302,46 @@ def test_day_off_recipe_describes_each_target_hour_by_its_own_date() -> None:
     assert by_target["10-09 00"] == 1
     assert by_target["10-09 23"] == 1
     assert "is_day_off" not in training_rows(PARAMS, _training_data()).columns
+
+
+@pytest.mark.parametrize(
+    ("changed", "named"),
+    [
+        ({"lags": [1]}, "lags"),
+        ({"rolling_windows": [6, 24, 48]}, "rolling_windows"),
+        ({"day_off": True}, "day_off"),
+        ({"threshold": {"window_days": 5, "quantile": 0.9}}, "threshold"),
+        ({"threshold": {"window_days": WINDOW_DAYS, "quantile": 0.95}}, "threshold"),
+    ],
+)
+def test_a_model_trained_with_another_recipe_is_refused_on_load(
+    trained, tmp_path: Path, changed: dict, named: str
+) -> None:
+    """A shorter threshold window in the definition used to reach the model as a 500."""
+    trained.model.save(tmp_path)
+    declared = DirectClassificationParams.model_validate({**PARAMS.model_dump(), **changed})
+
+    with pytest.raises(ModelRecipeMismatchError, match=f"{named}.*retrain"):
+        task_type.load(tmp_path, declared, WEATHER_FIELDS)
+
+
+def test_hyperparameters_and_field_order_do_not_stop_a_model_serving(
+    trained, tmp_path: Path
+) -> None:
+    trained.model.save(tmp_path)
+    declared = PARAMS.model_copy(
+        update={"model": PARAMS.model.model_copy(update={"num_leaves": 63})}
+    )
+
+    reloaded = task_type.load(tmp_path, declared, tuple(reversed(WEATHER_FIELDS)))
+
+    assert reloaded.params == PARAMS
+
+
+def test_a_model_trained_on_other_weather_fields_is_refused_on_load(
+    trained, tmp_path: Path
+) -> None:
+    trained.model.save(tmp_path)
+
+    with pytest.raises(ModelRecipeMismatchError, match="weather_fields"):
+        task_type.load(tmp_path, PARAMS, ("relative_humidity",))

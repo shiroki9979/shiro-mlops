@@ -9,7 +9,7 @@ LightGBM's native text format plus JSON metadata (ADR-0010).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -34,6 +34,7 @@ from shiro_mlops.tasks.types.base import (
     TrainingData,
     WeatherEchoingItem,
     WeatherInput,
+    require_trained_recipe,
     split_at_validation,
 )
 from shiro_mlops.tasks.types.lightgbm_common import (
@@ -136,8 +137,16 @@ class DirectClassification:
         model = DirectClassificationModel.fit(params, fitting_rows, data.weather_columns)
         return Trained(model=model, metrics=model.evaluate(validation_rows))
 
-    def load(self, directory: Path) -> DirectClassificationModel:
-        return DirectClassificationModel.load(directory)
+    def load(
+        self, directory: Path, params: DirectClassificationParams, weather_fields: Sequence[str]
+    ) -> DirectClassificationModel:
+        model = DirectClassificationModel.load(directory)
+        require_trained_recipe(
+            directory,
+            trained=_recipe(model.params, model.weather_columns),
+            declared=_recipe(params, weather_fields),
+        )
+        return model
 
     def assess_health(
         self, thresholds: DirectClassificationHealth, metrics: Mapping[str, float]
@@ -259,6 +268,17 @@ class DirectClassificationModel:
             feature_names=metadata["feature_names"],
             weather_columns=metadata["weather_columns"],
         )
+
+
+def _recipe(params: DirectClassificationParams, weather: Sequence[str]) -> dict[str, object]:
+    """What decides a model's inputs and labels; list order and hyperparameters decide nothing."""
+    return {
+        "threshold": params.threshold.model_dump(),
+        "lags": sorted(params.lags),
+        "rolling_windows": sorted(params.rolling_windows),
+        "day_off": params.day_off,
+        "weather_fields": sorted(weather),
+    }
 
 
 def training_rows(params: DirectClassificationParams, data: TrainingData) -> pd.DataFrame:
