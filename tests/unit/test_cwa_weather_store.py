@@ -4,13 +4,14 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.data.cwa_client import CWALocation, CWAObservationBatch
 from shiro_mlops.data.cwa_weather_store import FORECAST_ROW_COLUMNS, CWAWeatherStore
-from tests.helpers import canonical_observation_batch
+from tests.helpers import canonical_observation_batch, forecast_release, township_forecast
 
 TAIPEI = CWALocation("Taipei", "466920", "63000000")
 
@@ -225,3 +226,128 @@ def test_fetch_empty_results_schema(store: CWAWeatherStore):
     assert "temperature" in weather_df.columns
     assert "relative_humidity" in weather_df.columns
     assert pd.api.types.is_datetime64_any_dtype(weather_df["time"])
+
+
+def _releases_every_six_hours(days: int, *, last_issue: pd.Timestamp) -> list:
+    """Three-day releases for one geocode, each holding the next twelve hours."""
+    issues = pd.date_range(end=last_issue, periods=days * 4, freq="6h")
+    return [
+        forecast_release(
+            issued.to_pydatetime(),
+            tuple(
+                replace(
+                    township_forecast(
+                        (issued + pd.Timedelta(hours=offset)).to_pydatetime(), 20.0 + offset
+                    ),
+                    geocode="63000050",
+                )
+                for offset in range(1, 13)
+            ),
+        )
+        for issued in issues
+    ]
+
+
+LAST_ISSUE = pd.Timestamp("2026-08-20 11:00")
+CUTOFF = pd.Timestamp("2026-08-20 11:30")
+
+
+@pytest.fixture
+def week_of_releases(store: CWAWeatherStore) -> CWAWeatherStore:
+    store.upsert_cwa_forecast_releases(_releases_every_six_hours(7, last_issue=LAST_ISSUE))
+    return store
+
+
+def test_a_lower_issue_bound_keeps_the_newest_release_it_admits(
+    week_of_releases: CWAWeatherStore,
+) -> None:
+    rows = week_of_releases.fetch_cwa_forecast_rows(
+        geocode="63000050",
+        issued_before=CUTOFF,
+        source_updated_before=CUTOFF,
+        issued_after=CUTOFF - pd.Timedelta(hours=7),
+        valid_start=LAST_ISSUE + pd.Timedelta(hours=1),
+        valid_end=LAST_ISSUE + pd.Timedelta(hours=3),
+    )
+
+    assert set(rows["issued_at"]) == {LAST_ISSUE}
+    assert rows["valid_from"].tolist() == list(
+        pd.date_range(LAST_ISSUE + pd.Timedelta(hours=1), periods=3, freq="h")
+    )
+
+
+def test_a_lower_issue_bound_admits_a_release_issued_exactly_on_it(
+    week_of_releases: CWAWeatherStore,
+) -> None:
+    """Seven hours old is still fresh; only older is stale."""
+    cutoff = LAST_ISSUE + pd.Timedelta(hours=7)
+    rows = week_of_releases.fetch_cwa_forecast_rows(
+        geocode="63000050",
+        issued_before=cutoff,
+        source_updated_before=cutoff,
+        issued_after=cutoff - pd.Timedelta(hours=7),
+    )
+
+    assert set(rows["issued_at"]) == {LAST_ISSUE}
+
+
+def test_no_release_inside_the_lower_issue_bound_reads_nothing(
+    week_of_releases: CWAWeatherStore,
+) -> None:
+    """Every release is older than the bound, which serving would discard as stale anyway."""
+    cutoff = LAST_ISSUE + pd.Timedelta(hours=8)
+
+    rows = week_of_releases.fetch_cwa_forecast_rows(
+        geocode="63000050",
+        issued_before=cutoff,
+        source_updated_before=cutoff,
+        issued_after=cutoff - pd.Timedelta(hours=7),
+    )
+
+    assert rows.empty
+    assert list(rows.columns) == FORECAST_ROW_COLUMNS
+
+
+def test_a_point_in_time_read_returns_only_rows_of_the_selected_release(
+    week_of_releases: CWAWeatherStore,
+) -> None:
+    """Older releases overlap the window too; only the newest release's rows come back."""
+    rows = week_of_releases.fetch_cwa_forecast_rows(
+        geocode="63000050",
+        issued_before=CUTOFF,
+        source_updated_before=CUTOFF,
+        valid_start=LAST_ISSUE - pd.Timedelta(hours=3),
+        valid_end=LAST_ISSUE + pd.Timedelta(hours=3),
+        include_adjacent_points=True,
+    )
+
+    assert set(rows["issued_at"]) == {LAST_ISSUE}
+    assert rows["valid_from"].min() == LAST_ISSUE + pd.Timedelta(hours=1)
+
+
+def test_a_point_in_time_read_with_a_lower_bound_reads_only_recent_vintages(
+    week_of_releases: CWAWeatherStore, sqlite_engine: Engine
+) -> None:
+    """Without the bound, choosing a version read every vintage the geocode ever had."""
+    statements: list[tuple[str, dict]] = []
+
+    def record(conn, cursor, statement, parameters, *_args) -> None:
+        statements.append((statement, parameters))
+
+    event.listen(sqlite_engine, "before_cursor_execute", record)
+    try:
+        week_of_releases.fetch_cwa_forecast_rows(
+            geocode="63000050",
+            issued_before=CUTOFF,
+            source_updated_before=CUTOFF,
+            issued_after=CUTOFF - pd.Timedelta(hours=7),
+            valid_start=LAST_ISSUE + pd.Timedelta(hours=1),
+            valid_end=LAST_ISSUE + pd.Timedelta(hours=3),
+            include_adjacent_points=True,
+        )
+    finally:
+        event.remove(sqlite_engine, "before_cursor_execute", record)
+
+    reads = [statement for statement, _ in statements if "raw_cwa_" in statement]
+    assert reads
+    assert all("issued_at >= " in statement or "issued_at = " in statement for statement in reads)

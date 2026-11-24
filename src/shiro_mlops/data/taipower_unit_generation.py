@@ -78,17 +78,11 @@ def is_valid_unit_identity(value: Any) -> bool:
     return bool(cleaned) and cleaned.lower() not in INVALID_UNIT_IDENTIFIERS
 
 
-def _normalize_unit_type(raw: Any) -> str | None:
-    # 來源偶發夾帶 HTML 殘片（如 </b>），去除後才作為機組識別鍵的一部分。
-    if raw is None:
-        return None
-    cleaned = _HTML_TAG_RE.sub("", _strip_noise(raw)).strip()
-    if not is_valid_unit_identity(cleaned):
-        return None
-    return cleaned
+def _normalize_unit_identity(raw: Any) -> str | None:
+    """A unit type or name as a snapshot key part, or ``None`` when it is not a usable identity.
 
-
-def _normalize_unit_name(raw: Any) -> str | None:
+    The source now and then carries HTML fragments such as ``</b>``; they are removed first.
+    """
     if raw is None:
         return None
     cleaned = _HTML_TAG_RE.sub("", _strip_noise(raw)).strip()
@@ -158,8 +152,8 @@ def _parse_row(
     source_time: datetime,
     source_payload: dict[str, Any],
 ) -> TaipowerUnitGenerationSnapshot | None:
-    unit_type = _normalize_unit_type(row.get("機組類型"))
-    unit_name = _normalize_unit_name(row.get("機組名稱"))
+    unit_type = _normalize_unit_identity(row.get("機組類型"))
+    unit_name = _normalize_unit_identity(row.get("機組名稱"))
     if unit_type is None or unit_name is None:
         logger.warning(
             "Skipping unit generation row due to missing or invalid unit identity: "

@@ -4,7 +4,7 @@
 // since the Forecast View only reads the precomputed `/published/` files (ADR-0015 §2.4). Run after
 // the frontend build, via `make frontend-bundle-check` locally and in the CI frontend job. Its
 // negative controls live in frontend/tooling/check-forecast-view-bundle.test.mjs.
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -112,6 +112,13 @@ function main() {
   return 0
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node resolves symlinks in the entry module's import.meta.url but leaves argv[1] as typed, so the
+// raw path never matches through a symlinked checkout and the check would exit 0 having checked nothing.
+function isEntryPoint() {
+  const entry = process.argv[1]
+  return entry !== undefined && import.meta.url === pathToFileURL(realpathSync(entry)).href
+}
+
+if (isEntryPoint()) {
   process.exitCode = main()
 }

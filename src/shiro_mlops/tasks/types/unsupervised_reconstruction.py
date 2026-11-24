@@ -16,7 +16,7 @@ enforces ``allow_pickle=False`` on every ``np.load``).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -43,6 +43,7 @@ from shiro_mlops.tasks.types.base import (
     Trained,
     TrainingData,
     WeatherInput,
+    require_trained_recipe,
 )
 from shiro_mlops.tasks.types.metadata import ModelFormat, read_metadata, write_metadata
 
@@ -162,8 +163,26 @@ class UnsupervisedReconstruction:
         }
         return Trained(model=model, metrics=metrics)
 
-    def load(self, directory: Path) -> UnsupervisedReconstructionModel:
-        return UnsupervisedReconstructionModel.load(directory)
+    def load(
+        self,
+        directory: Path,
+        params: UnsupervisedReconstructionParams,
+        weather_fields: Sequence[str],
+    ) -> UnsupervisedReconstructionModel:
+        """The decision threshold was fixed at training, so a new quantile is not compared."""
+        model = UnsupervisedReconstructionModel.load(directory)
+        require_trained_recipe(
+            directory,
+            trained={
+                "window_hours": model.window_hours,
+                "weather_fields": sorted(model.weather_columns),
+            },
+            declared={
+                "window_hours": params.window_hours,
+                "weather_fields": sorted(weather_fields),
+            },
+        )
+        return model
 
     def assess_health(
         self, thresholds: UnsupervisedReconstructionHealth, metrics: Mapping[str, float]

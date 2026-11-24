@@ -1,7 +1,7 @@
 # shiro-mlops Frontend
 
 - 建立日期：2026-08-23
-- 最後更新：2026-11-23
+- 最後更新：2026-11-24
 
 React 19 + TypeScript + Vite + TanStack 的 pnpm workspace，依 [ADR-0014](../docs/adr/0014-keep-engineering-console-local-and-split-frontend-apps.md) 拆成兩個應用與一個共用套件：
 
@@ -11,7 +11,7 @@ frontend/
 │   ├── forecast-view/          # 預報檢視：/、/history；雲端只部署這個應用
 │   └── engineering-console/    # 工程主控台：base path /console/，只在地端
 ├── packages/
-│   └── shared/                 # UI 元件、設計 token、i18n 機制與語系切換、格式函式、request()、查詢畫面狀態；testing/ 為測試輔助
+│   └── shared/                 # UI 元件、設計 token、i18n 機制與語系切換、格式函式、CSV 匯出、request()、查詢畫面狀態；testing/ 為測試輔助
 └── tooling/                    # Vite dev 代理（/api、/published）、workspace 邊界與 bundle 檢查的測試（node --test）
 ```
 
@@ -39,7 +39,7 @@ frontend/
 2. **營運資料檢視器 (`/console/data`)**：本機或 `DATA_EXPLORER_ENABLED` 時可用的唯讀 TimescaleDB 檢視，涵蓋六個 typed datasets 與 CWA audits。契約見 [Data Explorer 規格](../docs/reference/data-explorer.md)。
 3. **系統設定與連線診斷 (`/console/settings`)**：FastAPI 後端連線資訊與手動 Payload 推論測試。
 
-兩個應用的外框都有語系切換；API 健康徽章與側欄狀態卡只在工程主控台。
+兩個應用的外框都有語系切換；API 健康徽章與側欄狀態卡只在工程主控台，兩者都依 `GET /health` 顯示 API 連線與模型載入狀態。
 
 ## 開發與執行指令
 

@@ -22,6 +22,7 @@ from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import MAX_HORIZON_HOURS, NATIONWIDE_SUBJECT
 from shiro_mlops.core.storage_time import from_storage_time, half_open_window, to_storage_time
+from shiro_mlops.data.hourly_actual_load import floor_to_hour
 from shiro_mlops.data.hourly_actual_load_store import REGIONAL_SNAPSHOT_SUM_SOURCE
 
 TRACK_RECORD_WINDOW = timedelta(hours=720)
@@ -165,7 +166,7 @@ class ForecastTrackRecordStore:
 
 def track_record_cutoff(moment: datetime) -> datetime:
     """The cutoff of a compilation run at ``moment``: that moment floored to the hour."""
-    return moment.replace(minute=0, second=0, microsecond=0)
+    return floor_to_hour(moment)
 
 
 def track_record_window(cutoff: datetime) -> TrackRecordWindow:

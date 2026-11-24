@@ -1,6 +1,7 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
-import { exportCsv, fromRfc3339, toRfc3339 } from '@/lib/data-explorer'
+import { exportCsv } from '@shiro-mlops/shared/csv'
+import { fromRfc3339, toRfc3339 } from '@/lib/data-explorer'
 import { Database, Download, RefreshCw } from 'lucide-react'
 import { useMessages } from '@/i18n/messages'
 import type { ExplorerWindow } from '@/lib/explorer-window'

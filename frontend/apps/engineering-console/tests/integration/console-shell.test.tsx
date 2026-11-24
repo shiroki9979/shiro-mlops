@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { onlineManager } from '@tanstack/react-query'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
@@ -21,6 +21,17 @@ const healthPayload = (model_loaded: boolean) => ({
   model_loaded,
   data_explorer_enabled: true,
 })
+
+const serviceStatus = zhTW.serviceStatus
+
+function sidebarStatusCard() {
+  return screen.getByRole('region', { name: serviceStatus.label })
+}
+
+// The pulse is CSS only, so its class is all the DOM shows of it.
+function livePulse(card: HTMLElement) {
+  return card.querySelector('.animate-pulse')
+}
 
 describe('Engineering Console shell', () => {
   afterEach(() => {
@@ -56,6 +67,41 @@ describe('Engineering Console shell', () => {
 
     expect(await screen.findByText(zhTW.header.modelNotLoaded)).toBeInTheDocument()
     expect(screen.queryByText(zhTW.header.apiUnreachable)).not.toBeInTheDocument()
+  })
+
+  it('shows the sidebar status card healthy, with the live pulse, when the API answers with the model loaded', async () => {
+    renderAppAt('/console/settings')
+    expect(await screen.findByText(zhTW.header.apiHealthy('local', '0.1.0'))).toBeInTheDocument()
+
+    const card = sidebarStatusCard()
+    expect(within(card).getByText(serviceStatus.apiState.reachable)).toBeInTheDocument()
+    expect(within(card).getByText(serviceStatus.modelState.loaded)).toBeInTheDocument()
+    expect(livePulse(card)).not.toBeNull()
+  })
+
+  it('shows the model not loaded in the sidebar status card, without the live pulse', async () => {
+    server.use(http.get('*/health', () => HttpResponse.json(healthPayload(false))))
+    renderAppAt('/console/settings')
+    expect(await screen.findByText(zhTW.header.modelNotLoaded)).toBeInTheDocument()
+
+    const card = sidebarStatusCard()
+    expect(livePulse(card)).toBeNull()
+    expect(within(card).getByText(serviceStatus.apiState.reachable)).toBeInTheDocument()
+    expect(within(card).getByText(serviceStatus.modelState.notLoaded)).toBeInTheDocument()
+    expect(within(card).queryByText(serviceStatus.modelState.loaded)).not.toBeInTheDocument()
+  })
+
+  it('shows the API unreachable and the model unknown in the sidebar status card, without the live pulse', async () => {
+    server.use(http.get('*/health', () => HttpResponse.error()))
+    renderAppAt('/console/settings')
+    // useHealth retries once, after TanStack's one-second default delay
+    expect(await screen.findByText(zhTW.header.apiUnreachable, {}, { timeout: 3000 })).toBeInTheDocument()
+
+    const card = sidebarStatusCard()
+    expect(livePulse(card)).toBeNull()
+    expect(within(card).getByText(serviceStatus.apiState.unreachable)).toBeInTheDocument()
+    expect(within(card).getByText(serviceStatus.modelState.unknown)).toBeInTheDocument()
+    expect(within(card).queryByText(serviceStatus.apiState.reachable)).not.toBeInTheDocument()
   })
 
   it('re-reads the data source status when the header Refresh is pressed on monitoring', async () => {

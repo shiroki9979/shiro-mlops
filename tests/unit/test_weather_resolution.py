@@ -546,6 +546,27 @@ def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
     assert store.fetch_cwa_forecast_rows.call_args.kwargs["source_updated_before"] == as_of
 
 
+def test_resolver_reads_only_releases_young_enough_to_serve() -> None:
+    """A release older than seven hours is stale whatever it holds, so it is never read."""
+    store = MagicMock(spec=CWAWeatherStore)
+    store.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
+    store.fetch_cwa_station_observations.return_value = pd.DataFrame()
+    as_of = datetime(2026, 8, 20, 12)
+
+    with pytest.raises(WeatherCoverageError):
+        resolve_weather(
+            store,
+            reference_point=TAIPEI,
+            start_time=datetime(2026, 8, 20, 13),
+            horizon_hours=1,
+            as_of=as_of,
+        )
+
+    assert store.fetch_cwa_forecast_rows.call_args.kwargs["issued_after"] == pd.Timestamp(
+        datetime(2026, 8, 20, 5)
+    )
+
+
 def test_resolver_does_not_interpolate_wind_direction() -> None:
     """Categorical wind direction may be exact but must never be fabricated between points."""
     store = MagicMock(spec=CWAWeatherStore)

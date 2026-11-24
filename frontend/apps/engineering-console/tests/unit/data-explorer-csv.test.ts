@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { exportCsv } from '@/lib/data-explorer'
+import { exportCsv } from '@shiro-mlops/shared/csv'
 
 afterEach(() => {
   vi.restoreAllMocks()

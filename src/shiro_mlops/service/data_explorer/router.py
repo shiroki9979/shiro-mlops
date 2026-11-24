@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from enum import StrEnum
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BeforeValidator
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -45,6 +48,25 @@ from shiro_mlops.service.data_explorer.series import Agg, Bucket, TooManyPointsE
 router = APIRouter(prefix="/data", tags=["data-explorer"])
 
 
+def _empty_reads_as(default: object) -> BeforeValidator:
+    """A declared parameter sent empty reads as not given (rest-api.md §5.1), so the type
+    validation FastAPI runs on it must see the default instead of an empty string."""
+    return BeforeValidator(lambda value: default if value == "" else value)
+
+
+_EMPTY_AS_NONE = _empty_reads_as(None)
+
+
+def _without_empty_values(values: object) -> object:
+    """`fields=` arrives as `[""]`; an empty repeat reads as not given, as any empty value does."""
+    if not isinstance(values, list):
+        return values
+    return [value for value in values if value != ""] or None
+
+
+_EMPTY_DROPPED = BeforeValidator(_without_empty_values)
+
+
 def _engine(request: Request) -> Engine:
     return request.app.state.repository.engine
 
@@ -60,35 +82,13 @@ def _query_params(request: Request) -> dict[str, str]:
     return dict(request.query_params)
 
 
-def _run_list(request: Request, dataset: Dataset) -> ListEnvelope:
-    _ensure_enabled()
+@contextmanager
+def _explorer_errors() -> Iterator[None]:
+    """Map the query layer's refusals to HTTP once for every endpoint."""
     try:
-        return DatasetQuery(_engine(request)).list(dataset, _query_params(request))
+        yield
     except CursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ExplorerQueryError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except (DatabaseUnavailableError, SQLAlchemyError) as exc:
-        raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
-
-
-def _run_series(
-    request: Request,
-    dataset: Dataset,
-    *,
-    fields: Sequence[StrEnum] | None = None,
-    bucket: Bucket,
-    agg: Agg | None = None,
-) -> SeriesResponse:
-    _ensure_enabled()
-    try:
-        return DatasetQuery(_engine(request)).series(
-            dataset,
-            _query_params(request),
-            fields=_field_names(fields),
-            bucket=bucket,
-            agg=agg,
-        )
     except TooManyPointsError as exc:
         suggested = exc.suggested_bucket.value if exc.suggested_bucket else None
         raise HTTPException(
@@ -100,6 +100,31 @@ def _run_series(
         raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
 
 
+def _run_list(request: Request, dataset: Dataset) -> ListEnvelope:
+    _ensure_enabled()
+    with _explorer_errors():
+        return DatasetQuery(_engine(request)).list(dataset, _query_params(request))
+
+
+def _run_series(
+    request: Request,
+    dataset: Dataset,
+    *,
+    fields: Sequence[StrEnum] | None = None,
+    bucket: Bucket,
+    agg: Agg | None = None,
+) -> SeriesResponse:
+    _ensure_enabled()
+    with _explorer_errors():
+        return DatasetQuery(_engine(request)).series(
+            dataset,
+            _query_params(request),
+            fields=_field_names(fields),
+            bucket=bucket,
+            agg=agg,
+        )
+
+
 def _field_names(fields: Sequence[StrEnum] | None) -> list[str] | None:
     return [field.value for field in fields] if fields else None
 
@@ -108,10 +133,8 @@ def _field_names(fields: Sequence[StrEnum] | None) -> list[str] | None:
 def get_status(request: Request) -> StatusResponse:
     """Return shared dataset availability, freshness, and completeness."""
     _ensure_enabled()
-    try:
+    with _explorer_errors():
         return DatasetQuery(_engine(request)).status()
-    except (DatabaseUnavailableError, SQLAlchemyError) as exc:
-        raise HTTPException(status_code=503, detail="Persistence unavailable") from exc
 
 
 @router.get("/power/load", response_model=ListEnvelope)
@@ -120,7 +143,7 @@ def list_hourly_load(
     start: str | None = None,
     end: str | None = None,
     subject: str | None = None,
-    limit: int | None = Query(default=None),
+    limit: Annotated[int | None, _EMPTY_AS_NONE] = None,
     cursor: str | None = None,
 ) -> ListEnvelope:
     """List persisted hourly electricity load rows."""
@@ -134,9 +157,9 @@ def hourly_load_series(
     start: str | None = None,
     end: str | None = None,
     subject: str | None = None,
-    fields: list[HourlyLoadSeriesField] | None = Query(default=None),
-    bucket: Bucket = Bucket.AUTO,
-    agg: Agg = Agg.AVG,
+    fields: Annotated[list[HourlyLoadSeriesField] | None, _EMPTY_DROPPED, Query()] = None,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
+    agg: Annotated[Agg, _empty_reads_as(Agg.AVG)] = Agg.AVG,
 ) -> SeriesResponse:
     """Chart series of hourly load per subject over an exact closed window of up to 92 days.
 
@@ -165,9 +188,9 @@ def national_supply_demand_series(
     request: Request,
     start: str | None = None,
     end: str | None = None,
-    fields: list[NationalSeriesField] | None = Query(default=None),
-    bucket: Bucket = Bucket.AUTO,
-    agg: Agg = Agg.AVG,
+    fields: Annotated[list[NationalSeriesField] | None, _EMPTY_DROPPED, Query()] = None,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
+    agg: Annotated[Agg, _empty_reads_as(Agg.AVG)] = Agg.AVG,
 ) -> SeriesResponse:
     """Ungrouped national supply-demand series in MW or percent over a closed window.
 
@@ -197,9 +220,9 @@ def regional_supply_demand_series(
     start: str | None = None,
     end: str | None = None,
     region: str | None = None,
-    fields: list[RegionalSeriesField] | None = Query(default=None),
-    bucket: Bucket = Bucket.AUTO,
-    agg: Agg = Agg.AVG,
+    fields: Annotated[list[RegionalSeriesField] | None, _EMPTY_DROPPED, Query()] = None,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
+    agg: Annotated[Agg, _empty_reads_as(Agg.AVG)] = Agg.AVG,
 ) -> SeriesResponse:
     """Regional supply-demand series in MW, one series per region and field.
 
@@ -229,10 +252,12 @@ def unit_generation_series(
     end: str | None = None,
     unit_type: str | None = None,
     unit_name: str | None = None,
-    fields: list[UnitSeriesField] | None = Query(default=None),
-    group_by: UnitGroupBy = UnitGroupBy.UNIT_TYPE,
-    bucket: Bucket = Bucket.AUTO,
-    agg: Agg = Agg.AVG,
+    fields: Annotated[list[UnitSeriesField] | None, _EMPTY_DROPPED, Query()] = None,
+    group_by: Annotated[
+        UnitGroupBy, _empty_reads_as(UnitGroupBy.UNIT_TYPE)
+    ] = UnitGroupBy.UNIT_TYPE,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
+    agg: Annotated[Agg, _empty_reads_as(Agg.AVG)] = Agg.AVG,
 ) -> SeriesResponse:
     """Chart series of unit generation per unit type, or as one total, over up to 92 days.
 
@@ -263,9 +288,9 @@ def observation_series(
     start: str | None = None,
     end: str | None = None,
     station_id: str | None = None,
-    fields: list[ObservationSeriesField] | None = Query(default=None),
-    bucket: Bucket = Bucket.AUTO,
-    agg: Agg = Agg.AVG,
+    fields: Annotated[list[ObservationSeriesField] | None, _EMPTY_DROPPED, Query()] = None,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
+    agg: Annotated[Agg, _empty_reads_as(Agg.AVG)] = Agg.AVG,
 ) -> SeriesResponse:
     """Chart series of CWA station observations, one per station and field.
 
@@ -297,10 +322,10 @@ def forecast_series(
     geocode: str | None = None,
     issued_at: str | None = None,
     source_updated_at: str | None = None,
-    all_vintages: bool = False,
-    fields: list[ForecastSeriesField] | None = Query(default=None),
-    bucket: Bucket = Bucket.AUTO,
-    agg: Agg = Agg.AVG,
+    all_vintages: Annotated[bool, _empty_reads_as(False)] = False,
+    fields: Annotated[list[ForecastSeriesField] | None, _EMPTY_DROPPED, Query()] = None,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
+    agg: Annotated[Agg, _empty_reads_as(Agg.AVG)] = Agg.AVG,
 ) -> SeriesResponse:
     """Chart series of CWA township forecasts on `valid_from`, one per geocode.
 
@@ -339,7 +364,7 @@ def observation_audit_series(
     end: str | None = None,
     status: str | None = None,
     missing_station_id: str | None = None,
-    bucket: Bucket = Bucket.AUTO,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
 ) -> SeriesResponse:
     """Status timeline of CWA observation batches over an exact closed window of up to 92 days.
 
@@ -359,7 +384,7 @@ def forecast_audit_series(
     dataset_id: str | None = None,
     status: str | None = None,
     missing_geocode: str | None = None,
-    bucket: Bucket = Bucket.AUTO,
+    bucket: Annotated[Bucket, _empty_reads_as(Bucket.AUTO)] = Bucket.AUTO,
 ) -> SeriesResponse:
     """Status timeline of CWA forecast versions by `issued_at`, over a window of up to 92 days.
 

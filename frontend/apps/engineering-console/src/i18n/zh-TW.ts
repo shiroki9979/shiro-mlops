@@ -21,10 +21,6 @@ export const zhTW = {
     monitoring: '模型漂移監控',
     dataExplorer: '營運資料檢視器',
     settings: '系統連線設定',
-    taipowerFeed: '台電即時串接',
-    taipowerFeedState: '正常',
-    recursiveInference: 'LightGBM 遞迴推論',
-    recursiveInferenceState: '運作中',
   },
   header: {
     title: '全台電網負載預測與氣候動態特徵儀表板',
@@ -34,6 +30,22 @@ export const zhTW = {
     modelNotLoaded: '模型未載入',
     apiHealthy: (environment: string, version: string) => `API 連線正常 (${environment} v${version})`,
     toggleTheme: '切換明暗主題',
+  },
+  serviceStatus: {
+    label: '服務狀態',
+    api: 'API 服務',
+    apiState: {
+      reachable: '連線正常',
+      unreachable: '無法連線',
+      checking: '檢查中',
+    },
+    model: '動態視界預報模型',
+    modelState: {
+      loaded: '已載入',
+      notLoaded: '未載入',
+      unknown: '無法確認',
+      checking: '檢查中',
+    },
   },
   localeSwitcher: {
     label: '介面語系',

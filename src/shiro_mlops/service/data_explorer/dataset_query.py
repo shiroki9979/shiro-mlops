@@ -21,7 +21,12 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
 from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import paginate_raw_list
-from shiro_mlops.service.data_explorer.query import ExplorerQuery, list_params, resolve_window
+from shiro_mlops.service.data_explorer.query import (
+    ExplorerQuery,
+    TimeWindow,
+    list_params,
+    resolve_window,
+)
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
@@ -139,23 +144,24 @@ class DatasetQuery:
     def _project_page(
         self, query: ExplorerQuery, rows: list[Row]
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        items = query.dataset.project(_WindowPage(self.db, query), rows)
-        return items, self._list_gaps(query)
-
-    def _list_gaps(self, query: ExplorerQuery) -> list[str]:
-        """Missing slots of the whole window that have already happened, ascending."""
-        if query.dataset.gaps is None:
-            return []
         scan = GapScan(self.db, query.dataset, query.filters)
-        return scan.due_missing_slots(query.window, now_taiwan())
+        items = query.dataset.project(_WindowPage(scan, query.window), rows)
+        return items, _list_gaps(scan, query)
+
+
+def _list_gaps(scan: GapScan, query: ExplorerQuery) -> list[str]:
+    """Missing slots of the whole window that have already happened, ascending."""
+    if query.dataset.gaps is None:
+        return []
+    return scan.due_missing_slots(query.window, now_taiwan())
 
 
 class _WindowPage:
     """The request window a page projection may consult, read lazily and once per page."""
 
-    def __init__(self, db: ExplorerDb, query: ExplorerQuery) -> None:
-        self.scan = GapScan(db, query.dataset, query.filters)
-        self.window = query.window
+    def __init__(self, scan: GapScan, window: TimeWindow) -> None:
+        self.scan = scan
+        self.window = window
 
     @cached_property
     def _present(self) -> dict[datetime, set[str]]:

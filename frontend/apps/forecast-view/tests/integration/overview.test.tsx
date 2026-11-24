@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { server } from '@/mocks/server'
+import { AUTO_REFRESH_INTERVAL_SEC } from '@/hooks/use-latest-issued-forecast'
 import { OverviewPage } from '@/routes/index'
 import { useDashboardStore } from '@/store/dashboard-store'
 import { useLocaleStore } from '@shiro-mlops/shared/i18n/locale-store'
@@ -172,33 +173,45 @@ describe('Overview page shows the latest issued forecast', () => {
       dashboard.table.load,
     ])
     expect(screen.getAllByRole('switch')).toHaveLength(1)
-    expect(screen.getByLabelText(dashboard.autoRefresh)).toBeInTheDocument()
+    expect(screen.getByLabelText(dashboard.autoRefresh(AUTO_REFRESH_INTERVAL_SEC))).toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/氣溫|濕度|°C/)
   })
 
-  it('exports a CSV of target hour and predicted load only', async () => {
+  it('exports a quoted CSV of target hour and predicted load only, named after the issue date', async () => {
     servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
     freezeViewerNow('2026-11-20T10:30:00+08:00')
     let exported: Blob | undefined
+    const revokeObjectURL = vi.fn()
     // jsdom implements neither object URLs nor download navigation.
-    Object.defineProperty(URL, 'createObjectURL', {
-      configurable: true,
-      value: (blob: Blob) => {
+    Object.assign(URL, {
+      createObjectURL: (blob: Blob) => {
         exported = blob
         return 'blob:csv'
       },
+      revokeObjectURL,
     })
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const downloads: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download)
+    })
     const user = userEvent.setup()
 
-    renderOverview()
-    await user.click(await screen.findByRole('button', { name: zhTW.common.exportCsv }))
+    try {
+      renderOverview()
+      await user.click(await screen.findByRole('button', { name: zhTW.common.exportCsv }))
+    } finally {
+      Reflect.deleteProperty(URL, 'createObjectURL')
+      Reflect.deleteProperty(URL, 'revokeObjectURL')
+    }
 
-    const lines = (await readBlob(exported!)).split('\n')
+    expect(downloads).toEqual(['issued_forecast_2026-11-20.csv'])
+    const lines = (await readBlob(exported!)).split(/\r?\n/)
     expect(lines).toHaveLength(25)
-    expect(lines[0]).toBe('Target Hour,Predicted Load (MW)')
-    expect(lines[1]).toBe('2026-11-20T11:00:00+08:00,30000.00')
-    expect(lines[24]).toBe('2026-11-21T10:00:00+08:00,30023.00')
+    expect(lines[0]).toBe('"Target Hour","Predicted Load (MW)"')
+    expect(lines[1]).toBe('"2026-11-20T11:00:00+08:00","30000.00"')
+    expect(lines[24]).toBe('"2026-11-21T10:00:00+08:00","30023.00"')
+    // An object URL holds the CSV in memory until revoked, so each export would otherwise leak one.
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:csv')
   })
 
   it('reads the forecast time and table in English', async () => {
@@ -211,6 +224,41 @@ describe('Overview page shows the latest issued forecast', () => {
     expect(await screen.findByText(en.dashboard.issuedAt('11/20, 10:15'))).toBeInTheDocument()
     expect(screen.getByText(en.dashboard.table.title(24))).toBeInTheDocument()
     expect(screen.getByText(en.dashboard.chart.title)).toBeInTheDocument()
+  })
+})
+
+describe('Overview auto refresh', () => {
+  const SETTINGS_KEY = 'shiro-dashboard-settings'
+
+  afterEach(() => {
+    localStorage.removeItem(SETTINGS_KEY)
+  })
+
+  it('polls at the interval its label names, ignoring an interval an earlier version stored', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ state: { horizonHours: 24, autoRefresh: true, refreshIntervalSec: 5 }, version: 0 }),
+    )
+    await useDashboardStore.persist.rehydrate()
+    servePublished(publishedForecast('2026-11-20T10:15:00+08:00', 168))
+    freezeViewerNow('2026-11-20T10:30:00+08:00')
+    const user = userEvent.setup()
+
+    const { queryClient } = renderOverview()
+    await screen.findByText(dashboard.table.targetHour)
+
+    const [forecastQuery] = queryClient.getQueryCache().getAll()
+    const intervalMs = forecastQuery.observers[0].options.refetchInterval
+    // The published file is served with max-age=60, so polling faster only re-reads the cached copy.
+    expect(intervalMs).toBe(60_000)
+    const toggle = screen.getByLabelText(dashboard.autoRefresh(Number(intervalMs) / 1000))
+    expect(toggle).toBeChecked()
+
+    await user.click(toggle)
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').state).toEqual({
+      horizonHours: 24,
+      autoRefresh: false,
+    })
   })
 })
 

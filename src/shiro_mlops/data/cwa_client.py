@@ -204,9 +204,14 @@ def _coerce_number(value: Any, context: str, *, trace_is_zero: bool = False) -> 
 
 
 def _observation_datetime(value: Any) -> pd.Timestamp | None:
-    """Normalize an observation timestamp to timezone-naive Taiwan local time."""
+    """Normalize an observation timestamp, bare or in its time object, to Taiwan local time."""
     if isinstance(value, dict):
         value = value.get("DateTime") or value.get("datetime") or value.get("obsTime")
+    return _taiwan_timestamp(value)
+
+
+def _taiwan_timestamp(value: Any) -> pd.Timestamp | None:
+    """Normalize a source timestamp to timezone-naive Taiwan local time; ``None`` if unreadable."""
     if value is None:
         return None
     try:
@@ -301,16 +306,6 @@ def parse_observation_batch(
     )
 
 
-def _forecast_timestamp(value: Any) -> pd.Timestamp | None:
-    """Normalize a forecast timestamp to timezone-naive Taiwan local time."""
-    if value is None:
-        return None
-    try:
-        return pd.Timestamp(standardize_taiwan_datetime(pd.Series([value])).iloc[0])
-    except (TypeError, ValueError):
-        return None
-
-
 def _forecast_locations(payload: Any) -> list[dict[str, Any]]:
     """Flatten CWA township forecast location containers."""
     if not isinstance(payload, dict):
@@ -389,13 +384,13 @@ def _forecast_release_timestamps(payload: Any) -> tuple[pd.Timestamp, pd.Timesta
         containers[0] if isinstance(containers, list) and containers else None
     )
     payload_map = _as_mapping(payload)
-    issued_at = _forecast_timestamp(
+    issued_at = _taiwan_timestamp(
         _forecast_metadata_value(
             (records, dataset_info, first_container, payload_map),
             ("IssueTime", "issueTime"),
         )
     )
-    source_updated_at = _forecast_timestamp(
+    source_updated_at = _taiwan_timestamp(
         _forecast_metadata_value(
             (records, dataset_info, first_container, payload_map),
             ("Update", "update"),
@@ -424,14 +419,14 @@ def _forecast_element_rows(
         for time_row in times:
             if not isinstance(time_row, dict):
                 continue
-            valid_from = _forecast_timestamp(
+            valid_from = _taiwan_timestamp(
                 time_row.get("DataTime")
                 or time_row.get("dataTime")
                 or time_row.get("StartTime")
                 or time_row.get("startTime")
             )
             valid_to = (
-                _forecast_timestamp(
+                _taiwan_timestamp(
                     time_row.get("EndTime") or time_row.get("endTime") or time_row.get("endtime")
                 )
                 or valid_from

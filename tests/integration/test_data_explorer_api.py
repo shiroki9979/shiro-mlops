@@ -1075,3 +1075,79 @@ def test_missing_member_filter_matches_the_identifier_literally(
 
     assert response.status_code == 200
     assert bool(response.json()["items"]) is matches
+
+
+def test_the_load_list_reads_an_empty_limit_as_not_given_like_every_other_list(
+    explorer_client,
+) -> None:
+    client, repo = explorer_client
+    hour = _now().replace(minute=0) - timedelta(hours=2)
+    _upsert_hours(repo, [hour])
+    window = {"start": rfc3339(hour - timedelta(hours=1)), "end": rfc3339(hour)}
+
+    responses = [
+        client.get(path, params={**window, "limit": ""})
+        for path in ("/data/power/load", "/data/power/supply-demand")
+    ]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert (
+        responses[0].json()["items"]
+        == client.get("/data/power/load", params=window).json()["items"]
+    )
+
+
+@pytest.mark.parametrize("flag", ["true", "TRUE", "1", "yes", "on", "y", "t"])
+def test_every_spelling_the_series_accepts_as_true_lists_every_vintage(
+    explorer_client, flag: str
+) -> None:
+    """The series validates the flag as a boolean, so the list must read the same words as true."""
+    client, repo = explorer_client
+    issued = _now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    repo.cwa_weather_store.upsert_cwa_forecast_releases(
+        [
+            forecast_release(
+                issued - timedelta(hours=offset),
+                (township_forecast(issued + timedelta(hours=1), 28.0 + offset),),
+            )
+            for offset in (0, 6)
+        ]
+    )
+    window = {"start": rfc3339(issued), "end": rfc3339(issued + timedelta(hours=2))}
+
+    listed = client.get("/data/weather/forecasts", params={**window, "all_vintages": flag})
+    charted = client.get("/data/weather/forecasts/series", params={**window, "all_vintages": flag})
+
+    assert listed.status_code == 200
+    assert len({item["issued_at"] for item in listed.json()["items"]}) == 2
+    assert charted.status_code == 200
+    assert len(charted.json()["series"]) == 2
+
+
+def test_a_regional_page_reads_its_window_present_regions_once(explorer_client) -> None:
+    """The page's missing regions and the window's missing slots come from one read."""
+    from sqlalchemy import event
+
+    client, repo = explorer_client
+    distinct_reads: list[str] = []
+
+    def count(conn, cursor, statement, *_args) -> None:
+        if statement.lstrip().startswith("SELECT DISTINCT"):
+            distinct_reads.append(statement)
+
+    end = _now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    repo.regional_supply_demand_store.upsert(
+        regional_supply_demand_snapshots(end - timedelta(minutes=30))
+    )
+    event.listen(repo.engine, "before_cursor_execute", count)
+    try:
+        response = client.get(
+            "/data/power/regional",
+            params={"start": rfc3339(end - timedelta(hours=2)), "end": rfc3339(end)},
+        )
+    finally:
+        event.remove(repo.engine, "before_cursor_execute", count)
+
+    assert response.status_code == 200
+    assert response.json()["items"]
+    assert len(distinct_reads) == 1

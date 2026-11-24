@@ -1,30 +1,6 @@
 import { TAIPEI_TIME_ZONE } from '@shiro-mlops/shared/i18n/format'
 import { ListEnvelope } from '@/schemas/data-explorer'
 
-export function exportCsv(filename: string, rows: Array<Record<string, unknown>>): void {
-  if (rows.length === 0) return
-  const headers = Object.keys(rows[0])
-  const csv = [
-    headers.map(csvCell).join(','),
-    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(',')),
-  ].join('\r\n')
-  if (typeof URL.createObjectURL !== 'function') return
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-}
-
-function csvCell(value: unknown): string {
-  const text = value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')
-  return `"${text.replaceAll('"', '""')}"`
-}
-
 export function toRfc3339(localValue: string): string {
   if (!localValue) return ''
   return localValue.length === 16 ? `${localValue}:00+08:00` : localValue

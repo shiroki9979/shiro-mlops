@@ -101,6 +101,38 @@ def test_fetching_an_issue_time_that_was_never_issued_returns_none(
     assert test_repo.issued_forecast_store.fetch(ISSUED_AT + timedelta(hours=1)) is None
 
 
+def test_an_issue_time_exists_only_once_issued(test_repo: TimeSeriesRepository) -> None:
+    store = test_repo.issued_forecast_store
+    assert store.exists(ISSUED_AT) is False
+
+    store.insert(_issued_forecast())
+
+    assert store.exists(ISSUED_AT) is True
+    assert store.exists(ISSUED_AT + timedelta(hours=1)) is False
+    assert store.exists(ISSUED_AT - timedelta(microseconds=1)) is False
+
+
+def test_checking_an_issue_time_reads_no_steps(test_repo: TimeSeriesRepository) -> None:
+    """Issuing asks this every hour; reading 168 steps only to discard them is wasted work."""
+    from sqlalchemy import event
+
+    store = test_repo.issued_forecast_store
+    store.insert(_issued_forecast())
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, *_args) -> None:
+        statements.append(statement)
+
+    event.listen(test_repo.engine, "before_cursor_execute", record)
+    try:
+        assert store.exists(ISSUED_AT) is True
+    finally:
+        event.remove(test_repo.engine, "before_cursor_execute", record)
+
+    assert len(statements) == 1
+    assert "issued_forecast_step" not in statements[0]
+
+
 def test_issued_forecast_repository_works_standalone(sqlite_engine: Engine) -> None:
     repository = IssuedForecastRepository(engine=sqlite_engine)
     forecast = _issued_forecast()

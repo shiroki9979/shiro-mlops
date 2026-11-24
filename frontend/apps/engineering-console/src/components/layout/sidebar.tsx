@@ -8,7 +8,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { cn } from '@shiro-mlops/shared/utils'
-import { useHealth } from '@/hooks/use-health'
+import { type ServiceState, serviceStateOf, useHealth } from '@/hooks/use-health'
 import {
   EXPLORER_DATASETS,
   EXPLORER_NAV_GROUPS,
@@ -137,32 +137,55 @@ function SidebarNavigation({
   )
 }
 
-function SidebarStatusCard() {
-  const m = useMessages()
+type ServiceStatusText = Messages['serviceStatus']
+type ApiStateKey = keyof ServiceStatusText['apiState']
+type ModelStateKey = keyof ServiceStatusText['modelState']
+
+const API_ROW = {
+  healthy: { state: 'reachable', tone: 'text-emerald-400' },
+  modelNotLoaded: { state: 'reachable', tone: 'text-emerald-400' },
+  unreachable: { state: 'unreachable', tone: 'text-rose-400' },
+  checking: { state: 'checking', tone: 'text-slate-500' },
+} as const satisfies Record<ServiceState['kind'], { state: ApiStateKey; tone: string }>
+
+const MODEL_ROW = {
+  healthy: { state: 'loaded', tone: 'text-cyan-400' },
+  modelNotLoaded: { state: 'notLoaded', tone: 'text-rose-400' },
+  unreachable: { state: 'unknown', tone: 'text-slate-500' },
+  checking: { state: 'checking', tone: 'text-slate-500' },
+} as const satisfies Record<ServiceState['kind'], { state: ModelStateKey; tone: string }>
+
+function SidebarStatusCard({ service }: { service: ServiceState }) {
+  const text = useMessages().serviceStatus
+  const api = API_ROW[service.kind]
+  const model = MODEL_ROW[service.kind]
   return (
-    <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 p-3.5 space-y-2 mt-4 shrink-0">
-      <div className="flex items-center justify-between text-xs">
+    <section
+      aria-label={text.label}
+      className="rounded-xl border border-slate-800/80 bg-slate-900/50 p-3.5 space-y-2 mt-4 shrink-0"
+    >
+      <div className="flex items-center justify-between gap-2 text-xs">
         <span className="text-slate-400 flex items-center gap-1.5">
-          <Radio className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
-          {m.nav.taipowerFeed}
+          <Radio className={cn('h-3.5 w-3.5 shrink-0', api.tone, service.kind === 'healthy' && 'animate-pulse')} />
+          {text.api}
         </span>
-        <span className="text-[11px] text-emerald-400 font-mono">{m.nav.taipowerFeedState}</span>
+        <span className={cn('text-[11px] font-mono', api.tone)}>{text.apiState[api.state]}</span>
       </div>
-      <div className="flex items-center justify-between text-xs">
+      <div className="flex items-center justify-between gap-2 text-xs">
         <span className="text-slate-400 flex items-center gap-1.5">
-          <Flame className="h-3.5 w-3.5 text-cyan-400" />
-          {m.nav.recursiveInference}
+          <Flame className={cn('h-3.5 w-3.5 shrink-0', model.tone)} />
+          {text.model}
         </span>
-        <span className="text-[11px] text-cyan-400 font-mono">{m.nav.recursiveInferenceState}</span>
+        <span className={cn('text-[11px] font-mono', model.tone)}>{text.modelState[model.state]}</span>
       </div>
-    </div>
+    </section>
   )
 }
 
 export function Sidebar() {
   const router = useRouterState()
-  const { data: health } = useHealth()
-  const explorerEnabled = health?.data_explorer_enabled ?? false
+  const healthQuery = useHealth()
+  const explorerEnabled = healthQuery.data?.data_explorer_enabled ?? false
   const m = useMessages()
 
   return (
@@ -185,7 +208,7 @@ export function Sidebar() {
           explorerEnabled={explorerEnabled}
         />
       </div>
-      <SidebarStatusCard />
+      <SidebarStatusCard service={serviceStateOf(healthQuery)} />
     </aside>
   )
 }

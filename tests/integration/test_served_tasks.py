@@ -133,6 +133,29 @@ def test_a_model_that_fails_to_load_leaves_only_its_own_task_unserved(
     assert loaded.sha256 == saved.sha256
 
 
+def test_a_model_trained_with_another_feature_recipe_is_not_served(
+    tmp_path: Path, serving_repo: TimeSeriesRepository, fitted_task_model: TaskModel
+) -> None:
+    """Editing the lags in the task definition must not serve the old model with new inputs."""
+    shipped = deployed_task(DYNAMIC_HORIZON_FORECAST)
+    save_model(tmp_path, shipped.task_id, fitted_task_model)
+    edited = replace(shipped, params=shipped.params.model_copy(update={"lags": [1]}))
+
+    served = ServedTasks.load(
+        {edited.task_id: edited},
+        tmp_path,
+        runtime=task_runtime(serving_repo),
+        clock=lambda: FRESH_AS_OF,
+    )
+
+    state = served.readiness(edited.task_id)
+    assert isinstance(state, LoadFailed)
+    assert state.reason.startswith("Model failed to load: ModelRecipeMismatchError: ")
+    assert "lags" in state.reason
+    with pytest.raises(ServingUnavailableError, match="lags"):
+        served.predict(edited.task_id, horizon_hours=3)
+
+
 def _fresh_forecast_release() -> CWAForecastRelease:
     """A Taipei release issued an hour before the anchor, covering the whole horizon."""
     anchor = pd.Timestamp(LAST_HOUR)

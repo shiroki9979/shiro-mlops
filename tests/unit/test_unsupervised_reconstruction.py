@@ -12,6 +12,7 @@ from sklearn.neural_network import MLPRegressor
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import (
     HealthStatus,
+    ModelRecipeMismatchError,
     PredictionData,
     TrainingData,
     WeatherInput,
@@ -40,6 +41,7 @@ PARAMS = UnsupervisedReconstructionParams.model_validate(
     }
 )
 task_type = get_task_type("unsupervised_reconstruction")
+WEATHER_FIELDS = ("temperature", "relative_humidity")
 THRESHOLDS = {"min_recall": 0.8, "max_false_positive_rate": 0.05}
 
 
@@ -247,7 +249,7 @@ def test_saved_model_reloads_without_pickle_and_predicts_identically(
     directory = tmp_path / "model"
 
     trained.model.save(directory)
-    reloaded = task_type.load(directory)
+    reloaded = task_type.load(directory, PARAMS, WEATHER_FIELDS)
 
     pd.testing.assert_frame_equal(reloaded.predict(data), trained.model.predict(data))
     assert sorted(path.name for path in directory.iterdir()) == ["metadata.json", "model.npz"]
@@ -267,7 +269,7 @@ def test_loading_a_model_of_another_task_type_fails(trained, tmp_path: Path) -> 
     )
 
     with pytest.raises(ValueError, match="recursive_regression"):
-        task_type.load(directory)
+        task_type.load(directory, PARAMS, WEATHER_FIELDS)
 
 
 def test_too_few_validation_windows_refuses_to_train() -> None:
@@ -372,3 +374,37 @@ def test_pattern_swap_still_shifts_a_day_long_window_by_twelve_hours() -> None:
     swapped = SYNTHETIC_ANOMALIES["pattern_swap"](load, 24)
 
     assert np.array_equal(swapped, np.roll(load, 12, axis=1))
+
+
+def test_a_model_trained_with_another_window_is_refused_on_load(trained, tmp_path: Path) -> None:
+    """A shorter window in the definition would read less history than the model's windows span."""
+    trained.model.save(tmp_path)
+
+    with pytest.raises(ModelRecipeMismatchError, match="window_hours.*retrain"):
+        task_type.load(tmp_path, PARAMS.model_copy(update={"window_hours": 12}), WEATHER_FIELDS)
+
+
+def test_a_model_trained_on_other_weather_fields_is_refused_on_load(
+    trained, tmp_path: Path
+) -> None:
+    trained.model.save(tmp_path)
+
+    with pytest.raises(ModelRecipeMismatchError, match="weather_fields"):
+        task_type.load(tmp_path, PARAMS, ("temperature",))
+
+
+def test_the_decision_quantile_and_network_size_do_not_stop_a_model_serving(
+    trained, tmp_path: Path
+) -> None:
+    """The threshold was fixed at training; a new quantile takes effect at the next training."""
+    trained.model.save(tmp_path)
+    declared = PARAMS.model_copy(
+        update={
+            "threshold_quantile": 0.95,
+            "model": PARAMS.model.model_copy(update={"hidden_layer_sizes": [16, 4, 16]}),
+        }
+    )
+
+    reloaded = task_type.load(tmp_path, declared, tuple(reversed(WEATHER_FIELDS)))
+
+    assert reloaded.threshold == trained.model.threshold

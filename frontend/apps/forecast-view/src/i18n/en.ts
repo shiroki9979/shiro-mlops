@@ -46,7 +46,7 @@ export const en: Messages = {
     stale: (hours: number) => `This forecast has not been updated for more than ${hours} hours`,
     issuedAt: (time) => `Forecast time: ${time}`,
     predictionSubject: 'Prediction Subject: Nationwide',
-    autoRefresh: 'Auto refresh (60s)',
+    autoRefresh: (seconds) => `Auto refresh (${seconds}s)`,
     metrics: {
       peakTitle: 'Forecast Peak Load',
       peakTag: 'Peak',

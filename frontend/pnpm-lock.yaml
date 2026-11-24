@@ -129,9 +129,6 @@ importers:
       recharts:
         specifier: ^2.15.1
         version: 2.15.4(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      sonner:
-        specifier: ^2.0.1
-        version: 2.0.8(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       zod:
         specifier: ^3.24.2
         version: 3.25.76

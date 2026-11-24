@@ -200,7 +200,7 @@ function declaredFilterValues(dataset: ExplorerDatasetConfig, search: Record<str
 }
 
 // SYNC(src/shiro_mlops/service/data_explorer/values.py): is_truthy.
-const TRUTHY_VALUES = new Set(['1', 'true', 'yes'])
+const TRUTHY_VALUES = new Set(['1', 'on', 't', 'true', 'y', 'yes'])
 
 function isTruthy(value: unknown): boolean {
   return value !== undefined && value !== null && TRUTHY_VALUES.has(String(value).toLowerCase())

@@ -1,7 +1,7 @@
 # Dagster 資產排程與觸發規格
 
 - 建立日期：2026-11-20
-- 最後更新：2026-11-23
+- 最後更新：2026-11-24
 - 專案版本：`0.4.0`
 
 > 由 `docs/SPEC.md` 第 3 節拆出。
@@ -94,7 +94,7 @@
    - **發布結局**：資產取得發布時刻後呼叫 `pipelines/issuing.py` 的 `issue_forecast`，它回傳四種結局之一：`Issued`（已寫入）、`AlreadyIssued`（該發布時刻已有紀錄，不寫入）、`ModelUnavailable`（模型目錄沒有可發布的模型）、`ForecastUnavailable`（runner 無法產出預報）。資產只把結局轉成 materialization metadata 或 `Failure`，對應見下方「無法產出」與「冪等性」。排程與 `issue_forecast` 以同一個 `issuing_decision` 判斷有沒有模型可發布。
    - **排程**：`15 * * * *`（`Asia/Taipei`），排在逐時負載推算（:05）與觀測擷取（:10）之後。以 `tick_run_request` 把 tick 同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），資產沒有設定欄位。
    - **發布時刻**：發布時刻即排程 tick 時刻，也是預報的 `as_of`，不取整點（決策見 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)）。
-   - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，經 `time_series_repo` resource 交出的已發布預報 store（`issued_forecast_store`）寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。
+   - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，經 `time_series_repo` resource 交出的已發布預報 store（`issued_forecast_store`）寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。已安裝的模型以不同於任務設定的輸入配方訓練時（`ModelRecipeMismatchError`，[ML 任務設定 §2](ml-tasks.md#2-任務類型介面taskstypes)），以 `Failure` 結束、不寫入，訊息列出不同的項目；排程照常觸發，直到重新訓練。
    - **lineage**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，因此任務 job 不會帶出發布（見第 1 項邊界）。`issued_forecast_job` 不選取任何擷取資產。
    - **只有定時發布才算**：資產宣告沒有 tick 時拒絕（[執行來源與 as_of](#執行來源與-as_of)），退回現在等於在 tick 以外的時刻補發。只有排程 tick 發起的 run 以該 tick 發布；手動 materialize、在 launchpad 自填 tick 標籤的 run、從排程 tick 預覽發起的 run，以及重新執行的 run 皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過、不產生 run。隨需 `/predict` 不寫入。
    - **無法產出**：排程與資產都以第 1 項的 `read_model_presence` 判斷有沒有模型可發布，只看模型目錄、不查最低累積。模型目錄沒有由模型存放安裝的模型時，排程以 `SkipReason` 略過：兩邊都沒有模型時為尚無 `dynamic_horizon_forecast__model` materialization 的原因，只有訓練紀錄時為「紀錄與目錄不一致」的原因。只有模型目錄時（例如刪除 `dagster_home` volume 但保留 `data/models/`）照常發布，MLflow 附註（`mlflow_model_version`）依 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的雜湊比對規則留空。模型目錄在 tick 之後、run 載入之前消失時，資產以 `Failure` 結束、description 與上述排程的略過原因相同（說明沒有模型，或紀錄與目錄不一致）並附 `issued_at` metadata，不寫入。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入。

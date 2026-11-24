@@ -148,3 +148,62 @@ def test_audit_series_scenarios_on_sqlite(scenario, test_repo: TimeSeriesReposit
 @pytest.mark.parametrize("scenario", AUDIT_STATUS_SCENARIOS, ids=lambda scenario: scenario.__name__)
 def test_audit_status_scenarios_on_sqlite(scenario, test_repo: TimeSeriesRepository) -> None:
     scenario(test_repo)
+
+
+SERIES_PATHS_WITH_FIELDS = [
+    "/data/power/load/series",
+    "/data/power/supply-demand/series",
+    "/data/power/regional/series",
+    "/data/power/units/series",
+    "/data/weather/observations/series",
+    "/data/weather/forecasts/series",
+]
+COUNT_SERIES_PATHS = ["/data/audits/cwa-observations/series", "/data/audits/cwa-forecasts/series"]
+
+
+@pytest.mark.parametrize("path", SERIES_PATHS_WITH_FIELDS)
+def test_declared_series_options_sent_empty_read_as_not_given(series_client_for, path) -> None:
+    """A form that clears a select sends `bucket=`; the contract reads it as the default."""
+    client, _repo = series_client_for
+    window = _window(datetime(2026, 9, 1), datetime(2026, 9, 2))
+
+    with_empty = client.get(path, params={**window, "bucket": "", "agg": "", "fields": ""})
+    without = client.get(path, params=window)
+
+    assert with_empty.status_code == 200, with_empty.json()
+    assert with_empty.json() == without.json()
+
+
+@pytest.mark.parametrize("path", COUNT_SERIES_PATHS)
+def test_an_empty_bucket_reads_as_not_given_on_count_series(series_client_for, path) -> None:
+    client, _repo = series_client_for
+    window = _window(datetime(2026, 9, 1), datetime(2026, 9, 2))
+
+    response = client.get(path, params={**window, "bucket": ""})
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["bucket"] == client.get(path, params=window).json()["bucket"]
+
+
+def test_an_empty_group_by_reads_as_not_given(series_client_for) -> None:
+    client, _repo = series_client_for
+    window = _window(datetime(2026, 9, 1), datetime(2026, 9, 2))
+
+    response = client.get("/data/power/units/series", params={**window, "group_by": ""})
+
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [("bucket", "weekly"), ("agg", "sum"), ("fields", "not_a_field"), ("group_by", "plant")],
+)
+def test_a_declared_series_option_with_an_unknown_value_is_still_rejected(
+    series_client_for, parameter: str, value: str
+) -> None:
+    client, _repo = series_client_for
+
+    response = client.get("/data/power/units/series", params={parameter: value})
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
