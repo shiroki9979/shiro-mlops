@@ -7,8 +7,8 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import Any
 
 CURSOR_VERSION = 2
-# 最長的合法 cursor（鄉鎮預報，篩選全帶、時間含微秒）約 700 字元；超過此長度的不是本服務發出的，
-# 解碼前就拒絕，不為它配置記憶體或解析 JSON。
+# WHY-NOT(MAX_CURSOR_LENGTH): 最長的合法 cursor（鄉鎮預報，篩選全帶、時間含微秒）約 700 字元；
+# 超過此長度的不是本服務發出的，解碼前就拒絕，不為它配置記憶體或解析 JSON。
 MAX_CURSOR_LENGTH = 4096
 
 
@@ -44,7 +44,7 @@ def _decode_cursor_payload(token: str, *, dataset: str) -> tuple[dict[str, Any],
     padded = token + "=" * (-len(token) % 4)
     try:
         payload = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
-    # json.loads raises RecursionError, not ValueError, on deeply nested input.
+    # WHY-NOT(RecursionError): json.loads raises it, not ValueError, on deeply nested input.
     except (ValueError, RecursionError) as exc:
         raise CursorError("Invalid cursor") from exc
     if not isinstance(payload, dict):

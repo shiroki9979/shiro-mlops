@@ -155,7 +155,7 @@ def _merge_recent_weather(
     result = load.copy()
     datetime_col = join_keys[0]
     ordered_load = load[join_keys].sort_values(datetime_col)
-    # WHY-NOT _merge_recent_weather: a field the weather does not carry is left out rather than
+    # WHY-NOT(_merge_recent_weather): a field the weather does not carry is left out rather than
     # added as an all-missing column, which made dropna() discard every row of a one-field task.
     for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL):
         if column not in weather.columns:

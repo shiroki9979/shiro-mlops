@@ -194,7 +194,7 @@ def _coerce_number(value: Any, context: str, *, trace_is_zero: bool = False) -> 
         raise ValueError(f"Invalid CWA numeric value for {context}: {raw!r}") from exc
     if not math.isfinite(number):
         raise ValueError(f"Non-finite CWA numeric value for {context}: {raw!r}")
-    # WHY-NOT _MISSING_NUMBER: the markers are compared as numbers because the API sends them
+    # WHY-NOT(_MISSING_NUMBER): the markers are compared as numbers because the API sends them
     # as JSON floats too; matching the text "-99" lets -99.0 through as a real temperature.
     if number == _MISSING_NUMBER:
         return None
@@ -621,7 +621,7 @@ class CWAClient:
         """Fetch one CWA source payload through the canonical ingestion boundary."""
         with httpx.Client(timeout=10.0) as client:
             response = client.get(url, params={"Authorization": self.api_key})
-            # WHY-NOT _fetch_json: raise_for_status() is avoided because its message carries
+            # WHY-NOT(_fetch_json): raise_for_status() is avoided because its message carries
             # the request URL, and the membership key travels in that URL's query string.
             if response.status_code != 200:
                 raise ValueError(

@@ -327,7 +327,7 @@ class SeriesReader:
         groups = request.group_columns
         by_key: dict[tuple[str, ...], list[dict[str, Any]]] = {key: [] for key in keys}
         for row in rows:
-            # WHY-NOT by_key: a row whose group the keys read did not see is dropped, not
+            # WHY-NOT(by_key): a row whose group the keys read did not see is dropped, not
             # indexed blindly. Keys and points are two reads, and an ingestion committing
             # between them adds a group the bucket and point limits were never checked for.
             key_rows = by_key.get(self._group_key(row, groups))

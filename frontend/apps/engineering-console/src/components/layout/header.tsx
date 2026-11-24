@@ -1,3 +1,4 @@
+import { useRefetchDatasetStatus } from '@/hooks/use-data-explorer'
 import { useHealth } from '@/hooks/use-health'
 import { Badge } from '@shiro-mlops/shared/ui/badge'
 import { Button } from '@shiro-mlops/shared/ui/button'
@@ -17,6 +18,7 @@ import { useMessages } from '@/i18n/messages'
 export function Header() {
   const healthQuery = useHealth()
   const { refetch, isFetching } = healthQuery
+  const refetchDatasetStatus = useRefetchDatasetStatus()
   // The badge states the API's condition now, so a failed or offline read outranks the last response
   const healthView = toQueryView(healthQuery, { policy: 'error-first' })
   const [isDark, setIsDark] = useState(true)
@@ -70,7 +72,10 @@ export function Header() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => refetch()}
+          onClick={() => {
+            void refetch()
+            void refetchDatasetStatus()
+          }}
           disabled={isFetching}
           className="gap-1.5 text-xs text-slate-300 border-slate-800 hover:bg-slate-850"
         >

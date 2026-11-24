@@ -88,7 +88,7 @@ def execution_origin(tags: Mapping[str, str]) -> ExecutionOrigin:
 
 
 def _daemon_launched_this_tick(tags: Mapping[str, str]) -> bool:
-    # WHY-NOT RUN_KEY_TAG: the schedule name alone does not prove a scheduled run. Evaluating
+    # WHY-NOT(RUN_KEY_TAG): the schedule name alone does not prove a scheduled run. Evaluating
     # a tick already merges the schedule name and the tick into the request's tags, and the
     # UI's tick preview copies them onto a run someone launches by hand for any past or
     # future tick. Only the daemon adds the run key, which tick_run_request sets to the tick.

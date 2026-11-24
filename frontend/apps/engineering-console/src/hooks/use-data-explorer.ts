@@ -6,14 +6,23 @@ function retryOnceWhenDatabaseUnavailable(failureCount: number, error: DataExplo
   return failureCount < 1 && error.kind === 'databaseUnavailable'
 }
 
+const DATASET_STATUS_QUERY_KEY = ['data-explorer', 'status'] as const
+
 export function useDatasetStatus() {
   return useQuery({
-    queryKey: ['data-explorer', 'status'],
+    queryKey: DATASET_STATUS_QUERY_KEY,
     queryFn: () => apiClient.getDataStatus(),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     retry: 1,
   })
+}
+
+// The status never goes stale on its own (manual Refresh only), so pages without a Refresh of
+// their own rely on the header's: it re-reads the status wherever a page is showing it.
+export function useRefetchDatasetStatus() {
+  const queryClient = useQueryClient()
+  return () => queryClient.refetchQueries({ queryKey: DATASET_STATUS_QUERY_KEY, type: 'active' })
 }
 
 export function datasetListQueryKey(path: string, params: Record<string, string | undefined>) {

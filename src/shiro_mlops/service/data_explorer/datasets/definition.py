@@ -97,7 +97,7 @@ class JsonContains(Filter):
     column: str
 
     def clause(self, db: ExplorerDb, value: str) -> Clauses:
-        # WHY-NOT JsonContains: the identifier is escaped before it goes into the pattern.
+        # WHY-NOT(JsonContains): the identifier is escaped before it goes into the pattern.
         # Unescaped, "%" matched every batch with any missing member and "_" any one character.
         escaped = "".join(f"\\{char}" if char in LIKE_SPECIAL else char for char in value)
         return (

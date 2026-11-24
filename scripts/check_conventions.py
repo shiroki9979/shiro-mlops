@@ -928,7 +928,7 @@ class GitRange:
     head: str
 
     def changed_markdown(self) -> list[str]:
-        # WHY-NOT changed_markdown: -z keeps paths as they are. Without it git C-quotes a
+        # WHY-NOT(changed_markdown): -z keeps paths as they are. Without it git C-quotes a
         # non-ASCII name, the quoted form matches no file in the log, and the doc is skipped.
         output = git(
             self.repo_root,
@@ -1039,7 +1039,7 @@ def parse_changed_lines(diff: str) -> dict[str, FileChanges]:
         if line.startswith(DIFF_FILE_HEADER):
             in_file_header = True
         elif in_file_header and line.startswith(DIFF_NEW_PATH):
-            # git ends this line with a tab when the path holds a space.
+            # WHY-NOT(rstrip): git ends this line with a tab when the path holds a space.
             path = line.removeprefix(DIFF_NEW_PATH).rstrip("\t")
             changes = files.setdefault(path, FileChanges())
         elif (hunk := HUNK_HEADER.match(line)) is not None:

@@ -236,7 +236,7 @@ class _Scaler:
 
     @classmethod
     def fit(cls, features: np.ndarray) -> _Scaler:
-        # WHY-NOT _Scaler: constant features are found by their range, not by std > 0; the std of
+        # WHY-NOT(_Scaler): constant features are found by their range, not by std > 0; the std of
         # a repeated inexact float (70.1) is round-off near 1e-14, and dividing by it turns the
         # first different reading at serving into a score trillions of times the threshold.
         is_constant = np.ptp(features, axis=0) == 0.0

@@ -26,7 +26,6 @@ def parse_api_time(value: datetime | str) -> datetime:
     return timestamp.tz_convert(TAIWAN).tz_localize(None).to_pydatetime()
 
 
-# 請求時間只接受 RFC 3339 date-time：日期、T、時分（秒與小數可省略）與可省略的 offset。
 _REQUEST_TIME = re.compile(
     r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?([Zz]|[+-]\d{2}:\d{2})?",
     re.ASCII,
@@ -41,7 +40,7 @@ def parse_request_time(value: datetime | str) -> datetime:
     Raises ``ValueError`` for anything but an RFC 3339 date-time inside
     ``[EARLIEST_REQUEST_TIME, REQUEST_TIME_END)``.
     """
-    # WHY-NOT parse_request_time: pandas is not asked to guess. It reads "now", "2026" or a
+    # WHY-NOT(parse_request_time): pandas is not asked to guess. It reads "now", "2026" or a
     # bare "12:00" as times, and reads the space a "+08:00" turns into when a client forgets
     # to URL-encode it as a time-of-day, so the request silently queried a different window.
     if isinstance(value, datetime):
@@ -55,7 +54,8 @@ def parse_request_time(value: datetime | str) -> datetime:
             parsed = parsed.astimezone(TAIWAN).replace(tzinfo=None)
         except OverflowError as exc:
             raise ValueError(_OUT_OF_RANGE) from exc
-    # The range keeps every later conversion (UTC, pandas nanoseconds) inside its bounds.
+    # WHY-NOT(EARLIEST_REQUEST_TIME): outside this range a later conversion (to UTC, to pandas
+    # nanoseconds) overflows and the request ends as a 500 instead of a refusal.
     if not EARLIEST_REQUEST_TIME <= parsed < REQUEST_TIME_END:
         raise ValueError(_OUT_OF_RANGE)
     return parsed
