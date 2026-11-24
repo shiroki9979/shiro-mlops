@@ -1,8 +1,8 @@
 # ADR 0004: 採用 Dagster 軟體定義資產 (SDA) 作為核心資料與模型編排引擎
 
-- 建立日期：2026-08-23
-- 最後更新：2026-08-23
-- 狀態：已接受 (Accepted)
+> - Created: 2026-08-23
+> - Last Updated: 2026-08-23
+> - Status: Accepted
 
 ---
 

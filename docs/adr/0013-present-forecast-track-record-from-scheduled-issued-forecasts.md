@@ -3,8 +3,9 @@
 > - Created: 2026-11-18
 > - Last Updated: 2026-11-20
 > - Author: Bo-Xue Huang
-> - Status: 已接受
+> - Status: Accepted
 > - Related: [ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[GLOSSARY.md](../../GLOSSARY.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 

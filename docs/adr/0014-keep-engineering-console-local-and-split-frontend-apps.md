@@ -3,8 +3,9 @@
 > - Created: 2026-11-18
 > - Last Updated: 2026-11-24
 > - Author: Bo-Xue Huang
-> - Status: 已接受
+> - Status: Accepted
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[GLOSSARY.md](../../GLOSSARY.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 

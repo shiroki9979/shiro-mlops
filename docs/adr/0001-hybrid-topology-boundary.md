@@ -1,8 +1,10 @@
 # ADR 0001: 混合雲地架構之權責邊界切分
 
-- 建立日期：2026-08-23
-- 最後更新：2026-11-19
-- 狀態：已被 [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 取代 (Superseded)
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-19
+> - Status: Superseded
+> - Superseded by: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)
+> - Revisions: [Notes](#notes)
 
 ---
 
