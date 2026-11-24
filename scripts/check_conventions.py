@@ -125,6 +125,8 @@ DOC_METADATA_MIGRATED_SCOPE = (
     "GLOSSARY.md",
     "CODING_STANDARDS.md",
     "frontend/README.md",
+    "docs/explanation/",
+    "docs/research/",
 )
 """Docs already in the metadata format, one directory (ending in /) or file per line."""
 COMMENT_KINDS_DIRS = ("src", "scripts")

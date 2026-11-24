@@ -1,29 +1,30 @@
-<!-- markdownlint-disable MD024 -->
 # 架構檢視：module 加深候選紀錄
 
-- 建立日期：2026-09-27
-- 最後更新：2026-11-22
-- 文件類型：Explanation（架構現況與取捨分析）
-- 狀態：候選 1 已依規格實作並完成雙資料庫驗收；候選 2、3 待評估，分別登記為技術債 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)、[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)
-- 候選 1 規格：[GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)
-- 檢視基準：`da538a58433a3e00ccf84dee19f7de9679c02e0e`
+> - Created: 2026-09-27
+> - Last Updated: 2026-11-24
+> - Status: Closed
+> - Related: [GitHub #72](https://github.com/shiroki9979/shiro-mlops/issues/72)、[2026-11-22 架構檢視](2026-11-22-architecture-review.md)
+
+<!-- markdownlint-disable MD024 -->
 
 ## 範圍與結論
 
-本次沿最近 80 個非 merge commits（2026-09-03 至 2026-09-27）追查變更熱點，
+本次以 `da538a58433a3e00ccf84dee19f7de9679c02e0e` 為檢視基準，沿最近 80 個非 merge commits（2026-09-03 至 2026-09-27）追查變更熱點，
 聚焦營運資料檢視器、氣象署鄉鎮預報版本與全台逐時實際負載。
 `repository.py`、`assets.py` 與 `weather_resolution.py` 分別出現在 22、20、7 個 commits。
 判斷依據為實際呼叫流程、歷史修補與現有測試，屬有範圍的架構檢視。
 
 | 候選 | 建議強度 | 主要收益 | 建議時機 |
 | :--- | :--- | :--- | :--- |
-| 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 已實作並驗收 |
+| 1. 集中營運資料檢視器的分頁規則 | Strong | 同一排序規則控制 cursor 與查詢，涵蓋 8 個 datasets | 已實作，並完成 PostgreSQL 與 SQLite 雙資料庫驗收 |
 | 2. 集中預報版本選取與降級解析 | Worth exploring | 預報消費政策具有共同 locality | 確認後續政策變更需要共同修改時（[#102](https://github.com/shiroki9979/shiro-mlops/issues/102)） |
 | 3. 收攏營運資料檢視器的查詢生命週期 | Worth exploring | 畫面操作共用窗口與 cursor 有效性規則 | 下次新增篩選或查詢操作時（[#103](https://github.com/shiroki9979/shiro-mlops/issues/103)） |
 
 優先建議候選 1：相同排序 invariant 曾需三處同步修補，已有具體維護成本；
 沿用既有 list interface 與離線 fixture 即可驗證改善，範圍也較候選 2 容易控制。
-2026-09-27 已選定候選 1，並確認 Q1 至 Q8 的設計選擇；完整方案已整理為 GitHub 規格 #72，五張工單已確認並發布為 #73 至 #77。
+2026-09-27 已選定候選 1，並確認 Q1 至 Q8 的設計選擇；完整方案已整理為 [GitHub 規格 #72](https://github.com/shiroki9979/shiro-mlops/issues/72)，五張工單已確認並發布為 #73 至 #77。
+
+候選 2、3 不在本次實作，改登記為技術債，等表中的時機出現再評估。本紀錄到此結案，下一輪檢視見 [2026-11-22 架構檢視](2026-11-22-architecture-review.md)。
 
 ## 評估用語
 
