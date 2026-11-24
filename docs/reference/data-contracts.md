@@ -3,8 +3,6 @@
 > - Created: 2026-11-20
 > - Last Updated: 2026-11-24
 
-> 由 `docs/SPEC.md` 第 1 節拆出。
-
 ---
 
 ## 1. 台電用電負載實體 (Taipower Load Schema)

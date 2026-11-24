@@ -1,9 +1,7 @@
 # 前端語系與格式
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-23
-
-> 由 `docs/SPEC.md` 第 6 節拆出。
+> - Last Updated: 2026-11-24
 
 ---
 

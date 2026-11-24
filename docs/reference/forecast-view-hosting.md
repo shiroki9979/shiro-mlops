@@ -3,8 +3,6 @@
 > - Created: 2026-11-20
 > - Last Updated: 2026-11-24
 
-> 由 `docs/SPEC.md` 第 8 節拆出。
-
 ---
 
 依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只以 S3 + CloudFront 提供預報檢視的發布產物，沒有 API origin。本節的配置經 [GitHub #128](https://github.com/shiroki9979/shiro-mlops/issues/128) 定案，已由 TICKET-412 實作於 `infra/terraform/`；瀏覽器 `Cache-Control` 與安全標頭已由 [GitHub #169](https://github.com/shiroki9979/shiro-mlops/issues/169) 實作。

@@ -3,8 +3,6 @@
 > - Created: 2026-11-20
 > - Last Updated: 2026-11-24
 
-> 由 `docs/SPEC.md` 第 3 節拆出。
-
 ---
 
 ## 執行來源與 as_of

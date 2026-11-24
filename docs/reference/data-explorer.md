@@ -3,12 +3,10 @@
 > - Created: 2026-11-20
 > - Last Updated: 2026-11-24
 
-> 由 `docs/SPEC.md` 第 4 節拆出。
-
 ---
 
-> **狀態：已實作。** 本節定義 [GitHub #40](https://github.com/shiroki9979/shiro-mlops/issues/40)
-> 與子工單 #41–#50 的契約；`GET /data/*` 與前端 `/data` 路由僅在 local environment 或 `DATA_EXPLORER_ENABLED` 時可用。
+> 本節定義 [GitHub #40](https://github.com/shiroki9979/shiro-mlops/issues/40)
+> 與子工單 #41–#50 的契約，皆已實作；`GET /data/*` 與前端 `/data` 路由僅在 local environment 或 `DATA_EXPLORER_ENABLED` 時可用。
 
 ## 1. 產品邊界
 

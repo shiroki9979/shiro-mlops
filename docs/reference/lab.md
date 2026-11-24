@@ -3,8 +3,6 @@
 > - Created: 2026-11-20
 > - Last Updated: 2026-11-24
 
-> 由 `docs/SPEC.md` 第 7 節拆出。
-
 ---
 
 > 依 [ADR-0011](../adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)。程式位於 `lab/`，相依方向固定為 `lab` → `shiro_mlops`；操作步驟見 [如何執行一次 lab 研究](../how-to/run-lab-study.md)。

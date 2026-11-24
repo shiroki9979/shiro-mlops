@@ -1,9 +1,7 @@
 # API 介面規格 (REST Interface)
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-23
-
-> 由 `docs/SPEC.md` 第 2 節拆出。
+> - Last Updated: 2026-11-24
 
 ---
 

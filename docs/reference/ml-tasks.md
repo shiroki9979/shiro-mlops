@@ -3,8 +3,6 @@
 > - Created: 2026-11-20
 > - Last Updated: 2026-11-24
 
-> 由 `docs/SPEC.md` 第 5 節拆出。
-
 ---
 
 > 依 [ADR-0009](../adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md) 與 [ADR-0010](../adr/0010-persist-models-in-native-non-executable-formats.md)。程式位於 `src/shiro_mlops/tasks/`，任務設定檔與程式一同隨映像檔發布。
