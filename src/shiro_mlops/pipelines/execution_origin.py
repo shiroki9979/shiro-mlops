@@ -5,8 +5,11 @@ time, through ``tick_run_request``; assets never read the tick from config. One
 schedule is the exception: the Forecast View export schedule keys its runs with
 ``tick_run_key`` but deliberately carries no tick, so the export's as_of is
 always the run's creation time. The
-tick counts only in the run the schedule launched: one Dagster also tagged with
-the schedule name, and not a re-execution, which copies the original run's tags.
+tick counts only in the run the scheduler daemon launched for it: one Dagster also
+tagged with the schedule name and with a run key equal to the tick, and not a
+re-execution, which copies the original run's tags. A run launched by hand from the
+UI's tick preview carries the schedule name and the tick but no run key, so it has
+no tick either.
 Any other run has no tick, and each asset with an as_of declares what it does
 then (``WithoutTick``): refuse, or fall back to now. Now is the run's creation
 time, so every retry inside one run gets the same as_of. Flooring the as_of to
@@ -25,6 +28,7 @@ from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 
 SCHEDULED_TICK_TAG = "shiro_mlops/scheduled_tick"
 SCHEDULE_NAME_TAG = "dagster/schedule_name"
+RUN_KEY_TAG = "dagster/run_key"
 REEXECUTION_TAGS = ("dagster/parent_run_id", "dagster/root_run_id")
 
 
@@ -75,12 +79,21 @@ def resolve_as_of(
 
 
 def execution_origin(tags: Mapping[str, str]) -> ExecutionOrigin:
-    """A tick counts only together with the schedule name Dagster tags each schedule run with."""
+    """A tick counts only in the run the scheduler daemon launched for that same tick."""
     if any(tag in tags for tag in REEXECUTION_TAGS):
         return ExecutionOrigin.REEXECUTION
-    if SCHEDULED_TICK_TAG in tags and SCHEDULE_NAME_TAG in tags:
+    if SCHEDULE_NAME_TAG in tags and _daemon_launched_this_tick(tags):
         return ExecutionOrigin.SCHEDULED_TICK
     return ExecutionOrigin.MANUAL
+
+
+def _daemon_launched_this_tick(tags: Mapping[str, str]) -> bool:
+    tick = tags.get(SCHEDULED_TICK_TAG)
+    # WHY-NOT(RUN_KEY_TAG): the schedule name alone does not prove a scheduled run. Evaluating
+    # a tick already merges the schedule name and the tick into the request's tags, and the
+    # UI's tick preview copies them onto a run someone launches by hand for any past or
+    # future tick. Only the daemon adds the run key, which tick_run_request sets to the tick.
+    return bool(tick) and tags.get(RUN_KEY_TAG) == tick
 
 
 def run_as_of(context: AssetExecutionContext, *, without_tick: WithoutTick) -> datetime:

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { onlineManager } from '@tanstack/react-query'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
@@ -56,6 +56,43 @@ describe('Engineering Console shell', () => {
 
     expect(await screen.findByText(zhTW.header.modelNotLoaded)).toBeInTheDocument()
     expect(screen.queryByText(zhTW.header.apiUnreachable)).not.toBeInTheDocument()
+  })
+
+  it('re-reads the data source status when the header Refresh is pressed on monitoring', async () => {
+    // The status never goes stale on its own, and monitoring has no Refresh of its own:
+    // without this the cards kept the state from when the console was opened.
+    const user = userEvent.setup()
+    let statusReads = 0
+    server.use(
+      http.get('*/data/status', () => {
+        statusReads += 1
+        return HttpResponse.json({ timezone: 'Asia/Taipei', datasets: [] })
+      }),
+    )
+    renderAppAt('/console/monitoring')
+    await waitFor(() => expect(statusReads).toBe(1))
+
+    await user.click(screen.getByRole('button', { name: zhTW.common.refresh }))
+
+    await waitFor(() => expect(statusReads).toBe(2))
+  })
+
+  it('does not read the data source status from a page that does not show it', async () => {
+    const user = userEvent.setup()
+    let statusReads = 0
+    server.use(
+      http.get('*/data/status', () => {
+        statusReads += 1
+        return HttpResponse.json({ timezone: 'Asia/Taipei', datasets: [] })
+      }),
+    )
+    renderAppAt('/console/settings')
+    expect(await screen.findByText(zhTW.header.apiHealthy('local', '0.1.0'))).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: zhTW.common.refresh }))
+
+    await screen.findByText(zhTW.header.apiHealthy('local', '0.1.0'))
+    expect(statusReads).toBe(0)
   })
 
   it('reports the API unreachable when a refresh fails after a healthy response', async () => {

@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, dev]
 
+# Every job starts from a read-only token instead of the repository default; the two jobs
+# that assume an AWS role add id-token: write themselves.
+permissions:
+  contents: read
+
 env:
   # Every job that sets up Terraform pins this version; it satisfies required_version in
   # infra/terraform/main.tf and infra/terraform/bootstrap/main.tf.

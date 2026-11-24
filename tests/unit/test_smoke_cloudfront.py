@@ -138,6 +138,31 @@ def test_missing_published_file_served_as_html_fails(distribution, capsys) -> No
     ]
 
 
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_missing_published_file_redirected_to_the_app_fails(distribution, capsys, status) -> None:
+    """A redirect to index.html is the same fallback as serving it, one hop later."""
+    distribution.missing = Response(status, location="/index.html")
+
+    exit_code, output = _run(distribution, capsys)
+
+    assert exit_code == 1
+    assert _failure_lines(output) == [
+        "- /published/definitely-missing-smoke-check.json is not 200:"
+        f" HTTP {status}, expected an error status"
+    ]
+
+
+@pytest.mark.parametrize("status", [403, 404, 410])
+def test_missing_published_file_answered_with_a_client_error_passes(
+    distribution, capsys, status
+) -> None:
+    distribution.missing = Response(status)
+
+    exit_code, _ = _run(distribution, capsys)
+
+    assert exit_code == 0
+
+
 def test_issued_at_older_than_24_hours_fails(distribution, capsys) -> None:
     distribution.routes["/published/latest_issued_forecast.json"] = _latest_issued(
         "2026-11-19T11:59:59+08:00"

@@ -299,6 +299,7 @@ After ：composition root〔一個 engine、一次 schema init〕→ 交出 stor
 - **CWA 天氣讀取詞彙**：`fetch_weather_range` 讀全域 `settings.cwa_locations` 做 alias 與測站互轉；canonical 欄名到特徵欄名的對映出現在三處，預報產品 id 與角色出現在四處。證據補充於 [#102](https://github.com/shiroki9979/shiro-mlops/issues/102)，仍等其觸發條件。
   **狀態（2026-11-23）**：讀全域 settings 一句記錄檢視基準當時的狀態；[#315](https://github.com/shiroki9979/shiro-mlops/issues/315) 已讓 `fetch_weather_range` 直接收 `CWALocation`，CWA 天氣 store 不再讀全域 settings。欄名對映與預報產品詞彙的重複仍在，照舊等 #102。
 - **死碼**：`cwa_client._parse_cwa_observations_payload` 與 `CWAClient.forecast_url` 在 src 與 tests 都沒有呼叫端，可直接刪除。
+  **狀態（2026-11-23）**：兩者與只被前者使用的 `_normalize_location_name` 已刪除。
 - **用語**：`direct_classification` 的 `lead_hours` 自負載起點起算，與 GLOSSARY「提前時數」不同，目前只是命名風險。
 
 ## 已有足夠 depth 的 module

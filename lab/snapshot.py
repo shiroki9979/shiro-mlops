@@ -9,7 +9,9 @@ a task whose weather differs.
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import uuid
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 from shiro_mlops.core.config import settings
+from shiro_mlops.core.datetime_utils import taiwan_now
 from shiro_mlops.data.repository import TimeSeriesRepository
 from shiro_mlops.tasks.definition import TaskDefinition, WeatherSpec, build_weather_spec
 from shiro_mlops.tasks.deployed import deployed_task
@@ -53,17 +56,43 @@ def write_snapshot(
     ``variant`` names a snapshot whose weather differs from the shipped definition.
     """
     normalized_as_of = normalize_taiwan_timestamp(as_of)
-    path = _snapshot_file(task, normalized_as_of, variant, snapshots_dir)
-    if path.exists():
-        raise FileExistsError(
-            f"Snapshot already exists for ({task.task_id}, {normalized_as_of.isoformat()}): {path}"
+    now = taiwan_now()
+    if normalized_as_of > now:
+        raise ValueError(
+            f"as_of {normalized_as_of.isoformat()} is later than the current time "
+            f"{now.isoformat(timespec='seconds')}: the snapshot would be labelled with a time "
+            "whose data does not exist yet, and a snapshot is never rewritten."
         )
+    path = _snapshot_file(task, normalized_as_of, variant, snapshots_dir)
+    already_exists = (
+        f"Snapshot already exists for ({task.task_id}, {normalized_as_of.isoformat()}): {path}"
+    )
+    if path.exists():
+        raise FileExistsError(already_exists)
     data = load_training_data(task, runtime, as_of=normalized_as_of.to_pydatetime())
     table = training_table(data)
     table.attrs = {_WEATHER_ATTR: _weather_record(task.weather)}
     path.parent.mkdir(parents=True, exist_ok=True)
-    table.to_parquet(path, index=False)
+    try:
+        _write_once(table, path)
+    except FileExistsError as error:
+        raise FileExistsError(already_exists) from error
     return path
+
+
+def _write_once(table: pd.DataFrame, path: Path) -> None:
+    """Write the whole file beside ``path``, then link it into place only if ``path`` is free.
+
+    Writing straight to ``path`` left a truncated file there when the write was interrupted;
+    the snapshot could then neither be read nor, being immutable, written again. A hard link
+    also refuses an existing target, so a second run finishing later cannot replace the first.
+    """
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        table.to_parquet(temporary, index=False)
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def read_snapshot(

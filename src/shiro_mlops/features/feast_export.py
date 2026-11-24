@@ -31,8 +31,6 @@ from shiro_mlops.features.transformers import (
 
 TAIPOWER_EXPORT_LAG_HOURS = (1, 2, 24)
 TAIPOWER_EXPORT_ROLLING_WINDOWS = (6, 24)
-DEFAULT_TEMPERATURE_CELSIUS = 25.0
-DEFAULT_RELATIVE_HUMIDITY_PERCENT = 70.0
 NON_LEAKING_LOAD_FILL = 0.0
 
 
@@ -116,21 +114,12 @@ def _build_weather_export(weather_df: pd.DataFrame, subjects: list[str]) -> pd.D
     result = pd.concat(
         [base.assign(**{LOCATION_COL: subject}) for subject in subjects], ignore_index=True
     )
-    if TEMPERATURE_COL not in result.columns:
-        result[TEMPERATURE_COL] = DEFAULT_TEMPERATURE_CELSIUS
-    if RELATIVE_HUMIDITY_COL not in result.columns:
-        result[RELATIVE_HUMIDITY_COL] = DEFAULT_RELATIVE_HUMIDITY_PERCENT
-
-    result[TEMPERATURE_COL] = (
-        pd.to_numeric(result[TEMPERATURE_COL], errors="coerce")
-        .fillna(DEFAULT_TEMPERATURE_CELSIUS)
-        .astype("float32")
-    )
-    result[RELATIVE_HUMIDITY_COL] = (
-        pd.to_numeric(result[RELATIVE_HUMIDITY_COL], errors="coerce")
-        .fillna(DEFAULT_RELATIVE_HUMIDITY_PERCENT)
-        .astype("float32")
-    )
+    # WHY-NOT(column): a missing reading stays missing. Filling it with a fixed
+    # temperature or humidity would publish a value no station ever reported.
+    for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL):
+        values = result[column] if column in result.columns else np.nan
+        result[column] = pd.to_numeric(values, errors="coerce")
+        result[column] = result[column].astype("float32")
     columns = [DATETIME_COL, LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL]
     return (
         result[columns]

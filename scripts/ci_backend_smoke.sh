@@ -45,9 +45,12 @@ main() {
     --api-url "$API_URL" --mlflow-url "$MLFLOW_URL" --wait-seconds "$WAIT_SECONDS"
 
   echo "==> Checking the API initialised the database schema itself"
-  # Not `grep --quiet`: it exits on the first match, and with pipefail the SIGPIPE it leaves
-  # `docker compose logs` can turn a match into a false condition.
-  if "${COMPOSE[@]}" logs --no-color api | grep --fixed-strings "$API_DDL_FAILURE" >&2; then
+  # The log is read before it is searched, not piped into grep: under pipefail a failing
+  # `docker compose logs` makes the whole pipeline false, which is this check's passing
+  # branch, so the failure it looks for would go unreported.
+  local api_log
+  api_log="$("${COMPOSE[@]}" logs --no-color api)"
+  if grep --fixed-strings "$API_DDL_FAILURE" <<<"$api_log" >&2; then
     echo "API log reports \"${API_DDL_FAILURE}\"" >&2
     exit 1
   fi

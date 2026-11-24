@@ -5,6 +5,7 @@ import secrets
 from dataclasses import replace
 from datetime import datetime
 
+import httpx
 import pandas as pd
 import pytest
 from defusedxml.common import DefusedXmlException
@@ -223,6 +224,53 @@ def test_client_does_not_expose_authorization_in_file_request_errors(
     assert "sensitive-query-value" not in str(exc_info.value)
 
 
+@pytest.mark.parametrize("status_code", [401, 429, 503])
+def test_client_does_not_expose_authorization_in_observation_request_errors(
+    monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    """httpx names the full URL, query string included, when it raises for a status."""
+    api_key = secrets.token_hex(8)
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, request=request)
+
+    transport = httpx.MockTransport(refuse)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "shiro_mlops.data.cwa_client.httpx.Client",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    with pytest.raises(ValueError, match=f"got {status_code}") as exc_info:
+        CWAClient(api_key=api_key).fetch_observation_batch()
+
+    assert api_key not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+
+
+def test_client_parses_a_successful_observation_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_key = secrets.token_hex(8)
+    requested: list[httpx.URL] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url)
+        return httpx.Response(200, json=_observation_payload(), request=request)
+
+    transport = httpx.MockTransport(answer)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "shiro_mlops.data.cwa_client.httpx.Client",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    batch = CWAClient(api_key=api_key).fetch_observation_batch()
+
+    assert [observation.station_id for observation in batch.observations] == ["466920"]
+    assert requested[0].params["Authorization"] == api_key
+
+
 def test_client_rejects_xml_entities_in_forecast_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -269,6 +317,45 @@ def test_parse_observation_batch_preserves_raw_and_normalizes_special_values() -
     assert observation.air_pressure_hpa == 1008.2
     assert observation.precipitation_mm == 0.0
     assert observation.wind_direction_deg is None
+
+
+@pytest.mark.parametrize("missing", [-99, -99.0, "-99", "-99.0", " -99.00 "])
+def test_observation_missing_marker_is_recognised_in_any_numeric_spelling(
+    missing: object,
+) -> None:
+    """The live API sends numbers as JSON floats as well as strings."""
+    payload = _observation_payload()
+    elements = payload["records"]["Station"][0]["WeatherElement"]
+    elements["AirTemperature"] = missing
+    elements["RelativeHumidity"] = missing
+    elements["Now"] = {"Precipitation": missing}
+
+    observation = parse_observation_batch(payload).observations[0]
+
+    assert observation.temperature_c is None
+    assert observation.relative_humidity_pct is None
+    assert observation.precipitation_mm is None
+
+
+@pytest.mark.parametrize("trace", [-98, -98.0, "-98", "-98.0", "T"])
+def test_observation_trace_precipitation_is_zero_in_any_numeric_spelling(
+    trace: object,
+) -> None:
+    payload = _observation_payload()
+    payload["records"]["Station"][0]["WeatherElement"]["Now"] = {"Precipitation": trace}
+
+    observation = parse_observation_batch(payload).observations[0]
+
+    assert observation.precipitation_mm == 0.0
+
+
+def test_trace_marker_stays_a_plain_number_outside_precipitation() -> None:
+    payload = _observation_payload()
+    payload["records"]["Station"][0]["WeatherElement"]["AirTemperature"] = -98.0
+
+    observation = parse_observation_batch(payload).observations[0]
+
+    assert observation.temperature_c == -98.0
 
 
 @pytest.mark.parametrize(

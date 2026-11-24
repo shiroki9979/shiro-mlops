@@ -30,8 +30,15 @@ export function toRfc3339(localValue: string): string {
   return localValue.length === 16 ? `${localValue}:00+08:00` : localValue
 }
 
+const HAS_UTC_OFFSET = /([zZ]|[+-]\d{2}:\d{2})$/
+
+// The window inputs are labelled Taipei time. A URL may carry another offset (a pasted
+// `...Z` link); the API reads that offset, so the input shows the same instant in Taipei
+// time rather than the digits as written. A value with no offset is Taipei time already.
 export function fromRfc3339(value?: string | null): string {
   if (!value) return ''
+  const instant = HAS_UTC_OFFSET.test(value) ? new Date(value) : null
+  if (instant && !Number.isNaN(instant.getTime())) return toDatetimeLocal(instant)
   return value.replace('+08:00', '').slice(0, 16)
 }
 

@@ -164,3 +164,28 @@ def test_lead_24_series_keeps_one_point_per_hour_from_the_latest_issue() -> None
 
     assert _series(record) == [(target, 28000.0, 28500.0)]
     assert _curve_cell(record, 24) == (24, pytest.approx(2.678571), pytest.approx(750.0))
+
+
+def test_zero_actual_load_counts_toward_mae_but_not_mape() -> None:
+    """A percentage error against zero load is undefined; the hour must not stop publication."""
+    pairs = _one_pair_per_day(7)
+    pairs.append(_pair(datetime(2026, 11, 20, 8, 0), 1, 30000.0, 0.0))
+
+    record = compile_forecast_track_record(CUTOFF, pairs)
+
+    assert record.metrics is not None
+    lead_1 = record.metrics.lead_time_curve[0]
+    assert lead_1.mape == pytest.approx(20.0)
+    assert lead_1.mae == pytest.approx((7 * 5000.0 + 30000.0) / 8)
+
+
+def test_lead_time_with_only_zero_actual_load_has_mae_and_no_mape() -> None:
+    pairs = _one_pair_per_day(7)
+    pairs.append(_pair(datetime(2026, 11, 20, 8, 0), 2, 30000.0, 0.0))
+
+    record = compile_forecast_track_record(CUTOFF, pairs)
+
+    assert record.metrics is not None
+    lead_2 = record.metrics.lead_time_curve[1]
+    assert lead_2.mape is None
+    assert lead_2.mae == pytest.approx(30000.0)

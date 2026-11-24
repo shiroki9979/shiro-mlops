@@ -1,4 +1,5 @@
-"""Verify the backend Compose services answer: API data status, API readiness and MLflow health.
+"""Verify the backend Compose services answer: API data status, API readiness, MLflow health
+and the MLflow tracking API under the host name the other containers call it by.
 
 Runs every check, repeating the whole round until all pass or `--wait-seconds` runs out, then lists
 each check that failed in the last round with the status code or reason it got.
@@ -9,19 +10,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 REQUEST_TIMEOUT_SECONDS = 10
 # SYNC(docs/reference/rest-api.md, src/shiro_mlops/data/weather_resolution.py): the modes a ready
 # task reports (`ForecastMode`); this script runs with `uv run --no-project` and
 # cannot import shiro_mlops.
 READY_MODES = ("normal", "degraded")
+# SYNC(docker/docker-compose.yml): the host and port of MLFLOW_TRACKING_URI there, which is
+# the Host header the api and dagster containers send; it must also be listed in the mlflow
+# service's MLFLOW_SERVER_ALLOWED_HOSTS.
+DEFAULT_MLFLOW_INTERNAL_HOST = "mlflow:5000"
+MLFLOW_API_PATH = "/api/2.0/mlflow/experiments/search?max_results=1"
+HOST_HEADER_VALUE = re.compile(r"[A-Za-z0-9.-]+(:\d{1,5})?")
 
 
 PlannedCheck = tuple[str, Callable[[], None]]
@@ -37,10 +45,12 @@ class FetchedResponse:
     body: bytes
 
 
-def fetch(base_url: str, path: str) -> FetchedResponse:
+def fetch(base_url: str, path: str, *, host: str | None = None) -> FetchedResponse:
+    """GET `path`; `host` replaces the Host header, to ask as a client inside the network."""
     url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    request = Request(url, headers={} if host is None else {"Host": host})
     try:
-        with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return FetchedResponse(response.status, response.read())
     except HTTPError as error:
         return FetchedResponse(error.code, error.read())
@@ -104,11 +114,24 @@ def check_mlflow_health(mlflow_url: str) -> None:
     require_status(fetch(mlflow_url, "/health"), 200)
 
 
-def planned_checks(api_url: str, mlflow_url: str) -> list[PlannedCheck]:
+def check_mlflow_tracking_api(mlflow_url: str, internal_host: str) -> None:
+    """The tracking API must answer the Host header a container sends, not only /health.
+
+    MLflow 3 refuses API requests whose Host it was not told to serve but answers /health to
+    anyone, so health alone stays green while every training run fails to record itself.
+    """
+    require_status(fetch(mlflow_url, MLFLOW_API_PATH, host=internal_host), 200)
+
+
+def planned_checks(api_url: str, mlflow_url: str, mlflow_internal_host: str) -> list[PlannedCheck]:
     return [
         ("API /data/status", lambda: check_data_status(api_url)),
         ("API /ready", lambda: check_ready(api_url)),
         ("MLflow /health", lambda: check_mlflow_health(mlflow_url)),
+        (
+            f"MLflow tracking API as {mlflow_internal_host}",
+            lambda: check_mlflow_tracking_api(mlflow_url, mlflow_internal_host),
+        ),
     ]
 
 
@@ -150,11 +173,24 @@ def parse_base_url(value: str) -> str:
     return value
 
 
+def parse_host_header(value: str) -> str:
+    if not HOST_HEADER_VALUE.fullmatch(value):
+        raise argparse.ArgumentTypeError(f"not a host or host:port: {value!r}")
+    return value
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", required=True, type=parse_base_url, help="FastAPI base URL")
     parser.add_argument(
         "--mlflow-url", required=True, type=parse_base_url, help="MLflow server base URL"
+    )
+    parser.add_argument(
+        "--mlflow-internal-host",
+        type=parse_host_header,
+        default=DEFAULT_MLFLOW_INTERNAL_HOST,
+        help="Host header the other containers send to MLflow "
+        f"(default: {DEFAULT_MLFLOW_INTERNAL_HOST})",
     )
     parser.add_argument(
         "--wait-seconds",
@@ -173,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exit_:
         return int(exit_.code or 0)
 
-    planned = planned_checks(args.api_url, args.mlflow_url)
+    planned = planned_checks(args.api_url, args.mlflow_url, args.mlflow_internal_host)
     failures = run_until_deadline(planned, args.wait_seconds, args.interval_seconds)
     if failures:
         print(

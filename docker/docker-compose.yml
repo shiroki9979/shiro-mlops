@@ -44,6 +44,12 @@ services:
       # defaults to psycopg v3, which the MLflow image does not install (#205).
       BACKEND_STORE_URI: postgresql+psycopg2://postgres:postgrespassword@postgres:5432/shiro_timeseries
       ARTIFACT_ROOT: /mlflow/artifacts
+      # WHY-NOT(MLFLOW_SERVER_ALLOWED_HOSTS): MLflow 3 answers 403 to an API request whose Host
+      # header it was not told to serve, and by default that is only localhost and private IPs.
+      # The api and dagster containers call it as mlflow:5000 (MLFLOW_TRACKING_URI below), so
+      # without this entry every training run fails to record itself while /health, which is
+      # exempt, stays green. localhost and 127.0.0.1 keep the published port 5001 working.
+      MLFLOW_SERVER_ALLOWED_HOSTS: mlflow:5000,localhost:*,127.0.0.1:*
 
     depends_on:
       postgres:

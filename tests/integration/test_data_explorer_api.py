@@ -924,3 +924,154 @@ def test_audit_status_filter_accepts_only_ingestion_completeness(explorer_client
     }
 
     assert statuses == {"complete": 200, "incomplete": 200, "partial": 422, "failed": 422}
+
+
+# --- malformed and hostile request values ---------------------------------------------------
+
+SERIES_PATHS = [f"{path}/series" for path in LIST_PATHS]
+
+
+@pytest.mark.parametrize("path", [*LIST_PATHS, *SERIES_PATHS])
+def test_an_unencoded_plus_in_the_offset_is_refused_instead_of_read_as_another_window(
+    explorer_client, path: str
+) -> None:
+    """`+08:00` sent without URL-encoding arrives as ` 08:00`; guessing it queried 08:00–08:00."""
+    client, repo = explorer_client
+    repo.engine = _UnreachableEngine()
+
+    response = client.get(f"{path}?start=2026-11-20T00:00:00+08:00&end=2026-11-20T12:00:00+08:00")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "start and end must be valid RFC 3339 timestamps"
+
+
+@pytest.mark.parametrize("path", [*LIST_PATHS, *SERIES_PATHS])
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("0001-01-01T00:00:00", "0001-01-02T00:00:00"),
+        ("1500-01-01T00:00:00", "1500-01-02T00:00:00"),
+        ("1677-09-21T00:00:00", "1677-09-22T00:00:00"),
+        ("3000-01-01T00:00:00", "3000-01-02T00:00:00"),
+        ("9999-12-30T00:00:00", "9999-12-31T23:59:59"),
+        ("now", "today"),
+        ("2026-11-20", "2026-11-21"),
+    ],
+    ids=[
+        "year-1",
+        "year-1500",
+        "before-nanosecond-range",
+        "year-3000",
+        "year-9999",
+        "words",
+        "dates",
+    ],
+)
+def test_windows_no_dataset_can_hold_are_refused_on_every_endpoint(
+    explorer_client, path: str, start: str, end: str
+) -> None:
+    client, _ = explorer_client
+
+    response = client.get(path, params={"start": start, "end": end})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "start and end must be valid RFC 3339 timestamps"
+
+
+@pytest.mark.parametrize(
+    ("path", "parameter"),
+    [
+        ("/data/power/load", "subject"),
+        ("/data/power/load/series", "subject"),
+        ("/data/weather/forecasts", "geocode"),
+        ("/data/weather/forecasts", "dataset_id"),
+        ("/data/weather/observations", "station_id"),
+        ("/data/audits/cwa-observations", "missing_station_id"),
+        ("/data/power/load", "cursor"),
+        ("/data/power/load", "start"),
+    ],
+)
+def test_a_nul_byte_in_any_parameter_is_refused_before_database_access(
+    explorer_client, path: str, parameter: str
+) -> None:
+    client, repo = explorer_client
+    repo.engine = _UnreachableEngine()
+
+    response = client.get(path, params={parameter: "a\x00b"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == f"{parameter} must not contain control characters"
+
+
+def test_a_cursor_key_with_a_nul_byte_is_an_invalid_cursor(explorer_client) -> None:
+    client, repo = explorer_client
+    now = _now().replace(minute=0)
+    _upsert_hours(repo, [now - timedelta(hours=offset) for offset in range(3)])
+    window = {"start": rfc3339(now - timedelta(hours=3)), "end": rfc3339(now), "limit": 1}
+    cursor = client.get("/data/power/load", params=window).json()["next_cursor"]
+
+    tampered = _replace_cursor_key(cursor, {"time": rfc3339(now), "subject": "nation\x00wide"})
+    response = client.get("/data/power/load", params={**window, "cursor": tampered})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid cursor key"
+
+
+@pytest.mark.parametrize("path", LIST_PATHS)
+def test_deeply_nested_cursor_is_a_bad_request_on_every_list(explorer_client, path: str) -> None:
+    client, repo = explorer_client
+    repo.engine = _UnreachableEngine()
+    nested = urlsafe_b64encode(b"[" * 3000).decode().rstrip("=")
+    oversized = urlsafe_b64encode(b"[" * 12000).decode().rstrip("=")
+
+    for cursor in (nested, oversized):
+        response = client.get(path, params={"cursor": cursor})
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid cursor"
+
+
+def _incomplete_observation_batch(repo: TimeSeriesRepository, observed: datetime) -> None:
+    from shiro_mlops.data.cwa_client import CWAObservationBatch
+
+    repo.cwa_weather_store.upsert_cwa_observation_batch(
+        CWAObservationBatch(
+            fetched_at=observed,
+            missing_station_ids=("467490",),
+            raw_payload={},
+            observations=(),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("missing_station_id", "matches"),
+    [
+        ("467490", True),
+        ("%", False),
+        ("4674_0", False),
+        ("46749%", False),
+        ("_67490", False),
+        ("\\", False),
+        ("467490\\", False),
+    ],
+)
+def test_missing_member_filter_matches_the_identifier_literally(
+    explorer_client, missing_station_id: str, matches: bool
+) -> None:
+    """`%` and `_` are LIKE wildcards; unescaped they listed batches missing other stations."""
+    client, repo = explorer_client
+    observed = _now().replace(minute=0)
+    _incomplete_observation_batch(repo, observed)
+
+    response = client.get(
+        "/data/audits/cwa-observations",
+        params={
+            "start": rfc3339(observed - timedelta(hours=1)),
+            "end": rfc3339(observed),
+            "missing_station_id": missing_station_id,
+        },
+    )
+
+    assert response.status_code == 200
+    assert bool(response.json()["items"]) is matches

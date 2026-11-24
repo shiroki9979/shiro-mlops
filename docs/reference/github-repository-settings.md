@@ -36,6 +36,8 @@ fork PR 的 workflow 執行時：
 
 `.github/workflows/` 不使用自架 runner，也不以 `pull_request_target` 或 `workflow_run` 執行未信任的程式碼（[ADR-0016 §2.3](../adr/0016-make-repository-public.md#23-公開後的設計限制)）。
 
+同一個 repo 內的 push 與 PR 所得到的 `GITHUB_TOKEN` 權限不依賴 **Settings → Actions → General → Workflow permissions** 的預設值：每個 workflow 在檔案最上層宣告 `permissions`（`ci.yml` 為 `contents: read`，`branch-flow.yml` 為空），只有以 OIDC 取得 AWS 角色的 `terraform-plan` 與 `deploy` 兩個 job 另加 `id-token: write`。`tests/unit/test_workflow_permissions.py` 檢查這三點，新增 workflow 或 job 時一併適用。
+
 ## 3. 安全功能
 
 位置在 **Settings → Advanced Security**，舊介面叫 **Code security**。下表依該頁由上到下的順序排列，方便逐項對照。

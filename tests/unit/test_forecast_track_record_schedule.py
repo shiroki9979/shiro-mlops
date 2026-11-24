@@ -21,7 +21,7 @@ from shiro_mlops.pipelines.schedules import (
     HOURLY_ACTUAL_LOAD_ASSET,
     TAIPOWER_REALTIME_SNAPSHOT_ASSETS,
 )
-from tests.helpers import selected_asset_names
+from tests.helpers import scheduler_launch_tags, selected_asset_names
 
 # 2026-11-20 02:25 UTC 即台灣 10:25，排在發布（:15）之後。
 TICK = datetime(2026, 11, 20, 2, 25, tzinfo=ZoneInfo("UTC"))
@@ -72,7 +72,7 @@ def test_scheduled_run_cuts_off_at_the_taiwan_local_tick_hour(
             "time_series_repo": test_repo,
             "io_manager": get_parquet_io_manager(data_dir=tmp_path),
         },
-        tags=request.tags,
+        tags=scheduler_launch_tags(request),
         instance=dagster_instance,
     )
 

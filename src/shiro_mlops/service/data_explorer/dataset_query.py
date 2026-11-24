@@ -21,13 +21,14 @@ from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.errors import DatabaseUnavailableError
 from shiro_mlops.service.data_explorer.gap_scan import GapScan
 from shiro_mlops.service.data_explorer.pagination import paginate_raw_list
-from shiro_mlops.service.data_explorer.query import ExplorerQuery, list_params
+from shiro_mlops.service.data_explorer.query import ExplorerQuery, list_params, resolve_window
 from shiro_mlops.service.data_explorer.schemas import (
     ListEnvelope,
     SeriesResponse,
     StatusResponse,
 )
 from shiro_mlops.service.data_explorer.series import (
+    SERIES_MAX_DAYS,
     Agg,
     Bucket,
     SeriesReader,
@@ -45,9 +46,13 @@ class ListRequest(NamedTuple):
 
 
 def validate_list_request(dataset: Dataset, query: Mapping[str, str]) -> ListRequest:
-    """Reject undeclared parameters, then validate the whole cursor, before any database read."""
+    """Reject undeclared parameters, then validate the whole cursor or, without one, the
+    window, before any database read: a version resolver reads the database to pin a version."""
     params = list_params(dataset, query)
-    return ListRequest(params, _validate_cursor(dataset, params))
+    cursor_filters = _validate_cursor(dataset, params)
+    if cursor_filters is None:
+        resolve_window(params.get("start"), params.get("end"), dataset.max_days)
+    return ListRequest(params, cursor_filters)
 
 
 def _validate_cursor(dataset: Dataset, params: dict[str, str]) -> dict[str, Any] | None:
@@ -98,6 +103,7 @@ class DatasetQuery:
             raise ValueError(f"dataset {dataset.id} declares no series")
         options = dataset.series
         params = series_params(dataset, options, query)
+        resolve_window(params.get("start"), params.get("end"), SERIES_MAX_DAYS)
         if dataset.resolve_version is not None:
             options, params = dataset.resolve_version.plan_series(self.db, options, params)
         request = SeriesRequest.build(

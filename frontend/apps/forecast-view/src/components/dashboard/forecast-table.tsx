@@ -22,7 +22,7 @@ interface ForecastTableProps {
 }
 
 export function ForecastTable({ steps, issuedAt }: ForecastTableProps) {
-  const [page, setPage] = useState(0)
+  const [requestedPage, setPage] = useState(0)
   const m = useMessages()
   const locale = useLocale()
   const tableText = m.dashboard.table
@@ -46,6 +46,9 @@ export function ForecastTable({ steps, issuedAt }: ForecastTableProps) {
   }
 
   const totalPages = Math.ceil(steps.length / pageSize)
+  // A refreshed forecast can have fewer steps than the one the reader paged through; the
+  // page they asked for may no longer exist, and showing it would be an empty table.
+  const page = Math.min(requestedPage, totalPages - 1)
   const paginatedItems = steps.slice(page * pageSize, (page + 1) * pageSize)
 
   return (
@@ -98,7 +101,7 @@ export function ForecastTable({ steps, issuedAt }: ForecastTableProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              onClick={() => setPage(Math.max(0, page - 1))}
               disabled={page === 0}
               className="h-7 text-xs px-2.5"
             >
@@ -110,7 +113,7 @@ export function ForecastTable({ steps, issuedAt }: ForecastTableProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
               className="h-7 text-xs px-2.5"
             >

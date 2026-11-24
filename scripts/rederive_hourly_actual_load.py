@@ -37,6 +37,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _reject_partial_hours(start: datetime, end: datetime) -> None:
+    """Both edges must be whole Taiwan-local hours, given without a UTC offset.
+
+    An edge inside an hour would derive that hour from only the samples after it; the
+    partial mean is then stored as the hour's load, and a later run never overwrites it.
+    """
+    for option, moment in (("--start", start), ("--end", end)):
+        if moment.tzinfo is not None:
+            raise SystemExit(
+                f"{option} {moment.isoformat()} must be Asia/Taipei time without a UTC offset."
+            )
+        if moment != floor_to_hour(moment):
+            raise SystemExit(f"{option} {moment.isoformat()} must be a whole hour.")
+
+
 def _reject_unfinished_window(start: datetime, end: datetime) -> None:
     latest_completed = floor_to_hour(taiwan_now().to_pydatetime().replace(tzinfo=None))
     if end > latest_completed:
@@ -50,6 +65,7 @@ def _reject_unfinished_window(start: datetime, end: datetime) -> None:
 
 def main(argv: list[str] | None = None, engine: Engine | None = None) -> int:
     args = _parse_args(argv)
+    _reject_partial_hours(args.start, args.end)
     _reject_unfinished_window(args.start, args.end)
     store = TimeSeriesRepository(engine=engine).hourly_actual_load_store
     hours = store.rederive(

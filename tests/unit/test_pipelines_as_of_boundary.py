@@ -29,10 +29,11 @@ NOW_METHODS = {
 TICK_AND_LINEAGE_ATTRIBUTES = frozenset(
     {"scheduled_execution_time", "parent_run_id", "root_run_id"}
 )
-# 排程名稱、重新執行與 tick 標籤：字串本身，以及 Dagster 與執行來源 module 的常數名。
+# 排程名稱、run key、重新執行與 tick 標籤：字串本身，以及 Dagster 與執行來源 module 的常數名。
 RUN_TAG_VALUES = frozenset(
     {
         "dagster/schedule_name",
+        "dagster/run_key",
         "dagster/parent_run_id",
         "dagster/root_run_id",
         ".dagster/scheduled_execution_time",
@@ -42,6 +43,7 @@ RUN_TAG_VALUES = frozenset(
 RUN_TAG_CONSTANTS = frozenset(
     {
         "SCHEDULE_NAME_TAG",
+        "RUN_KEY_TAG",
         "PARENT_RUN_ID_TAG",
         "ROOT_RUN_ID_TAG",
         "SCHEDULED_EXECUTION_TIME_TAG",

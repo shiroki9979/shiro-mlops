@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from shiro_mlops.service.data_explorer.errors import ExplorerQueryError
 from shiro_mlops.service.data_explorer.series import SeriesOptions, series_flag_conflicts
-from shiro_mlops.service.data_explorer.timefmt import parse_api_storage_time
+from shiro_mlops.service.data_explorer.timefmt import parse_request_storage_time
 
 if TYPE_CHECKING:
     from shiro_mlops.service.data_explorer.db import ExplorerDb
@@ -81,10 +81,13 @@ class InstantEquals(Filter):
 
     def clause(self, db: ExplorerDb, value: str) -> Clauses:
         try:
-            instant = parse_api_storage_time(value)
+            instant = parse_request_storage_time(value)
         except (TypeError, ValueError, OverflowError) as exc:
             raise ExplorerQueryError(f"{self.name} must be a valid RFC 3339 timestamp") from exc
         return [f"{self.name} = :{self.name}"], {self.name: instant}
+
+
+LIKE_SPECIAL = frozenset("%_\\")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -94,7 +97,13 @@ class JsonContains(Filter):
     column: str
 
     def clause(self, db: ExplorerDb, value: str) -> Clauses:
-        return [f"CAST({self.column} AS TEXT) LIKE :{self.name}"], {self.name: f'%"{value}"%'}
+        # WHY-NOT(escaped): the identifier is escaped before it goes into the pattern.
+        # Unescaped, "%" matched every batch with any missing member and "_" any one character.
+        escaped = "".join(f"\\{char}" if char in LIKE_SPECIAL else char for char in value)
+        return (
+            [f"CAST({self.column} AS TEXT) LIKE :{self.name} ESCAPE '\\'"],
+            {self.name: f'%"{escaped}"%'},
+        )
 
 
 @dataclass(frozen=True, kw_only=True)

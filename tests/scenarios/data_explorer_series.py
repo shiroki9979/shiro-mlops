@@ -177,6 +177,31 @@ def assert_partial_edge_bucket_uses_only_window_rows(repo: TimeSeriesRepository)
     assert _points(response.json()) == [("2026-11-19T00:00:00+08:00", 3000.0)]
 
 
+def assert_edge_bucket_without_a_due_slot_is_not_reported_missing(
+    repo: TimeSeriesRepository,
+) -> None:
+    """窗口起點落在整點之後，逐時資料在該小時沒有應到的時段，不得多出一個 null 點。"""
+    first = datetime(2026, 11, 18, 10, 0)
+    loads = {first + timedelta(hours=hour): 30000.0 + hour for hour in range(4)}
+    with _seeded_load(repo, loads) as (client, subject):
+        response = client.get(
+            LOAD_SERIES_PATH,
+            params={
+                "start": rfc3339(first + timedelta(minutes=30)),
+                "end": rfc3339(first + timedelta(hours=3)),
+                "subject": subject,
+                "bucket": "1h",
+            },
+        )
+
+    assert response.status_code == 200
+    assert _points(response.json()) == [
+        ("2026-11-18T11:00:00+08:00", 30001.0),
+        ("2026-11-18T12:00:00+08:00", 30002.0),
+        ("2026-11-18T13:00:00+08:00", 30003.0),
+    ]
+
+
 def assert_raw_bucket_ignores_agg(repo: TimeSeriesRepository) -> None:
     """raw 不做時間聚合並忽略 agg，回應的 agg 為 null。"""
     first = datetime(2026, 11, 18, 22, 0)
@@ -208,5 +233,6 @@ SERIES_SCENARIOS = (
     assert_explicit_bucket_over_limit_suggests_coarser,
     assert_invalid_series_requests_are_rejected,
     assert_partial_edge_bucket_uses_only_window_rows,
+    assert_edge_bucket_without_a_due_slot_is_not_reported_missing,
     assert_raw_bucket_ignores_agg,
 )

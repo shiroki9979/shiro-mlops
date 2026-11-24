@@ -34,7 +34,13 @@ export function useChartBrush(onSelect: (selection: BucketSelection) => void): C
         setSelection(instant === undefined ? null : { from: instant, to: instant })
       },
       onMouseMove: (state) => {
-        if (selection) setSelection(extendTo(state))
+        // Recharts reports every pointer move, most of them inside the bucket the selection
+        // already ends at. Keeping the same object then lets React skip re-rendering the
+        // chart card, which would otherwise rebuild every series on each move of a drag.
+        const instant = bucketInstant(state)
+        setSelection((current) =>
+          current && instant !== undefined && instant !== current.to ? { ...current, to: instant } : current,
+        )
       },
       onMouseUp: (state) => {
         const finished = extendTo(state)

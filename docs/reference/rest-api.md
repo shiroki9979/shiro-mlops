@@ -232,7 +232,7 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 
 | 參數 | 型別 | 預設 | 說明 |
 | --- | --- | --- | --- |
-| `start`、`end` | RFC 3339 | `end` = 現在，`start` = `end` − 24 小時 | 與 list 相同的精確閉區間；無 offset 時視為台北時間。窗口最長 92 天，與各 list 的天數上限無關。 |
+| `start`、`end` | RFC 3339 | `end` = 現在，`start` = `end` − 24 小時 | 與 list 相同的精確閉區間；無 offset 時視為台北時間。只接受 RFC 3339 date-time 且須落在 1970 至 2199 年之間，其他寫法回 422（[data-explorer.md](data-explorer.md) §7 HTTP 語意）。窗口最長 92 天，與各 list 的天數上限無關。 |
 | `fields` | 可重複的列舉 | 該資料集的預設欄位（§5.4） | `fields=a&fields=b`；重複的欄位只產生一條 series，series 依請求順序排列。 |
 | `group_by` | 依資料集的列舉 | 該資料集的預設分組 | 只有允許切換分組的資料集接受（見 §5.4）；其餘資料集帶此參數回 422。 |
 | `bucket` | `auto` \| `raw` \| `1h` \| `1d` | `auto` | `auto` 解析為同時符合兩個點數上限的最細粒度（依 `raw`、`1h`、`1d` 順序）。 |
@@ -276,11 +276,11 @@ Data Explorer 圖表使用的有界序列查詢。與 list endpoints 相同，�
 | 正常，含窗口內沒有資料 | 200 | —（沒有資料時 `series` 為 `[]`） |
 | 手動指定的 `bucket` 讓任一 series 超過 1,200 點，或全部 series 合計超過 10,000 點 | 422 | `{"message": "...", "suggested_bucket": "1d"}`；`suggested_bucket` 為符合上限的最細粒度，沒有任何粒度符合時為 `null` |
 | `auto` 也找不到符合上限的粒度 | 422 | 同上，`suggested_bucket` 為 `null` |
-| 窗口超過 92 天、`start` 晚於 `end`、時間格式錯誤、未宣告的參數 | 422 | 字串訊息 |
+| 窗口超過 92 天、`start` 晚於 `end`、時間格式錯誤或超出 1970–2199 年、參數值含控制字元、未宣告的參數 | 422 | 字串訊息 |
 | 欄位不在白名單、`bucket` 或 `agg` 不在列舉內（含 `agg=sum`） | 422 | FastAPI 驗證錯誤陣列 |
 | TimescaleDB 無法連線 | 503 | `"Persistence unavailable"` |
 
-點數以窗口內預期的 bucket 數計算：`raw` 依資料集節奏（逐時負載 1 小時、10 分鐘快照 10 分鐘），`1h` 與 `1d` 依整點與台北日界，含只涵蓋到部分的邊界 bucket。
+點數以窗口內預期的 bucket 數計算：`raw` 依資料集節奏（逐時負載 1 小時、10 分鐘快照 10 分鐘），`1h` 與 `1d` 依整點與台北日界，含只涵蓋到部分的邊界 bucket；邊界 bucket 在窗口內沒有任何應到的時段時不計入，也不補 `null` 點。
 
 ### 5.4 各資料集
 

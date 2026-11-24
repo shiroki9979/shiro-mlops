@@ -17,12 +17,6 @@ import pandas as pd
 # entity expansion（billion laughs）等 XML 攻擊，故以 defusedxml 解析。
 from defusedxml import ElementTree
 
-from shiro_mlops.core.constants import (
-    DATETIME_COL,
-    LOCATION_COL,
-    RELATIVE_HUMIDITY_COL,
-    TEMPERATURE_COL,
-)
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 
 
@@ -149,18 +143,6 @@ class CWAForecastRelease:
         object.__setattr__(self, "status", cwa_ingestion_status(self.missing_geocodes))
 
 
-def _normalize_location_name(name: str) -> str:
-    """Normalize common Chinese station names to standard English identifiers."""
-    mapping = {
-        "臺北": "Taipei",
-        "台北": "Taipei",
-        "臺中": "Taichung",
-        "台中": "Taichung",
-        "高雄": "Kaohsiung",
-    }
-    return mapping.get(name.strip(), name.strip())
-
-
 def _source_value(value: Any) -> Any:
     """Extract a scalar source value from CWA's value-object variants."""
     if isinstance(value, dict):
@@ -191,16 +173,20 @@ def _find_element_value(elements: Any, names: set[str]) -> Any:
     return None
 
 
-def _coerce_number(
-    value: Any, context: str, *, zero_markers: set[str] | None = None
-) -> float | None:
+_MISSING_TEXT_MARKERS = frozenset({"", "-", "X", "x"})
+_MISSING_NUMBER = -99.0
+_TRACE_PRECIPITATION_TEXT_MARKERS = frozenset({"T", "t"})
+_TRACE_PRECIPITATION_NUMBER = -98.0
+
+
+def _coerce_number(value: Any, context: str, *, trace_is_zero: bool = False) -> float | None:
     """Normalize CWA numeric values and documented missing markers."""
     if value is None:
         return None
     raw = str(_source_value(value)).strip()
-    if raw in {"", "-", "X", "x", "-99"}:
+    if raw in _MISSING_TEXT_MARKERS:
         return None
-    if zero_markers and raw in zero_markers:
+    if trace_is_zero and raw in _TRACE_PRECIPITATION_TEXT_MARKERS:
         return 0.0
     try:
         number = float(raw)
@@ -208,6 +194,12 @@ def _coerce_number(
         raise ValueError(f"Invalid CWA numeric value for {context}: {raw!r}") from exc
     if not math.isfinite(number):
         raise ValueError(f"Non-finite CWA numeric value for {context}: {raw!r}")
+    # WHY-NOT(_MISSING_NUMBER): the markers are compared as numbers because the API sends them
+    # as JSON floats too; matching the text "-99" lets -99.0 through as a real temperature.
+    if number == _MISSING_NUMBER:
+        return None
+    if trace_is_zero and number == _TRACE_PRECIPITATION_NUMBER:
+        return 0.0
     return number
 
 
@@ -289,7 +281,7 @@ def parse_observation_batch(
                 precipitation_mm=_coerce_number(
                     precipitation,
                     f"station {station_id} precipitation_mm",
-                    zero_markers={"T", "t", "-98"},
+                    trace_is_zero=True,
                 ),
                 wind_speed_m_s=_coerce_number(
                     _find_element_value(elements, {"WindSpeed", "WDSD", "WS"}),
@@ -455,7 +447,7 @@ def _forecast_element_rows(
 def _forecast_numeric(values: dict[str, Any], names: set[str], context: str) -> float | None:
     """Normalize a numeric forecast element from its aliases."""
     raw = _find_element_value(values, names)
-    return _coerce_number(raw, context, zero_markers={"-98", "T", "t"})
+    return _coerce_number(raw, context, trace_is_zero=True)
 
 
 def _forecast_text(values: dict[str, Any], names: set[str]) -> str | None:
@@ -572,86 +564,6 @@ def _parse_forecast_file_payload(payload: str) -> dict[str, Any]:
     return {"records": dataset}
 
 
-def _parse_cwa_observations_payload(data: Any, fallback_location: str = "Taipei") -> pd.DataFrame:
-    """Parse flat or nested CWA observation payload into standardized DataFrame."""
-    if isinstance(data, list):
-        df = pd.DataFrame(data)
-        if LOCATION_COL not in df.columns:
-            df[LOCATION_COL] = fallback_location
-        return df
-
-    if not isinstance(data, dict):
-        return pd.DataFrame(
-            columns=[DATETIME_COL, LOCATION_COL, TEMPERATURE_COL, RELATIVE_HUMIDITY_COL]
-        )
-
-    records = data.get("records", {})
-    stations = records.get("Station") or records.get("location") or []
-
-    rows: list[dict[str, Any]] = []
-    for st in stations:
-        raw_loc = st.get("StationName") or st.get("locationName") or fallback_location
-        loc = _normalize_location_name(str(raw_loc))
-
-        # Extract observation datetime
-        obs_time = st.get("ObsTime") or st.get("obsTime") or st.get("time")
-        if isinstance(obs_time, dict):
-            dt_str = obs_time.get("DateTime") or obs_time.get("obsTime")
-        else:
-            dt_str = obs_time
-
-        temp: float | None = None
-        rh: float | None = None
-
-        we = st.get("WeatherElement") or st.get("weatherElement")
-        if isinstance(we, dict):
-            t_val = (
-                we.get("AirTemperature") if we.get("AirTemperature") is not None else we.get("TEMP")
-            )
-            if t_val is not None:
-                try:
-                    temp = float(t_val)
-                except (ValueError, TypeError):
-                    pass
-            h_val = (
-                we.get("RelativeHumidity")
-                if we.get("RelativeHumidity") is not None
-                else we.get("HUMD")
-            )
-            if h_val is not None:
-                try:
-                    rh = float(h_val)
-                except (ValueError, TypeError):
-                    pass
-        elif isinstance(we, list):
-            for elem in we:
-                elem_name = elem.get("elementName")
-                raw_val = elem.get("elementValue")
-                if isinstance(raw_val, dict):
-                    raw_val = raw_val.get("value")
-                if elem_name in {"AirTemperature", "TEMP"} and raw_val is not None:
-                    try:
-                        temp = float(raw_val)
-                    except (ValueError, TypeError):
-                        pass
-                elif elem_name in {"RelativeHumidity", "HUMD"} and raw_val is not None:
-                    try:
-                        rh = float(raw_val)
-                    except (ValueError, TypeError):
-                        pass
-
-        rows.append(
-            {
-                DATETIME_COL: dt_str,
-                LOCATION_COL: loc,
-                TEMPERATURE_COL: temp,
-                RELATIVE_HUMIDITY_COL: rh,
-            }
-        )
-
-    return pd.DataFrame(rows)
-
-
 class CWASource(Protocol):
     """Port that fetches CWA products and parses them with this module's parsers."""
 
@@ -680,7 +592,6 @@ class CWAClient:
             "F-D0047-089": f"{_CWA_FORECAST_FILE_API}/F-D0047-089",
             "F-D0047-091": f"{_CWA_FORECAST_FILE_API}/F-D0047-091",
         }
-        self.forecast_url = self.forecast_urls["F-D0047-089"]
 
     def fetch_observation_batch(
         self, locations: dict[str, CWALocation] | None = None
@@ -710,8 +621,12 @@ class CWAClient:
         """Fetch one CWA source payload through the canonical ingestion boundary."""
         with httpx.Client(timeout=10.0) as client:
             response = client.get(url, params={"Authorization": self.api_key})
-            if hasattr(response, "raise_for_status"):
-                response.raise_for_status()
+            # WHY-NOT(status_code): raise_for_status() is avoided because its message carries
+            # the request URL, and the membership key travels in that URL's query string.
+            if response.status_code != 200:
+                raise ValueError(
+                    f"CWA observation request expected HTTP 200, got {response.status_code}"
+                )
             return json.loads(response.text)
 
     def _fetch_forecast_file(self, url: str) -> str:

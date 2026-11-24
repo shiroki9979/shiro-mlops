@@ -140,6 +140,17 @@ def test_a_task_may_declare_a_subset_of_the_weather_fields(tmp_path: Path) -> No
     assert task.weather.fields == ("temperature",)
 
 
+def test_a_weather_field_listed_twice_is_rejected_at_load(tmp_path: Path) -> None:
+    """A repeated field would otherwise surface as a shape error in the middle of training."""
+    repeated = _definition().replace(
+        'fields = ["temperature", "relative_humidity"]', 'fields = ["temperature", "temperature"]'
+    )
+    path = _write(tmp_path, repeated)
+
+    with pytest.raises(TaskDefinitionError, match="weather.*field.*more than once"):
+        load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+
 def test_unknown_task_type_is_rejected(tmp_path: Path) -> None:
     path = _write(tmp_path, _definition().replace("recursive_regression", "time_travel"))
 

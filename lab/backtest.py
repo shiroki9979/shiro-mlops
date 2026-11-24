@@ -9,7 +9,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
-from shiro_mlops.core.constants import DATETIME_COL, LOAD_MW_COL, SUBJECT_COL
+from shiro_mlops.core.constants import DATETIME_COL, HOURS_PER_DAY, LOAD_MW_COL, SUBJECT_COL
 from shiro_mlops.core.datetime_utils import standardize_taiwan_datetime
 from shiro_mlops.features.transformers import merge_weather_features
 from shiro_mlops.models.evaluator import evaluate_forecast
@@ -169,6 +169,13 @@ def split_search_and_eval_origins(
     are those on the last ``eval_calendar_days`` dates; search origins are the earlier
     ones whose target window ends before the first evaluation target hour.
     """
+    if not 1 <= hour_step <= HOURS_PER_DAY:
+        raise ValueError(f"hour_step must be between 1 and {HOURS_PER_DAY}, got {hour_step}.")
+    if eval_calendar_days < 1:
+        # A slice of the last 0 days is every day, and of the last -1 days all but the first.
+        raise ValueError(f"eval_calendar_days must be >= 1, got {eval_calendar_days}.")
+    if horizon_hours < 1:
+        raise ValueError(f"horizon_hours must be >= 1, got {horizon_hours}.")
     sampled = [origin for origin in eligible if origin.hour % hour_step == 0]
     dates = sorted({origin.date() for origin in sampled})
     eval_dates = set(dates[-eval_calendar_days:])
@@ -240,7 +247,13 @@ def _validate_backtest_inputs(
         raise ValueError("origins must not be empty.")
     if horizon_hours < 1:
         raise ValueError("horizon_hours must be >= 1.")
-    return tuple(normalize_taiwan_timestamp(origin) for origin in origins)
+    normalized = tuple(normalize_taiwan_timestamp(origin) for origin in origins)
+    repeated = sorted({origin for origin in normalized if normalized.count(origin) > 1})
+    if repeated:
+        # A repeated origin would count twice in every metric while keeping one forecast.
+        listed = ", ".join(origin.isoformat() for origin in repeated)
+        raise ValueError(f"origins must be distinct; listed more than once: {listed}")
+    return normalized
 
 
 @dataclass(frozen=True)

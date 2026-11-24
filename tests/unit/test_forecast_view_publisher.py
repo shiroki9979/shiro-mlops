@@ -1,8 +1,10 @@
 """Which destinations the Forecast View export writes, from the deployment's settings (ADR-0015 §2.3)."""
 
+import os
 from pathlib import Path
 
 import boto3
+import pytest
 
 from shiro_mlops.core.config import Settings
 from shiro_mlops.core.forecast_view_publisher import ForecastViewPublisher
@@ -76,3 +78,64 @@ def test_the_upload_key_never_appears_in_the_settings_repr() -> None:
     settings = Settings(_env_file=None, AWS_SECRET_ACCESS_KEY="offline-test-secret")
 
     assert "offline-test-secret" not in repr(settings)
+
+
+def test_an_export_overlapping_another_does_not_lose_its_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manual materialization can overlap the scheduled export; both must finish."""
+    published = tmp_path / "published"
+    publisher = ForecastViewPublisher(published)
+    real_replace = os.replace
+    overlapped = False
+
+    def replace_after_another_export_ran(source: object, target: object) -> None:
+        nonlocal overlapped
+        if not overlapped:
+            overlapped = True
+            publisher.publish({"latest.json": b"second"})
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", replace_after_another_export_ran)
+
+    publisher.publish({"latest.json": b"first"})
+
+    assert (published / "latest.json").read_bytes() == b"first"
+    assert [path.name for path in published.iterdir()] == ["latest.json"]
+
+
+def test_a_failed_local_write_keeps_the_previous_file_and_leaves_no_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published = tmp_path / "published"
+    publisher = ForecastViewPublisher(published)
+    publisher.publish({"latest.json": b"previous"})
+
+    def disk_full(*_: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", disk_full)
+
+    with pytest.raises(OSError, match="No space left"):
+        publisher.publish({"latest.json": b"next"})
+
+    assert (published / "latest.json").read_bytes() == b"previous"
+    assert [path.name for path in published.iterdir()] == ["latest.json"]
+
+
+def test_published_files_stay_readable_by_the_web_server(tmp_path: Path) -> None:
+    """Nginx runs as another user; a private temporary file would be served as 403."""
+    ForecastViewPublisher(tmp_path).publish({"latest.json": b"{}"})
+
+    reference = tmp_path / "reference"
+    reference.write_bytes(b"")
+    assert (tmp_path / "latest.json").stat().st_mode == reference.stat().st_mode
+
+
+def test_publishing_nothing_still_creates_the_directory(tmp_path: Path) -> None:
+    target = tmp_path / "published"
+
+    ForecastViewPublisher(target).publish({})
+
+    assert target.is_dir()
+    assert list(target.iterdir()) == []
