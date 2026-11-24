@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import cached_property
 
 import numpy as np
 import pandas as pd
@@ -272,10 +273,29 @@ class _BacktestContext:
         return list(self.task.weather.fields)
 
     def aligned_horizon_weather(self, horizon_times: pd.DatetimeIndex) -> pd.DataFrame:
-        """Observed weather on the target hours, each matched within two hours backward."""
-        horizon_grid = pd.DataFrame({DATETIME_COL: horizon_times})
-        weather = self.weather[self.weather[DATETIME_COL] <= horizon_times[-1]]
-        aligned = merge_weather_features(horizon_grid, weather)
+        """Observed weather on the target hours, each matched within two hours backward.
+
+        An hour's match depends on that hour alone, never on the origin asking for it, so
+        the snapshot's hours are aligned once; ``eligible_origins`` used to realign the
+        horizon for every candidate origin, about half of its run time.
+        """
+        hourly = self._hourly_weather
+        if hourly.index.is_unique and horizon_times.isin(hourly.index).all():
+            return hourly.loc[horizon_times].rename_axis(DATETIME_COL).reset_index()
+        return self._align(pd.DataFrame({DATETIME_COL: horizon_times}))
+
+    @cached_property
+    def _hourly_weather(self) -> pd.DataFrame:
+        """Every hour from the first load hour to the last one plus the horizon, aligned."""
+        if self.load.empty:
+            return pd.DataFrame(columns=self.weather_fields, index=pd.DatetimeIndex([]))
+        first = self.load[DATETIME_COL].iloc[0].floor("h")
+        last = self.load[DATETIME_COL].iloc[-1] + pd.Timedelta(hours=self.horizon_hours)
+        grid = pd.DataFrame({DATETIME_COL: pd.date_range(first, last, freq="h")})
+        return self._align(grid).set_index(DATETIME_COL)
+
+    def _align(self, grid: pd.DataFrame) -> pd.DataFrame:
+        aligned = merge_weather_features(grid, self.weather)
         return aligned[[DATETIME_COL, *self.weather_fields]].sort_values(
             DATETIME_COL, ignore_index=True
         )

@@ -16,6 +16,7 @@ from lab.backtest import (
     verify_non_overlapping_target_windows,
 )
 from pydantic import BaseModel
+from shiro_mlops.features.transformers import merge_weather_features
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.prediction_inputs import (
@@ -564,3 +565,38 @@ def test_split_rejects_a_horizon_shorter_than_one_hour() -> None:
 def test_split_of_no_eligible_origins_is_rejected() -> None:
     with pytest.raises(ValueError, match="no eligible origins"):
         split_search_and_eval_origins((), horizon_hours=24, eval_calendar_days=7, hour_step=6)
+
+
+def test_target_hour_weather_does_not_depend_on_the_origin_that_asks_for_it(
+    fast_task: TaskDefinition,
+) -> None:
+    """Each hour takes the latest observation within two hours before it, whatever the origin;
+    aligning the whole snapshot once must give every origin the weather it used to get."""
+    from lab.backtest import _build_context
+
+    load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    weather = weather.drop(index=[40, 41, 42, 100, 200, 201]).reset_index(drop=True)
+    weather.loc[150, "relative_humidity"] = float("nan")
+    context = _build_context(fast_task, _training_data(load, weather), HORIZON_HOURS, 24)
+
+    def aligned_one_origin_at_a_time(horizon: pd.DatetimeIndex) -> pd.DataFrame:
+        grid = pd.DataFrame({"datetime": horizon})
+        upto = context.weather[context.weather["datetime"] <= horizon[-1]]
+        aligned = merge_weather_features(grid, upto)
+        return aligned[["datetime", *context.weather_fields]].sort_values(
+            "datetime", ignore_index=True
+        )
+
+    first, last = load["datetime"].iloc[0], load["datetime"].iloc[-1]
+    origins = [
+        *pd.date_range(first, last, freq="7h"),
+        first - pd.Timedelta(hours=3),
+        last,
+        last + pd.Timedelta(hours=1),
+        last + pd.Timedelta(hours=30),
+    ]
+    for origin in origins:
+        horizon = target_hours(origin, HORIZON_HOURS)
+        pd.testing.assert_frame_equal(
+            context.aligned_horizon_weather(horizon), aligned_one_origin_at_a_time(horizon)
+        )
