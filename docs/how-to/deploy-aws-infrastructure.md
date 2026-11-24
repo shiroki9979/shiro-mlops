@@ -1,7 +1,7 @@
 # 如何部署 AWS 基礎設施 (Terraform & IAM OIDC)
 
-- 建立日期：2026-08-23
-- 最後更新：2026-11-21
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-21
 
 > [!NOTE]
 > **Diátaxis 象限鎖定**
