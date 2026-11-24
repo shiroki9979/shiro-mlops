@@ -114,7 +114,7 @@ def _build_weather_export(weather_df: pd.DataFrame, subjects: list[str]) -> pd.D
     result = pd.concat(
         [base.assign(**{LOCATION_COL: subject}) for subject in subjects], ignore_index=True
     )
-    # WHY-NOT(_build_weather_export): a missing reading stays missing. Filling it with a fixed
+    # WHY-NOT(column): a missing reading stays missing. Filling it with a fixed
     # temperature or humidity would publish a value no station ever reported.
     for column in (TEMPERATURE_COL, RELATIVE_HUMIDITY_COL):
         values = result[column] if column in result.columns else np.nan

@@ -78,7 +78,7 @@ class ForecastViewPublisher:
 
 def _replace_atomically(path: Path, body: bytes) -> None:
     """Nginx serves the directory while the export runs; a rename never exposes half a file."""
-    # WHY-NOT(_replace_atomically): the temporary name is unique per call. With one fixed name,
+    # WHY-NOT(temporary): the temporary name is unique per call. With one fixed name,
     # two exports that overlap (a manual materialization during the scheduled run) write the
     # same file, and the slower one's rename fails because the faster one already moved it.
     # It is written with write_bytes, not tempfile, so it keeps the default mode Nginx can read.

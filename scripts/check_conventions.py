@@ -928,7 +928,7 @@ class GitRange:
     head: str
 
     def changed_markdown(self) -> list[str]:
-        # WHY-NOT(changed_markdown): -z keeps paths as they are. Without it git C-quotes a
+        # WHY-NOT(output): -z keeps paths as they are. Without it git C-quotes a
         # non-ASCII name, the quoted form matches no file in the log, and the doc is skipped.
         output = git(
             self.repo_root,

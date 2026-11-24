@@ -621,7 +621,7 @@ class CWAClient:
         """Fetch one CWA source payload through the canonical ingestion boundary."""
         with httpx.Client(timeout=10.0) as client:
             response = client.get(url, params={"Authorization": self.api_key})
-            # WHY-NOT(_fetch_json): raise_for_status() is avoided because its message carries
+            # WHY-NOT(status_code): raise_for_status() is avoided because its message carries
             # the request URL, and the membership key travels in that URL's query string.
             if response.status_code != 200:
                 raise ValueError(

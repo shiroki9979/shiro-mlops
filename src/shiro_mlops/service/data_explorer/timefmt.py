@@ -40,11 +40,11 @@ def parse_request_time(value: datetime | str) -> datetime:
     Raises ``ValueError`` for anything but an RFC 3339 date-time inside
     ``[EARLIEST_REQUEST_TIME, REQUEST_TIME_END)``.
     """
-    # WHY-NOT(parse_request_time): pandas is not asked to guess. It reads "now", "2026" or a
-    # bare "12:00" as times, and reads the space a "+08:00" turns into when a client forgets
-    # to URL-encode it as a time-of-day, so the request silently queried a different window.
     if isinstance(value, datetime):
         parsed = value
+    # WHY-NOT(_REQUEST_TIME): pandas is not asked to guess. It reads "now", "2026" or a bare
+    # "12:00" as times, and reads the space a "+08:00" turns into when a client forgets to
+    # URL-encode it as a time-of-day, so the request silently queried a different window.
     elif isinstance(value, str) and _REQUEST_TIME.fullmatch(value):
         parsed = datetime.fromisoformat(value.upper())
     else:
