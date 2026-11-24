@@ -36,6 +36,7 @@ _SELECT_HEADER = text(
     WHERE issued_at = :issued_at
     """
 )
+_ISSUE_TIME_EXISTS = text("SELECT 1 FROM issued_forecast WHERE issued_at = :issued_at")
 _SELECT_LATEST_ISSUED_AT = text(
     """
     SELECT issued_at
@@ -97,6 +98,12 @@ class IssuedForecastRepository:
             "Issued forecast at %s with %d steps", forecast.issued_at.isoformat(), len(steps)
         )
         return True
+
+    def exists(self, issued_at: datetime) -> bool:
+        """Whether a forecast was issued at a Taiwan-local issue time, read from its header only."""
+        params = {"issued_at": to_storage_time(issued_at)}
+        with self.engine.connect() as conn:
+            return conn.execute(_ISSUE_TIME_EXISTS, params).first() is not None
 
     def fetch(self, issued_at: datetime) -> IssuedForecast | None:
         """Read the forecast issued at a Taiwan-local issue time, or ``None``."""

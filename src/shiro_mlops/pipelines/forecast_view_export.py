@@ -17,6 +17,8 @@ first issue. The export schedule carries no tick, so that as_of always falls
 back to now, the run's creation time.
 """
 
+from dataclasses import asdict
+
 from dagster import (
     AssetExecutionContext,
     AssetIn,
@@ -35,7 +37,10 @@ from dagster import (
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.core.forecast_view_publisher import ForecastViewPublisher
 from shiro_mlops.core.io_managers import NONE_BEFORE_FIRST_MATERIALIZATION
-from shiro_mlops.data.forecast_track_record import track_record_cutoff
+from shiro_mlops.data.forecast_track_record import (
+    compile_forecast_track_record,
+    track_record_cutoff,
+)
 from shiro_mlops.data.forecast_view import (
     FORECAST_TRACK_RECORD_FILE,
     LATEST_ISSUED_FORECAST_FILE,
@@ -102,7 +107,7 @@ def forecast_view_export(
 def _uncompiled_track_record(context: AssetExecutionContext) -> dict:
     """Zero accumulated days, cut off at the export run's hour, as before the first issue."""
     cutoff = track_record_cutoff(run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW))
-    return {"cutoff": cutoff, "accumulated_days": 0, "metrics": None}
+    return asdict(compile_forecast_track_record(cutoff, ()))
 
 
 forecast_view_export_job = define_asset_job(

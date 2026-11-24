@@ -78,7 +78,7 @@ def issue_forecast(
     models_root: Path,
 ) -> IssuingOutcome:
     """Forecast as of ``issued_at`` and keep it, unless that issue time is already on record."""
-    if store.fetch(issued_at) is not None:
+    if store.exists(issued_at):
         return AlreadyIssued()
     loaded = _load_model(instance, models_root)
     if isinstance(loaded, ModelUnavailable):
