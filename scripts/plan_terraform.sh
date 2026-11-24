@@ -8,6 +8,9 @@
 # The saved plan and its JSON hold sensitive values such as the budget alert email in plain
 # text, so CI keeps them on the runner and never uploads them as artifacts.
 #
+# The safety check runs on the host python3, not through uv: it uses only the standard library,
+# and both CI jobs hold an OIDC token, so they download no uv at run time (#369).
+#
 # Usage: scripts/plan_terraform.sh [--lock=false] [--out <plan-file>] [--summary <file>]
 #                                  <backend-config>
 #   --lock=false     plan without the state lock (the plan role cannot write the lockfile)
@@ -69,7 +72,7 @@ readonly PLAN_ARGS PLAN_FILE SUMMARY_FILE
 readonly PLAN_JSON="${PLAN_FILE}.json"
 
 check_plan() {
-  uv run --no-project python "${REPO_ROOT}/scripts/check_plan_safety.py" "$PLAN_JSON"
+  python3 "${REPO_ROOT}/scripts/check_plan_safety.py" "$PLAN_JSON"
 }
 
 main() {

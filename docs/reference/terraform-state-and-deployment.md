@@ -72,6 +72,8 @@
 
 不加 permissions boundary。apply 角色仍可建立名稱為 `shiro-mlops-*` 的新角色、讓它信任任意主體並掛上高權限 policy（例如 `AdministratorAccess`），再 assume 它取得帳號的完整權限。這需要合併進 `main` 的程式碼或遭竊的 `main` workflow token；此風險已接受，影響範圍仍小於直接給 apply 角色 `AdministratorAccess`。apply 角色也能為地端上傳用 IAM 使用者建立 access key。
 
+job 取得 `id-token: write` 後，其中每個 step 都能自行請求 OIDC token，`configure-aws-credentials` 之後的 step 也讀得到匯出的 `AWS_*`。因此 `terraform-plan` 與 `deploy` 不安裝任何 npm 或 PyPI 套件，也不在執行期下載 uv：只用 `actions/checkout`、`actions/download-artifact`、`aws-actions/configure-aws-credentials`、`hashicorp/setup-terraform` 這四個 action，只用標準函式庫的腳本以 runner 內建的 `python3` 執行。`tests/unit/test_workflow_permissions.py` 檢查這兩個 job 的 action 與 `run:` 指令，以及這些指令呼叫的 `scripts/*.sh`。預報檢視改由沒有 `id-token` 的 `frontend` job 建置（第 9 節），被入侵的前端相依套件仍能竄改上傳的 bundle，但拿不到 AWS 角色；`site/` 的影響範圍限於網站內容，可用 bucket 的舊版本復原。
+
 ## 4. 離線驗證
 
 `make infra-check`（`scripts/infra_check.sh`）對兩層都確認 `.terraform.lock.hcl` 已入版控（第 2 節），再執行 `terraform fmt -check`、`terraform validate`（`init -backend=false -lockfile=readonly`）與 `terraform test`。`terraform test` 以 `mock_provider "aws"` 執行 `plan`，不需要 AWS 憑證或 state backend；斷言的項目見 `infra/terraform/tests/` 與 `infra/terraform/bootstrap/tests/`：
@@ -84,7 +86,7 @@
 
 ## 5. Plan 安全檢查
 
-`scripts/check_plan_safety.py` 判斷 CI 能否套用一份已存 plan，只用 Python 標準函式庫。PR plan、`main` 的部署 job 與本機（第 7 節）都經由 `scripts/plan_terraform.sh` 呼叫它，該腳本對主設定依序執行 `terraform init`、`terraform plan -out`、`terraform show -json` 與本檢查，本身從不 apply：
+`scripts/check_plan_safety.py` 判斷 CI 能否套用一份已存 plan，只用 Python 標準函式庫。PR plan、`main` 的部署 job 與本機（第 7 節）都經由 `scripts/plan_terraform.sh` 以 `python3` 呼叫它，該腳本對主設定依序執行 `terraform init`、`terraform plan -out`、`terraform show -json` 與本檢查，本身從不 apply：
 
 ```bash
 scripts/plan_terraform.sh [--lock=false] [--out <plan-file>] [--summary <file>] <backend-config>
@@ -111,7 +113,7 @@ scripts/plan_terraform.sh [--lock=false] [--out <plan-file>] [--summary <file>] 
 `.github/workflows/ci.yml` 的 `terraform-plan` job 讓 release 審查者在合併前看到雲端會怎麼變：
 
 - **觸發**：只在 base 為 `main` 的 PR（`dev` → `main` 的 release PR）執行；base 為 `dev` 的 PR 不執行。
-- **權限**：只有這個 job 取得 `id-token: write`，以 GitHub OIDC assume plan 角色（第 3 節）；plan 角色沒有寫入權限，因此 plan 以 `-lock=false` 執行，不寫 lockfile。
+- **權限**：除了第 9 節的部署 job，只有這個 job 取得 `id-token: write`，以 GitHub OIDC assume plan 角色（第 3 節）；plan 角色沒有寫入權限，因此 plan 以 `-lock=false` 執行，不寫 lockfile。job 不安裝任何套件（第 3 節「殘餘風險」）。
 - **步驟**：以 `scripts/plan_terraform.sh --lock=false --summary "$GITHUB_STEP_SUMMARY" "bucket=$TF_STATE_BUCKET"` 對主設定執行 init、`plan -lock=false -out`、`show -json` 與第 5 節的檢查。
 - **結果**：摘要出現在 job summary，不寫 PR comment，因此不需要 `pull-requests: write` 或第三方 action。plan 不安全時 job 失敗，摘要列出違規資源。
 - **`budget_alert_email`**：只由 Actions secret `BUDGET_ALERT_EMAIL` 以 `TF_VAR_budget_alert_email` 傳入。變數標為 sensitive，plan 輸出顯示為 `(sensitive value)`；已存 plan 與其 JSON 含明文，只留在 runner 上，不上傳為 artifact。
@@ -150,7 +152,8 @@ job 所需的角色 ARN variable 未設定時，該 job 寫 notice 後略過並�
 
 - **觸發條件**：只在 `main` 分支的 push 執行；每次 push 都執行，不加 path filter，沒有基礎設施變更時 apply 是 no-op，同時能發現 drift。
 - **`needs`**：`lint-and-test`、`frontend`、`nginx`、`backend`、`infra`、`docs` 全部通過才執行，任一失敗就不部署。不依賴 PR plan job：它只在 pull request 執行，push 時被略過，依賴被略過的 job 會讓部署 job 一起被略過。
-- **權限**：只有這個 job 授予 `id-token: write`（另有 `contents: read`）；workflow 層級不另授權限。
+- **權限**：這個 job 與第 6 節的 PR plan 授予 `id-token: write`（另有 `contents: read`）；workflow 層級不另授權限。job 不設定 Node.js、pnpm 或 uv，不安裝任何套件（第 3 節「殘餘風險」）。
+- **預報檢視 bundle**：由 `frontend` job 在 `main` push 時建置、通過 `make frontend-bundle-check` 後以 artifact `forecast-view-dist` 上傳（保留 1 天），這個 job 在 assume 任何角色前下載到 `frontend/apps/forecast-view/dist`。部署的就是通過檢查的那份 bundle。
 
 步驟依序執行，任一步失敗即停止：
 
@@ -158,9 +161,8 @@ job 所需的角色 ARN variable 未設定時，該 job 寫 notice 後略過並�
 | :--- | :--- | :--- |
 | 1 | apply 角色 | `scripts/plan_terraform.sh`（第 5 節）對主設定 `terraform init`（state bucket 以 `-backend-config="bucket=…"` 從 repository variable `TF_STATE_BUCKET` 傳入）→ `plan -out=tfplan`（取得 lockfile）→ `show -json` → plan 安全檢查（摘要寫進 job summary）；下一步才 `apply tfplan`。套用的是剛通過檢查的那份已存 plan；含刪除、替換或 `forget` 時檢查以結束碼 1 失敗，不 apply |
 | 2 | apply 角色 | 以 `terraform output -raw` 讀取 `s3_bucket_name` 與 `forecast_view_url`；網站上傳角色讀不到 state，因此在換角色前讀取 |
-| 3 | 無 | 建置預報檢視（`pnpm --filter @shiro-mlops/forecast-view run build`） |
-| 4 | 網站上傳角色 | `scripts/upload_forecast_view_site.sh` 依[預報檢視的雲端託管 §5](forecast-view-hosting.md#5-部署與驗證) 上傳 `site/`：先上傳 `index.html` 以外的檔案，再上傳 `index.html`，最後以 `sync --delete` 刪除前一版的 assets；不做 invalidation。建置目錄沒有 `index.html` 時以結束碼 2 停止，不執行 `sync --delete` |
-| 5 | 無 | 以 `forecast_view_url` 直接執行 `scripts/smoke_cloudfront.py`，跑完整項目（含 `/published/` 新鮮度） |
+| 3 | 網站上傳角色 | `scripts/upload_forecast_view_site.sh` 依[預報檢視的雲端託管 §5](forecast-view-hosting.md#5-部署與驗證) 上傳 `site/`：先上傳 `index.html` 以外的檔案，再上傳 `index.html`，最後以 `sync --delete` 刪除前一版的 assets；不做 invalidation。建置目錄沒有 `index.html` 時以結束碼 2 停止，不執行 `sync --delete` |
+| 4 | 無（環境中仍有網站上傳角色的憑證） | 以 `forecast_view_url` 執行 `scripts/smoke_cloudfront.sh`，它以 `python3` 執行 `scripts/smoke_cloudfront.py`、原樣傳回結束碼，跑完整項目（含 `/published/` 新鮮度） |
 
 `budget_alert_email` 由 Actions secret `BUDGET_ALERT_EMAIL` 以環境變數 `TF_VAR_budget_alert_email` 傳入；變數與 secret 的完整清單見第 8 節。
 
