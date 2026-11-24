@@ -3,9 +3,11 @@
 from datetime import date
 from pathlib import Path
 
+import pytest
 from check_conventions import (
     Violation,
     check_docker_pins,
+    check_python_uv,
     doc_date_violation,
     find_banned_terms,
     find_host_python_in_makefile,
@@ -402,6 +404,117 @@ def test_packages_installed_under_a_constraints_file_are_pinned_by_it() -> None:
         "RUN uv pip install --system --no-cache -c /tmp/constraints.txt mlflow psycopg2-binary\n"
         "RUN pip install --constraint=constraints.txt fastapi\n"
         "RUN pip install -cconstraints.txt uvicorn\n"
+    )
+
+    assert _unpinned(dockerfile) == []
+
+
+# --- shell forms that used to hide a host python or an unpinned install --------------------
+
+
+def test_workflow_run_with_the_command_on_the_next_line_is_checked() -> None:
+    """A plain YAML scalar may start on the line after `run:`."""
+    workflow = "    steps:\n      - run:\n          python3 scripts/smoke_nginx.py\n"
+
+    assert _lines(find_host_python_in_workflow(workflow)) == [3]
+
+
+def test_workflow_run_on_the_next_line_still_ends_at_the_next_key() -> None:
+    workflow = "      - run:\n          uv run pytest\n        env:\n          PYTHON: python3\n"
+
+    assert find_host_python_in_workflow(workflow) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "version=$(python3 -c "import sys; print(sys.version)")"',
+        "echo `python3 --version`",
+        'VALUE="`python -c 1`"',
+        "sudo python3 setup.py",
+        "env PYTHONPATH=src python -m pytest",
+        "exec python3 app.py",
+        "command python3 app.py",
+        "nohup python3 worker.py &",
+        'case "$1" in smoke) python3 scripts/smoke_nginx.py ;; esac',
+        "bash -c 'python3 scripts/smoke_nginx.py'",
+        'sh -ec "cd frontend && python3 -m http.server"',
+    ],
+)
+def test_host_python_behind_substitutions_wrappers_and_nested_shells_is_flagged(
+    command: str,
+) -> None:
+    assert _lines(find_host_python_in_makefile(f"target:\n\t{command}\n")) == [2]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "python3 is not used directly"',
+        "echo 'run $(python3 -V) yourself'",
+        "uv run python -m pytest",
+        "sudo -u runner uv run python app.py",
+        "env -u PYTHONPATH uv run python app.py",
+        "bash -c 'uv run python scripts/smoke_nginx.py'",
+    ],
+)
+def test_python_through_uv_or_as_plain_text_stays_allowed(command: str) -> None:
+    assert find_host_python_in_makefile(f"target:\n\t{command}\n") == []
+
+
+def test_python_uv_reads_workflows_with_either_yaml_extension(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (tmp_path / "Makefile").write_text("", encoding="utf-8")
+    (workflows / "ci.yml").write_text("      - run: python3 a.py\n", encoding="utf-8")
+    (workflows / "release.yaml").write_text("      - run: python3 b.py\n", encoding="utf-8")
+
+    assert sorted(violation.path for violation in check_python_uv(tmp_path)) == [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yaml",
+    ]
+
+
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        pytest.param("RUN <<EOF\npip install requests\nEOF\n", id="heredoc"),
+        pytest.param(
+            "RUN --mount=type=cache,target=/root/.cache <<EOT\nset -e\npip install requests\nEOT\n",
+            id="heredoc-after-run-flags",
+        ),
+        pytest.param("RUN <<-'EOF'\n\tpip install requests\n\tEOF\n", id="indented-quoted-heredoc"),
+        pytest.param('RUN ["pip", "install", "requests"]\n', id="exec-form"),
+        pytest.param('RUN ["/bin/sh", "-c", "pip install requests"]\n', id="exec-form-shell"),
+        pytest.param('RUN sh -c "pip install requests"\n', id="sh-c"),
+        pytest.param("RUN bash -lc 'pip install requests'\n", id="bash-lc"),
+        pytest.param("RUN env PIP_NO_CACHE_DIR=1 pip install requests\n", id="env"),
+        pytest.param("RUN sudo -H pip install requests\n", id="sudo"),
+        pytest.param("RUN pip --cache-dir /tmp/c install requests\n", id="option-value-first"),
+        pytest.param("ONBUILD RUN pip install requests\n", id="onbuild"),
+    ],
+)
+def test_unpinned_installs_behind_every_run_spelling_are_reported(dockerfile: str) -> None:
+    assert _unpinned(dockerfile) == [(1, ["requests"])]
+
+
+def test_a_heredoc_body_is_not_read_as_dockerfile_instructions() -> None:
+    dockerfile = (
+        "RUN <<EOF\n"
+        "pip install requests==2.32.3\n"
+        "echo RUN pip install loose\n"
+        "EOF\n"
+        "RUN pip install fastapi\n"
+    )
+
+    assert _unpinned(dockerfile) == [(5, ["fastapi"])]
+
+
+def test_pinned_installs_behind_wrappers_stay_allowed() -> None:
+    dockerfile = (
+        'RUN sh -c "pip install requests==2.32.3"\n'
+        'RUN ["pip", "install", "-r", "/tmp/requirements.txt"]\n'
+        "RUN <<EOF\nuv pip install --system -c /tmp/constraints.txt mlflow\nEOF\n"
     )
 
     assert _unpinned(dockerfile) == []

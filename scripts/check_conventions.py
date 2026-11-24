@@ -1,12 +1,16 @@
 """Check repository conventions that are mechanical enough to enforce in CI.
 
 Checks:
-  python-uv  Makefile recipes and CI `run:` commands must not start with a host python/python3.
+  python-uv  Makefile recipes and CI `run:` commands (.yml and .yaml workflows) must not run a
+             host python/python3, also not behind a wrapper (env, sudo, exec, command, nohup,
+             nice), inside `sh -c`/`bash -c`, in `$(...)` or backticks, or in a case arm.
   docker-pins
              Each package a `pip install` or `uv pip install` in docker/Dockerfile* names must be
              pinned to an exact version with ==, unless the command reads a constraints file
              with -c (as exported from uv.lock); or read a lock file with -r instead. Values of
-             options such as -r and -e (a local project) are not checked.
+             options such as -r and -e (a local project) are not checked. RUN and ONBUILD RUN in
+             shell or exec form are read, a heredoc body run by the shell included, with the
+             same wrappers and nested shells as python-uv.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
   doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
              earlier than the newest author date of their commits in that range.
@@ -60,6 +64,7 @@ Checks:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import subprocess
@@ -73,7 +78,7 @@ from typing import TypeVar
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAKEFILE = "Makefile"
-WORKFLOW_GLOB = ".github/workflows/*.yml"
+WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 DOCKERFILE_GLOB = "docker/Dockerfile*"
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
@@ -87,9 +92,19 @@ BANNED_TERMS = {
 
 HOST_PYTHON = re.compile(r"(?:.*/)?python(?:3(?:\.\d+)?)?")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-COMMAND_SEPARATORS = frozenset({";", ";;", "&", "&&", "|", "||", "|&", "("})
+COMMAND_SEPARATORS = frozenset({";", ";;", "&", "&&", "|", "||", "|&", "(", ")"})
 # Shell reserved words are syntax, so the word after them is still the command word.
 RESERVED_WORDS = frozenset({"!", "{", "if", "then", "elif", "else", "while", "until", "do", "time"})
+# WHY-NOT(WRAPPER_COMMANDS): a wrapper is not the command word; `sudo python3 x.py` would
+# otherwise pass for a sudo call and hide the host python it runs.
+WRAPPER_COMMANDS = frozenset({"env", "sudo", "exec", "command", "nohup", "nice"})
+WRAPPER_VALUE_OPTIONS = {
+    "env": frozenset({"-u", "--unset", "-C", "--chdir"}),
+    "sudo": frozenset({"-C", "-D", "-g", "-h", "-p", "-R", "-r", "-t", "-T", "-U", "-u"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+}
+NESTED_SHELL = re.compile(r"(?:.*/)?(?:ba|da|z|k)?sh")
+YAML_MAPPING_KEY = re.compile(r"^\s*[A-Za-z0-9_-]+:(?:\s|$)")
 MAKE_RECIPE_PREFIXES = "@-+"
 LINE_CONTINUATION = "\\"
 
@@ -100,7 +115,14 @@ YAML_QUOTES = "\"'"
 
 # WHY-NOT(DOCKERFILE_RUN): RUN's own flags (--mount=..., --network=...) are skipped, or a
 # `RUN --mount=... pip install` would hide its unpinned packages behind the flag.
-DOCKERFILE_RUN = re.compile(r"^\s*RUN\s+(?:--\S+\s+)*(?P<command>.*)$", re.IGNORECASE)
+DOCKERFILE_RUN = re.compile(
+    r"^\s*(?:ONBUILD\s+)?RUN\s+(?:--\S+\s+)*(?P<command>.*)$", re.IGNORECASE
+)
+# WHY-NOT(HEREDOC): a RUN heredoc's lines up to its delimiter are its body; read as Dockerfile
+# lines they were skipped, so `RUN <<EOF` hid every install in it.
+HEREDOC = re.compile(
+    r"<<(?P<strip>-?)\s*(?P<quote>[\'\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
+)
 DOCKERFILE_COMMENT = re.compile(r"^\s*#")
 PIP_PROGRAM = re.compile(r"(?:.*/)?pip(?:3(?:\.\d+)?)?")
 UV_PROGRAM = re.compile(r"(?:.*/)?uv")
@@ -316,7 +338,8 @@ def check_python_uv(repo_root: Path) -> list[Violation]:
         (repo_root / MAKEFILE, find_host_python_in_makefile)
     ]
     sources += [
-        (path, find_host_python_in_workflow) for path in sorted(repo_root.glob(WORKFLOW_GLOB))
+        (path, find_host_python_in_workflow)
+        for path in sorted(path for glob in WORKFLOW_GLOBS for path in repo_root.glob(glob))
     ]
     return [
         violation
@@ -377,12 +400,26 @@ def workflow_run_blocks(text: str) -> list[list[SourceLine]]:
         if match is None:
             continue
         value = match["value"].strip()
+        key_column = line.index("run:")
         scalar = BLOCK_SCALAR.match(value)
         if scalar is not None:
-            blocks.append(block_scalar(lines, index, len(match["indent"]), scalar["style"]))
+            blocks.append(block_scalar(lines, index, key_column, scalar["style"]))
         elif value:
             blocks.append([SourceLine(index + 1, unquote_yaml(value))])
+        elif (plain := plain_scalar_below(lines, index, key_column)) is not None:
+            blocks.append([plain])
     return blocks
+
+
+def plain_scalar_below(lines: list[str], key_index: int, key_column: int) -> SourceLine | None:
+    """A plain scalar that starts on the line after `run:`, folded into one command.
+
+    A mapping under `run:` (as in `defaults: run: working-directory: ...`) is not a command.
+    """
+    block = block_scalar(lines, key_index, key_column, FOLDED_STYLE)
+    if not block or YAML_MAPPING_KEY.match(lines[block[0].line - 1]):
+        return None
+    return block[0]
 
 
 def block_scalar(lines: list[str], key_index: int, key_indent: int, style: str) -> list[SourceLine]:
@@ -447,14 +484,91 @@ def shell_tokens(text: str) -> list[str] | None:
 
 
 def starts_host_python(command: SourceLine) -> bool:
+    return any(HOST_PYTHON.fullmatch(run[0]) for run in parsed_commands(command))
+
+
+def parsed_commands(command: SourceLine) -> list[list[str]]:
     tokens = shell_tokens(command.text)
     if tokens is None:
         raise ValueError(f"line {command.line}: cannot parse shell command {command.text!r}")
-    return any(HOST_PYTHON.fullmatch(word) for word in command_words(tokens))
+    return commands_in(tokens, command.text)
 
 
-def command_words(tokens: list[str]) -> list[str]:
-    return [command[0] for command in simple_commands(tokens)]
+def commands_in(tokens: list[str], text: str | None) -> list[list[str]]:
+    """Every simple command the shell would run, each from its real command word.
+
+    A wrapper (`env`, `sudo`, `exec`, ...) runs the command after its options, `sh -c` runs
+    its script, and `$(...)` or backticks in `text` run what they enclose; each of these
+    used to pass for the wrapper or the outer command alone.
+    """
+    commands = [run for simple in simple_commands(tokens) for run in unwrapped(simple)]
+    if text is not None:
+        for inner in command_substitutions(text):
+            commands += nested_commands(inner)
+    return commands
+
+
+def nested_commands(text: str) -> list[list[str]]:
+    tokens = shell_tokens(text)
+    return [] if tokens is None else commands_in(tokens, text)
+
+
+def unwrapped(command: list[str]) -> list[list[str]]:
+    command = list(command)
+    while command and command[0] in WRAPPER_COMMANDS:
+        wrapper = command.pop(0)
+        value_options = WRAPPER_VALUE_OPTIONS.get(wrapper, frozenset())
+        while command and (
+            command[0].startswith("-") or (wrapper == "env" and ENV_ASSIGNMENT.match(command[0]))
+        ):
+            if command.pop(0) in value_options and command:
+                command.pop(0)
+    if not command:
+        return []
+    if NESTED_SHELL.fullmatch(command[0]):
+        for position, token in enumerate(command[1:], start=1):
+            if not token.startswith("-") or token.startswith("--"):
+                break
+            if "c" in token[1:]:
+                script = command[position + 1] if position + 1 < len(command) else ""
+                return [command, *nested_commands(script)]
+    return [command]
+
+
+def command_substitutions(text: str) -> list[str]:
+    """The text inside each `$(...)` and backtick pair outside single quotes."""
+    found: list[str] = []
+    index, quote = 0, None
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if char in "'\"" and quote in (None, char):
+            quote = None if quote == char else char
+        elif quote != "'" and text.startswith("$(", index):
+            end = matching_parenthesis(text, index + 1)
+            found.append(text[index + 2 : end])
+            index = end
+        elif quote != "'" and char == "`":
+            end = text.find("`", index + 1)
+            end = len(text) if end == -1 else end
+            found.append(text[index + 1 : end])
+            index = end
+        index += 1
+    return found
+
+
+def matching_parenthesis(text: str, opening: int) -> int:
+    depth = 0
+    for index in range(opening, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return len(text)
 
 
 def check_docker_pins(repo_root: Path) -> list[Violation]:
@@ -475,22 +589,40 @@ def unpinned_message(hit: UnpinnedInstall) -> str:
 def find_unpinned_pip_installs(text: str) -> list[UnpinnedInstall]:
     hits = []
     for run in dockerfile_run_commands(text):
-        tokens = shell_tokens(run.text)
-        if tokens is None:
-            raise ValueError(f"line {run.line}: cannot parse shell command {run.text!r}")
-        packages = tuple(
-            package for command in simple_commands(tokens) for package in unpinned_packages(command)
-        )
+        exec_form = dockerfile_exec_form(run.text)
+        commands = commands_in(exec_form, None) if exec_form is not None else parsed_commands(run)
+        packages = tuple(package for command in commands for package in unpinned_packages(command))
         if packages:
             hits.append(UnpinnedInstall(run.line, packages))
     return hits
 
 
+def dockerfile_exec_form(command: str) -> list[str] | None:
+    """The argument list of `RUN ["pip", "install", ...]`, which runs without a shell."""
+    if not command.lstrip().startswith("["):
+        return None
+    try:
+        arguments = json.loads(command)
+    except ValueError:
+        return None
+    if not isinstance(arguments, list) or not all(isinstance(item, str) for item in arguments):
+        return None
+    return arguments
+
+
 def dockerfile_run_commands(text: str) -> list[SourceLine]:
-    """Join each RUN instruction's continuation lines into one shell command."""
+    """Join each RUN instruction's continuation lines into one shell command.
+
+    A heredoc's body runs as shell commands when nothing but a shell takes it, and each
+    of those is reported at its RUN line; its lines are never read as instructions.
+    """
+    lines = text.splitlines()
     runs: list[SourceLine] = []
     pending: list[SourceLine] = []
-    for number, line in enumerate(text.splitlines(), start=1):
+    index = 0
+    while index < len(lines):
+        number, line = index + 1, lines[index]
+        index += 1
         if pending and DOCKERFILE_COMMENT.match(line):
             continue
         if not pending:
@@ -499,12 +631,36 @@ def dockerfile_run_commands(text: str) -> list[SourceLine]:
                 continue
             line = match["command"]
         pending.append(SourceLine(number, line.strip()))
-        if not line.rstrip().endswith(LINE_CONTINUATION):
-            runs.append(SourceLine(pending[0].line, join_lines(pending)))
-            pending = []
+        if line.rstrip().endswith(LINE_CONTINUATION):
+            continue
+        run = SourceLine(pending[0].line, join_lines(pending))
+        pending = []
+        markers = list(HEREDOC.finditer(run.text))
+        if not markers:
+            runs.append(run)
+            continue
+        command = HEREDOC.sub("", run.text).strip()
+        runs.append(SourceLine(run.line, command))
+        for marker in markers:
+            body, index = heredoc_body(lines, index, marker)
+            if not command or NESTED_SHELL.fullmatch(command.split()[0]):
+                runs += [SourceLine(run.line, line.text) for line in join_continuations(body)]
     if pending:
         runs.append(SourceLine(pending[0].line, join_lines(pending)))
     return runs
+
+
+def heredoc_body(
+    lines: list[str], start: int, marker: re.Match[str]
+) -> tuple[list[SourceLine], int]:
+    """The heredoc's lines from `start` up to its delimiter, and the index after it."""
+    body: list[SourceLine] = []
+    for index in range(start, len(lines)):
+        line = lines[index].lstrip("\t") if marker["strip"] else lines[index]
+        if line == marker["word"]:
+            return body, index + 1
+        body.append(SourceLine(index + 1, line.strip()))
+    return body, len(lines)
 
 
 def simple_commands(tokens: list[str]) -> list[list[str]]:
@@ -560,9 +716,13 @@ def pip_install_arguments(command: list[str]) -> list[str]:
     else:
         return []
     position = 0
+    skips_values = not HOST_PYTHON.fullmatch(program)
     for word in subcommand:
         while position < len(rest) and rest[position] != word and rest[position].startswith("-"):
-            position += 1
+            # WHY-NOT(takes_value): in `pip --cache-dir /tmp/c install`, the value /tmp/c is not
+            # the subcommand; without skipping it, the install after it was never checked.
+            takes_value = skips_values and rest[position] in PIP_VALUE_OPTIONS
+            position += 2 if takes_value else 1
         if position == len(rest) or rest[position] != word:
             return []
         position += 1
