@@ -3,13 +3,7 @@
 > - Created: 2026-08-23
 > - Last Updated: 2026-11-24
 
-> [!NOTE]
-> **Diátaxis 象限鎖定**
->
-> - **目標象限**：How-To Guide
-> - **目標讀者**：具備 Docker 與 MLOps 基本概念的工程師
-> - **核心目標**：指引如何在全地端執行拓撲中啟動並驗證完整 Docker Compose MLOps Stack
-> - **排除內容（Avoid）**：零基礎 Python 教學、詳細的時序演算法數學推導
+具備 Docker 與 MLOps 基本概念的工程師可依本指南，在全地端執行拓撲中啟動並驗證完整的 Docker Compose MLOps Stack。本指南不從零教 Python，也不推導時序演算法的數學細節。
 
 本指南說明如何透過 Docker Compose 一鍵啟動 Nginx 前端預覽、FastAPI、TimescaleDB、Redis (Feast Online Store)、MLflow Tracking Server 與 Dagster 的全地端工作環境。首次擷取仍需連線至台電與 CWA 外部資料來源。Nginx 提供 Docker 建置後的靜態前端，不提供熱重載；雲端前端部署不在此流程內。
 

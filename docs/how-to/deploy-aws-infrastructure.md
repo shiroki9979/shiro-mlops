@@ -1,15 +1,9 @@
 # 如何部署 AWS 基礎設施 (Terraform & IAM OIDC)
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-21
+> - Last Updated: 2026-11-24
 
-> [!NOTE]
-> **Diátaxis 象限鎖定**
->
-> - **目標象限**：How-To Guide
-> - **目標讀者**：負責雲端基礎設施部署的 MLOps / DevOps 工程師
-> - **核心目標**：指引如何以 IAM Identity Center 的短期憑證建立 Terraform 的 bootstrap 層與 S3 遠端 state、首次 apply 預報檢視的靜態託管資源（S3 與 CloudFront）、建立與輪替地端上傳用 access key、設定 CI 使用的 GitHub variables 與 secrets、取得預報檢視的網址與執行雲端 smoke check，以及依序拆除兩層
-> - **排除內容（Avoid）**：AWS 基本概念入門、AWS Organizations 與 IAM Identity Center 的開通、本機快速預測操作、CD 管線設定
+負責雲端基礎設施部署的 MLOps / DevOps 工程師可依本指南，以 IAM Identity Center 的短期憑證建立 Terraform 的 bootstrap 層與 S3 遠端 state、首次 apply 預報檢視的靜態託管資源（S3 與 CloudFront）、建立與輪替地端上傳用 access key、設定 CI 使用的 GitHub variables 與 secrets、取得預報檢視的網址並執行雲端 smoke check，最後依序拆除兩層。本指南假設讀者已熟悉 AWS 基本概念，也不涵蓋 AWS Organizations 與 IAM Identity Center 的開通、本機快速預測操作與 CD 管線設定。
 
 依 [ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)，雲端只存放並提供預報檢視的發布產物。Terraform 分成兩層，結構、state 與各角色的信任與權限見 [Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)：
 

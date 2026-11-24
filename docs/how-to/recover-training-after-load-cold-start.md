@@ -1,15 +1,9 @@
 # 如何在逐時負載冷啟動後恢復訓練與監控排程
 
 > - Created: 2026-09-26
-> - Last Updated: 2026-11-23
+> - Last Updated: 2026-11-24
 
-> [!NOTE]
-> **Diátaxis 象限鎖定**
->
-> - **目標象限**：How-To Guide
-> - **目標讀者**：負責地端 Docker Compose Stack 的操作人員
-> - **核心目標**：從空的 `raw_taipower_load` 開始累積全台逐時實際負載，確認累積進度，並在門檻達成後讓 `dynamic_horizon_forecast__training_job` 與 `dynamic_horizon_forecast__monitoring_job` 恢復運作，首次訓練成功後開啟 `issued_forecast_schedule` 每小時發布預報，並從冷啟動當天起以 `forecast_track_record_schedule` 每小時彙整預報實績、以 `forecast_view_export_schedule` 每小時匯出預報檢視的公開 JSON
-> - **排除內容（Avoid）**：推算規則與 28 日門檻的設計理由（見 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)）、排程與失敗政策契約（見 [Dagster 排程](../reference/dagster-schedules.md)）
+負責地端 Docker Compose Stack 的操作人員可依本指南，從空的 `raw_taipower_load` 開始累積全台逐時實際負載並確認累積進度，在門檻達成後讓 `dynamic_horizon_forecast__training_job` 與 `dynamic_horizon_forecast__monitoring_job` 恢復運作。首次訓練成功後開啟 `issued_forecast_schedule` 每小時發布預報；`forecast_track_record_schedule` 每小時彙整預報實績，`forecast_view_export_schedule` 每小時匯出預報檢視的公開 JSON，這兩個排程從冷啟動當天就開啟。推算規則與 28 日門檻的設計理由見 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)，排程與失敗政策契約見 [Dagster 排程](../reference/dagster-schedules.md)，本指南不重複說明。
 
 全台逐時實際負載只能由區域供需快照往後累積，無法回補歷史。有效逐時觀測未達任務設定 `src/shiro_mlops/tasks/dynamic_horizon_forecast.toml` 的 `[policies].min_training_hours`（預設 `672`，連續無缺漏時約 28 日）前，訓練與 drift 排程每次 tick 都會略過並揭露原因，這是預期行為。
 
