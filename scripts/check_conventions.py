@@ -6,21 +6,24 @@ Checks:
              nice), inside `sh -c`/`bash -c`, in `$(...)` or backticks, or in a case arm.
   docker-pins
              Each package a `pip install` or `uv pip install` in docker/Dockerfile* and
-             frontend/Dockerfile* names must be pinned to an exact version with ==, unless the command reads a constraints file
-             with -c (as exported from uv.lock); or read a lock file with -r instead. Values of
-             options such as -r and -e (a local project) are not checked. RUN and ONBUILD RUN in
-             shell or exec form are read, a heredoc body run by the shell included, with the
-             same wrappers and nested shells as python-uv.
-             Each image that FROM or COPY --from names in those Dockerfiles, and each `image:` in docker/docker-compose*.yml, must carry a
-             digest, written name:tag@sha256:<digest> so the tag stays readable; build stage
-             names, stage indexes and scratch are not images.
+             frontend/Dockerfile* names must be pinned to an exact version with ==, unless the
+             command reads a constraints file with -c (as exported from uv.lock); or read a lock
+             file with -r instead. Values of options such as -r and -e (a local project) are not
+             checked. RUN and ONBUILD RUN in shell or exec form are read, a heredoc body run by
+             the shell included, with the same wrappers and nested shells as python-uv.
+             Each image that FROM or COPY --from names in those Dockerfiles, and each `image:`
+             in docker/docker-compose*.yml and *.yaml, must be written name:tag@sha256:<digest>:
+             the digest pins it, the tag keeps it readable. A reference holding a variable is
+             unpinned. Build stage names, stage indexes and scratch are not images.
              To fix: resolve the multi-platform index digest of the exact tag (`docker
              buildx imagetools inspect <name>:<tag>`) and append it to the reference.
   action-pins
-             Each `uses:` in .github/workflows/*.yml and *.yaml must name a full 40-character
-             commit SHA; keep the release it is in as a trailing comment (`# v4.4.0`) for
-             reviewers. Local ./ actions are skipped and docker:// actions need a digest. Each
-             astral-sh/setup-uv step must set `with: version:` to an exact uv release (X.Y.Z).
+             Each `uses:` in .github/workflows/*.yml and *.yaml, outside `run:` scripts, must
+             name a full 40-character commit SHA; keep the release it is in as a trailing
+             comment (`# v4.4.0`) for reviewers. Local ./ actions are skipped and docker://
+             actions need name:tag@sha256:<digest>. Each astral-sh/setup-uv step must set
+             `with: version:` to an exact uv release (X.Y.Z), written out or as
+             `${{ env.NAME }}` naming a workflow-level `env:` entry that holds one.
              To fix: `git ls-remote https://github.com/<owner>/<repo> refs/tags/<release>^{}`
              (or the plain tag when it has no ^{} line) gives the commit SHA.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
@@ -138,8 +141,11 @@ HEREDOC = re.compile(
 )
 USES_KEY = re.compile(r"^\s*(?:-\s+)?uses:\s*(?P<quote>[\"']?)(?P<ref>[^\s\"'#]+)(?P=quote)")
 COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
-IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+TAGGED_DIGEST = re.compile(r":[^/:@]+@sha256:[0-9a-f]{64}$")
 SETUP_UV_ACTION = "astral-sh/setup-uv"
+WORKFLOW_ENV_KEY = "env:"
+WORKFLOW_ENV_ENTRY = re.compile(r"^  (?P<name>[A-Za-z_][A-Za-z0-9_]*):\s*(?P<value>.*)$")
+ENV_EXPRESSION = re.compile(r"\$\{\{\s*env\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+")
 MAPPING_ENTRY = re.compile(r"^\s*(?:-\s+)?(?P<key>[A-Za-z0-9_-]+):\s*(?P<value>.*)$")
 LOCAL_ACTION = "./"
@@ -148,9 +154,10 @@ DOCKERFILE_FROM = re.compile(
     r"^\s*FROM\s+(?:--\S+\s+)*(?P<image>\S+)(?:\s+AS\s+(?P<stage>\S+))?", re.IGNORECASE
 )
 DOCKERFILE_COPY_FROM = re.compile(
-    r"^\s*(?:ONBUILD\s+)?COPY\s+.*?--from=(?P<image>\S+)", re.IGNORECASE
+    r"^\s*(?:ONBUILD\s+)?COPY\s+.*?--from=(?P<quote>[\"']?)(?P<image>[^\s\"']+)(?P=quote)",
+    re.IGNORECASE,
 )
-EMPTY_IMAGE = "scratch"
+SCRATCH_IMAGE = "scratch"
 COMPOSE_IMAGE = re.compile(r"^\s*image:\s*(?P<quote>[\"']?)(?P<image>[^\s\"'#]+)(?P=quote)")
 DOCKERFILE_COMMENT = re.compile(r"^\s*#")
 PIP_PROGRAM = re.compile(r"(?:.*/)?pip(?:3(?:\.\d+)?)?")
@@ -667,14 +674,14 @@ def find_unpinned_pip_installs(text: str) -> list[UnpinnedInstall]:
 
 def find_unpinned_images(text: str) -> list[SourceLine]:
     """Images that FROM or COPY --from names without a digest; build stages are not images."""
-    stages = {EMPTY_IMAGE}
+    stages = {SCRATCH_IMAGE}
     hits = []
     for number, line in enumerate(text.splitlines(), start=1):
         match = DOCKERFILE_FROM.match(line) or DOCKERFILE_COPY_FROM.match(line)
         if match is None:
             continue
         image = match["image"]
-        if image.lower() not in stages and not image.isdigit() and not IMAGE_DIGEST.search(image):
+        if image.lower() not in stages and not image.isdigit() and not TAGGED_DIGEST.search(image):
             hits.append(SourceLine(number, image))
         if match.re is DOCKERFILE_FROM and match["stage"]:
             stages.add(match["stage"].lower())
@@ -686,7 +693,7 @@ def find_unpinned_compose_images(text: str) -> list[SourceLine]:
     return [
         SourceLine(number, match["image"])
         for number, line in enumerate(text.splitlines(), start=1)
-        if (match := COMPOSE_IMAGE.match(line)) and not IMAGE_DIGEST.search(match["image"])
+        if (match := COMPOSE_IMAGE.match(line)) and not TAGGED_DIGEST.search(match["image"])
     ]
 
 
@@ -825,51 +832,79 @@ def pip_install_arguments(command: list[str]) -> list[str]:
 def find_unpinned_actions(text: str) -> list[SourceLine]:
     """`uses:` references that do not name a full commit SHA (or a digest, for docker://)."""
     hits = []
-    for number, line in enumerate(text.splitlines(), start=1):
-        match = USES_KEY.match(line)
-        if match is None:
-            continue
-        ref = match["ref"]
+    for index, ref in workflow_uses(text):
         if ref.startswith(LOCAL_ACTION):
             continue
         if ref.startswith(DOCKER_ACTION):
-            pinned = IMAGE_DIGEST.search(ref) is not None
+            pinned = TAGGED_DIGEST.search(ref) is not None
         else:
             _, _, version = ref.partition("@")
             pinned = COMMIT_SHA.fullmatch(version) is not None
         if not pinned:
-            hits.append(SourceLine(number, ref))
+            hits.append(SourceLine(index + 1, ref))
     return hits
 
 
 def find_unpinned_uv_setups(text: str) -> list[SourceLine]:
     """setup-uv steps whose `with: version:` is missing or not an exact uv release.
 
-    Each hit is reported at its version line, or at the `uses:` line when there is none; its
-    text is the version as written, empty when missing.
+    A `${{ env.NAME }}` version is read from the workflow-level `env:`. Each hit is reported
+    at its version line, or at the `uses:` line when there is none; its text is the version as
+    written, empty when missing.
     """
     lines = text.splitlines()
+    env = workflow_env(lines)
     hits = []
-    for index, line in enumerate(lines):
-        match = USES_KEY.match(line)
-        if match is None or match["ref"].partition("@")[0] != SETUP_UV_ACTION:
+    for index, ref in workflow_uses(text):
+        if ref.partition("@")[0] != SETUP_UV_ACTION:
             continue
-        key_column = line.index("uses:")
+        key_column = lines[index].index("uses:")
         version = step_with_value(lines, step_lines(lines, index, key_column), "version")
         if version is None:
             hits.append(SourceLine(index + 1, ""))
-        elif not EXACT_VERSION.fullmatch(version.text):
+        elif not EXACT_VERSION.fullmatch(resolve_env(version.text, env)):
             hits.append(version)
     return hits
 
 
+def workflow_uses(text: str) -> list[tuple[int, str]]:
+    """(line index, ref) of each `uses:` key, skipping lines of `run:` scripts."""
+    script_lines = {line.line for block in workflow_run_blocks(text) for line in block}
+    return [
+        (index, match["ref"])
+        for index, line in enumerate(text.splitlines())
+        if index + 1 not in script_lines and (match := USES_KEY.match(line))
+    ]
+
+
+def workflow_env(lines: list[str]) -> dict[str, str]:
+    """The workflow-level `env:` entries, unquoted."""
+    env: dict[str, str] = {}
+    in_env = False
+    for line in lines:
+        if line and not line[0].isspace():
+            in_env = line.rstrip() == WORKFLOW_ENV_KEY
+        elif in_env and (entry := WORKFLOW_ENV_ENTRY.match(line)):
+            env[entry["name"]] = unquote_yaml(entry["value"].split(" #", 1)[0].strip())
+    return env
+
+
+def resolve_env(value: str, env: dict[str, str]) -> str:
+    expression = ENV_EXPRESSION.fullmatch(value)
+    return env.get(expression["name"], value) if expression else value
+
+
 def step_lines(lines: list[str], index: int, key_column: int) -> range:
-    """The indexes of the workflow step whose keys start at `key_column` around `index`."""
+    """The indexes of the workflow step whose keys start at `key_column` around `index`.
+
+    The step starts at its `- ` line, the first line above `index` indented less than its
+    keys; blank and comment lines do not end it.
+    """
     start = index
-    while (
-        start > 0 and lines[start].lstrip()[:2] != "- " and indentation(lines[start]) >= key_column
-    ):
+    while start > 0 and indentation(lines[start]) >= key_column:
         start -= 1
+        while start > 0 and lines[start].strip()[:1] in ("", "#"):
+            start -= 1
     end = index + 1
     while end < len(lines) and (not lines[end].strip() or indentation(lines[end]) >= key_column):
         end += 1
@@ -877,20 +912,22 @@ def step_lines(lines: list[str], index: int, key_column: int) -> range:
 
 
 def step_with_value(lines: list[str], step: range, key: str) -> SourceLine | None:
-    """The value of `key` under the step's `with:` mapping, unquoted and without its comment."""
-    with_indent = None
+    """The value of `key` directly under the step's `with:`, unquoted and without its comment."""
+    with_column = child_column = None
     for index in step:
         entry = MAPPING_ENTRY.match(lines[index])
         if entry is None:
             continue
         column = lines[index].index(entry["key"])
-        if entry["key"] == "with" and with_indent is None:
-            with_indent = column
-        elif with_indent is not None and column <= with_indent:
-            with_indent = None
-        elif with_indent is not None and entry["key"] == key:
-            value = entry["value"].split(" #", 1)[0].strip()
-            return SourceLine(index + 1, unquote_yaml(value))
+        if with_column is not None and column <= with_column:
+            with_column = child_column = None
+        if entry["key"] == "with" and with_column is None:
+            with_column = column
+        elif with_column is not None:
+            child_column = column if child_column is None else child_column
+            if column == child_column and entry["key"] == key:
+                value = entry["value"].split(" #", 1)[0].strip()
+                return SourceLine(index + 1, unquote_yaml(value))
     return None
 
 

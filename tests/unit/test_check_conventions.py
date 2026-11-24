@@ -525,8 +525,6 @@ def test_pinned_installs_behind_wrappers_stay_allowed() -> None:
     assert _unpinned(dockerfile) == []
 
 
-# --- action-pins ----------------------------------------------------------------------------
-
 CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 
 
@@ -593,8 +591,6 @@ def test_setup_uv_with_an_exact_version_and_other_steps_versions_are_allowed() -
 
     assert find_unpinned_uv_setups(workflow) == []
 
-
-# --- docker-pins: base images ---------------------------------------------------------------
 
 DIGEST = "@sha256:" + "b" * 64
 
@@ -707,3 +703,55 @@ def test_action_pins_reports_unpinned_actions_and_uv_versions_in_every_workflow(
             "set setup-uv `with: version:` to an exact uv release (X.Y.Z), not: latest",
         ),
     ]
+
+
+def test_setup_uv_version_from_workflow_env_is_resolved() -> None:
+    workflow = (
+        "env:\n"
+        '  UV_VERSION: "0.11.32"\n'
+        "  LOOSE_UV: latest\n"
+        "jobs:\n"
+        "  a:\n"
+        "    steps:\n"
+        f"      - uses: astral-sh/setup-uv@{CHECKOUT_SHA}\n"
+        "        with:\n"
+        "          version: ${{ env.UV_VERSION }}\n"
+        f"      - uses: astral-sh/setup-uv@{CHECKOUT_SHA}\n"
+        "        with:\n"
+        "          version: ${{ env.LOOSE_UV }}\n"
+    )
+
+    assert [(hit.line, hit.text) for hit in find_unpinned_uv_setups(workflow)] == [
+        (12, "${{ env.LOOSE_UV }}"),
+    ]
+
+
+def test_setup_uv_version_is_found_across_blank_lines_but_not_inside_a_block_scalar() -> None:
+    workflow = (
+        "      - name: Version before uses\n"
+        "        with:\n"
+        '          version: "0.11.32"\n'
+        "\n"
+        "        # setup\n"
+        f"        uses: astral-sh/setup-uv@{CHECKOUT_SHA}\n"
+        f"      - uses: astral-sh/setup-uv@{CHECKOUT_SHA}\n"
+        "        with:\n"
+        "          cache-dependency-glob: |\n"
+        "            version: 0.11.32\n"
+    )
+
+    assert [(hit.line, hit.text) for hit in find_unpinned_uv_setups(workflow)] == [(7, "")]
+
+
+def test_uses_lines_inside_a_run_script_are_not_actions() -> None:
+    workflow = "      - run: |\n          echo done\n          uses: actions/checkout@v4\n"
+
+    assert find_unpinned_actions(workflow) == []
+
+
+def test_quoted_stage_names_are_stages_and_a_digest_needs_a_tag() -> None:
+    dockerfile = (
+        f'FROM node:24-alpine{DIGEST} AS build\nCOPY --from="build" /app /app\nFROM nginx{DIGEST}\n'
+    )
+
+    assert _images(dockerfile) == [(3, f"nginx{DIGEST}")]

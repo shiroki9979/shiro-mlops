@@ -12,6 +12,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The image must match the postgres service image in docker/docker-compose.yml.
 docker run --rm -d --name "$container" \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pagination_acceptance \
