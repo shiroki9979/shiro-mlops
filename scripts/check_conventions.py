@@ -115,7 +115,14 @@ DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
 # whole doc scope and a new directory cannot slip past it.
 DOC_METADATA_MIGRATED_SCOPE = (
     "docs/adr/",
-    "docs/reference/markdown-metadata.md",
+    "docs/reference/",
+    "docs/agents/",
+    "docs/ROADMAP.md",
+    "AGENTS.md",
+    "README.md",
+    "GLOSSARY.md",
+    "CODING_STANDARDS.md",
+    "frontend/README.md",
 )
 """Docs already in the metadata format, one directory (ending in /) or file per line."""
 COMMENT_KINDS_DIRS = ("src", "scripts")
