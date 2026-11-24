@@ -1,7 +1,7 @@
 # ADR 0006: 地端引入 TimescaleDB 作為時序資料儲存庫與分層儲存架構
 
 > - Created: 2026-08-26
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-20
 > - Status: Accepted
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)
 > - Superseded by: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)

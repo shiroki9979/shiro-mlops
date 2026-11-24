@@ -302,6 +302,9 @@ LEGACY_METADATA_KEYS = (
     "前次檢視",
     "對應",
     "結論",
+    "關聯",
+    "專案名稱",
+    "候選 1 規格",
 )
 """Header keys from before the metadata contract; they mark a legacy metadata block."""
 METADATA_KEY_NAMES = frozenset(key.casefold() for key in (*METADATA_KEYS, *LEGACY_METADATA_KEYS))

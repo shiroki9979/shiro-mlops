@@ -144,6 +144,24 @@ def test_converting_a_legacy_header_to_the_metadata_block_does_not_count(repo: P
 
 
 @pytest.mark.parametrize(
+    "legacy_line",
+    [
+        "- 關聯：[ADR-0002](0002-title.md)",
+        "- 專案名稱：`shiro-mlops`",
+        "- 候選 1 規格：[GitHub #72](https://github.com/owner/repo/issues/72)",
+    ],
+)
+def test_converting_a_legacy_header_with_any_legacy_key_does_not_count(
+    repo: Path, legacy_line: str
+) -> None:
+    legacy = _LEGACY_ADR.replace("(Accepted)\n", f"(Accepted)\n{legacy_line}\n")
+    base = _commit(repo, {"docs/adr/0001-title.md": legacy}, "2026-10-01")
+    head = _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-25")
+
+    assert check_doc_dates(GitRange(repo, base, head)) == []
+
+
+@pytest.mark.parametrize(
     ("updated_on", "expected"),
     [("2026-10-23", []), ("2026-10-21", [("docs/adr/0001-title.md", 4)])],
 )

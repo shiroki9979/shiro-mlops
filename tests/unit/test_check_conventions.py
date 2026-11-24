@@ -1084,6 +1084,9 @@ def test_dated_lines_after_the_first_h2_are_body_text() -> None:
         "> **最後更新**：2026",
         "> - **排除內容（Avoid）**：架構取捨",
         "- 狀態 (Status)：已接受",
+        "- 關聯：[ADR-0001](../adr/0001-title.md)",
+        "- 專案名稱：`shiro-mlops`",
+        "- 候選 1 規格：[GitHub #72](https://github.com/owner/repo/issues/72)",
     ],
 )
 def test_metadata_or_legacy_key_outside_the_metadata_block_is_a_violation(line: str) -> None:
