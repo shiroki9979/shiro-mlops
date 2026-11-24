@@ -46,10 +46,26 @@ export const EMPTY_VALUE = '—'
 
 type DateInput = string | number | Date
 
+// Building an Intl formatter costs far more than formatting with one, and a table formats every
+// cell, so each (locale, options) pair is built once. Options are keyed by content because most
+// call sites spread a fresh object on every call.
+const dateTimeFormats = new Map<string, Intl.DateTimeFormat>()
+const numberFormats = new Map<string, Intl.NumberFormat>()
+
+function reuse<T>(cache: Map<string, T>, locale: Locale, options: object, build: () => T): T {
+  const key = `${locale}|${JSON.stringify(options, Object.keys(options).sort())}`
+  let formatter = cache.get(key)
+  if (formatter === undefined) {
+    formatter = build()
+    cache.set(key, formatter)
+  }
+  return formatter
+}
+
 function formatDate(value: DateInput, locale: Locale, options: Intl.DateTimeFormatOptions): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return String(value)
-  return new Intl.DateTimeFormat(locale, options).format(date)
+  return reuse(dateTimeFormats, locale, options, () => new Intl.DateTimeFormat(locale, options)).format(date)
 }
 
 export function formatDateTime(value: DateInput, locale: Locale): string {
@@ -108,5 +124,5 @@ function fixedDigits(fractionDigits: number): Intl.NumberFormatOptions {
 }
 
 function formatWith(value: number, locale: Locale, options: Intl.NumberFormatOptions): string {
-  return new Intl.NumberFormat(locale, options).format(value)
+  return reuse(numberFormats, locale, options, () => new Intl.NumberFormat(locale, options)).format(value)
 }

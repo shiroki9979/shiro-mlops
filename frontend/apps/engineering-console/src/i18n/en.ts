@@ -22,10 +22,6 @@ export const en: Messages = {
     monitoring: 'Model Drift Monitoring',
     dataExplorer: 'Data Explorer',
     settings: 'System Connection',
-    taipowerFeed: 'Taipower live feed',
-    taipowerFeedState: 'NORMAL',
-    recursiveInference: 'LightGBM recursive inference',
-    recursiveInferenceState: 'ACTIVE',
   },
   header: {
     title: 'Nationwide Grid Load Forecast & Weather Dashboard',
@@ -35,6 +31,22 @@ export const en: Messages = {
     modelNotLoaded: 'Model not loaded',
     apiHealthy: (environment, version) => `API connected (${environment} v${version})`,
     toggleTheme: 'Toggle light/dark theme',
+  },
+  serviceStatus: {
+    label: 'Service status',
+    api: 'API service',
+    apiState: {
+      reachable: 'Connected',
+      unreachable: 'Unreachable',
+      checking: 'Checking',
+    },
+    model: 'Dynamic Horizon Forecasting model',
+    modelState: {
+      loaded: 'Loaded',
+      notLoaded: 'Not loaded',
+      unknown: 'Unknown',
+      checking: 'Checking',
+    },
   },
   localeSwitcher: {
     label: 'Interface language',

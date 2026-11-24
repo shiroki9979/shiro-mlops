@@ -1,9 +1,8 @@
 import { useRefetchDatasetStatus } from '@/hooks/use-data-explorer'
-import { useHealth } from '@/hooks/use-health'
+import { serviceStateOf, useHealth } from '@/hooks/use-health'
 import { Badge } from '@shiro-mlops/shared/ui/badge'
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { LocaleSwitcher } from '@shiro-mlops/shared/i18n/locale-switcher'
-import { toQueryView } from '@shiro-mlops/shared/query-view'
 import {
   Activity,
   AlertTriangle,
@@ -19,8 +18,7 @@ export function Header() {
   const healthQuery = useHealth()
   const { refetch, isFetching } = healthQuery
   const refetchDatasetStatus = useRefetchDatasetStatus()
-  // The badge states the API's condition now, so a failed or offline read outranks the last response
-  const healthView = toQueryView(healthQuery, { policy: 'error-first' })
+  const service = serviceStateOf(healthQuery)
   const [isDark, setIsDark] = useState(true)
   const m = useMessages()
 
@@ -42,21 +40,17 @@ export function Header() {
 
       <div className="flex items-center gap-3">
         {/* Backend health status badge */}
-        {healthView.kind === 'content' ? (
-          healthView.content.model_loaded ? (
-            <Badge variant="success" className="gap-1.5 py-1">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              <span>
-                {m.header.apiHealthy(healthView.content.environment, healthView.content.version)}
-              </span>
-            </Badge>
-          ) : (
-            <Badge variant="destructive" className="gap-1.5 py-1">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              <span>{m.header.modelNotLoaded}</span>
-            </Badge>
-          )
-        ) : healthView.kind === 'error' || healthView.kind === 'paused' ? (
+        {service.kind === 'healthy' ? (
+          <Badge variant="success" className="gap-1.5 py-1">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            <span>{m.header.apiHealthy(service.health.environment, service.health.version)}</span>
+          </Badge>
+        ) : service.kind === 'modelNotLoaded' ? (
+          <Badge variant="destructive" className="gap-1.5 py-1">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span>{m.header.modelNotLoaded}</span>
+          </Badge>
+        ) : service.kind === 'unreachable' ? (
           <Badge variant="destructive" className="gap-1.5 py-1">
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>{m.header.apiUnreachable}</span>

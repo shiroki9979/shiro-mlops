@@ -2,8 +2,15 @@
 // Engineering Console trace or on-demand inference call in an otherwise clean bundle and expects the
 // check to name it.
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { consoleOnlyDependencies, findBundleViolations } from '../../scripts/check_forecast_view_bundle.mjs'
+
+const SCRIPT = fileURLToPath(new URL('../../scripts/check_forecast_view_bundle.mjs', import.meta.url))
 
 const CLEAN_FILES = [
   { path: 'index.html', text: '<script type="module" src="/assets/index-abc.js"></script>' },
@@ -101,4 +108,38 @@ describe('consoleOnlyDependencies', () => {
 
     assert.deepEqual(consoleOnlyDependencies(manifests), ['@tanstack/react-table'])
   })
+})
+
+describe('running the check as a script', () => {
+  // A copy of the script in a checkout with no frontend build, so a run that reaches the check
+  // always fails for want of build output. The root is resolved so the direct path has no symlink
+  // in it (macOS's tmpdir is one).
+  function inUnbuiltCheckout(run) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'bundle-check-')))
+    try {
+      mkdirSync(join(root, 'checkout/scripts'), { recursive: true })
+      const script = join(root, 'checkout/scripts/check_forecast_view_bundle.mjs')
+      copyFileSync(SCRIPT, script)
+      symlinkSync(join(root, 'checkout'), join(root, 'linked-checkout'), 'dir')
+      symlinkSync(script, join(root, 'check.mjs'))
+      run({
+        'its own path': script,
+        'a symlink to the script': join(root, 'check.mjs'),
+        'a symlinked directory': join(root, 'linked-checkout/scripts/check_forecast_view_bundle.mjs'),
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  for (const invocation of ['its own path', 'a symlink to the script', 'a symlinked directory']) {
+    it(`fails for missing build output when invoked through ${invocation}`, () => {
+      inUnbuiltCheckout((paths) => {
+        const result = spawnSync(process.execPath, [paths[invocation]], { encoding: 'utf8' })
+
+        assert.match(result.stderr, /build output not found/)
+        assert.equal(result.status, 1)
+      })
+    })
+  }
 })

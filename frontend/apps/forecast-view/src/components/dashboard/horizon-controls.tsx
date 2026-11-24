@@ -1,5 +1,6 @@
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Switch } from '@shiro-mlops/shared/ui/switch'
+import { AUTO_REFRESH_INTERVAL_SEC } from '@/hooks/use-latest-issued-forecast'
 import { useDashboardStore } from '@/store/dashboard-store'
 import { Clock, MapPin, RefreshCw } from 'lucide-react'
 import { type Messages, useMessages } from '@/i18n/messages'
@@ -61,7 +62,7 @@ export function HorizonControls() {
             className="cursor-pointer text-slate-300 flex items-center gap-1 select-none"
           >
             <RefreshCw className={`h-3 w-3 ${autoRefresh ? 'text-cyan-400' : 'text-slate-500'}`} />
-            {m.dashboard.autoRefresh}
+            {m.dashboard.autoRefresh(AUTO_REFRESH_INTERVAL_SEC)}
           </label>
         </div>
       </div>

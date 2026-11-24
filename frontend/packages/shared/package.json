@@ -5,6 +5,7 @@
     "type": "module",
     "exports": {
         "./api": "./src/api/request.ts",
+        "./csv": "./src/lib/csv.ts",
         "./i18n/locale-switcher": "./src/i18n/locale-switcher.tsx",
         "./i18n/*": "./src/i18n/*.ts",
         "./query-view": "./src/query/query-view.ts",

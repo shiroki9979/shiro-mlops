@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { NonEmptyArray } from '@shiro-mlops/shared/query-view'
 import type { ForecastStep } from '@/schemas/published'
+import { exportCsv } from '@shiro-mlops/shared/csv'
 import { Button } from '@shiro-mlops/shared/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@shiro-mlops/shared/ui/card'
 import {
@@ -30,19 +31,12 @@ export function ForecastTable({ steps, issuedAt }: ForecastTableProps) {
 
   const handleExportCSV = () => {
     // Values stay as published: target hours keep their +08:00 offset, whatever the interface locale.
-    const headers = ['Target Hour', 'Predicted Load (MW)']
-    const rows = steps.map((step) => [step.target_hour, step.predicted_load_mw.toFixed(2)])
-
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.setAttribute('href', url)
+    const rows = steps.map((step) => ({
+      'Target Hour': step.target_hour,
+      'Predicted Load (MW)': step.predicted_load_mw.toFixed(2),
+    }))
     // Named after the forecast's Taipei issue date (the offset-carrying string's own date), not the viewer's clock.
-    link.setAttribute('download', `issued_forecast_${issuedAt.slice(0, 10)}.csv`)
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    exportCsv(`issued_forecast_${issuedAt.slice(0, 10)}.csv`, rows)
   }
 
   const totalPages = Math.ceil(steps.length / pageSize)

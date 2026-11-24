@@ -37,7 +37,7 @@ export const zhTW = {
     stale: (hours: number) => `預報已超過 ${hours} 小時未更新`,
     issuedAt: (time: string) => `預報時刻：${time}`,
     predictionSubject: '預測對象：全台',
-    autoRefresh: '自動輪詢 (60s)',
+    autoRefresh: (seconds: number) => `自動輪詢 (${seconds}s)`,
     metrics: {
       peakTitle: '尖峰用電預估',
       peakTag: '尖峰',
