@@ -94,6 +94,7 @@ class _ForecastRowFilter:
     dataset_id: str | None
     issued_before: datetime | None
     source_updated_before: datetime | None
+    issued_after: datetime | None
     valid_start: datetime | None
     valid_end: datetime | None
     include_adjacent_points: bool
@@ -126,6 +127,9 @@ class _ForecastRowFilter:
         if self.source_updated_before is not None:
             clauses.append("source_updated_at <= :source_updated_before")
             params["source_updated_before"] = self.source_updated_before
+        if self.issued_after is not None:
+            clauses.append("issued_at >= :issued_after")
+            params["issued_after"] = self.issued_after
         return clauses, params
 
 
@@ -180,8 +184,15 @@ def _select_forecast_versions(
     return selected
 
 
-def _read_forecast_rows(conn: Connection, filters: _ForecastRowFilter) -> pd.DataFrame:
+def _read_forecast_rows(
+    conn: Connection, filters: _ForecastRowFilter, versions: set[ForecastVersion] | None = None
+) -> pd.DataFrame:
+    """Rows matching ``filters``; with ``versions``, only the rows of those vintages."""
     clauses, params = filters.row_conditions()
+    if versions is not None:
+        version_clause, version_params = _version_condition(versions)
+        clauses.append(version_clause)
+        params.update(version_params)
     query = f"""
         SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
                location_name, temperature_c, dew_point_c, apparent_temperature_c,
@@ -193,6 +204,23 @@ def _read_forecast_rows(conn: Connection, filters: _ForecastRowFilter) -> pd.Dat
                  issued_at DESC, source_updated_at DESC
     """
     return pd.read_sql_query(text(query), conn, params=params)
+
+
+def _version_condition(versions: set[ForecastVersion]) -> tuple[str, dict[str, Any]]:
+    """Equality on each vintage's key, so the row read never scans the geocode's history."""
+    if not versions:
+        return "1=0", {}
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    for index, version in enumerate(sorted(versions)):
+        clauses.append(
+            f"(dataset_id = :v{index}_dataset AND issued_at = :v{index}_issued"
+            f" AND source_updated_at = :v{index}_updated)"
+        )
+        params[f"v{index}_dataset"] = version.dataset_id
+        params[f"v{index}_issued"] = to_storage_time(version.issued_at)
+        params[f"v{index}_updated"] = to_storage_time(version.source_updated_at)
+    return f"({' OR '.join(clauses)})", params
 
 
 def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> set[ForecastVersion]:
@@ -211,21 +239,16 @@ def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> se
     )
     available_versions = pd.read_sql_query(
         text(
-            """
+            f"""
             SELECT DISTINCT dataset_id, issued_at, source_updated_at
             FROM raw_cwa_township_forecast
-            WHERE geocode = :geocode
+            WHERE geocode = :geocode AND {" AND ".join(clauses)}
             """
         ),
         conn,
-        params={"geocode": filters.geocode},
+        params={**params, "geocode": filters.geocode},
     )
     return _select_forecast_versions(headers, available_versions)
-
-
-def _in_versions(frame: pd.DataFrame, versions: set[ForecastVersion]) -> pd.DataFrame:
-    selected = [_forecast_version_key(row) in versions for _, row in frame.iterrows()]
-    return frame.loc[pd.Series(selected, index=frame.index, dtype=bool)]
 
 
 def _forecast_rows_in_taiwan_time(frame: pd.DataFrame) -> pd.DataFrame:
@@ -439,11 +462,18 @@ class CWAWeatherStore:
         dataset_id: str | None = None,
         issued_before: datetime | str | None = None,
         source_updated_before: datetime | str | None = None,
+        issued_after: datetime | str | None = None,
         valid_start: datetime | str | None = None,
         valid_end: datetime | str | None = None,
         include_adjacent_points: bool = False,
     ) -> pd.DataFrame:
         """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff.
+
+        With a geocode and ``issued_before``, each dataset serves its newest release holding
+        rows for the geocode, chosen first, and only that release's rows are read.
+        ``issued_after`` leaves out releases issued before it; serving passes the staleness
+        limit, since an older release would be discarded as stale anyway, so the choice
+        never reads the geocode's whole history.
 
         Cutoffs and window bounds are Taiwan-local instants or their text; ``pd.Timestamp``
         parses the text and turns an omitted bound into ``NaT``, which binds no condition.
@@ -453,14 +483,14 @@ class CWAWeatherStore:
             dataset_id=dataset_id,
             issued_before=to_storage_time_or_none(pd.Timestamp(issued_before)),
             source_updated_before=to_storage_time_or_none(pd.Timestamp(source_updated_before)),
+            issued_after=to_storage_time_or_none(pd.Timestamp(issued_after)),
             valid_start=to_storage_time_or_none(pd.Timestamp(valid_start)),
             valid_end=to_storage_time_or_none(pd.Timestamp(valid_end)),
             include_adjacent_points=include_adjacent_points,
         )
         with self._engine.connect() as conn:
-            frame = _read_forecast_rows(conn, filters)
-            if filters.selects_versions:
-                frame = _in_versions(frame, _read_selected_versions(conn, filters))
+            versions = _read_selected_versions(conn, filters) if filters.selects_versions else None
+            frame = _read_forecast_rows(conn, filters, versions)
         return _forecast_rows_in_taiwan_time(frame)
 
     def fetch_weather_range(

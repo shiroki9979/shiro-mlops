@@ -364,6 +364,7 @@ def resolve_weather(
             geocode=reference_point.geocode,
             issued_before=cutoff,
             source_updated_before=cutoff,
+            issued_after=cutoff - FORECAST_STALE_AFTER,
             valid_start=start,
             valid_end=end,
             include_adjacent_points=True,
