@@ -25,6 +25,14 @@ export const zhTW = {
   localeSwitcher: {
     label: '介面語系',
   },
+  // The attribution statement required by the Open Government Data License v1.0 (政府資料開放授權條款-第1版).
+  attribution: {
+    sourceLabel: '資料來源：',
+    providers: '台灣電力股份有限公司、交通部中央氣象署',
+    statement: '此開放資料依政府資料開放授權條款 (Open Government Data License) 進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。',
+    licenseLabel: '授權條款：',
+    licenseLink: '政府資料開放授權條款',
+  },
   dashboard: {
     unavailable: '目前無法取得預報',
     horizon: {

@@ -60,12 +60,12 @@ describe('Forecast View language switch', () => {
     expect(JSON.parse(localStorage.getItem(LOCALE_STORAGE_KEY) ?? '{}').state).toEqual({ preference: 'en' })
   })
 
-  it('links only to Forecast View pages', async () => {
+  it('links only to Forecast View pages and the data license', async () => {
     renderAppAt('/')
 
     await screen.findByLabelText(zhTW.localeSwitcher.label)
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'))
 
-    expect(hrefs).toEqual(['/', '/history'])
+    expect(hrefs).toEqual(['/', '/history', 'https://data.gov.tw/license'])
   })
 })
