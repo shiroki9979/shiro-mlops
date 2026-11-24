@@ -3,9 +3,7 @@
 > - Created: 2026-11-09
 > - Last Updated: 2026-11-24
 
-在 `lab/` 研究工作區探索特徵配方與超參數的工程師與研究者，可依本指南走完從凍結訓練表快照、執行滾動起點回測、比較候選參數，到撰寫可重現的研究報告（`README.md`）並回寫 TOML 的完整流程。同庫單向相依與快照架構的取捨理由見 [ADR-0011](../adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)，領域名詞定義見 [GLOSSARY.md](../../GLOSSARY.md)，本指南不重複說明。
-
-本指南說明如何在 `lab/` 研究工作區對指定 ML 任務凍結時間點快照、執行滾動起點回測，並產出符合團隊重現規範的研究報告。
+在 `lab/` 研究工作區探索特徵配方與超參數的工程師與研究者，可依本指南對指定 ML 任務走完從凍結時間點訓練表快照、執行滾動起點回測、比較候選參數，到撰寫符合團隊重現規範的研究報告（`README.md`）並回寫 TOML 的完整流程。同庫單向相依與快照架構的取捨理由見 [ADR-0011](../adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)，領域名詞定義見 [GLOSSARY.md](../../GLOSSARY.md)，本指南不重複說明。
 
 ---
 

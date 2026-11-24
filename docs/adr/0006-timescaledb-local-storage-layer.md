@@ -4,6 +4,7 @@
 > - Last Updated: 2026-11-24
 > - Status: Accepted
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)
+> - Superseded by: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)
 > - Revisions: [Notes](#notes)
 
 ---
