@@ -1,9 +1,11 @@
 # 台電全台逐時實際負載來源調查
 
-- 建立日期：2026-09-16
-- 最後更新：2026-09-27
-- 對應：#58 Establish canonical hourly actual-load source
-- 結論：**沒有驗證到可直接取代既有來源的官方「歷史、全台、逐時實際負載」端點。** 可用的候選是由官方四區即時負載加總而成的未來 10 分鐘觀測序列；它不能回填歷史，且須作為新的衍生契約明確保存。
+> - Created: 2026-09-16
+> - Last Updated: 2026-11-24
+> - Status: Closed
+> - Related: [GitHub #58](https://github.com/shiroki9979/shiro-mlops/issues/58)、[ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md)
+
+本調查為 [#58](https://github.com/shiroki9979/shiro-mlops/issues/58)「Establish canonical hourly actual-load source」尋找全台逐時實際負載的官方來源。結論是**沒有驗證到可直接取代既有來源的官方「歷史、全台、逐時實際負載」端點。** 可用的候選是由官方四區即時負載加總而成的未來 10 分鐘觀測序列；它不能回填歷史，且須作為新的衍生契約明確保存。這個候選後來由 [ADR-0008](../adr/0008-derive-hourly-actual-load-from-regional-snapshots.md) 採用，本調查就此結案。
 
 ## 既有資料契約
 
