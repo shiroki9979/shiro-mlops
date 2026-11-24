@@ -1143,10 +1143,10 @@ def test_doc_metadata_reads_the_working_tree_of_tracked_docs_only(repo: Path) ->
     ]
 
 
-def test_doc_metadata_skips_docs_outside_the_migrated_scope(
+def test_doc_metadata_reports_a_noncompliant_doc_in_a_new_directory(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
-    _commit(repo, {"docs/unmigrated/guide.md": _doc("2026-10-01")}, "2026-10-01")
+    _commit(repo, {"docs/new-area/guide.md": _doc("2026-10-01")}, "2026-10-01")
 
-    assert main(["doc-metadata"]) == 0
+    assert main(["doc-metadata"]) == 1

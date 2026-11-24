@@ -39,8 +39,7 @@ Checks:
   doc-metadata
              Each tracked doc in the working tree must follow the metadata contract: an H1 on
              line 1, then a `> - Key: value` metadata block. Each violation starts with its
-             rule code; the rules and codes are in docs/reference/markdown-metadata.md. Only
-             the docs in DOC_METADATA_MIGRATED_SCOPE are checked until every doc is migrated.
+             rule code; the rules and codes are in docs/reference/markdown-metadata.md.
   debt-markers
              TODO/FIXME/HACK/XXX in tracked source files must name their tech-debt issue,
              as in `TODO(#123): ...` (see docs/agents/tech-debt.md).
@@ -111,23 +110,6 @@ COMPOSE_GLOBS = ("docker/docker-compose*.yml", "docker/docker-compose*.yaml")
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
 """Top-level directories whose Markdown the doc checks skip, besides EXCLUDED_DIRS at any depth."""
-# TODO(#396): drop this list once every doc in scope is migrated, so doc-metadata checks the
-# whole doc scope and a new directory cannot slip past it.
-DOC_METADATA_MIGRATED_SCOPE = (
-    "docs/adr/",
-    "docs/reference/",
-    "docs/how-to/",
-    "docs/tutorials/",
-    "docs/agents/",
-    "docs/ROADMAP.md",
-    "AGENTS.md",
-    "README.md",
-    "GLOSSARY.md",
-    "CODING_STANDARDS.md",
-    "frontend/README.md",
-    "docs/explanation/",
-    "docs/research/",
-)
 """Docs already in the metadata format, one directory (ending in /) or file per line."""
 COMMENT_KINDS_DIRS = ("src", "scripts")
 CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
@@ -1048,16 +1030,8 @@ def check_doc_metadata(repo_root: Path) -> list[Violation]:
     return [
         violation
         for path in tracked_markdown(repo_root)
-        if is_doc_metadata_migrated(path)
         for violation in doc_metadata_violations(path, (repo_root / path).read_bytes())
     ]
-
-
-def is_doc_metadata_migrated(path: str) -> bool:
-    return any(
-        path == entry or (entry.endswith("/") and path.startswith(entry))
-        for entry in DOC_METADATA_MIGRATED_SCOPE
-    )
 
 
 def tracked_markdown(repo_root: Path) -> list[str]:

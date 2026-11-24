@@ -16,10 +16,6 @@ metadata 只記錄文件「現在是什麼」；變更經過交給 git 的 commi
   - 一般文件：其餘所有文件，README 一律算一般文件。
 - 不設 spec 類型，也不設 `Decision` key。
 
-### 1.1 過渡期的已遷移範圍
-
-既有文件分批遷移到本格式。遷移完成前，`doc-metadata` 只檢查 `scripts/check_conventions.py` 中 `DOC_METADATA_MIGRATED_SCOPE` 列出的目錄與檔案，每行一項，目錄以 `/` 結尾；一批文件遷移完成時，同一個 PR 把它們加入清單。所有文件遷移完成後清單移除，`doc-metadata` 改為檢查第 1 節的完整範圍。這份清單只是過渡，不屬於契約本身。
-
 ## 2. 檔頭格式
 
 ```markdown
