@@ -23,6 +23,9 @@ class GapScan:
     db: ExplorerDb
     dataset: Dataset
     filters: Mapping[str, Any] = field(default_factory=dict)
+    _present: dict[TimeWindow, dict[datetime, set[str]]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     @property
     def policy(self) -> GapPolicy:
@@ -61,7 +64,16 @@ class GapScan:
         return missing
 
     def present_members(self, window: TimeWindow) -> dict[datetime, set[str]]:
-        """The slots rows fill inside the window, each with the gap members present in it."""
+        """The slots rows fill inside the window, each with the gap members present in it.
+
+        Read once per window: a list page asks for its rows' missing members and for the
+        window's missing slots, which is the same window unless it reaches past now.
+        """
+        if window not in self._present:
+            self._present[window] = self._read_present_members(window)
+        return self._present[window]
+
+    def _read_present_members(self, window: TimeWindow) -> dict[datetime, set[str]]:
         policy, dataset = self.policy, self.dataset
         clauses, params = self.db.time_window(dataset.time_column, window)
         scope_clauses, scope_params = dataset.gap_clauses(self.db, self.filters)

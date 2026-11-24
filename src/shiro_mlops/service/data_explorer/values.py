@@ -57,4 +57,5 @@ def json_list(value: object) -> list[Any]:
 
 # SYNC(frontend/apps/engineering-console/src/components/data-explorer/explorer-query-state.ts): TRUTHY_VALUES.
 def is_truthy(value: object) -> bool:
-    return str(value).lower() in {"1", "true", "yes"}
+    """True for every spelling FastAPI's bool validation reads as true on a series endpoint."""
+    return str(value).lower() in {"1", "on", "t", "true", "y", "yes"}

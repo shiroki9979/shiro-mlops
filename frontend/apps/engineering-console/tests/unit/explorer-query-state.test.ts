@@ -100,7 +100,12 @@ it.each<[unknown, boolean]>([
   [false, false],
   [0, false],
   ['', false],
-  ['on', false],
+  // The API reads the same spellings as true (src/shiro_mlops/service/data_explorer/values.py).
+  ['on', true],
+  ['T', true],
+  ['y', true],
+  ['off', false],
+  ['no', false],
 ])('reads all_vintages %j as on: %s', (value, on) => {
   const state = parseExplorerQuery(forecasts, { ...WITHIN_LIMIT, all_vintages: value }, DEFAULT_WINDOW)
 
