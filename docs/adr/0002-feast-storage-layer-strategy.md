@@ -1,8 +1,9 @@
 # ADR 0002: Feast 特徵庫之離線/線上儲存庫與註冊表配置策略
 
-- 建立日期：2026-08-23
-- 最後更新：2026-09-27
-- 狀態：已接受 (Accepted)
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-24
+> - Status: Accepted
+> - Revisions: [Notes](#notes)
 
 ---
 
@@ -41,6 +42,6 @@ Feature Store (Feast) 需要分別定義 Offline Store（用於離線特徵抽�
 
 ---
 
-## 修訂紀錄 (Revisions)
+## Notes
 
 - 2026-09-27：[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md) 將 Feast 凍結為動態視界預報任務專屬的匯出，不納入 ML 任務抽象；本決策適用範圍縮為該任務，決策內容不變。
