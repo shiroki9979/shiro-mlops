@@ -15,25 +15,31 @@ env:
   # Every job that sets up Terraform pins this version; it satisfies required_version in
   # infra/terraform/main.tf and infra/terraform/bootstrap/main.tf.
   TERRAFORM_VERSION: "1.11.4"
+  # Every setup-uv step installs this version. Must match the ghcr.io/astral-sh/uv image that
+  # docker/Dockerfile.api, docker/Dockerfile.dagster and docker/Dockerfile.mlflow copy.
+  UV_VERSION: "0.11.32"
+
+# Actions are pinned to a commit SHA with their release as a comment, and setup-uv to an exact
+# uv version (scripts/check_conventions.py action-pins).
 
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # blob-limits reads every commit in the PR range, not only the merge result.
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@6dfebec6ddbcd197e02256fbdf54deb334fb7f06 # v2.1.2
         with:
-          version: "latest"
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
@@ -49,8 +55,8 @@ jobs:
       - name: Type check src with mypy
         run: uv run mypy
 
-      - name: Check Python runs through uv, Dockerfile pip installs are pinned, tech-debt markers name an issue, comment refs resolve
-        run: uv run python scripts/check_conventions.py python-uv docker-pins debt-markers comment-refs
+      - name: Check Python runs through uv, Docker images and pip installs are pinned, actions and uv are pinned, tech-debt markers name an issue, comment refs resolve
+        run: uv run python scripts/check_conventions.py python-uv docker-pins action-pins debt-markers comment-refs
 
       # Stands in for a push ruleset, which a public repository cannot have (ADR-0016).
       - name: Check no commit in the PR adds a file over the size limit or with a blocked extension
@@ -73,10 +79,10 @@ jobs:
         working-directory: frontend
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: frontend/package.json
 
@@ -103,7 +109,7 @@ jobs:
       # it holds the apply role, and pnpm install runs third-party code (#369).
       - name: Hand the Forecast View bundle to the deploy job
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: forecast-view-dist
           path: frontend/apps/forecast-view/dist
@@ -114,12 +120,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@6dfebec6ddbcd197e02256fbdf54deb334fb7f06 # v2.1.2
         with:
-          version: "latest"
+          version: ${{ env.UV_VERSION }}
 
       - name: Build image and smoke test both apps, API gateway, and upstream recreation
         run: make frontend-smoke-ci
@@ -128,12 +134,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@6dfebec6ddbcd197e02256fbdf54deb334fb7f06 # v2.1.2
         with:
-          version: "latest"
+          version: ${{ env.UV_VERSION }}
 
       - name: Build backend images and smoke test API data status, API readiness and MLflow health
         run: make backend-smoke-ci
@@ -142,15 +148,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: frontend/package.json
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
@@ -161,27 +167,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # doc-dates and comment-kinds diff against the PR base; doc-dates also reads commit
           # dates in the PR range.
           fetch-depth: 0
 
       - name: Lint Markdown
-        uses: DavidAnson/markdownlint-cli2-action@v24
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: "**/*.md"
 
       - name: Check relative links and anchors offline
-        uses: lycheeverse/lychee-action@v2
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: --offline --no-progress --include-fragments "**/*.md"
           fail: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@6dfebec6ddbcd197e02256fbdf54deb334fb7f06 # v2.1.2
         with:
-          version: "latest"
+          version: ${{ env.UV_VERSION }}
 
       # check_conventions.py uses only the standard library, so this job skips syncing the
       # project environment that lint-and-test installs.
@@ -213,7 +219,7 @@ jobs:
       AWS_TERRAFORM_PLAN_ROLE_ARN: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check whether AWS is configured
         id: aws
@@ -221,7 +227,7 @@ jobs:
 
       - name: Assume the Terraform plan role
         if: steps.aws.outputs.configured == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -230,7 +236,7 @@ jobs:
       # -json` (which holds sensitive values in plain text) goes only to the file on disk.
       - name: Set up Terraform
         if: steps.aws.outputs.configured == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
@@ -266,7 +272,7 @@ jobs:
       AWS_TERRAFORM_APPLY_ROLE_ARN: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check whether AWS is configured
         id: aws
@@ -277,21 +283,21 @@ jobs:
       # `terraform output -raw` prints the bare value.
       - name: Set up Terraform
         if: steps.aws.outputs.configured == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Download the Forecast View bundle the frontend job built and checked
         if: steps.aws.outputs.configured == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: forecast-view-dist
           path: frontend/apps/forecast-view/dist
 
       - name: Assume the Terraform apply role
         if: steps.aws.outputs.configured == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -322,7 +328,7 @@ jobs:
 
       - name: Assume the site deploy role
         if: steps.aws.outputs.configured == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_SITE_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}

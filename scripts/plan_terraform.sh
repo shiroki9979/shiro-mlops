@@ -81,7 +81,9 @@ main() {
   echo "==> Initialising infra/terraform against the remote state"
   # -reconfigure: a local directory last initialised by `make infra-check` (-backend=false)
   # otherwise stops on the backend change; nothing is migrated, the remote state is used as is.
-  terraform init -input=false -reconfigure "-backend-config=${BACKEND_CONFIG}"
+  # -lockfile=readonly: the plan uses the provider versions and hashes reviewed in the committed
+  # .terraform.lock.hcl, never a newer release published since.
+  terraform init -input=false -reconfigure -lockfile=readonly "-backend-config=${BACKEND_CONFIG}"
 
   echo "==> Planning infra/terraform"
   terraform plan -input=false "${PLAN_ARGS[@]}" "-out=${PLAN_FILE}"
