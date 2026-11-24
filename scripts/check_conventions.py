@@ -110,7 +110,6 @@ COMPOSE_GLOBS = ("docker/docker-compose*.yml", "docker/docker-compose*.yaml")
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
 """Top-level directories whose Markdown the doc checks skip, besides EXCLUDED_DIRS at any depth."""
-"""Docs already in the metadata format, one directory (ending in /) or file per line."""
 COMMENT_KINDS_DIRS = ("src", "scripts")
 CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
 
@@ -265,16 +264,19 @@ MODIFIED = "M"
 RENAMED = "R"
 PAIRED_STATUSES = frozenset("RC")
 
-LAST_UPDATED = re.compile(
-    r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
-    r"(?P<value>\d{4}-\d{2}-\d{2})",
-    re.IGNORECASE,
-)
-CREATED = re.compile(
-    r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:建立日期|Created)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
-    r"(?P<value>\d{4}-\d{2}-\d{2})",
-    re.IGNORECASE,
-)
+
+def header_date_pattern(*keys: str) -> re.Pattern[str]:
+    """A header date line naming one of `keys`, as a list item, blockquote or bold label."""
+    names = "|".join(map(re.escape, keys))
+    return re.compile(
+        rf"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:{names})(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
+        r"(?P<value>\d{4}-\d{2}-\d{2})",
+        re.IGNORECASE,
+    )
+
+
+LAST_UPDATED = header_date_pattern("最後更新", "Last Updated")
+CREATED = header_date_pattern("建立日期", "Created")
 METADATA_KEYS = (
     "Created",
     "Last Updated",
@@ -1648,13 +1650,18 @@ def metadata_block(lines: list[str]) -> range | None:
     h1 = next((index for index, line in enumerate(lines) if ATX_H1.match(line)), None)
     if h1 is None:
         return None
-    start = h1 + 1
-    while start < len(lines) and not lines[start].strip():
-        start += 1
+    start = first_content_line(lines, h1)
+    if start is None:
+        return None
     end = start
     while end < len(lines) and is_metadata_item(lines[end]):
         end += 1
     return range(start, end) if end > start else None
+
+
+def first_content_line(lines: list[str], h1: int) -> int | None:
+    """Index of the first non-blank line after the H1 at index `h1`, or None if there is none."""
+    return next((index for index in range(h1 + 1, len(lines)) if lines[index].strip()), None)
 
 
 def is_metadata_item(line: str) -> bool:
@@ -1690,9 +1697,9 @@ def doc_metadata_violations(path: str, content: str | bytes) -> list[Violation]:
         return [Violation(path, 1, "h1-first-line: the first line must be the doc's # H1 title")]
     block = strict_metadata_block(lines)
     if block is None:
-        start = next((index for index in range(1, len(lines)) if lines[index].strip()), 0)
+        start = first_content_line(lines, 0)
         message = f"metadata-block-position: {METADATA_BLOCK_EXPECTED}"
-        violations = [Violation(path, start + 1, message)]
+        violations = [Violation(path, 1 if start is None else start + 1, message)]
         block = range(0)
     else:
         violations = metadata_block_violations(path, lines, block)
@@ -1702,7 +1709,7 @@ def doc_metadata_violations(path: str, content: str | bytes) -> list[Violation]:
 
 def strict_metadata_block(lines: list[str]) -> range | None:
     """Indexes of the blockquote right after the H1 on line 1, or None if another block is."""
-    start = next((index for index in range(1, len(lines)) if lines[index].strip()), None)
+    start = first_content_line(lines, 0)
     if start is None or not lines[start].startswith(BLOCKQUOTE):
         return None
     end = start
