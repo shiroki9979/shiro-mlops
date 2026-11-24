@@ -1,7 +1,7 @@
 # Coding Standards
 
-- 建立日期：2026-10-25
-- 最後更新：2026-11-24
+> - Created: 2026-10-25
+> - Last Updated: 2026-11-24
 
 本檔列出本 repo 特有、需由審查者判斷的規則。可機械判定的規則由 CI 執行（ruff、markdownlint、`scripts/check_conventions.py`），不在此重述。
 
