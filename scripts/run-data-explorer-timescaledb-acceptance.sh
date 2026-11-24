@@ -16,7 +16,7 @@ docker run --rm -d --name "$container" \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pagination_acceptance \
   -p 127.0.0.1::5432 \
-  timescale/timescaledb:latest-pg15 >/dev/null
+  timescale/timescaledb:2.28.3-pg15@sha256:6343bdc87ca132c6b53acb26113a6bad1821d188fa39975a745f32ddd9757634 >/dev/null
 container_started=true
 
 # The image's init step runs a temporary server on the Unix socket only, then restarts;

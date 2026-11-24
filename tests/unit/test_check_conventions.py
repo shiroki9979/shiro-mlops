@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from check_conventions import (
     Violation,
+    check_action_pins,
     check_docker_pins,
     check_python_uv,
     doc_date_violation,
@@ -14,7 +15,11 @@ from check_conventions import (
     find_host_python_in_workflow,
     find_last_updated,
     find_unlinked_debt_markers,
+    find_unpinned_actions,
+    find_unpinned_compose_images,
+    find_unpinned_images,
     find_unpinned_pip_installs,
+    find_unpinned_uv_setups,
     is_debt_marker_source,
     python_comments,
 )
@@ -345,7 +350,7 @@ def test_docker_pins_reports_each_unpinned_dockerfile_under_docker(tmp_path: Pat
     docker.mkdir()
     (docker / "Dockerfile.api").write_text("RUN uv pip install --system -r /tmp/req.txt\n")
     (docker / "Dockerfile.mlflow").write_text(
-        "FROM python:3.11-slim\n\nRUN pip install --no-cache-dir mlflow psycopg2-binary\n"
+        f"FROM python:3.11-slim{DIGEST}\n\nRUN pip install --no-cache-dir mlflow psycopg2-binary\n"
     )
 
     assert check_docker_pins(tmp_path) == [
@@ -518,3 +523,187 @@ def test_pinned_installs_behind_wrappers_stay_allowed() -> None:
     )
 
     assert _unpinned(dockerfile) == []
+
+
+# --- action-pins ----------------------------------------------------------------------------
+
+CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
+
+
+def test_actions_referenced_by_tag_branch_or_short_sha_are_reported() -> None:
+    workflow = (
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - name: Install uv\n"
+        "        uses: 'astral-sh/setup-uv@main'\n"
+        '      - uses: "aws-actions/configure-aws-credentials@11bd719"  # v4\n'
+    )
+
+    assert [(hit.line, hit.text) for hit in find_unpinned_actions(workflow)] == [
+        (2, "actions/checkout@v4"),
+        (4, "astral-sh/setup-uv@main"),
+        (5, "aws-actions/configure-aws-credentials@11bd719"),
+    ]
+
+
+def test_actions_at_a_full_commit_sha_local_actions_and_docker_digests_are_allowed() -> None:
+    workflow = (
+        f"      - uses: actions/checkout@{CHECKOUT_SHA} # v4.2.2\n"
+        f"        uses: github/codeql-action/init@{CHECKOUT_SHA}\n"
+        "      - uses: ./.github/actions/setup\n"
+        "      - uses: docker://alpine:3.20@sha256:" + "a" * 64 + "\n"
+        "      - run: echo uses: actions/checkout@v4\n"
+    )
+
+    assert find_unpinned_actions(workflow) == []
+
+
+def test_setup_uv_without_an_exact_uv_version_is_reported_at_its_version_or_uses_line() -> None:
+    workflow = (
+        "    steps:\n"
+        "      - name: Install uv\n"
+        f"        uses: astral-sh/setup-uv@{CHECKOUT_SHA} # v2\n"
+        "        with:\n"
+        '          version: "latest"\n'
+        "          enable-cache: true\n"
+        f"      - uses: astral-sh/setup-uv@{CHECKOUT_SHA}\n"
+        "      - name: Uses with before\n"
+        "        with:\n"
+        "          version: 0.11\n"
+        f"        uses: astral-sh/setup-uv@{CHECKOUT_SHA}\n"
+    )
+
+    assert [(hit.line, hit.text) for hit in find_unpinned_uv_setups(workflow)] == [
+        (5, "latest"),
+        (7, ""),
+        (10, "0.11"),
+    ]
+
+
+def test_setup_uv_with_an_exact_version_and_other_steps_versions_are_allowed() -> None:
+    workflow = (
+        "      - name: Install uv\n"
+        f"        uses: astral-sh/setup-uv@{CHECKOUT_SHA} # v2\n"
+        "        with:\n"
+        "          version: '0.11.32'  # matches docker/Dockerfile.*\n"
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          version: latest\n"
+    )
+
+    assert find_unpinned_uv_setups(workflow) == []
+
+
+# --- docker-pins: base images ---------------------------------------------------------------
+
+DIGEST = "@sha256:" + "b" * 64
+
+
+def _images(dockerfile: str) -> list[tuple[int, str]]:
+    return [(hit.line, hit.text) for hit in find_unpinned_images(dockerfile)]
+
+
+def test_base_and_copied_images_without_a_digest_are_reported() -> None:
+    dockerfile = (
+        "ARG NODE_VERSION=24.19.0\n"
+        "FROM node:${NODE_VERSION}-alpine AS build\n"
+        "COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /bin/uv\n"
+        "from --platform=$BUILDPLATFORM python:3.11-slim\n"
+        "FROM nginx:1.30-alpine\n"
+    )
+
+    assert _images(dockerfile) == [
+        (2, "node:${NODE_VERSION}-alpine"),
+        (3, "ghcr.io/astral-sh/uv:0.11.32"),
+        (4, "python:3.11-slim"),
+        (5, "nginx:1.30-alpine"),
+    ]
+
+
+def test_images_with_a_digest_stage_names_and_scratch_are_allowed() -> None:
+    dockerfile = (
+        f"FROM node:24.19.0-alpine{DIGEST} AS Build\n"
+        f"COPY --from=ghcr.io/astral-sh/uv:0.11.32{DIGEST} /uv /bin/uv\n"
+        "FROM build AS test\n"
+        "FROM scratch\n"
+        "COPY --from=build /app/dist /usr/share/nginx/html\n"
+        "COPY --from=0 /app /app\n"
+        "# FROM python:3.11-slim\n"
+    )
+
+    assert _images(dockerfile) == []
+
+
+def test_compose_images_without_a_digest_are_reported() -> None:
+    compose = (
+        "services:\n"
+        "  postgres:\n"
+        "    image: timescale/timescaledb:latest-pg15\n"
+        "  redis:\n"
+        '    image: "redis:7-alpine"  # cache\n'
+        "  pinned:\n"
+        f"    image: redis:7.4.2-alpine{DIGEST}\n"
+        "  api:\n"
+        "    build:\n"
+        "      context: ..\n"
+        "    environment:\n"
+        "      DOCS: 'image: not-a-key'\n"
+    )
+
+    assert [(hit.line, hit.text) for hit in find_unpinned_compose_images(compose)] == [
+        (3, "timescale/timescaledb:latest-pg15"),
+        (5, "redis:7-alpine"),
+    ]
+
+
+def test_docker_pins_reads_backend_and_frontend_dockerfiles_and_compose(tmp_path: Path) -> None:
+    (tmp_path / "docker").mkdir()
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "docker" / "Dockerfile.api").write_text(f"FROM python:3.11-slim{DIGEST}\n")
+    (tmp_path / "docker" / "docker-compose.yml").write_text(
+        "services:\n  redis:\n    image: redis:7-alpine\n"
+    )
+    (tmp_path / "frontend" / "Dockerfile").write_text(
+        f"FROM node:24-alpine{DIGEST} AS build\nFROM nginx:1.30-alpine\n"
+    )
+
+    assert check_docker_pins(tmp_path) == [
+        Violation(
+            "docker/docker-compose.yml",
+            3,
+            "pin images to a digest, as in name:tag@sha256:<digest>: redis:7-alpine",
+        ),
+        Violation(
+            "frontend/Dockerfile",
+            2,
+            "pin images to a digest, as in name:tag@sha256:<digest>: nginx:1.30-alpine",
+        ),
+    ]
+
+
+def test_action_pins_reports_unpinned_actions_and_uv_versions_in_every_workflow(
+    tmp_path: Path,
+) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        f"      - uses: astral-sh/setup-uv@{CHECKOUT_SHA} # v2\n"
+        "        with:\n"
+        "          version: latest\n"
+    )
+    (workflows / "release.yaml").write_text(f"      - uses: actions/checkout@{CHECKOUT_SHA}\n")
+
+    assert check_action_pins(tmp_path) == [
+        Violation(
+            ".github/workflows/ci.yml",
+            2,
+            "pin actions to a full commit SHA, with the release as a comment: actions/checkout@v4",
+        ),
+        Violation(
+            ".github/workflows/ci.yml",
+            5,
+            "set setup-uv `with: version:` to an exact uv release (X.Y.Z), not: latest",
+        ),
+    ]

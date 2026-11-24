@@ -5,12 +5,24 @@ Checks:
              host python/python3, also not behind a wrapper (env, sudo, exec, command, nohup,
              nice), inside `sh -c`/`bash -c`, in `$(...)` or backticks, or in a case arm.
   docker-pins
-             Each package a `pip install` or `uv pip install` in docker/Dockerfile* names must be
-             pinned to an exact version with ==, unless the command reads a constraints file
+             Each package a `pip install` or `uv pip install` in docker/Dockerfile* and
+             frontend/Dockerfile* names must be pinned to an exact version with ==, unless the command reads a constraints file
              with -c (as exported from uv.lock); or read a lock file with -r instead. Values of
              options such as -r and -e (a local project) are not checked. RUN and ONBUILD RUN in
              shell or exec form are read, a heredoc body run by the shell included, with the
              same wrappers and nested shells as python-uv.
+             Each image that FROM or COPY --from names in those Dockerfiles, and each `image:` in docker/docker-compose*.yml, must carry a
+             digest, written name:tag@sha256:<digest> so the tag stays readable; build stage
+             names, stage indexes and scratch are not images.
+             To fix: resolve the multi-platform index digest of the exact tag (`docker
+             buildx imagetools inspect <name>:<tag>`) and append it to the reference.
+  action-pins
+             Each `uses:` in .github/workflows/*.yml and *.yaml must name a full 40-character
+             commit SHA; keep the release it is in as a trailing comment (`# v4.4.0`) for
+             reviewers. Local ./ actions are skipped and docker:// actions need a digest. Each
+             astral-sh/setup-uv step must set `with: version:` to an exact uv release (X.Y.Z).
+             To fix: `git ls-remote https://github.com/<owner>/<repo> refs/tags/<release>^{}`
+             (or the plain tag when it has no ^{} line) gives the commit SHA.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
   doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
              earlier than the newest author date of their commits in that range.
@@ -79,7 +91,8 @@ from typing import TypeVar
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAKEFILE = "Makefile"
 WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
-DOCKERFILE_GLOB = "docker/Dockerfile*"
+DOCKERFILE_GLOBS = ("docker/Dockerfile*", "frontend/Dockerfile*")
+COMPOSE_GLOBS = ("docker/docker-compose*.yml", "docker/docker-compose*.yaml")
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
 COMMENT_KINDS_DIRS = ("src", "scripts")
@@ -123,6 +136,22 @@ DOCKERFILE_RUN = re.compile(
 HEREDOC = re.compile(
     r"<<(?P<strip>-?)\s*(?P<quote>[\'\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
 )
+USES_KEY = re.compile(r"^\s*(?:-\s+)?uses:\s*(?P<quote>[\"']?)(?P<ref>[^\s\"'#]+)(?P=quote)")
+COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+SETUP_UV_ACTION = "astral-sh/setup-uv"
+EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+")
+MAPPING_ENTRY = re.compile(r"^\s*(?:-\s+)?(?P<key>[A-Za-z0-9_-]+):\s*(?P<value>.*)$")
+LOCAL_ACTION = "./"
+DOCKER_ACTION = "docker://"
+DOCKERFILE_FROM = re.compile(
+    r"^\s*FROM\s+(?:--\S+\s+)*(?P<image>\S+)(?:\s+AS\s+(?P<stage>\S+))?", re.IGNORECASE
+)
+DOCKERFILE_COPY_FROM = re.compile(
+    r"^\s*(?:ONBUILD\s+)?COPY\s+.*?--from=(?P<image>\S+)", re.IGNORECASE
+)
+EMPTY_IMAGE = "scratch"
+COMPOSE_IMAGE = re.compile(r"^\s*image:\s*(?P<quote>[\"']?)(?P<image>[^\s\"'#]+)(?P=quote)")
 DOCKERFILE_COMMENT = re.compile(r"^\s*#")
 PIP_PROGRAM = re.compile(r"(?:.*/)?pip(?:3(?:\.\d+)?)?")
 UV_PROGRAM = re.compile(r"(?:.*/)?uv")
@@ -275,6 +304,7 @@ HitT = TypeVar("HitT", SourceLine, UnpinnedInstall)
 CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "python-uv": lambda args: check_python_uv(REPO_ROOT),
     "docker-pins": lambda args: check_docker_pins(REPO_ROOT),
+    "action-pins": lambda args: check_action_pins(REPO_ROOT),
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
@@ -337,10 +367,7 @@ def check_python_uv(repo_root: Path) -> list[Violation]:
     sources: list[tuple[Path, Callable[[str], list[SourceLine]]]] = [
         (repo_root / MAKEFILE, find_host_python_in_makefile)
     ]
-    sources += [
-        (path, find_host_python_in_workflow)
-        for path in sorted(path for glob in WORKFLOW_GLOBS for path in repo_root.glob(glob))
-    ]
+    sources += [(path, find_host_python_in_workflow) for path in globbed(repo_root, WORKFLOW_GLOBS)]
     return [
         violation
         for path, find in sources
@@ -572,13 +599,54 @@ def matching_parenthesis(text: str, opening: int) -> int:
 
 
 def check_docker_pins(repo_root: Path) -> list[Violation]:
-    return [
+    dockerfiles = globbed(repo_root, DOCKERFILE_GLOBS)
+    violations = [
         violation
-        for path in sorted(repo_root.glob(DOCKERFILE_GLOB))
+        for path in dockerfiles
         for violation in file_violations(
             repo_root, path, find_unpinned_pip_installs, unpinned_message
         )
+        + file_violations(repo_root, path, find_unpinned_images, unpinned_image_message)
     ]
+    violations += [
+        violation
+        for path in globbed(repo_root, COMPOSE_GLOBS)
+        for violation in file_violations(
+            repo_root, path, find_unpinned_compose_images, unpinned_image_message
+        )
+    ]
+    return sorted(violations, key=lambda violation: (violation.path, violation.line))
+
+
+def check_action_pins(repo_root: Path) -> list[Violation]:
+    return [
+        violation
+        for path in globbed(repo_root, WORKFLOW_GLOBS)
+        for violation in sorted(
+            file_violations(repo_root, path, find_unpinned_actions, unpinned_action_message)
+            + file_violations(repo_root, path, find_unpinned_uv_setups, unpinned_uv_message),
+            key=lambda violation: violation.line,
+        )
+    ]
+
+
+def globbed(repo_root: Path, globs: Iterable[str]) -> list[Path]:
+    return sorted(path for glob in globs for path in repo_root.glob(glob))
+
+
+def unpinned_image_message(hit: SourceLine) -> str:
+    return f"pin images to a digest, as in name:tag@sha256:<digest>: {hit.text}"
+
+
+def unpinned_action_message(hit: SourceLine) -> str:
+    return f"pin actions to a full commit SHA, with the release as a comment: {hit.text}"
+
+
+def unpinned_uv_message(hit: SourceLine) -> str:
+    return (
+        "set setup-uv `with: version:` to an exact uv release (X.Y.Z), not: "
+        f"{hit.text or '(missing)'}"
+    )
 
 
 def unpinned_message(hit: UnpinnedInstall) -> str:
@@ -595,6 +663,31 @@ def find_unpinned_pip_installs(text: str) -> list[UnpinnedInstall]:
         if packages:
             hits.append(UnpinnedInstall(run.line, packages))
     return hits
+
+
+def find_unpinned_images(text: str) -> list[SourceLine]:
+    """Images that FROM or COPY --from names without a digest; build stages are not images."""
+    stages = {EMPTY_IMAGE}
+    hits = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = DOCKERFILE_FROM.match(line) or DOCKERFILE_COPY_FROM.match(line)
+        if match is None:
+            continue
+        image = match["image"]
+        if image.lower() not in stages and not image.isdigit() and not IMAGE_DIGEST.search(image):
+            hits.append(SourceLine(number, image))
+        if match.re is DOCKERFILE_FROM and match["stage"]:
+            stages.add(match["stage"].lower())
+    return hits
+
+
+def find_unpinned_compose_images(text: str) -> list[SourceLine]:
+    """Compose `image:` values without a digest."""
+    return [
+        SourceLine(number, match["image"])
+        for number, line in enumerate(text.splitlines(), start=1)
+        if (match := COMPOSE_IMAGE.match(line)) and not IMAGE_DIGEST.search(match["image"])
+    ]
 
 
 def dockerfile_exec_form(command: str) -> list[str] | None:
@@ -727,6 +820,78 @@ def pip_install_arguments(command: list[str]) -> list[str]:
             return []
         position += 1
     return rest[position:]
+
+
+def find_unpinned_actions(text: str) -> list[SourceLine]:
+    """`uses:` references that do not name a full commit SHA (or a digest, for docker://)."""
+    hits = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = USES_KEY.match(line)
+        if match is None:
+            continue
+        ref = match["ref"]
+        if ref.startswith(LOCAL_ACTION):
+            continue
+        if ref.startswith(DOCKER_ACTION):
+            pinned = IMAGE_DIGEST.search(ref) is not None
+        else:
+            _, _, version = ref.partition("@")
+            pinned = COMMIT_SHA.fullmatch(version) is not None
+        if not pinned:
+            hits.append(SourceLine(number, ref))
+    return hits
+
+
+def find_unpinned_uv_setups(text: str) -> list[SourceLine]:
+    """setup-uv steps whose `with: version:` is missing or not an exact uv release.
+
+    Each hit is reported at its version line, or at the `uses:` line when there is none; its
+    text is the version as written, empty when missing.
+    """
+    lines = text.splitlines()
+    hits = []
+    for index, line in enumerate(lines):
+        match = USES_KEY.match(line)
+        if match is None or match["ref"].partition("@")[0] != SETUP_UV_ACTION:
+            continue
+        key_column = line.index("uses:")
+        version = step_with_value(lines, step_lines(lines, index, key_column), "version")
+        if version is None:
+            hits.append(SourceLine(index + 1, ""))
+        elif not EXACT_VERSION.fullmatch(version.text):
+            hits.append(version)
+    return hits
+
+
+def step_lines(lines: list[str], index: int, key_column: int) -> range:
+    """The indexes of the workflow step whose keys start at `key_column` around `index`."""
+    start = index
+    while (
+        start > 0 and lines[start].lstrip()[:2] != "- " and indentation(lines[start]) >= key_column
+    ):
+        start -= 1
+    end = index + 1
+    while end < len(lines) and (not lines[end].strip() or indentation(lines[end]) >= key_column):
+        end += 1
+    return range(start, end)
+
+
+def step_with_value(lines: list[str], step: range, key: str) -> SourceLine | None:
+    """The value of `key` under the step's `with:` mapping, unquoted and without its comment."""
+    with_indent = None
+    for index in step:
+        entry = MAPPING_ENTRY.match(lines[index])
+        if entry is None:
+            continue
+        column = lines[index].index(entry["key"])
+        if entry["key"] == "with" and with_indent is None:
+            with_indent = column
+        elif with_indent is not None and column <= with_indent:
+            with_indent = None
+        elif with_indent is not None and entry["key"] == key:
+            value = entry["value"].split(" #", 1)[0].strip()
+            return SourceLine(index + 1, unquote_yaml(value))
+    return None
 
 
 def check_terms(repo_root: Path) -> list[Violation]:

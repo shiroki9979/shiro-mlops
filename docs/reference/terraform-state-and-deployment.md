@@ -1,7 +1,7 @@
 # Terraform state 與部署權責
 
 - 建立日期：2026-11-21
-- 最後更新：2026-11-22
+- 最後更新：2026-11-24
 - 專案版本：`0.4.0`
 
 ---
@@ -35,6 +35,7 @@
 - **backend 採 partial configuration**：backend 區塊只寫 `key`、`region`、`encrypt` 與 `use_lockfile`，bucket 名稱不寫進程式碼。本機以不提交的 backend 設定檔 `infra/terraform/state.s3.tfbackend`（內容只有一行 `bucket = "<state_bucket_name>"`，兩層共用；`.gitignore` 已排除 `*.tfbackend`）以 `-backend-config` 傳入。
 - **bootstrap 層的雞生蛋問題**：state bucket 由 bootstrap 層自己建立，因此 bootstrap 層第一次以本機 state apply，再以 `terraform init -migrate-state` 把 state 搬進 state bucket 的 `bootstrap/terraform.tfstate`。拆除時反向把 state 搬回本機。本機 state 以不提交的 `backend_override.tf`（`.gitignore` 已排除 `*_override.tf`）切換。
 - **離線檢查**：`make infra-check` 對兩層都以 `terraform init -backend=false` 初始化，不讀 state，也不需要 AWS 憑證。
+- **provider lock 檔**：兩層各自提交 `.terraform.lock.hcl`，記錄 AWS provider 的確切版本與 `linux_amd64`、`linux_arm64`、`darwin_amd64`、`darwin_arm64` 的 hash，兩層鎖在同一版本。`make infra-check` 與 `scripts/plan_terraform.sh`（PR plan 與 `main` 的部署）都以 `terraform init -lockfile=readonly` 執行：lock 檔缺少或不再滿足 `required_providers` 時 init 失敗，不會改寫它，因此 release PR 上看到的 plan 與合併後 apply 的 plan 用同一版 provider。`make infra-check` 另外檢查兩個 lock 檔都已入版控。升級 provider 時在兩層各執行 `terraform init -backend=false -upgrade`，再以 `terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_amd64 -platform=darwin_arm64` 補齊各平台的 hash，兩個 lock 檔在同一個 PR 提交。
 
 ## 3. 角色的信任與權限
 
@@ -73,7 +74,7 @@
 
 ## 4. 離線驗證
 
-`make infra-check`（`scripts/infra_check.sh`）對兩層都執行 `terraform fmt -check`、`terraform validate`（`init -backend=false`）與 `terraform test`。`terraform test` 以 `mock_provider "aws"` 執行 `plan`，不需要 AWS 憑證或 state backend；斷言的項目見 `infra/terraform/tests/` 與 `infra/terraform/bootstrap/tests/`：
+`make infra-check`（`scripts/infra_check.sh`）對兩層都確認 `.terraform.lock.hcl` 已入版控（第 2 節），再執行 `terraform fmt -check`、`terraform validate`（`init -backend=false -lockfile=readonly`）與 `terraform test`。`terraform test` 以 `mock_provider "aws"` 執行 `plan`，不需要 AWS 憑證或 state backend；斷言的項目見 `infra/terraform/tests/` 與 `infra/terraform/bootstrap/tests/`：
 
 - plan、apply 與網站上傳角色的 `sub` 與 `aud` 各等於第 3 節的值，沒有 `repo:<repo>:*`；網站上傳角色信任 data source 引用的 provider。
 - plan 角色只有 `ReadOnlyAccess` 與 state 的列出、讀取。
