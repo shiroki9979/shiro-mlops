@@ -36,6 +36,11 @@ Checks:
              date of the commit that adds it, so a doc copied as a template gets its own date.
              Docs are the tracked .md files outside lab/ and data/, and outside .venv and
              node_modules at any depth.
+  doc-metadata
+             Each tracked doc in the working tree must follow the metadata contract: an H1 on
+             line 1, then a `> - Key: value` metadata block. Each violation starts with its
+             rule code; the rules and codes are in docs/reference/markdown-metadata.md. Only
+             the docs in DOC_METADATA_MIGRATED_SCOPE are checked until every doc is migrated.
   debt-markers
              TODO/FIXME/HACK/XXX in tracked source files must name their tech-debt issue,
              as in `TODO(#123): ...` (see docs/agents/tech-debt.md).
@@ -106,6 +111,13 @@ COMPOSE_GLOBS = ("docker/docker-compose*.yml", "docker/docker-compose*.yaml")
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
 """Top-level directories whose Markdown the doc checks skip, besides EXCLUDED_DIRS at any depth."""
+# TODO(#396): drop this list once every doc in scope is migrated, so doc-metadata checks the
+# whole doc scope and a new directory cannot slip past it.
+DOC_METADATA_MIGRATED_SCOPE = (
+    "docs/adr/",
+    "docs/reference/markdown-metadata.md",
+)
+"""Docs already in the metadata format, one directory (ending in /) or file per line."""
 COMMENT_KINDS_DIRS = ("src", "scripts")
 CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
 
@@ -300,6 +312,33 @@ LEGACY_METADATA_KEYS = (
 METADATA_KEY_NAMES = frozenset(key.casefold() for key in (*METADATA_KEYS, *LEGACY_METADATA_KEYS))
 METADATA_ITEM = re.compile(r"^(?:>\s*)?[-*]\s+(?:\*\*)?(?P<key>[^:：*]+?)(?:\*\*)?\s*[:：]")
 ATX_H1 = re.compile(r"^#(?:\s|$)")
+BLOCKQUOTE = ">"
+STRICT_METADATA_ITEM = re.compile(r"^> - (?P<key>[^\s:：*][^:：*]*?): (?P<value>\S.*)$")
+METADATA_ITEM_FORM = "write each line as `> - Key: value`, with a half-width colon and a value"
+METADATA_BLOCK_EXPECTED = (
+    "the first block after the H1 must be the metadata block, one `> - Key: value` line per key"
+)
+ADR_ONLY_METADATA_KEYS = frozenset({"Supersedes", "Superseded by", "Revisions"})
+REQUIRED_METADATA_KEYS = ("Created", "Last Updated")
+ADR_REQUIRED_METADATA_KEYS = (*REQUIRED_METADATA_KEYS, "Status")
+METADATA_DATE_KEYS = frozenset({"Created", "Last Updated"})
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+ADR_STATUSES = ("Proposed", "Accepted", "Superseded", "Deprecated", "Rejected")
+DOC_STATUSES = ("Open", "Closed", "Obsolete")
+LINK_METADATA_KEYS = frozenset({"Related", "Supersedes", "Superseded by"})
+MARKDOWN_LINK = r"\[[^\[\]]+\]\([^()\s]+\)"
+LINK_LIST = re.compile(rf"{MARKDOWN_LINK}(?:、{MARKDOWN_LINK})*")
+SAME_FILE_LINK = re.compile(r"\[[^\[\]]+\]\(#(?P<anchor>[^()\s]+)\)")
+NOTES_H2 = re.compile(r"^## (?P<title>(?:\d+(?:\.\d+)*\.?\s+)?Notes)\s*$")
+"""An ADR's Notes H2, with or without a section number such as `5.`."""
+ATX_H2 = re.compile(r"^##(?:\s|$)")
+HEADER_LINE_PREFIX = re.compile(r"^(?:\s*(?:>|-|\*\*))*\s*")
+"""What a header line may open with before its text: blockquote, list and bold markers."""
+HEADER_KEY = re.compile(
+    r"(?P<key>[^:：*（(]+?)\s*(?:\*\*)?\s*(?:[（(][^()（）]*[)）])?\s*(?:\*\*)?\s*[:：]"
+)
+"""A `key:` opening a header line; a gloss such as `（Avoid）` or `(Status)` is not the key."""
+REVISION_WORD = "修訂"
 
 
 @dataclass(frozen=True)
@@ -368,6 +407,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "action-pins": lambda args: check_action_pins(REPO_ROOT),
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
+    "doc-metadata": lambda args: check_doc_metadata(REPO_ROOT),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
     "comment-refs": lambda args: check_comment_refs(REPO_ROOT),
     "comment-kinds": lambda args: check_comment_kinds(GitRange(REPO_ROOT, args.base, args.head)),
@@ -991,6 +1031,22 @@ def check_terms(repo_root: Path) -> list[Violation]:
         for path in tracked_markdown(repo_root)
         for hit in find_banned_terms((repo_root / path).read_text(encoding="utf-8"))
     ]
+
+
+def check_doc_metadata(repo_root: Path) -> list[Violation]:
+    return [
+        violation
+        for path in tracked_markdown(repo_root)
+        if is_doc_metadata_migrated(path)
+        for violation in doc_metadata_violations(path, (repo_root / path).read_bytes())
+    ]
+
+
+def is_doc_metadata_migrated(path: str) -> bool:
+    return any(
+        path == entry or (entry.endswith("/") and path.startswith(entry))
+        for entry in DOC_METADATA_MIGRATED_SCOPE
+    )
 
 
 def tracked_markdown(repo_root: Path) -> list[str]:
@@ -1633,6 +1689,164 @@ def content_outside_metadata(text: str) -> list[str]:
     while after and not after[0].strip():
         after.pop(0)
     return before + after
+
+
+def doc_metadata_violations(path: str, content: str | bytes) -> list[Violation]:
+    """Where a doc breaks the metadata contract in docs/reference/markdown-metadata.md."""
+    if not is_doc_in_scope(path):
+        return []
+    try:
+        text = content.decode("utf-8") if isinstance(content, bytes) else content
+    except UnicodeDecodeError as error:
+        line = content[: error.start].count(b"\n") + 1
+        return [Violation(path, line, "not-utf8: the doc must be UTF-8 encoded")]
+    lines = text.splitlines()
+    if not lines or not ATX_H1.match(lines[0]):
+        return [Violation(path, 1, "h1-first-line: the first line must be the doc's # H1 title")]
+    block = strict_metadata_block(lines)
+    if block is None:
+        start = next((index for index in range(1, len(lines)) if lines[index].strip()), 0)
+        message = f"metadata-block-position: {METADATA_BLOCK_EXPECTED}"
+        violations = [Violation(path, start + 1, message)]
+        block = range(0)
+    else:
+        violations = metadata_block_violations(path, lines, block)
+    violations.extend(header_violations(path, lines, block))
+    return sorted(violations, key=lambda violation: violation.line)
+
+
+def strict_metadata_block(lines: list[str]) -> range | None:
+    """Indexes of the blockquote right after the H1 on line 1, or None if another block is."""
+    start = next((index for index in range(1, len(lines)) if lines[index].strip()), None)
+    if start is None or not lines[start].startswith(BLOCKQUOTE):
+        return None
+    end = start
+    while end < len(lines) and lines[end].startswith(BLOCKQUOTE):
+        end += 1
+    return range(start, end)
+
+
+def metadata_block_violations(path: str, lines: list[str], block: range) -> list[Violation]:
+    is_adr = ADR_FILE.fullmatch(path) is not None
+    violations = []
+    seen: dict[str, int] = {}
+    dates: dict[str, date] = {}
+    # WHY-NOT(named): a key on a malformed line is not reported missing as well; its
+    # metadata-item violation already points at the line to fix.
+    named: set[str] = set()
+    for index in block:
+        line = index + 1
+        item = STRICT_METADATA_ITEM.match(lines[index])
+        if item is None:
+            violations.append(Violation(path, line, f"metadata-item: {METADATA_ITEM_FORM}"))
+            loose = METADATA_ITEM.match(lines[index])
+            named.update([loose["key"].strip()] if loose else [])
+            continue
+        key, value = item["key"], item["value"]
+        named.add(key)
+        problem = metadata_key_problem(key, is_adr, seen) or metadata_value_problem(
+            key, value, is_adr, lines
+        )
+        if problem is not None:
+            violations.append(Violation(path, line, problem))
+            continue
+        seen[key] = line
+        if key in METADATA_DATE_KEYS:
+            dates[key] = date.fromisoformat(value)
+    if "Created" in dates and "Last Updated" in dates and dates["Last Updated"] < dates["Created"]:
+        message = (
+            f"date-order: 'Last Updated' must not be earlier than 'Created' ({dates['Created']})"
+        )
+        violations.append(Violation(path, seen["Last Updated"], message))
+    required = ADR_REQUIRED_METADATA_KEYS if is_adr else REQUIRED_METADATA_KEYS
+    violations.extend(
+        Violation(path, block.start + 1, f"missing-key: the metadata block must have {key!r}")
+        for key in required
+        if key not in named
+    )
+    return violations
+
+
+def metadata_key_problem(key: str, is_adr: bool, seen: dict[str, int]) -> str | None:
+    """Why `key` cannot stand where it is, given the keys `seen` above it, or None."""
+    allowed = ", ".join(METADATA_KEYS)
+    if key not in METADATA_KEYS:
+        return f"unknown-key: {key!r}; allowed keys: {allowed}"
+    if key in ADR_ONLY_METADATA_KEYS and not is_adr:
+        return f"key-not-applicable: {key!r} applies only to ADRs (docs/adr/NNNN-*.md)"
+    if key in seen:
+        return f"duplicate-key: {key!r} already appears on line {seen[key]}"
+    later = [other for other in seen if METADATA_KEYS.index(other) > METADATA_KEYS.index(key)]
+    if later:
+        return f"key-order: {key!r} must come before {later[0]!r}; key order: {allowed}"
+    return None
+
+
+def metadata_value_problem(key: str, value: str, is_adr: bool, lines: list[str]) -> str | None:
+    """Why `value` is not allowed for `key`, or None."""
+    if key in METADATA_DATE_KEYS and not is_iso_date(value):
+        return f"invalid-date: {key!r} must be a single YYYY-MM-DD date, got {value!r}"
+    statuses = ADR_STATUSES if is_adr else DOC_STATUSES
+    if key == "Status" and value not in statuses:
+        kind = "an ADR" if is_adr else "a doc outside docs/adr/"
+        return f"status-value: Status of {kind} must be one of {', '.join(statuses)}, got {value!r}"
+    if key in LINK_METADATA_KEYS and LINK_LIST.fullmatch(value) is None:
+        return (
+            f"link-only: {key!r} holds only Markdown links `[text](target)` joined by `、`;"
+            " move other text into the body"
+        )
+    if key == "Revisions" and not points_at_notes(value, lines):
+        return (
+            "revisions-target: 'Revisions' must be one same-file link to this ADR's Notes H2,"
+            " e.g. `[Notes](#5-notes)` for `## 5. Notes`"
+        )
+    return None
+
+
+def is_iso_date(value: str) -> bool:
+    if ISO_DATE.fullmatch(value) is None:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def points_at_notes(value: str, lines: list[str]) -> bool:
+    link = SAME_FILE_LINK.fullmatch(value)
+    notes = (match for line in lines if (match := NOTES_H2.match(line)) is not None)
+    return link is not None and any(link["anchor"] == heading_anchor(h2["title"]) for h2 in notes)
+
+
+def heading_anchor(title: str) -> str:
+    """The fragment GitHub links a heading's text to, for plain-text headings."""
+    kept = "".join(char for char in title.strip().lower() if char.isalnum() or char in " _-")
+    return kept.replace(" ", "-")
+
+
+def header_violations(path: str, lines: list[str], block: range) -> list[Violation]:
+    """Dated lines and stray metadata keys between the H1 and the first H2, outside `block`."""
+    first_h2 = next((index for index, line in enumerate(lines) if ATX_H2.match(line)), len(lines))
+    violations = []
+    for index in range(1, first_h2):
+        if index in block:
+            continue
+        text = HEADER_LINE_PREFIX.sub("", lines[index])
+        key = HEADER_KEY.match(text)
+        if ISO_DATE.match(text) or text.startswith(REVISION_WORD):
+            message = (
+                "header-dated-line: lines starting with a date or 修訂 do not belong in the"
+                " header; leave the change log to commit messages and ADR Notes"
+            )
+            violations.append(Violation(path, index + 1, message))
+        elif key is not None and key["key"].strip().casefold() in METADATA_KEY_NAMES:
+            message = (
+                f"header-stray-key: {key['key'].strip()!r} belongs in the metadata block as"
+                f" `> - Key: value` with one of: {', '.join(METADATA_KEYS)}"
+            )
+            violations.append(Violation(path, index + 1, message))
+    return violations
 
 
 def doc_date_violation(path: str, text: str, changed_on: date) -> Violation | None:

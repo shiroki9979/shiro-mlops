@@ -6,7 +6,14 @@ from pathlib import Path
 
 import check_conventions
 import pytest
-from check_conventions import BLOB_SIZE_LIMIT, GitRange, check_blob_limits, check_doc_dates, main
+from check_conventions import (
+    BLOB_SIZE_LIMIT,
+    GitRange,
+    check_blob_limits,
+    check_doc_dates,
+    check_doc_metadata,
+    main,
+)
 
 
 @pytest.fixture
@@ -1104,3 +1111,42 @@ def test_debt_markers_are_checked_in_node_modules_scripts_and_hcl(
     _commit(repo, {name: "// TODO: tidy this up\n"}, "2026-11-22")
 
     assert main(["debt-markers"]) == 1
+
+
+def test_main_exits_1_when_a_tracked_adr_breaks_the_metadata_contract(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(repo, {"docs/adr/0001-title.md": _adr("已接受")}, "2026-10-01")
+
+    assert main(["doc-metadata"]) == 1
+
+
+def test_main_exits_0_when_tracked_adrs_follow_the_metadata_contract(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-01")
+
+    assert main(["doc-metadata"]) == 0
+
+
+def test_doc_metadata_reads_the_working_tree_of_tracked_docs_only(repo: Path) -> None:
+    _commit(repo, {"docs/adr/0001-title.md": _adr("Accepted")}, "2026-10-01")
+    (repo / "docs/adr/0001-title.md").write_text(_adr("已接受"), encoding="utf-8")
+    (repo / "docs/adr/0002-untracked.md").write_text("No title.\n", encoding="utf-8")
+
+    violations = check_doc_metadata(repo)
+
+    assert [(violation.path, violation.line) for violation in violations] == [
+        ("docs/adr/0001-title.md", 5)
+    ]
+
+
+def test_doc_metadata_skips_docs_outside_the_migrated_scope(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check_conventions, "REPO_ROOT", repo)
+    _commit(repo, {"docs/unmigrated/guide.md": _doc("2026-10-01")}, "2026-10-01")
+
+    assert main(["doc-metadata"]) == 0

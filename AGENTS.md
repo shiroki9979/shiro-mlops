@@ -57,7 +57,7 @@ uv run ruff format --check .
 uv run mypy
 
 # Repository convention & Markdown checks (also run in CI)
-uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates comment-kinds blob-limits --base origin/dev
+uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates doc-metadata comment-kinds blob-limits --base origin/dev
 npx markdownlint-cli2 "**/*.md"
 
 # Local API dev server
