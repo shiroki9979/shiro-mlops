@@ -96,6 +96,17 @@ jobs:
         working-directory: .
         run: make frontend-bundle-check
 
+      # The deploy job uploads this bundle, the one checked above, instead of building its own:
+      # it holds the apply role, and pnpm install runs third-party code (#369).
+      - name: Hand the Forecast View bundle to the deploy job
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-view-dist
+          path: frontend/apps/forecast-view/dist
+          if-no-files-found: error
+          retention-days: 1
+
   nginx:
     runs-on: ubuntu-latest
     steps:
@@ -221,12 +232,6 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install uv
-        if: steps.aws.outputs.configured == 'true'
-        uses: astral-sh/setup-uv@v2
-        with:
-          version: "latest"
-
       # --lock=false: the plan role has no write access, so it cannot create the state lockfile.
       - name: Plan the main configuration, check it deletes, replaces or forgets nothing, and write the job summary
         if: steps.aws.outputs.configured == 'true'
@@ -235,8 +240,10 @@ jobs:
           TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
         run: scripts/plan_terraform.sh --lock=false --summary "$GITHUB_STEP_SUMMARY" "bucket=$TF_STATE_BUCKET"
 
-  # Applies the main Terraform configuration, then uploads the Forecast View and smoke-checks it
-  # (docs/reference/terraform-state-and-deployment.md, "CD 部署 (main)"). Not offline-tested;
+  # Applies the main Terraform configuration, then uploads the Forecast View the frontend job built
+  # and smoke-checks it (docs/reference/terraform-state-and-deployment.md, "CD 部署 (main)"). It
+  # sets up no Node.js, pnpm or uv and installs no packages: every step could request the OIDC
+  # token or read the exported AWS_* (tests/unit/test_workflow_permissions.py). Not offline-tested;
   # the first release's ops acceptance verifies it. A failed step fails the run; nothing rolls back.
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -262,12 +269,6 @@ jobs:
         id: aws
         run: scripts/check_aws_configured.sh AWS_TERRAFORM_APPLY_ROLE_ARN "Terraform apply 與預報檢視部署"
 
-      - name: Install uv
-        if: steps.aws.outputs.configured == 'true'
-        uses: astral-sh/setup-uv@v2
-        with:
-          version: "latest"
-
       # The wrapper echoes stdout into the log and step outputs; it is off so `terraform show
       # -json` (which holds sensitive values in plain text) goes only to the file on disk, and
       # `terraform output -raw` prints the bare value.
@@ -277,6 +278,13 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
+
+      - name: Download the Forecast View bundle the frontend job built and checked
+        if: steps.aws.outputs.configured == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-view-dist
+          path: frontend/apps/forecast-view/dist
 
       - name: Assume the Terraform apply role
         if: steps.aws.outputs.configured == 'true'
@@ -309,27 +317,6 @@ jobs:
           echo "s3_bucket_name=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_OUTPUT"
           echo "forecast_view_url=$(terraform output -raw forecast_view_url)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Node.js
-        if: steps.aws.outputs.configured == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: frontend/package.json
-
-      - name: Enable pinned pnpm
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: frontend
-        run: corepack enable
-
-      - name: Install frontend dependencies
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
-
-      - name: Build the Forecast View
-        if: steps.aws.outputs.configured == 'true'
-        working-directory: frontend
-        run: pnpm --filter @shiro-mlops/forecast-view run build
-
       - name: Assume the site deploy role
         if: steps.aws.outputs.configured == 'true'
         uses: aws-actions/configure-aws-credentials@v4
@@ -343,9 +330,9 @@ jobs:
           S3_BUCKET_NAME: ${{ steps.outputs.outputs.s3_bucket_name }}
         run: scripts/upload_forecast_view_site.sh frontend/apps/forecast-view/dist "$S3_BUCKET_NAME"
 
-      # Run directly rather than through `make cloud-smoke`, which reports every failure as exit 2.
+      # Not `make cloud-smoke`, which reports every failure as exit 2.
       - name: Smoke-check the deployed Forecast View
         if: steps.aws.outputs.configured == 'true'
         env:
           FORECAST_VIEW_URL: ${{ steps.outputs.outputs.forecast_view_url }}
-        run: uv run --no-project python scripts/smoke_cloudfront.py --base-url "$FORECAST_VIEW_URL"
+        run: scripts/smoke_cloudfront.sh --base-url "$FORECAST_VIEW_URL"
