@@ -321,15 +321,15 @@ class Dataset:
         filters: Mapping[str, Any],
         declared: list[Filter] | tuple[Filter, ...],
     ) -> Clauses:
-        clauses = [item.sql for item in self.pinned]
+        clauses = [pinned.sql for pinned in self.pinned]
         params: dict[str, Any] = {}
-        for item in self.pinned:
-            params.update(item.params)
-        for item in declared:
-            value = filters.get(item.name)
+        for pinned in self.pinned:
+            params.update(pinned.params)
+        for declared_filter in declared:
+            value = filters.get(declared_filter.name)
             if value in (None, ""):
                 continue
-            extra_clauses, extra_params = item.clause(db, str(value))
+            extra_clauses, extra_params = declared_filter.clause(db, str(value))
             clauses.extend(extra_clauses)
             params.update(extra_params)
         return clauses, params

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 MODEL_FILE = "model.txt"
 # 固定種子讓同一份訓練資料重新訓練時得到相同模型；各任務類型只再補上自己的 objective。
-LIGHTGBM_BASE_PARAMS = {"boosting_type": "gbdt", "random_state": 42, "verbose": -1}
+LIGHTGBM_BASE_PARAMS: dict[str, Any] = {"boosting_type": "gbdt", "random_state": 42, "verbose": -1}
 
 
 class LightGBMParams(BaseModel):

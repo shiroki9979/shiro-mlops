@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import pandas as pd
@@ -46,7 +46,11 @@ PREDICTION_COL = f"predicted_{LOAD_MW_COL}"
 MODEL_FILES = NativeBoosterFiles(ModelFormat(TASK_TYPE_NAME, version=1))
 HEALTH_METRIC = "mape"
 NON_FEATURE_COLUMNS = frozenset({DATETIME_COL, LOAD_MW_COL, LOCATION_COL, SUBJECT_COL})
-FIXED_LIGHTGBM_PARAMS = {**LIGHTGBM_BASE_PARAMS, "objective": "regression", "metric": "rmse"}
+FIXED_LIGHTGBM_PARAMS: dict[str, Any] = {
+    **LIGHTGBM_BASE_PARAMS,
+    "objective": "regression",
+    "metric": "rmse",
+}
 
 
 class RecursiveRegressionParams(BaseModel):
@@ -86,7 +90,7 @@ class RecursiveRegression:
 
     name: ClassVar[str] = TASK_TYPE_NAME
     params_model: ClassVar[type[RecursiveRegressionParams]] = RecursiveRegressionParams
-    prediction_item: ClassVar[type[RecursiveRegressionPrediction]] = RecursiveRegressionPrediction
+    prediction_item: ClassVar[type[BaseModel]] = RecursiveRegressionPrediction
     health_model: ClassVar[type[RecursiveRegressionHealth]] = RecursiveRegressionHealth
 
     def requirements(self, params: RecursiveRegressionParams) -> InputRequirements:
@@ -186,7 +190,7 @@ class RecursiveRegressionModel:
         if validation_rows.empty:
             return {}
         predicted = self.booster.predict(validation_rows[self.feature_names])
-        return evaluate_forecast(validation_rows[LOAD_MW_COL].to_numpy(), predicted)
+        return evaluate_forecast(validation_rows[LOAD_MW_COL].to_numpy(), np.asarray(predicted))
 
     def predict(self, data: PredictionData) -> pd.DataFrame:
         """Roll the one-step model forward, feeding each prediction into later lags."""
@@ -304,7 +308,7 @@ class _LoadHistory:
         return features
 
     def _load_at(self, instant: int) -> float:
-        position = np.searchsorted(self._times, instant, side="right") - 1
+        position = int(np.searchsorted(self._times, instant, side="right")) - 1
         if position < 0 or self._times[position] != instant:
             return np.nan
         return float(self._loads[position])

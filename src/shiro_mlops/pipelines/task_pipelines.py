@@ -172,13 +172,15 @@ def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefini
         saved = save_model(settings.models_dir, task.task_id, trained.model)
         run_id, model_version = _track(context, task, metrics, saved.directory)
         return Output(
-            value=TrainedModelRecord(
-                task_id=task.task_id,
-                metrics=metrics,
-                run_id=run_id,
-                model_version=model_version,
-                model_path=str(saved.directory),
-                training_rows=len(features),
+            value=dict(
+                TrainedModelRecord(
+                    task_id=task.task_id,
+                    metrics=metrics,
+                    run_id=run_id,
+                    model_version=model_version,
+                    model_path=str(saved.directory),
+                    training_rows=len(features),
+                )
             ),
             metadata={
                 **{name: MetadataValue.float(value) for name, value in metrics.items()},

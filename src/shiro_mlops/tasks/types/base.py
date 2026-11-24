@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from shiro_mlops.core.constants import DATETIME_COL
 
 P = TypeVar("P", bound=BaseModel)
+H = TypeVar("H", bound=BaseModel)
 
 
 class WeatherInput(Enum):
@@ -165,7 +166,7 @@ def require_trained_recipe(
         )
 
 
-class TaskType(Protocol[P]):
+class TaskType(Protocol[P, H]):
     """How one family of tasks builds labels, trains, evaluates, predicts, and persists."""
 
     name: ClassVar[str]
@@ -174,7 +175,7 @@ class TaskType(Protocol[P]):
     # /tasks/{task_id}/predict 的回應與 OpenAPI；繼承 WeatherEchoingItem 者另補上天氣欄位與來源。
     prediction_item: ClassVar[type[BaseModel]]
     # 健康判定門檻的 schema；門檻值來自任務設定 [health]，判定規則屬於任務類型。
-    health_model: ClassVar[type[BaseModel]]
+    health_model: ClassVar[type[H]]
 
     def requirements(self, params: P) -> InputRequirements: ...
 
@@ -185,6 +186,4 @@ class TaskType(Protocol[P]):
         other inputs than it was trained with (``ModelRecipeMismatchError``)."""
         ...
 
-    def assess_health(
-        self, thresholds: BaseModel, metrics: Mapping[str, float]
-    ) -> HealthAssessment: ...
+    def assess_health(self, thresholds: H, metrics: Mapping[str, float]) -> HealthAssessment: ...

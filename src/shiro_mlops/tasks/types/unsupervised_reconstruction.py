@@ -124,9 +124,7 @@ class UnsupervisedReconstruction:
     params_model: ClassVar[type[UnsupervisedReconstructionParams]] = (
         UnsupervisedReconstructionParams
     )
-    prediction_item: ClassVar[type[UnsupervisedReconstructionPrediction]] = (
-        UnsupervisedReconstructionPrediction
-    )
+    prediction_item: ClassVar[type[BaseModel]] = UnsupervisedReconstructionPrediction
     health_model: ClassVar[type[UnsupervisedReconstructionHealth]] = (
         UnsupervisedReconstructionHealth
     )
@@ -359,7 +357,7 @@ class UnsupervisedReconstructionModel:
 
     def save(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        np.savez(directory / ARRAYS_FILE, **self._arrays())
+        np.savez(directory / ARRAYS_FILE, allow_pickle=False, **self._arrays())
         metadata = {
             "hidden_activation": HIDDEN_ACTIVATION,
             "output_activation": OUTPUT_ACTIVATION,
