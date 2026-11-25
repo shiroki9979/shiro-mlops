@@ -17,7 +17,6 @@ from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 
 TAIWAN = ZoneInfo(TAIWAN_TZ)
 
-# What a stored time column reads back as: SQLite text, a TimescaleDB datetime, or NULL.
 StoredInstant: TypeAlias = str | datetime | None
 
 

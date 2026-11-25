@@ -545,6 +545,8 @@ class CWAWeatherStore:
 
 
 def _optional_bound(value: datetime | str | None) -> datetime | None:
-    """A Taiwan-local cutoff or window bound, or its text, as a storage time; omitted stays ``None``."""
-    # Empty or "NaT" text parses to NaT, which binds no condition either.
+    """A Taiwan-local cutoff or window bound, or its text, as a storage time.
+
+    An omitted bound, and text that parses to ``NaT``, give ``None``, which binds no condition.
+    """
     return None if value is None else to_storage_time_or_none(pd.Timestamp(value))
