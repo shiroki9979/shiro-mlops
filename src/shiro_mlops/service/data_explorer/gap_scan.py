@@ -12,6 +12,7 @@ import pandas as pd
 from shiro_mlops.service.data_explorer.datasets.definition import Dataset, GapPolicy
 from shiro_mlops.service.data_explorer.db import ExplorerDb
 from shiro_mlops.service.data_explorer.query import TimeWindow
+from shiro_mlops.service.data_explorer.series import pandas_frequency
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 from shiro_mlops.service.data_explorer.values import row_time
 
@@ -47,7 +48,7 @@ class GapScan:
         policy, cadence = self.policy, self.dataset.cadence
         present = self.present_members(window)
         last = window.end if due_by is None else min(window.end, due_by)
-        first = pd.Timestamp(window.start).ceil(cadence)
+        first = pd.Timestamp(window.start).ceil(pandas_frequency(cadence))
         missing: list[str] = []
         for timestamp in pd.date_range(first, last, freq=cadence):
             slot = timestamp.to_pydatetime()
@@ -90,7 +91,7 @@ class GapScan:
             slot = (
                 moment
                 if policy.exact_instant
-                else pd.Timestamp(moment).floor(dataset.cadence).to_pydatetime()
+                else pd.Timestamp(moment).floor(pandas_frequency(dataset.cadence)).to_pydatetime()
             )
             members = present.setdefault(slot, set())
             if member is not None:

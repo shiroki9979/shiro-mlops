@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from functools import cache, reduce
 from typing import Annotated, Any, Literal, Self, assert_never
 
+import pandas as pd
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, create_model
 from starlette.responses import JSONResponse
@@ -313,14 +314,21 @@ def _predict(served: ServedTasks, task_id: str, *, horizon_hours: int) -> Predic
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
+def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Rows of a frame whose column labels are field names."""
+    return [
+        {str(column): value for column, value in row.items()} for row in frame.to_dict("records")
+    ]
+
+
 def _prediction_rows(outcome: PredictionOutcome) -> list[dict[str, object]]:
     """Merge each prediction row with the weather row and sources at the same position.
 
     The response model validates the rows against the task's item; fields it lacks are ignored.
     """
     rows = zip(
-        outcome.predictions.to_dict("records"),
-        outcome.weather.to_dict("records"),
+        _records(outcome.predictions),
+        _records(outcome.weather),
         outcome.weather_sources,
         strict=True,
     )

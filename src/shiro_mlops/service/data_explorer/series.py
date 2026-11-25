@@ -383,7 +383,7 @@ class SeriesReader:
     def _slot_of(self, moment: datetime, bucket: Bucket) -> datetime:
         if bucket is not Bucket.RAW:
             return moment
-        return pd.Timestamp(moment).floor(self.dataset.cadence).to_pydatetime()
+        return pd.Timestamp(moment).floor(pandas_frequency(self.dataset.cadence)).to_pydatetime()
 
 
 def _as_points(values: list[tuple[datetime, float | None]]) -> list[SeriesPoint]:
@@ -391,6 +391,11 @@ def _as_points(values: list[tuple[datetime, float | None]]) -> list[SeriesPoint]
         SeriesPoint(t=format_taiwan_time(moment, timespec="auto"), v=value)
         for moment, value in sorted(values, key=lambda point: point[0])
     ]
+
+
+def pandas_frequency(cadence: timedelta) -> str:
+    """A dataset cadence, whole seconds, as the frequency string ``Timestamp.floor`` and ``ceil`` take."""
+    return f"{int(cadence.total_seconds())}s"
 
 
 def expected_bucket_starts(
@@ -403,11 +408,11 @@ def expected_bucket_starts(
     exactly when one of its slots is inside the window: hourly data from 10:30 has no slot
     in the 10:00 bucket, and expecting it would report a gap that the list does not.
     """
-    first_slot = pd.Timestamp(window.start).ceil(cadence)
+    first_slot = pd.Timestamp(window.start).ceil(pandas_frequency(cadence))
     if first_slot > pd.Timestamp(window.end):
         return []
     if bucket is Bucket.RAW:
-        first, frequency = first_slot, pd.Timedelta(cadence)
+        first, frequency = first_slot, pandas_frequency(cadence)
     else:
         frequency = BUCKET_FREQUENCY[bucket]
         first = first_slot.floor(frequency)

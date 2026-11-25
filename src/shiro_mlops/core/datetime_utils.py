@@ -1,5 +1,7 @@
 """Timezone utilities for standardizing Taiwan (Asia/Taipei) local timestamps."""
 
+from datetime import datetime
+
 import pandas as pd
 
 from shiro_mlops.core.constants import DATETIME_COL, STORAGE_TIME_COL
@@ -36,9 +38,9 @@ def standardize_taiwan_datetime(s: pd.Series) -> pd.Series:
     if pd.api.types.is_datetime64_dtype(s.dtype):
         return s.astype("datetime64[ns]")
 
-    def to_taiwan_local(value: object) -> pd.Timestamp:
+    def to_taiwan_local(value: str | datetime | None) -> pd.Timestamp | None:
         if pd.isna(value):
-            return pd.NaT
+            return None
         timestamp = pd.Timestamp(value)
         if timestamp.tzinfo is not None:
             return timestamp.tz_convert(TAIWAN_TZ).tz_localize(None)
