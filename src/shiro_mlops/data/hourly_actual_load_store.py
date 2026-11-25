@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
@@ -238,7 +239,11 @@ class HourlyActualLoadStore:
             ORDER BY time
             """
         )
-        params = {"subject": subject, "source": REGIONAL_SNAPSHOT_SUM_SOURCE, **window.params}
+        params: dict[str, Any] = {
+            "subject": subject,
+            "source": REGIONAL_SNAPSHOT_SUM_SOURCE,
+            **window.params,
+        }
         with self._engine.connect() as conn:
             stored = pd.read_sql_query(query, con=conn, params=params)
         return pd.DataFrame(

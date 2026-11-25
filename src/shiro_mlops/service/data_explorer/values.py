@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, SupportsFloat
 
-import pandas as pd
-
-from shiro_mlops.core.storage_time import from_storage_time, from_storage_time_or_none
+from shiro_mlops.core.storage_time import (
+    StoredInstant,
+    from_storage_time,
+    from_storage_time_or_none,
+)
 from shiro_mlops.data.repository_utils import deserialize_raw_payload
 from shiro_mlops.service.data_explorer.timefmt import format_taiwan_time
 
@@ -26,15 +29,17 @@ def format_row_time(row: Mapping[str, Any], column: str, *, timespec: str = "sec
     return format_taiwan_time(row_time(row, column), timespec=timespec)
 
 
-def optional_time(value: object) -> str | None:
+def optional_time(value: StoredInstant) -> str | None:
     taiwan = from_storage_time_or_none(value)
     return None if taiwan is None else format_taiwan_time(taiwan)
 
 
 def to_float(value: SupportsFloat | str | None) -> float | None:
-    if value is None or pd.isna(value):
+    """A stored number as ``float``; NULL and NaN give ``None``."""
+    if value is None:
         return None
-    return float(value)
+    number = float(value)
+    return None if math.isnan(number) else number
 
 
 def to_mw(value: SupportsFloat | str | None) -> float | None:

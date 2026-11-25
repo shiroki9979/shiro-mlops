@@ -215,25 +215,26 @@ def _fresh_rows(frame: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
 
 def _point_value(
     frame: pd.DataFrame, moment: pd.Timestamp, column: str
-) -> tuple[object, pd.Series | None]:
+) -> tuple[object, pd.Series] | None:
+    """The value of ``column`` at ``moment`` and the forecast row it came from, if any."""
     if frame.empty or column not in frame.columns:
-        return None, None
+        return None
     points = frame[frame["valid_from"] == frame["valid_to"]].sort_values("valid_from")
     if points.empty:
-        return None, None
+        return None
     exact = points[points["valid_from"] == moment]
     if not exact.empty:
         row = exact.iloc[-1]
-        return (row[column], row) if pd.notna(row[column]) else (None, None)
+        return (row[column], row) if pd.notna(row[column]) else None
     if column in NON_INTERPOLATED_FORECAST_FIELDS:
-        return None, None
+        return None
     before = points[points["valid_from"] < moment].tail(1)
     after = points[points["valid_from"] > moment].head(1)
     if before.empty or after.empty:
-        return None, None
+        return None
     left, right = before.iloc[0], after.iloc[0]
     if pd.isna(left[column]) or pd.isna(right[column]):
-        return None, None
+        return None
     span = (right["valid_from"] - left["valid_from"]).total_seconds()
     ratio = (moment - left["valid_from"]).total_seconds() / span
     return float(left[column]) + (float(right[column]) - float(left[column])) * ratio, right
@@ -241,13 +242,14 @@ def _point_value(
 
 def _interval_value(
     frame: pd.DataFrame, moment: pd.Timestamp, column: str
-) -> tuple[object, pd.Series | None]:
+) -> tuple[object, pd.Series] | None:
+    """The value of ``column`` from the last interval covering ``moment`` and that row, if any."""
     if frame.empty or column not in frame.columns:
-        return None, None
+        return None
     candidates = frame[frame.apply(lambda row: _row_covers(row, moment), axis=1)]
     candidates = candidates[candidates[column].notna()]
     if candidates.empty:
-        return None, None
+        return None
     return candidates.iloc[-1][column], candidates.iloc[-1]
 
 
@@ -273,7 +275,7 @@ class _ObservationFallback:
             work = pd.DataFrame({"observed_at": pd.Series(dtype="datetime64[ns]")})
         self._frame = work
         self._observed_at = pd.DatetimeIndex(work["observed_at"].map(_as_timestamp))
-        self._previous_day: dict[str, dict[pd.Timestamp, object]] = {}
+        self._previous_day: dict[str, dict[pd.Timestamp, float | None]] = {}
         self._climatology: dict[tuple[str, int, int], float | None] = {}
 
     def value(self, moment: pd.Timestamp, column: str) -> tuple[object, WeatherSourceKind | None]:
@@ -289,7 +291,7 @@ class _ObservationFallback:
             return None, None
         return mean, WeatherSourceKind.CLIMATOLOGY
 
-    def _previous_day_values(self, column: str) -> dict[pd.Timestamp, object]:
+    def _previous_day_values(self, column: str) -> dict[pd.Timestamp, float | None]:
         """The last reading at each observation time, absent values included."""
         if column not in self._previous_day:
             self._previous_day[column] = dict(
@@ -321,11 +323,13 @@ def _resolve_value(
     column: str,
 ) -> tuple[object, WeatherValueSource | None]:
     """One hour's value of ``column`` and its source, or no source when nothing covers it."""
-    value, row = _point_value(datasets[WeatherSourceKind.THREE_DAY], moment, column)
-    if value is not None:
+    point = _point_value(datasets[WeatherSourceKind.THREE_DAY], moment, column)
+    if point is not None:
+        value, row = point
         return value, WeatherValueSource.forecast(WeatherSourceKind.THREE_DAY, row)
-    value, row = _interval_value(datasets[WeatherSourceKind.WEEKLY], moment, column)
-    if value is not None:
+    interval = _interval_value(datasets[WeatherSourceKind.WEEKLY], moment, column)
+    if interval is not None:
+        value, row = interval
         return value, WeatherValueSource.forecast(WeatherSourceKind.WEEKLY, row)
     value, substitute = fallback.value(moment, column)
     if substitute is None:

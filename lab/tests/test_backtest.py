@@ -445,7 +445,7 @@ def test_eligible_origins_characterize_load_and_weather_gaps(
     times = load["datetime"]
     load = load[times != times.iloc[60]].reset_index(drop=True)
     load.loc[load["datetime"] == times.iloc[270], "load_mw"] = float("nan")
-    beyond_tolerance = times.iloc[[240, 241, 242]]
+    beyond_tolerance = times.iloc[240:243]
     weather = weather[~weather["datetime"].isin([*beyond_tolerance, times.iloc[250]])]
     weather = weather.reset_index(drop=True)
     weather.loc[weather["datetime"] == times.iloc[255], "relative_humidity"] = float("nan")

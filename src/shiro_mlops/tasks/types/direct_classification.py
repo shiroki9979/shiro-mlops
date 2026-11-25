@@ -319,15 +319,15 @@ def _anchor_features(params: DirectClassificationParams, load: pd.Series) -> pd.
     """
     features = pd.DataFrame({ANCHOR_LOAD_COL: load}, index=load.index)
     for lag in params.lags:
-        lagged = load.reindex(load.index - pd.Timedelta(hours=lag))
+        lagged = load.reindex(pd.DatetimeIndex(load.index) - pd.Timedelta(hours=lag))
         features[f"{LOAD_MW_COL}_lag_{lag}"] = lagged.to_numpy()
     for window in params.rolling_windows:
         rolling = load.rolling(f"{window}h")
         features[f"{LOAD_MW_COL}_rolling_mean_{window}"] = rolling.mean()
         features[f"{LOAD_MW_COL}_rolling_std_{window}"] = rolling.std().fillna(0.0)
-    window = load.rolling(f"{params.threshold.window_hours}h")
-    covered = window.count() >= params.threshold.window_hours
-    features[THRESHOLD_COL] = window.quantile(params.threshold.quantile).where(covered)
+    threshold_window = load.rolling(f"{params.threshold.window_hours}h")
+    covered = threshold_window.count() >= params.threshold.window_hours
+    features[THRESHOLD_COL] = threshold_window.quantile(params.threshold.quantile).where(covered)
     features.index.name = ANCHOR_COL
     return features
 
@@ -336,7 +336,8 @@ def _target_rows(known: pd.DataFrame, targets: pd.Series, day_off: bool) -> pd.D
     """Pair anchor rows with target hours, adding the lead time and the target's calendar."""
     rows = known.reset_index()
     rows[DATETIME_COL] = targets.to_numpy()
-    rows[LEAD_HOURS_COL] = (rows[DATETIME_COL] - rows[ANCHOR_COL]) // pd.Timedelta(hours=1)
+    lead = pd.to_timedelta(rows[DATETIME_COL] - rows[ANCHOR_COL])
+    rows[LEAD_HOURS_COL] = lead // pd.Timedelta(hours=1)
     return create_calendar_features(rows, day_off=day_off)
 
 

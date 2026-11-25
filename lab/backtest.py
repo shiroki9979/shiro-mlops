@@ -436,7 +436,7 @@ def _admit_origin_inputs(
         raise ValueError(
             f"Origin {origin.isoformat()} failed lookback load completeness check "
             f"(prediction input gate): {error} "
-            f"(first missing: {pd.Timestamp(error.first_missing).isoformat()})"
+            f"(first missing: {'NaT' if error.first_missing is None else error.first_missing.isoformat()})"
         ) from error
     except TaskUnavailableError as error:
         raise ValueError(

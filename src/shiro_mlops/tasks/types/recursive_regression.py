@@ -315,7 +315,7 @@ class _LoadHistory:
 
 
 def _nanoseconds(times: pd.Series) -> np.ndarray:
-    return pd.DatetimeIndex(times).as_unit("ns").asi8
+    return pd.DatetimeIndex(times).as_unit("ns").to_numpy().view(np.int64)
 
 
 def _sample_std(observed: np.ndarray) -> float:

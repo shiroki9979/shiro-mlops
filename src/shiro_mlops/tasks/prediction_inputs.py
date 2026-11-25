@@ -128,7 +128,8 @@ def _require_target_weather(
     targets = pd.date_range(anchor + timedelta(hours=1), periods=horizon_hours, freq="h")
     by_hour = weather.assign(**{DATETIME_COL: pd.to_datetime(weather[DATETIME_COL])})
     by_hour = by_hour.groupby(DATETIME_COL)[list(fields)].first().reindex(targets)
-    for hour, values in by_hour.iterrows():
+    for hour in targets:
+        values = by_hour.loc[hour]
         missing = [field for field in fields if pd.isna(values[field])]
         if missing:
             raise WeatherUnavailableError(

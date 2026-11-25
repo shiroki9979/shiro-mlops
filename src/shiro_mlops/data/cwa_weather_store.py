@@ -475,17 +475,17 @@ class CWAWeatherStore:
         limit, since an older release would be discarded as stale anyway, so the choice
         never reads the geocode's whole history.
 
-        Cutoffs and window bounds are Taiwan-local instants or their text; ``pd.Timestamp``
-        parses the text and turns an omitted bound into ``NaT``, which binds no condition.
+        Cutoffs and window bounds are Taiwan-local instants or their text; an omitted bound
+        binds no condition.
         """
         filters = _ForecastRowFilter(
             geocode=geocode,
             dataset_id=dataset_id,
-            issued_before=to_storage_time_or_none(pd.Timestamp(issued_before)),
-            source_updated_before=to_storage_time_or_none(pd.Timestamp(source_updated_before)),
-            issued_after=to_storage_time_or_none(pd.Timestamp(issued_after)),
-            valid_start=to_storage_time_or_none(pd.Timestamp(valid_start)),
-            valid_end=to_storage_time_or_none(pd.Timestamp(valid_end)),
+            issued_before=_optional_bound(issued_before),
+            source_updated_before=_optional_bound(source_updated_before),
+            issued_after=_optional_bound(issued_after),
+            valid_start=_optional_bound(valid_start),
+            valid_end=_optional_bound(valid_end),
             include_adjacent_points=include_adjacent_points,
         )
         with self._engine.connect() as conn:
@@ -542,3 +542,11 @@ class CWAWeatherStore:
                 "created_at",
             ]
         ]
+
+
+def _optional_bound(value: datetime | str | None) -> datetime | None:
+    """A Taiwan-local cutoff or window bound, or its text, as a storage time.
+
+    An omitted bound, and text that parses to ``NaT``, give ``None``, which binds no condition.
+    """
+    return None if value is None else to_storage_time_or_none(pd.Timestamp(value))

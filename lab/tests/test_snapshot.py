@@ -4,6 +4,7 @@ import ast
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -442,7 +443,7 @@ def test_a_snapshot_that_appears_during_the_write_is_not_overwritten(
     target = snapshot_path(task, AS_OF, snapshots_dir=snapshots_dir)
     real_to_parquet = pd.DataFrame.to_parquet
 
-    def another_run_finishes_first(frame: pd.DataFrame, path: object, **kwargs: object) -> None:
+    def another_run_finishes_first(frame: pd.DataFrame, path: Path, **kwargs: Any) -> None:
         real_to_parquet(frame, path, **kwargs)
         target.write_bytes(b"written-by-the-other-run")
 
