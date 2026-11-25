@@ -1,8 +1,9 @@
 # ADR 0003: 採用單一 LightGBM 遞迴自回歸多步預測以應對動態視界
 
-- 建立日期：2026-08-23
-- 最後更新：2026-09-27
-- 狀態：已接受 (Accepted)
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-24
+> - Status: Accepted
+> - Revisions: [Notes](#notes)
 
 ---
 
@@ -46,6 +47,6 @@
 
 ---
 
-## 修訂紀錄 (Revisions)
+## Notes
 
 - 2026-09-27：[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md) 引入多種任務類型；遞迴策略僅適用動態視界預報任務，其他任務（如高負載預警）可採直接策略，本決策內容不變。實際訓練特徵的 lag 為 (1, 2, 24, 48, 168)，lag 3 從未進入訓練特徵；任務設定以前者為準。

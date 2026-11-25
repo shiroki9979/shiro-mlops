@@ -1,7 +1,7 @@
 # AGENTS.md
 
-- Created: 2026-08-23
-- Last updated: 2026-11-24
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-24
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -20,6 +20,7 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
   - [terraform-state-and-deployment.md](docs/reference/terraform-state-and-deployment.md): the two Terraform layers, S3 remote state and locking, and the GitHub OIDC roles' trust and permissions.
   - [github-rulesets.md](docs/reference/github-rulesets.md): GitHub Rulesets for branches and release tags, required status checks, bypass actors; the exported JSON lives in `.github/rulesets/`.
   - [github-repository-settings.md](docs/reference/github-repository-settings.md): GitHub settings outside the rulesets: visibility, fork PR approval for Actions, security features, maintainer email privacy.
+  - [markdown-metadata.md](docs/reference/markdown-metadata.md): the Markdown header contract every doc follows: H1 on line 1, the `> - Key: value` metadata block, allowed keys, `Status` values and the `doc-metadata` rule codes. Read it before creating a doc or editing a header.
 - **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, the frozen baseline DDL with recorded schema migrations ([ADR-0017](docs/adr/0017-freeze-baseline-ddl-and-record-schema-migrations.md)): a change to an existing table is a migration, not a DDL edit, the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)), the static, precomputed Forecast View as the only cloud surface ([ADR-0015](docs/adr/0015-publish-forecast-view-as-static-precomputed-output.md), superseding ADR-0001), and the public repository ([ADR-0016](docs/adr/0016-make-repository-public.md)): read it before changing workflows, since Actions logs are public, fork PRs must be assumed, and self-hosted runners and push rulesets are out.
 - **Research Workspace (`lab/`)**: `lab/` is a `uv` workspace member that depends unidirectionally on `shiro_mlops` (`src/` must NEVER import `lab`). Use it to freeze point-in-time training table snapshots, run rolling-origin backtests (滾動起點回測), and record hyperparameter studies under `lab/<YYYY-MM-DD>-<topic>/`.
 - **Roadmap & Work Tickets**: [docs/ROADMAP.md](docs/ROADMAP.md) indexes milestones (goals, acceptance criteria, priority). Work tickets, their Definition of Done and status live in GitHub issues; operational acceptance has its own `ops-acceptance` issues. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
@@ -56,7 +57,7 @@ uv run ruff format --check .
 uv run mypy
 
 # Repository convention & Markdown checks (also run in CI)
-uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates comment-kinds blob-limits --base origin/dev
+uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates doc-metadata comment-kinds blob-limits --base origin/dev
 npx markdownlint-cli2 "**/*.md"
 
 # Local API dev server

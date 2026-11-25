@@ -10,6 +10,7 @@ from check_conventions import (
     check_docker_pins,
     check_python_uv,
     doc_date_violation,
+    doc_metadata_violations,
     find_banned_terms,
     find_host_python_in_makefile,
     find_host_python_in_workflow,
@@ -217,6 +218,13 @@ def test_lab_markdown_without_header_is_excluded_from_doc_dates() -> None:
     )
 
     assert violation is None
+
+
+@pytest.mark.parametrize(
+    "path", ["data/raw/notes.md", "frontend/node_modules/pkg/README.md", ".venv/lib/README.md"]
+)
+def test_markdown_that_markdownlint_ignores_is_excluded_from_doc_dates(path: str) -> None:
+    assert doc_date_violation(path, "# Notes\n", changed_on=date(2026, 11, 8)) is None
 
 
 def test_debt_marker_without_issue_reference_is_flagged() -> None:
@@ -755,3 +763,357 @@ def test_quoted_stage_names_are_stages_and_a_digest_needs_a_tag() -> None:
     )
 
     assert _images(dockerfile) == [(3, f"nginx{DIGEST}")]
+
+
+ADR_PATH = "docs/adr/0001-title.md"
+DOC_PATH = "docs/reference/guide.md"
+
+
+def _adr_doc(metadata: str = "", body: str = "## 1. Context\n\nBody.\n") -> str:
+    block = metadata or (
+        "> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n> - Status: Accepted\n"
+    )
+    return f"# ADR-0001：Title\n\n{block}\n---\n\n{body}"
+
+
+def _general_doc(metadata: str = "", intro: str = "", body: str = "## 1. Scope\n\nBody.\n") -> str:
+    block = metadata or "> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n"
+    return f"# Guide\n\n{block}\n{intro}{body}"
+
+
+def _metadata_hits(path: str, markdown: str | bytes) -> list[tuple[str, int, str]]:
+    """Each violation as (path, line, rule code), the code being the message's first word."""
+    return [
+        (violation.path, violation.line, violation.message.split(":", 1)[0])
+        for violation in doc_metadata_violations(path, markdown)
+    ]
+
+
+def test_conforming_adr_and_general_doc_have_no_metadata_violations() -> None:
+    assert _metadata_hits(ADR_PATH, _adr_doc()) == []
+    assert _metadata_hits(DOC_PATH, _general_doc()) == []
+
+
+def test_doc_whose_first_line_is_not_an_h1_is_a_violation() -> None:
+    markdown = "<!-- markdownlint-disable MD024 -->\n" + _general_doc()
+
+    assert _metadata_hits(DOC_PATH, markdown) == [(DOC_PATH, 1, "h1-first-line")]
+
+
+def test_doc_that_is_not_utf8_is_reported_at_the_undecodable_line() -> None:
+    markdown = b"# Guide\n\n" + "最後更新\n".encode("big5")
+
+    assert _metadata_hits(DOC_PATH, markdown) == [(DOC_PATH, 3, "not-utf8")]
+
+
+def test_utf8_bytes_are_checked_like_text() -> None:
+    assert _metadata_hits(DOC_PATH, _general_doc().encode()) == []
+
+
+@pytest.mark.parametrize(
+    "path", ["lab/2026-11-08-study/README.md", "data/raw/notes.md", "frontend/node_modules/a.md"]
+)
+def test_docs_outside_the_doc_scope_are_not_checked_for_metadata(path: str) -> None:
+    assert _metadata_hits(path, "Research notes without a title.\n") == []
+
+
+def test_first_block_after_the_h1_must_be_the_metadata_block() -> None:
+    markdown = (
+        "# Guide\n\nIntro paragraph.\n\n> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n"
+    )
+
+    assert _metadata_hits(DOC_PATH, markdown) == [
+        (DOC_PATH, 3, "metadata-block-position"),
+        (DOC_PATH, 5, "header-stray-key"),
+        (DOC_PATH, 6, "header-stray-key"),
+    ]
+
+
+def test_doc_with_only_a_title_misses_its_metadata_block_on_the_title_line() -> None:
+    assert _metadata_hits(DOC_PATH, "# Guide\n") == [(DOC_PATH, 1, "metadata-block-position")]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "> - Author：Doc Author",
+        "> Author: Doc Author",
+        "> - **Author**: Doc Author",
+        ">",
+        "> - Author:",
+    ],
+)
+def test_metadata_line_not_in_key_colon_value_form_is_a_violation(item: str) -> None:
+    metadata = f"> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n{item}\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == [(DOC_PATH, 5, "metadata-item")]
+
+
+def test_key_outside_the_whitelist_is_reported_with_the_allowed_keys() -> None:
+    metadata = "> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n> - 專案版本: `0.4.0`\n"
+
+    [violation] = doc_metadata_violations(DOC_PATH, _general_doc(metadata))
+
+    assert (violation.line, violation.message.split(":", 1)[0]) == (5, "unknown-key")
+    assert "Created, Last Updated, Author, Status, Related" in violation.message
+
+
+def test_key_names_are_case_sensitive() -> None:
+    metadata = "> - Created: 2026-10-01\n> - Last updated: 2026-10-02\n"
+
+    assert (DOC_PATH, 4, "unknown-key") in _metadata_hits(DOC_PATH, _general_doc(metadata))
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "> - Supersedes: [ADR-0001](../adr/0001-title.md)",
+        "> - Superseded by: [ADR-0015](../adr/0015-title.md)",
+        "> - Revisions: [Notes](#notes)",
+    ],
+)
+def test_adr_only_keys_do_not_apply_to_general_docs(item: str) -> None:
+    metadata = f"> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n{item}\n"
+    body = "## Notes\n\n- 2026-10-02：Revised.\n"
+
+    hits = _metadata_hits(DOC_PATH, _general_doc(metadata, body=body))
+
+    assert hits == [(DOC_PATH, 5, "key-not-applicable")]
+
+
+def test_adr_may_carry_supersedes_superseded_by_and_revisions() -> None:
+    metadata = (
+        "> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n> - Status: Accepted\n"
+        "> - Supersedes: [ADR-0002](0002-title.md)\n"
+        "> - Superseded by: [ADR-0015](0015-title.md)\n"
+        "> - Revisions: [Notes](#5-notes)\n"
+    )
+
+    assert _metadata_hits(ADR_PATH, _adr_doc(metadata, body="## 5. Notes\n\n- Note.\n")) == []
+
+
+def test_repeated_key_is_reported_on_its_second_line() -> None:
+    metadata = (
+        "> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n"
+        "> - Author: Doc Author\n> - Author: Other Author\n"
+    )
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == [(DOC_PATH, 6, "duplicate-key")]
+
+
+def test_key_after_a_later_key_is_reported_with_the_expected_order() -> None:
+    metadata = (
+        "> - Created: 2026-10-01\n> - Related: [ADR-0001](../adr/0001-title.md)\n"
+        "> - Last Updated: 2026-10-02\n"
+    )
+
+    [violation] = doc_metadata_violations(DOC_PATH, _general_doc(metadata))
+
+    assert (violation.line, violation.message.split(":", 1)[0]) == (5, "key-order")
+    assert "Created, Last Updated, Author, Status, Related" in violation.message
+
+
+def test_missing_dates_are_reported_on_the_first_metadata_line() -> None:
+    hits = _metadata_hits(DOC_PATH, _general_doc("> - Author: Doc Author\n"))
+
+    assert hits == [(DOC_PATH, 3, "missing-key"), (DOC_PATH, 3, "missing-key")]
+
+
+def test_status_is_required_in_an_adr_but_optional_in_a_general_doc() -> None:
+    dates = "> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n"
+
+    assert _metadata_hits(ADR_PATH, _adr_doc(dates)) == [(ADR_PATH, 3, "missing-key")]
+    assert _metadata_hits(DOC_PATH, _general_doc(dates)) == []
+
+
+@pytest.mark.parametrize(
+    "value", ["2026-13-01", "2026/10/02", "2026-10-02（補充說明）", "2026-10-02, 2026-10-03"]
+)
+def test_date_that_is_not_a_single_valid_iso_date_is_a_violation(value: str) -> None:
+    metadata = f"> - Created: 2026-10-01\n> - Last Updated: {value}\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == [(DOC_PATH, 4, "invalid-date")]
+
+
+def test_last_updated_before_created_is_a_violation_on_the_last_updated_line() -> None:
+    metadata = "> - Created: 2026-10-02\n> - Last Updated: 2026-10-01\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == [(DOC_PATH, 4, "date-order")]
+
+
+def test_last_updated_on_the_created_day_is_in_order() -> None:
+    metadata = "> - Created: 2026-10-02\n> - Last Updated: 2026-10-02\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == []
+
+
+def _with_status(status: str) -> str:
+    return f"> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n> - Status: {status}\n"
+
+
+@pytest.mark.parametrize("status", ["Proposed", "Accepted", "Superseded", "Deprecated", "Rejected"])
+def test_adr_accepts_its_lifecycle_statuses(status: str) -> None:
+    assert _metadata_hits(ADR_PATH, _adr_doc(_with_status(status))) == []
+
+
+@pytest.mark.parametrize("status", ["已接受", "accepted", "Open", "Accepted (2026-10-02)"])
+def test_adr_rejects_other_statuses(status: str) -> None:
+    assert _metadata_hits(ADR_PATH, _adr_doc(_with_status(status))) == [
+        (ADR_PATH, 5, "status-value")
+    ]
+
+
+@pytest.mark.parametrize("status", ["Open", "Closed", "Obsolete"])
+def test_general_doc_accepts_record_statuses(status: str) -> None:
+    assert _metadata_hits(DOC_PATH, _general_doc(_with_status(status))) == []
+
+
+@pytest.mark.parametrize("status", ["Accepted", "Superseded", "進行中"])
+def test_general_doc_rejects_adr_and_free_text_statuses(status: str) -> None:
+    assert _metadata_hits(DOC_PATH, _general_doc(_with_status(status))) == [
+        (DOC_PATH, 5, "status-value")
+    ]
+
+
+@pytest.mark.parametrize(
+    "related",
+    [
+        "[ADR-0006](../adr/0006-title.md)",
+        "[ADR-0006](../adr/0006-title.md)、[Issue #30](https://github.com/o/r/issues/30)",
+        "[資料契約 §5](data-contracts.md#5-dagster-artifact-序列化與信任邊界)",
+    ],
+)
+def test_related_holding_only_links_joined_by_the_ideographic_comma_passes(related: str) -> None:
+    metadata = f"> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n> - Related: {related}\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == []
+
+
+@pytest.mark.parametrize(
+    "related",
+    [
+        "[ADR-0006](../adr/0006-title.md)（補充）",
+        "[ADR-0006](../adr/0006-title.md), [ADR-0007](../adr/0007-title.md)",
+        "ADR-0006",
+        "見 [ADR-0006](../adr/0006-title.md)",
+    ],
+)
+def test_related_with_text_besides_links_is_a_violation(related: str) -> None:
+    metadata = f"> - Created: 2026-10-01\n> - Last Updated: 2026-10-02\n> - Related: {related}\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(metadata)) == [(DOC_PATH, 5, "link-only")]
+
+
+@pytest.mark.parametrize("key", ["Supersedes", "Superseded by"])
+def test_adr_supersession_keys_hold_only_links(key: str) -> None:
+    metadata = _with_status("Superseded") + f"> - {key}: ADR-0015\n"
+
+    assert _metadata_hits(ADR_PATH, _adr_doc(metadata)) == [(ADR_PATH, 6, "link-only")]
+
+
+@pytest.mark.parametrize(
+    ("heading", "anchor"), [("## Notes", "#notes"), ("## 5. Notes", "#5-notes")]
+)
+def test_revisions_points_at_the_notes_h2_whatever_its_section_number(
+    heading: str, anchor: str
+) -> None:
+    metadata = _with_status("Accepted") + f"> - Revisions: [Notes]({anchor})\n"
+    body = f"## 1. Context\n\nBody.\n\n{heading}\n\n- 2026-10-02：§1 revised.\n"
+
+    assert _metadata_hits(ADR_PATH, _adr_doc(metadata, body=body)) == []
+
+
+@pytest.mark.parametrize(
+    "revisions",
+    [
+        "[Context](#1-context)",
+        "[Notes](#notes)",
+        "[Notes](0002-title.md#notes)",
+        "[Notes](#5-notes)、[Context](#1-context)",
+        "see Notes",
+    ],
+)
+def test_revisions_not_pointing_at_this_adrs_notes_h2_is_a_violation(revisions: str) -> None:
+    metadata = _with_status("Accepted") + f"> - Revisions: {revisions}\n"
+    body = "## 1. Context\n\nBody.\n\n## 5. Notes\n\n- 2026-10-02：§1 revised.\n"
+
+    hits = _metadata_hits(ADR_PATH, _adr_doc(metadata, body=body))
+
+    assert hits == [(ADR_PATH, 6, "revisions-target")]
+
+
+def test_revisions_needs_a_notes_h2_to_point_at() -> None:
+    metadata = _with_status("Accepted") + "> - Revisions: [Notes](#notes)\n"
+
+    hits = _metadata_hits(ADR_PATH, _adr_doc(metadata, body="## Context\n\n### Notes\n"))
+
+    assert hits == [(ADR_PATH, 6, "revisions-target")]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "2026-10-02：補上 Related。",
+        "- 2026-10-02 修正錯字",
+        "> - **2026-10-02**：狀態改為已結案",
+        "修訂：§2 改寫",
+        "- **修訂紀錄**：見 Notes",
+    ],
+)
+def test_dated_or_revision_line_in_the_header_is_a_violation(line: str) -> None:
+    intro = f"Intro paragraph.\n\n{line}\n\n"
+
+    hits = _metadata_hits(DOC_PATH, _general_doc(intro=intro))
+
+    assert hits == [(DOC_PATH, 8, "header-dated-line")]
+
+
+def test_dated_lines_after_the_first_h2_are_body_text() -> None:
+    body = "## Notes\n\n- 2026-10-02：§1 revised.\n- 最後更新：2026-09-04（補充說明）。\n"
+
+    assert _metadata_hits(DOC_PATH, _general_doc(body=body)) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- 專案版本：`0.4.0`",
+        "- **目標讀者**：維運人員",
+        "> - Status: Open",
+        "Related: [ADR-0001](../adr/0001-title.md)",
+        "> **最後更新**：2026",
+        "> - **排除內容（Avoid）**：架構取捨",
+        "- 狀態 (Status)：已接受",
+        "- 關聯：[ADR-0001](../adr/0001-title.md)",
+        "- 專案名稱：`shiro-mlops`",
+        "- 候選 1 規格：[GitHub #72](https://github.com/owner/repo/issues/72)",
+    ],
+)
+def test_metadata_or_legacy_key_outside_the_metadata_block_is_a_violation(line: str) -> None:
+    intro = f"Intro paragraph.\n\n{line}\n\n"
+
+    hits = _metadata_hits(DOC_PATH, _general_doc(intro=intro))
+
+    assert hits == [(DOC_PATH, 8, "header-stray-key")]
+
+
+def test_legacy_header_list_is_out_of_position_and_its_keys_are_stray() -> None:
+    markdown = "# Guide\n\n- 建立日期：2026-10-01\n- 最後更新：2026-10-02\n\n## 1. Scope\n"
+
+    assert _metadata_hits(DOC_PATH, markdown) == [
+        (DOC_PATH, 3, "metadata-block-position"),
+        (DOC_PATH, 3, "header-stray-key"),
+        (DOC_PATH, 4, "header-stray-key"),
+    ]
+
+
+def test_intro_list_with_bold_terms_before_the_first_h2_is_not_a_stray_key() -> None:
+    intro = (
+        "本文件說明兩層設定：\n\n"
+        "- **bootstrap 層**（`infra/bootstrap/`）：建立 state bucket。\n"
+        "- **主層**（`infra/`）：其餘資源。\n"
+        "- 狀態機的說明見正文。\n\n"
+        "---\n\n"
+    )
+
+    assert _metadata_hits(DOC_PATH, _general_doc(intro=intro)) == []

@@ -1,8 +1,7 @@
 # 專案發展藍圖 (ROADMAP.md)
 
-- 建立日期：2026-08-23
-- 最後更新：2026-11-21
-- 專案版本：`0.4.0`
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-21
 
 本文件只是里程碑索引，記錄各里程碑的目標、驗收標準與優先順序。工單內容、完成標準與進度寫在 GitHub issue。現場驗證另開營運驗收 issue，驗收通過才關閉。規則見 [issue-tracker.md](agents/issue-tracker.md)。
 

@@ -3,8 +3,9 @@
 > - Created: 2026-11-16
 > - Last Updated: 2026-11-16
 > - Author: Bo-Xue Huang
-> - Status: 已接受
+> - Status: Accepted
 > - Related: [ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 

@@ -194,6 +194,9 @@ jobs:
       - name: Check documentation terminology
         run: uv run --no-project python scripts/check_conventions.py terms
 
+      - name: Check Markdown metadata
+        run: uv run --no-project python scripts/check_conventions.py doc-metadata
+
       - name: Check last-updated dates of changed docs
         if: github.event_name == 'pull_request'
         env:

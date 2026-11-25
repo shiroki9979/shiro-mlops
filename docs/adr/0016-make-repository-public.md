@@ -3,8 +3,9 @@
 > - Created: 2026-11-22
 > - Last Updated: 2026-11-23
 > - Author: Bo-Xue Huang
-> - Status: 已接受
+> - Status: Accepted
 > - Related: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)、[GitHub Rulesets](../reference/github-rulesets.md)、[GitHub 儲存庫設定](../reference/github-repository-settings.md)、[Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 

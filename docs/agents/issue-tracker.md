@@ -1,7 +1,7 @@
 # Issue tracker: GitHub
 
-- 建立日期：2026-08-25
-- 最後更新：2026-11-20
+> - Created: 2026-08-25
+> - Last Updated: 2026-11-20
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 

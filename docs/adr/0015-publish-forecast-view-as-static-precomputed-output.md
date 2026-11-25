@@ -3,9 +3,10 @@
 > - Created: 2026-11-19
 > - Last Updated: 2026-11-21
 > - Author: Bo-Xue Huang
-> - Status: 已接受
-> - Supersedes: [ADR-0001](0001-hybrid-topology-boundary.md)
-> - Related: [ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[ADR-0014](0014-keep-engineering-console-local-and-split-frontend-apps.md)、[GLOSSARY.md](../../GLOSSARY.md)
+> - Status: Accepted
+> - Related: [ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[ADR-0014](0014-keep-engineering-console-local-and-split-frontend-apps.md)、[GLOSSARY.md](../../GLOSSARY.md)
+> - Supersedes: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0006](0006-timescaledb-local-storage-layer.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 

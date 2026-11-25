@@ -1,8 +1,8 @@
 # ADR 0005: 採用 uv 作為 Python 套件依賴與虛擬環境管理標準
 
-- 建立日期：2026-08-23
-- 最後更新：2026-08-23
-- 狀態：已接受 (Accepted)
+> - Created: 2026-08-23
+> - Last Updated: 2026-08-23
+> - Status: Accepted
 
 ---
 

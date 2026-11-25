@@ -27,8 +27,19 @@ Checks:
              To fix: `git ls-remote https://github.com/<owner>/<repo> refs/tags/<release>^{}`
              (or the plain tag when it has no ^{} line) gives the commit SHA.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
-  doc-dates  Docs changed between --base and --head must carry a last-updated header dated no
-             earlier than the newest author date of their commits in that range.
+  doc-dates  Docs that --base...--head adds, modifies or renames must carry a last-updated header
+             dated no earlier than the newest author date (in the author's timezone) of the
+             non-merge commits in that range that change them outside their metadata block.
+             A commit that only edits the metadata block, in the `> - Key: value` form or a
+             legacy header list such as `- 建立日期：...`, or only renames the doc, does not count.
+             A doc the range adds must also carry a created date no earlier than the author
+             date of the commit that adds it, so a doc copied as a template gets its own date.
+             Docs are the tracked .md files outside lab/ and data/, and outside .venv and
+             node_modules at any depth.
+  doc-metadata
+             Each tracked doc in the working tree must follow the metadata contract: an H1 on
+             line 1, then a `> - Key: value` metadata block. Each violation starts with its
+             rule code; the rules and codes are in docs/reference/markdown-metadata.md.
   debt-markers
              TODO/FIXME/HACK/XXX in tracked source files must name their tech-debt issue,
              as in `TODO(#123): ...` (see docs/agents/tech-debt.md).
@@ -88,7 +99,7 @@ import tokenize
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TypeVar
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -97,7 +108,8 @@ WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 DOCKERFILE_GLOBS = ("docker/Dockerfile*", "frontend/Dockerfile*")
 COMPOSE_GLOBS = ("docker/docker-compose*.yml", "docker/docker-compose*.yaml")
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
-DOC_DATES_EXCLUDED_DIRS = frozenset({"lab"})
+DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
+"""Top-level directories whose Markdown the doc checks skip, besides EXCLUDED_DIRS at any depth."""
 COMMENT_KINDS_DIRS = ("src", "scripts")
 CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
 
@@ -248,12 +260,83 @@ BLOCKED_SUFFIX_FOLLOWERS = {".tfstate": None, ".tfvars": frozenset({".json"})}
 BLOCKED_NAMES = frozenset({"tfplan", "tfplan.json"})
 GITLINK_MODE = "160000"
 DELETED_MODE = "000000"
+MODIFIED = "M"
+RENAMED = "R"
+PAIRED_STATUSES = frozenset("RC")
 
-LAST_UPDATED = re.compile(
-    r"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:最後更新|Last Updated)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
-    r"(?P<value>\d{4}-\d{2}-\d{2})",
-    re.IGNORECASE,
+
+def header_date_pattern(*keys: str) -> re.Pattern[str]:
+    """A header date line naming one of `keys`, as a list item, blockquote or bold label."""
+    names = "|".join(map(re.escape, keys))
+    return re.compile(
+        rf"^\s*(?:[>*-]\s+)*(?:\*\*)?(?:{names})(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*"
+        r"(?P<value>\d{4}-\d{2}-\d{2})",
+        re.IGNORECASE,
+    )
+
+
+LAST_UPDATED = header_date_pattern("最後更新", "Last Updated")
+CREATED = header_date_pattern("建立日期", "Created")
+METADATA_KEYS = (
+    "Created",
+    "Last Updated",
+    "Author",
+    "Status",
+    "Related",
+    "Supersedes",
+    "Superseded by",
+    "Revisions",
 )
+"""The keys a doc's metadata block may hold, in the order it must hold them."""
+LEGACY_METADATA_KEYS = (
+    "建立日期",
+    "最後更新",
+    "狀態",
+    "專案版本",
+    "目標象限",
+    "目標讀者",
+    "核心目標",
+    "排除內容",
+    "文件類型",
+    "檢視基準",
+    "前次檢視",
+    "對應",
+    "結論",
+    "關聯",
+    "專案名稱",
+    "候選 1 規格",
+)
+"""Header keys from before the metadata contract; they mark a legacy metadata block."""
+METADATA_KEY_NAMES = frozenset(key.casefold() for key in (*METADATA_KEYS, *LEGACY_METADATA_KEYS))
+METADATA_ITEM = re.compile(r"^(?:>\s*)?[-*]\s+(?:\*\*)?(?P<key>[^:：*]+?)(?:\*\*)?\s*[:：]")
+ATX_H1 = re.compile(r"^#(?:\s|$)")
+BLOCKQUOTE = ">"
+STRICT_METADATA_ITEM = re.compile(r"^> - (?P<key>[^\s:：*][^:：*]*?): (?P<value>\S.*)$")
+METADATA_ITEM_FORM = "write each line as `> - Key: value`, with a half-width colon and a value"
+METADATA_BLOCK_EXPECTED = (
+    "the first block after the H1 must be the metadata block, one `> - Key: value` line per key"
+)
+ADR_ONLY_METADATA_KEYS = frozenset({"Supersedes", "Superseded by", "Revisions"})
+REQUIRED_METADATA_KEYS = ("Created", "Last Updated")
+ADR_REQUIRED_METADATA_KEYS = (*REQUIRED_METADATA_KEYS, "Status")
+METADATA_DATE_KEYS = frozenset({"Created", "Last Updated"})
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+ADR_STATUSES = ("Proposed", "Accepted", "Superseded", "Deprecated", "Rejected")
+DOC_STATUSES = ("Open", "Closed", "Obsolete")
+LINK_METADATA_KEYS = frozenset({"Related", "Supersedes", "Superseded by"})
+MARKDOWN_LINK = r"\[[^\[\]]+\]\([^()\s]+\)"
+LINK_LIST = re.compile(rf"{MARKDOWN_LINK}(?:、{MARKDOWN_LINK})*")
+SAME_FILE_LINK = re.compile(r"\[[^\[\]]+\]\(#(?P<anchor>[^()\s]+)\)")
+NOTES_H2 = re.compile(r"^## (?P<title>(?:\d+(?:\.\d+)*\.?\s+)?Notes)\s*$")
+"""An ADR's Notes H2, with or without a section number such as `5.`."""
+ATX_H2 = re.compile(r"^##(?:\s|$)")
+HEADER_LINE_PREFIX = re.compile(r"^(?:\s*(?:>|-|\*\*))*\s*")
+"""What a header line may open with before its text: blockquote, list and bold markers."""
+HEADER_KEY = re.compile(
+    r"(?P<key>[^:：*（(]+?)\s*(?:\*\*)?\s*(?:[（(][^()（）]*[)）])?\s*(?:\*\*)?\s*[:：]"
+)
+"""A `key:` opening a header line; a gloss such as `（Avoid）` or `(Status)` is not the key."""
+REVISION_WORD = "修訂"
 
 
 @dataclass(frozen=True)
@@ -296,6 +379,14 @@ class HeaderDate:
 
 
 @dataclass(frozen=True)
+class PathChange:
+    """How one commit changes a path: a git status letter and the path the content came from."""
+
+    status: str
+    source: str
+
+
+@dataclass(frozen=True)
 class CommittedFile:
     """A file version one commit adds or modifies."""
 
@@ -314,6 +405,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "action-pins": lambda args: check_action_pins(REPO_ROOT),
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
+    "doc-metadata": lambda args: check_doc_metadata(REPO_ROOT),
     "debt-markers": lambda args: check_debt_markers(REPO_ROOT),
     "comment-refs": lambda args: check_comment_refs(REPO_ROOT),
     "comment-kinds": lambda args: check_comment_kinds(GitRange(REPO_ROOT, args.base, args.head)),
@@ -939,6 +1031,14 @@ def check_terms(repo_root: Path) -> list[Violation]:
     ]
 
 
+def check_doc_metadata(repo_root: Path) -> list[Violation]:
+    return [
+        violation
+        for path in tracked_markdown(repo_root)
+        for violation in doc_metadata_violations(path, (repo_root / path).read_bytes())
+    ]
+
+
 def tracked_markdown(repo_root: Path) -> list[str]:
     return tracked_files(repo_root, "*.md")
 
@@ -1271,14 +1371,18 @@ def blocked_file_kind(path: str) -> str | None:
 
 def check_doc_dates(revisions: GitRange) -> list[Violation]:
     violations = []
+    added = set(revisions.changed_markdown(diff_filter="A"))
     for path in revisions.changed_markdown():
         changed_on = revisions.newest_author_date(path)
-        if changed_on is None:
+        added_on = revisions.added_on(path) if path in added else None
+        if changed_on is None and added_on is None:
             continue
-        violation = doc_date_violation(path, revisions.read_at_head(path), changed_on)
-        if violation is not None:
-            violations.append(violation)
-    return violations
+        text = revisions.read_at_head(path)
+        if changed_on is not None:
+            violations.append(doc_date_violation(path, text, changed_on))
+        if added_on is not None:
+            violations.append(created_date_violation(path, text, added_on))
+    return [violation for violation in violations if violation is not None]
 
 
 @dataclass(frozen=True)
@@ -1289,7 +1393,8 @@ class GitRange:
     base: str
     head: str
 
-    def changed_markdown(self) -> list[str]:
+    def changed_markdown(self, diff_filter: str = "AMR") -> list[str]:
+        """Docs in scope that the range adds, modifies or renames, or those `diff_filter` picks."""
         # WHY-NOT(output): -z keeps paths as they are. Without it git C-quotes a
         # non-ASCII name, the quoted form matches no file in the log, and the doc is skipped.
         output = git(
@@ -1297,28 +1402,91 @@ class GitRange:
             "diff",
             "--name-only",
             "-z",
-            "--diff-filter=AMR",
+            "--find-renames",
+            f"--diff-filter={diff_filter}",
             f"{self.base}...{self.head}",
             "--",
             "*.md",
         )
-        return [path for path in output.split("\0") if path and not is_doc_date_excluded(path)]
+        return [path for path in output.split("\0") if path and is_doc_in_scope(path)]
 
     def newest_author_date(self, path: str) -> date | None:
-        # Author date in the author's own timezone matches the calendar day the header was written.
-        # Log order follows ancestry, and a rebase can leave an older author date on top, so the
-        # newest date is the maximum over the range rather than the first entry.
+        """The newest author date of the commits in base..head that change the doc's content.
+
+        Author date in the author's own timezone matches the calendar day the header was
+        written. A commit that only edits the metadata block or only renames the doc does not
+        count. Log order follows ancestry, and a rebase can leave an older author date on top,
+        so the newest date is the maximum over the range rather than the first entry.
+        """
+        return max(
+            (
+                authored_on
+                for commit, authored_on in self.commits_touching(path)
+                if self.changes_content(commit, path)
+            ),
+            default=None,
+        )
+
+    def added_on(self, path: str) -> date | None:
+        """Author date of the commit in base..head that adds the doc.
+
+        Renames are followed back to the commit that added the doc under its first name.
+        Copies are not: a doc started from a copy of another is added by the copying commit.
+        """
+        commits = self.commits_touching(path)
+        added_on = None
+        while commits:
+            commit, added_on = commits[-1]
+            change = self.path_change(commit, path)
+            if change is None or change.status != RENAMED:
+                break
+            path = change.source
+            commits = self.commits_touching(path, until=f"{commit}^")
+        return added_on
+
+    def commits_touching(self, path: str, until: str | None = None) -> list[tuple[str, date]]:
+        """Non-merge commits in base..head (or base..until) touching `path`, newest first."""
         output = git(
             self.repo_root,
             "log",
             "--no-merges",
-            "--format=%ad",
+            "--format=%H %ad",
             "--date=short",
-            f"{self.base}..{self.head}",
+            f"{self.base}..{until or self.head}",
             "--",
             path,
         )
-        return max(map(date.fromisoformat, output.split()), default=None)
+        return [
+            (commit, date.fromisoformat(authored_on))
+            for commit, authored_on in (line.split() for line in output.splitlines())
+        ]
+
+    def changes_content(self, commit: str, path: str) -> bool:
+        """Whether a non-merge commit changes the doc at `path` outside its metadata block.
+
+        A renamed doc is compared with its path before the rename. Adding or deleting the doc
+        is a content change.
+        """
+        change = self.path_change(commit, path)
+        if change is None or change.status not in (MODIFIED, RENAMED):
+            return True
+        before = git(self.repo_root, "show", f"{commit}^:{change.source}")
+        after = git(self.repo_root, "show", f"{commit}:{path}")
+        return content_outside_metadata(before) != content_outside_metadata(after)
+
+    def path_change(self, commit: str, path: str) -> PathChange | None:
+        """How a non-merge commit changes `path`, renames detected; None if it leaves it alone."""
+        raw = git(
+            self.repo_root,
+            "diff-tree",
+            "-r",
+            "-z",
+            "--find-renames",
+            "--root",
+            "--no-commit-id",
+            commit,
+        )
+        return path_change_in(raw, path)
 
     def read_at_head(self, path: str) -> str:
         return git(self.repo_root, "show", f"{self.head}:{path}")
@@ -1444,12 +1612,240 @@ def blob_sizes(repo_root: Path, blobs: set[str]) -> dict[str, int]:
     return {blob: int(size) for blob, size in (line.split() for line in output.splitlines())}
 
 
-def is_doc_date_excluded(path: str) -> bool:
-    return bool(DOC_DATES_EXCLUDED_DIRS.intersection(Path(path).parts[:1]))
+def path_change_in(raw: str, path: str) -> PathChange | None:
+    """Read `git diff-tree -z --find-renames` raw output for the change that leaves `path`.
+
+    A record is the metadata (its last column the status letter plus a similarity score for
+    a rename or copy), then the path, or the source and target paths for a rename or copy.
+    """
+    fields = raw.split("\0")
+    index = 0
+    while index < len(fields) - 1:
+        status = fields[index].split()[-1][0]
+        if status in PAIRED_STATUSES:
+            source, target = fields[index + 1], fields[index + 2]
+            index += 3
+        else:
+            source = target = fields[index + 1]
+            index += 2
+        if target == path:
+            return PathChange(status, source)
+    return None
+
+
+def is_doc_in_scope(path: str) -> bool:
+    """Whether the doc checks cover this Markdown path."""
+    parts = PurePosixPath(path).parts
+    return (
+        path.endswith(".md")
+        and parts[0] not in DOC_SCOPE_EXCLUDED_ROOTS
+        and EXCLUDED_DIRS.isdisjoint(parts[:-1])
+    )
+
+
+def metadata_block(lines: list[str]) -> range | None:
+    """Indexes of the metadata block: the list items of metadata keys right after the first H1.
+
+    Both the `> - Key: value` form and legacy header lists such as `- 建立日期：...` count, as
+    long as every item names a key from METADATA_KEYS or LEGACY_METADATA_KEYS; the block ends
+    at the first line that is not such an item.
+    """
+    h1 = next((index for index, line in enumerate(lines) if ATX_H1.match(line)), None)
+    if h1 is None:
+        return None
+    start = first_content_line(lines, h1)
+    if start is None:
+        return None
+    end = start
+    while end < len(lines) and is_metadata_item(lines[end]):
+        end += 1
+    return range(start, end) if end > start else None
+
+
+def first_content_line(lines: list[str], h1: int) -> int | None:
+    """Index of the first non-blank line after the H1 at index `h1`, or None if there is none."""
+    return next((index for index in range(h1 + 1, len(lines)) if lines[index].strip()), None)
+
+
+def is_metadata_item(line: str) -> bool:
+    match = METADATA_ITEM.match(line)
+    return match is not None and match["key"].strip().casefold() in METADATA_KEY_NAMES
+
+
+def content_outside_metadata(text: str) -> list[str]:
+    """The doc's lines without its metadata block and the blank lines around it."""
+    lines = text.splitlines()
+    block = metadata_block(lines)
+    if block is None:
+        return lines
+    before, after = lines[: block.start], lines[block.stop :]
+    while before and not before[-1].strip():
+        before.pop()
+    while after and not after[0].strip():
+        after.pop(0)
+    return before + after
+
+
+def doc_metadata_violations(path: str, content: str | bytes) -> list[Violation]:
+    """Where a doc breaks the metadata contract in docs/reference/markdown-metadata.md."""
+    if not is_doc_in_scope(path):
+        return []
+    try:
+        text = content.decode("utf-8") if isinstance(content, bytes) else content
+    except UnicodeDecodeError as error:
+        line = content[: error.start].count(b"\n") + 1
+        return [Violation(path, line, "not-utf8: the doc must be UTF-8 encoded")]
+    lines = text.splitlines()
+    if not lines or not ATX_H1.match(lines[0]):
+        return [Violation(path, 1, "h1-first-line: the first line must be the doc's # H1 title")]
+    block = strict_metadata_block(lines)
+    if block is None:
+        start = first_content_line(lines, 0)
+        message = f"metadata-block-position: {METADATA_BLOCK_EXPECTED}"
+        violations = [Violation(path, 1 if start is None else start + 1, message)]
+        block = range(0)
+    else:
+        violations = metadata_block_violations(path, lines, block)
+    violations.extend(header_violations(path, lines, block))
+    return sorted(violations, key=lambda violation: violation.line)
+
+
+def strict_metadata_block(lines: list[str]) -> range | None:
+    """Indexes of the blockquote right after the H1 on line 1, or None if another block is."""
+    start = first_content_line(lines, 0)
+    if start is None or not lines[start].startswith(BLOCKQUOTE):
+        return None
+    end = start
+    while end < len(lines) and lines[end].startswith(BLOCKQUOTE):
+        end += 1
+    return range(start, end)
+
+
+def metadata_block_violations(path: str, lines: list[str], block: range) -> list[Violation]:
+    is_adr = ADR_FILE.fullmatch(path) is not None
+    violations = []
+    seen: dict[str, int] = {}
+    dates: dict[str, date] = {}
+    # WHY-NOT(named): a key on a malformed line is not reported missing as well; its
+    # metadata-item violation already points at the line to fix.
+    named: set[str] = set()
+    for index in block:
+        line = index + 1
+        item = STRICT_METADATA_ITEM.match(lines[index])
+        if item is None:
+            violations.append(Violation(path, line, f"metadata-item: {METADATA_ITEM_FORM}"))
+            loose = METADATA_ITEM.match(lines[index])
+            named.update([loose["key"].strip()] if loose else [])
+            continue
+        key, value = item["key"], item["value"]
+        named.add(key)
+        problem = metadata_key_problem(key, is_adr, seen) or metadata_value_problem(
+            key, value, is_adr, lines
+        )
+        if problem is not None:
+            violations.append(Violation(path, line, problem))
+            continue
+        seen[key] = line
+        if key in METADATA_DATE_KEYS:
+            dates[key] = date.fromisoformat(value)
+    if "Created" in dates and "Last Updated" in dates and dates["Last Updated"] < dates["Created"]:
+        message = (
+            f"date-order: 'Last Updated' must not be earlier than 'Created' ({dates['Created']})"
+        )
+        violations.append(Violation(path, seen["Last Updated"], message))
+    required = ADR_REQUIRED_METADATA_KEYS if is_adr else REQUIRED_METADATA_KEYS
+    violations.extend(
+        Violation(path, block.start + 1, f"missing-key: the metadata block must have {key!r}")
+        for key in required
+        if key not in named
+    )
+    return violations
+
+
+def metadata_key_problem(key: str, is_adr: bool, seen: dict[str, int]) -> str | None:
+    """Why `key` cannot stand where it is, given the keys `seen` above it, or None."""
+    allowed = ", ".join(METADATA_KEYS)
+    if key not in METADATA_KEYS:
+        return f"unknown-key: {key!r}; allowed keys: {allowed}"
+    if key in ADR_ONLY_METADATA_KEYS and not is_adr:
+        return f"key-not-applicable: {key!r} applies only to ADRs (docs/adr/NNNN-*.md)"
+    if key in seen:
+        return f"duplicate-key: {key!r} already appears on line {seen[key]}"
+    later = [other for other in seen if METADATA_KEYS.index(other) > METADATA_KEYS.index(key)]
+    if later:
+        return f"key-order: {key!r} must come before {later[0]!r}; key order: {allowed}"
+    return None
+
+
+def metadata_value_problem(key: str, value: str, is_adr: bool, lines: list[str]) -> str | None:
+    """Why `value` is not allowed for `key`, or None."""
+    if key in METADATA_DATE_KEYS and not is_iso_date(value):
+        return f"invalid-date: {key!r} must be a single YYYY-MM-DD date, got {value!r}"
+    statuses = ADR_STATUSES if is_adr else DOC_STATUSES
+    if key == "Status" and value not in statuses:
+        kind = "an ADR" if is_adr else "a doc outside docs/adr/"
+        return f"status-value: Status of {kind} must be one of {', '.join(statuses)}, got {value!r}"
+    if key in LINK_METADATA_KEYS and LINK_LIST.fullmatch(value) is None:
+        return (
+            f"link-only: {key!r} holds only Markdown links `[text](target)` joined by `、`;"
+            " move other text into the body"
+        )
+    if key == "Revisions" and not points_at_notes(value, lines):
+        return (
+            "revisions-target: 'Revisions' must be one same-file link to this ADR's Notes H2,"
+            " e.g. `[Notes](#5-notes)` for `## 5. Notes`"
+        )
+    return None
+
+
+def is_iso_date(value: str) -> bool:
+    if ISO_DATE.fullmatch(value) is None:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def points_at_notes(value: str, lines: list[str]) -> bool:
+    link = SAME_FILE_LINK.fullmatch(value)
+    notes = (match for line in lines if (match := NOTES_H2.match(line)) is not None)
+    return link is not None and any(link["anchor"] == heading_anchor(h2["title"]) for h2 in notes)
+
+
+def heading_anchor(title: str) -> str:
+    """The fragment GitHub links a heading's text to, for plain-text headings."""
+    kept = "".join(char for char in title.strip().lower() if char.isalnum() or char in " _-")
+    return kept.replace(" ", "-")
+
+
+def header_violations(path: str, lines: list[str], block: range) -> list[Violation]:
+    """Dated lines and stray metadata keys between the H1 and the first H2, outside `block`."""
+    first_h2 = next((index for index, line in enumerate(lines) if ATX_H2.match(line)), len(lines))
+    violations = []
+    for index in range(1, first_h2):
+        if index in block:
+            continue
+        text = HEADER_LINE_PREFIX.sub("", lines[index])
+        key = HEADER_KEY.match(text)
+        if ISO_DATE.match(text) or text.startswith(REVISION_WORD):
+            message = (
+                "header-dated-line: lines starting with a date or 修訂 do not belong in the"
+                " header; leave the change log to commit messages and ADR Notes"
+            )
+            violations.append(Violation(path, index + 1, message))
+        elif key is not None and key["key"].strip().casefold() in METADATA_KEY_NAMES:
+            message = (
+                f"header-stray-key: {key['key'].strip()!r} belongs in the metadata block as"
+                f" `> - Key: value` with one of: {', '.join(METADATA_KEYS)}"
+            )
+            violations.append(Violation(path, index + 1, message))
+    return violations
 
 
 def doc_date_violation(path: str, text: str, changed_on: date) -> Violation | None:
-    if is_doc_date_excluded(path):
+    if not is_doc_in_scope(path):
         return None
     header = find_last_updated(text)
     if header is None:
@@ -1467,9 +1863,32 @@ def doc_date_violation(path: str, text: str, changed_on: date) -> Violation | No
     )
 
 
+def created_date_violation(path: str, text: str, added_on: date) -> Violation | None:
+    """A doc's created date must not predate the commit that adds it; a missing one passes here."""
+    header = find_header_date(CREATED, text)
+    if not is_doc_in_scope(path) or header is None:
+        return None
+    try:
+        created_on = header.value
+    except ValueError:
+        return Violation(path, header.line, f"invalid created date {header.raw!r}")
+    if created_on >= added_on:
+        return None
+    return Violation(
+        path,
+        header.line,
+        f"created date {created_on} is older than the commit that adds this doc ({added_on});"
+        " set it to the day the doc was added",
+    )
+
+
 def find_last_updated(text: str) -> HeaderDate | None:
+    return find_header_date(LAST_UPDATED, text)
+
+
+def find_header_date(header: re.Pattern[str], text: str) -> HeaderDate | None:
     for number, line in enumerate(text.splitlines(), start=1):
-        match = LAST_UPDATED.match(line)
+        match = header.match(line)
         if match is not None:
             return HeaderDate(number, match["value"])
     return None

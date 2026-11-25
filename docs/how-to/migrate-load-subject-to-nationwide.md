@@ -1,15 +1,9 @@
 # 如何將全台負載的預測對象遷移為 nationwide
 
-- 建立日期：2026-09-27
-- 最後更新：2026-11-24
+> - Created: 2026-09-27
+> - Last Updated: 2026-11-24
 
-> [!NOTE]
-> **Diátaxis 象限鎖定**
->
-> - **目標象限**：How-To Guide
-> - **目標讀者**：負責既有 TimescaleDB volume 升級的操作人員
-> - **核心目標**：把 `raw_taipower_load` 的 `location` 欄改名為 `subject`，並將既有 `Taipei` 列遷移為 `nationwide`，過程中不遺失無法回補的全台逐時實際負載
-> - **排除內容（Avoid）**：預測對象與氣象代表點分離的設計理由（見 [ADR-0009](../adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md)）、欄位契約（見 [資料契約 §3](../reference/data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables)）
+負責升級既有 TimescaleDB volume 的操作人員可依本指南，把 `raw_taipower_load` 的 `location` 欄改名為 `subject`，並將既有 `Taipei` 列遷移為 `nationwide`，過程中不遺失無法回補的全台逐時實際負載。預測對象與氣象代表點分離的設計理由見 [ADR-0009](../adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md)，欄位契約見 [資料契約 §3](../reference/data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables)，本指南不重複說明。
 
 本指南適用於在 ADR-0009 之前就已建立 `raw_taipower_load` 的資料庫。全新資料庫建立時已直接採用 `subject`，不需執行本指南。
 

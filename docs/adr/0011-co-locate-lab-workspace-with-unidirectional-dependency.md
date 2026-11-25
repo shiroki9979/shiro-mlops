@@ -3,7 +3,7 @@
 > - Created: 2026-11-08
 > - Last Updated: 2026-11-20
 > - Author: Bo-Xue Huang
-> - Status: 已接受
+> - Status: Accepted
 > - Related: [ADR-0005](0005-dependency-management-with-uv.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
 
 ---

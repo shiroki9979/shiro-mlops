@@ -1,13 +1,15 @@
 # Coding Standards
 
-- 建立日期：2026-10-25
-- 最後更新：2026-11-23
+> - Created: 2026-10-25
+> - Last Updated: 2026-11-24
 
 本檔列出本 repo 特有、需由審查者判斷的規則。可機械判定的規則由 CI 執行（ruff、markdownlint、`scripts/check_conventions.py`），不在此重述。
 
 ## 文件
 
 - **Diátaxis 歸位**：How-To 只寫操作步驟與預期結果。CI job 的組成與檢查清單以連結指向 `.github/workflows/ci.yml` 或對應腳本，文件內不重述，避免與 CI 漂移。
+- **能改正文就不寫修訂註記**：內容變了就直接改寫受影響的正文，變更經過留在 commit message。只有 ADR 在不能改寫原決策時（例如決策的一部分被後續 ADR 取代，或需要保留原決策的脈絡）才在 `Notes` 寫修訂註記；檔頭格式見 [Markdown 文件 metadata](docs/reference/markdown-metadata.md)。
+- **修訂註記的寫法**：一條註記一個清單項目，依日期追加在 `Notes` 末尾，以 `YYYY-MM-DD：` 開頭，寫出受影響的段落（例如 `§2.3`）與改了什麼。不寫票號或 PR 號，追蹤資訊留在 commit 與 PR。本規則適用於新增的註記，既有註記不回溯改寫。
 
 ## 設定與基礎設施
 

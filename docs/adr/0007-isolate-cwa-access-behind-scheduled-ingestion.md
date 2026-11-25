@@ -3,7 +3,7 @@
 > - Created: 2026-09-07
 > - Last Updated: 2026-11-22
 > - Author: Bo-Xue Huang
-> - Status: 已接受
+> - Status: Accepted
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[Issue #30](https://github.com/shiroki9979/shiro-mlops/issues/30)
 
 ---

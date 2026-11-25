@@ -1,7 +1,7 @@
 # shiro-mlops
 
-- Created: 2026-08-23
-- Last updated: 2026-11-22
+> - Created: 2026-08-23
+> - Last Updated: 2026-11-22
 
 Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast, Dagster, MLflow, and LightGBM.
 
