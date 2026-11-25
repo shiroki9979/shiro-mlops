@@ -1690,11 +1690,14 @@ def doc_metadata_violations(path: str, content: str | bytes) -> list[Violation]:
     """Where a doc breaks the metadata contract in docs/reference/markdown-metadata.md."""
     if not is_doc_in_scope(path):
         return []
-    try:
-        text = content.decode("utf-8") if isinstance(content, bytes) else content
-    except UnicodeDecodeError as error:
-        line = content[: error.start].count(b"\n") + 1
-        return [Violation(path, line, "not-utf8: the doc must be UTF-8 encoded")]
+    if isinstance(content, bytes):
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            line = content[: error.start].count(b"\n") + 1
+            return [Violation(path, line, "not-utf8: the doc must be UTF-8 encoded")]
+    else:
+        text = content
     lines = text.splitlines()
     if not lines or not ATX_H1.match(lines[0]):
         return [Violation(path, 1, "h1-first-line: the first line must be the doc's # H1 title")]

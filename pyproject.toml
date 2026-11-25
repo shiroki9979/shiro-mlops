@@ -63,9 +63,17 @@ ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["src"]
+files = ["src", "lab", "scripts"]
+# Every lab study is a standalone script named study.py, so checking them together clashes on the
+# module name; CI checks each one in its own run.
+exclude = ['^lab/\d{4}-\d{2}-\d{2}-[^/]+/']
 plugins = ["pydantic.mypy"]
 warn_unused_ignores = true
+
+# lab/tests imports tests.helpers; tests/ is not type checked, so its errors stay hidden.
+[[tool.mypy.overrides]]
+module = ["tests", "tests.*"]
+follow_imports = "silent"
 
 # These packages ship no type information, so mypy reads their imports as Any.
 [[tool.mypy.overrides]]

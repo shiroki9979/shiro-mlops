@@ -72,6 +72,7 @@ from lab.backtest import (  # noqa: E402
     BacktestReport,
     OriginSplit,
     eligible_origins,
+    recursive_regression_params,
     rolling_origin_backtest,
     split_search_and_eval_origins,
     training_row_count,
@@ -253,7 +254,7 @@ def _summarize(result: CandidateResult) -> dict[str, object]:
     task = result.candidate.task
     return {
         "weather": [[p.location.alias, p.weight] for p in task.weather.reference_points],
-        "day_off": task.params.day_off,
+        "day_off": recursive_regression_params(task).day_off,
         "snapshot": str(result.candidate.snapshot),
         "snapshot_sha256": result.candidate.snapshot_sha256,
         "training_rows": result.training_rows,

@@ -9,6 +9,7 @@ from lab.backtest import (
     BacktestReport,
     eligible_origins,
     origin_runs,
+    recursive_regression_params,
     rolling_origin_backtest,
     split_search_and_eval_origins,
     target_hours,
@@ -37,8 +38,9 @@ ORIGIN_2 = pd.Timestamp("2026-09-20 12:00:00")
 @pytest.fixture
 def fast_task() -> TaskDefinition:
     shipped = deployed_task(DYNAMIC_HORIZON_FORECAST)
-    params = shipped.params.model_copy(
-        update={"model": shipped.params.model.model_copy(update={"n_estimators": 15})}
+    shipped_params = recursive_regression_params(shipped)
+    params = shipped_params.model_copy(
+        update={"model": shipped_params.model.model_copy(update={"n_estimators": 15})}
     )
     policies = shipped.policies.model_copy(update={"min_training_hours": 24 * 9})
     return replace(shipped, params=params, policies=policies)
@@ -600,3 +602,13 @@ def test_target_hour_weather_does_not_depend_on_the_origin_that_asks_for_it(
         pd.testing.assert_frame_equal(
             context.aligned_horizon_weather(horizon), aligned_one_origin_at_a_time(horizon)
         )
+
+
+def test_recursive_regression_params_rejects_params_of_another_task_type() -> None:
+    class OtherParams(BaseModel):
+        horizon: int = 1
+
+    task = replace(deployed_task(DYNAMIC_HORIZON_FORECAST), params=OtherParams())
+
+    with pytest.raises(ValueError, match="recursive_regression"):
+        recursive_regression_params(task)

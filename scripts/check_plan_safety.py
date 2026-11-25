@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 SAFE_ACTIONS = frozenset({"no-op", "create", "read", "update"})
-REPLACE_LABELS = {
+REPLACE_LABELS: dict[tuple[str, ...], str] = {
     ("delete", "create"): "replace (delete, then create)",
     ("create", "delete"): "replace (create, then delete)",
 }
