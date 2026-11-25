@@ -18,6 +18,7 @@ back to now, the run's creation time.
 """
 
 from dataclasses import asdict
+from typing import Any
 
 from dagster import (
     AssetExecutionContext,
@@ -77,8 +78,8 @@ FORECAST_VIEW_EXPORT_RETRY_POLICY = RetryPolicy(max_retries=2, delay=60)
     deps=[AssetKey(ISSUED_FORECAST_ASSET)],
 )
 def forecast_view_export(
-    context: AssetExecutionContext, track_record: dict | None
-) -> MaterializeResult:
+    context: AssetExecutionContext, track_record: dict[str, Any] | None
+) -> MaterializeResult[None]:
     """Before the first issue or the first compilation, the export still writes both files."""
     store = getattr(context.resources, TIME_SERIES_REPO).issued_forecast_store
     publisher: ForecastViewPublisher = getattr(context.resources, FORECAST_VIEW_PUBLISHER)
@@ -104,7 +105,7 @@ def forecast_view_export(
     )
 
 
-def _uncompiled_track_record(context: AssetExecutionContext) -> dict:
+def _uncompiled_track_record(context: AssetExecutionContext) -> dict[str, Any]:
     """Zero accumulated days, cut off at the export run's hour, as before the first issue."""
     cutoff = track_record_cutoff(run_as_of(context, without_tick=WithoutTick.FALL_BACK_TO_NOW))
     return asdict(compile_forecast_track_record(cutoff, ()))

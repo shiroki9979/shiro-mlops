@@ -31,7 +31,7 @@ def write_metadata(directory: Path, model_format: ModelFormat, fields: Mapping[s
 
 
 def read_metadata(directory: Path, model_format: ModelFormat) -> dict[str, Any]:
-    metadata = json.loads((directory / METADATA_FILE).read_text(encoding="utf-8"))
+    metadata: dict[str, Any] = json.loads((directory / METADATA_FILE).read_text(encoding="utf-8"))
     if metadata.get("task_type") != model_format.task_type:
         raise ValueError(
             f"Model in {directory} belongs to task type {metadata.get('task_type')!r}, "

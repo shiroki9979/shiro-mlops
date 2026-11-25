@@ -76,7 +76,7 @@ ISSUED_FORECAST_JOB = "issued_forecast_job"
         AssetKey(CWA_FORECAST_ASSET),
     ],
 )
-def issued_forecast(context: AssetExecutionContext) -> MaterializeResult:
+def issued_forecast(context: AssetExecutionContext) -> MaterializeResult[None]:
     """Issue once per tick; fail without writing when no forecast can be produced.
 
     An issue time already on record succeeds without writing, so a run retried

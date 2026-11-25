@@ -24,10 +24,10 @@ from shiro_mlops.pipelines.cold_start import ScheduleDecision, read_model_presen
 from shiro_mlops.pipelines.task_pipelines import latest_recorded_model
 from shiro_mlops.tasks.deployed import DYNAMIC_HORIZON_FORECAST, deployed_task
 from shiro_mlops.tasks.model_store import LoadedModel, load_model_with_sha256
+from shiro_mlops.tasks.prediction_inputs import TaskUnavailableError
 from shiro_mlops.tasks.runner import (
     PredictionOutcome,
     TaskRuntime,
-    TaskUnavailableError,
     predict_task,
 )
 from shiro_mlops.tasks.types.base import ModelRecipeMismatchError

@@ -166,7 +166,7 @@ def _model_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsDefini
         description="Train through the runner, save the native model, and track it in MLflow",
         ins={"features": AssetIn(key=AssetKey(names.features))},
     )
-    def model(context: AssetExecutionContext, features: pd.DataFrame) -> Output[dict]:
+    def model(context: AssetExecutionContext, features: pd.DataFrame) -> Output[dict[str, Any]]:
         trained = fit_task(task, training_data_from_table(task, features))
         metrics = {name: float(value) for name, value in trained.metrics.items()}
         saved = save_model(settings.models_dir, task.task_id, trained.model)
@@ -235,7 +235,7 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
         ins={"model": AssetIn(key=AssetKey(names.model))},
         deps=[AssetKey(TARGET_SOURCE_ASSETS[task.target])],
     )
-    def monitoring(context: AssetExecutionContext, model: dict) -> dict:
+    def monitoring(context: AssetExecutionContext, model: dict[str, Any]) -> dict[str, Any]:
         """Hourly report: bounded reads only, so the full history is never re-read."""
         try:
             report = monitor_task(
@@ -254,7 +254,7 @@ def _monitoring_asset(names: TaskPipelineNames, task: TaskDefinition) -> AssetsD
     return monitoring
 
 
-def _report_payload(report: MonitoringReport, *, training_rows: int) -> dict:
+def _report_payload(report: MonitoringReport, *, training_rows: int) -> dict[str, Any]:
     return {
         "task_id": report.task_id,
         "status": report.health.status.value,

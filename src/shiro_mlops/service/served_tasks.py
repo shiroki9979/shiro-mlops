@@ -26,12 +26,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from shiro_mlops.tasks.definition import TaskDefinition
 from shiro_mlops.tasks.deployed import UnknownTaskError
 from shiro_mlops.tasks.model_store import load_model_with_sha256
+from shiro_mlops.tasks.prediction_inputs import TaskUnavailableError
 from shiro_mlops.tasks.runner import (
     InputsUnavailable,
     PredictionOutcome,
     Ready,
     TaskRuntime,
-    TaskUnavailableError,
     check_task_ready,
     predict_task,
 )

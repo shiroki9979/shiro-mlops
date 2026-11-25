@@ -262,7 +262,8 @@ class _Scaler:
         )
 
     def transform(self, features: np.ndarray) -> np.ndarray:
-        return (features - self.mean) / self.scale
+        scaled: np.ndarray = (features - self.mean) / self.scale
+        return scaled
 
 
 class UnsupervisedReconstructionModel:

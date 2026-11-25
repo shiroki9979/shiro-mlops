@@ -77,7 +77,7 @@ class AssetFinder(HTMLParser):
 
 class NoRedirectHandler(HTTPRedirectHandler):
     # Redirects are asserted on directly; following them would hide a Location that drops the port.
-    def redirect_request(self, *args, **kwargs) -> None:
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
         return None
 
 

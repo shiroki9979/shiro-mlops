@@ -1,6 +1,6 @@
 """Main Dagster Definitions entrypoint."""
 
-from dagster import Definitions, load_assets_from_modules, resource
+from dagster import Definitions, InitResourceContext, load_assets_from_modules, resource
 
 from shiro_mlops.core.config import settings
 from shiro_mlops.core.forecast_view_publisher import ForecastViewPublisher
@@ -56,25 +56,29 @@ feast_io_manager = get_feast_parquet_io_manager(data_dir=settings.DATA_DIR)
 
 
 @resource
-def time_series_repo_resource(_context):
+def time_series_repo_resource(_context: InitResourceContext) -> TimeSeriesRepository:
     """Open the database when a run needs it, not while loading definitions."""
     return TimeSeriesRepository()
 
 
 @resource
-def cwa_source_resource(_context):
+def cwa_source_resource(_context: InitResourceContext) -> CWAClient:
     """Build the CWA HTTP adapter when a run needs it, authorized with the configured API key."""
     return CWAClient(api_key=settings.CWA_API_KEY)
 
 
 @resource
-def taipower_supply_demand_source_resource(_context):
+def taipower_supply_demand_source_resource(
+    _context: InitResourceContext,
+) -> TaipowerSupplyDemandClient:
     """Build the Taipower nationwide supply-demand HTTP adapter when a run needs it."""
     return TaipowerSupplyDemandClient(base_url=settings.TAIPOWER_SUPPLY_DEMAND_API_URL)
 
 
 @resource
-def taipower_regional_supply_demand_source_resource(_context):
+def taipower_regional_supply_demand_source_resource(
+    _context: InitResourceContext,
+) -> TaipowerRegionalSupplyDemandClient:
     """Build the Taipower regional supply-demand HTTP adapter when a run needs it."""
     return TaipowerRegionalSupplyDemandClient(
         base_url=settings.TAIPOWER_REGIONAL_SUPPLY_DEMAND_API_URL
@@ -82,13 +86,15 @@ def taipower_regional_supply_demand_source_resource(_context):
 
 
 @resource
-def taipower_unit_generation_source_resource(_context):
+def taipower_unit_generation_source_resource(
+    _context: InitResourceContext,
+) -> TaipowerUnitGenerationClient:
     """Build the Taipower unit net-generation HTTP adapter when a run needs it."""
     return TaipowerUnitGenerationClient(base_url=settings.TAIPOWER_UNIT_GENERATION_API_URL)
 
 
 @resource
-def forecast_view_publisher_resource(_context):
+def forecast_view_publisher_resource(_context: InitResourceContext) -> ForecastViewPublisher:
     """Build the S3 client, if any, when a run needs it, not while loading definitions."""
     return ForecastViewPublisher.from_settings(settings)
 

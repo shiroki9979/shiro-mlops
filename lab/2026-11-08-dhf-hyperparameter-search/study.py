@@ -32,7 +32,7 @@ import hashlib
 import json
 import logging
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -229,7 +229,7 @@ def build_candidate_task(
 def make_objective(
     base_task: TaskDefinition,
     data: TrainingData,
-):
+) -> Callable[[optuna.Trial], float]:
     """Build an Optuna objective that ONLY evaluates on SEARCH_ORIGINS."""
 
     def objective(trial: optuna.Trial) -> float:
