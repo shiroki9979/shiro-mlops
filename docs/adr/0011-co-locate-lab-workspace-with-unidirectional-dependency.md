@@ -1,10 +1,12 @@
 # ADR-0011：研究空間與正式程式同庫、單向相依
 
 > - Created: 2026-11-08
-> - Last Updated: 2026-11-20
+> - Last Updated: 2026-11-25
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0005](0005-dependency-management-with-uv.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
+> - Superseded by: [ADR-0018](0018-access-research-data-through-data-freezes-and-knowledge-time.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 
@@ -77,3 +79,4 @@
 ## 5. Notes
 
 - 實作追蹤：[ROADMAP M8](../ROADMAP.md)、[GitHub #89](https://github.com/shiroki9979/shiro-mlops/issues/89)（工單 [#93](https://github.com/shiroki9979/shiro-mlops/issues/93)、[#90](https://github.com/shiroki9979/shiro-mlops/issues/90)、[#91](https://github.com/shiroki9979/shiro-mlops/issues/91)、[#92](https://github.com/shiroki9979/shiro-mlops/issues/92)）。
+- 部分被 [ADR-0018](0018-access-research-data-through-data-freezes-and-knowledge-time.md)（`Proposed`）取代：§2「訓練表層級的不可變快照」、取捨二、§3 中與快照相關的效益與代價、不做範圍的「原始資料表層級的快照與多氣象代表點研究」，以及 §4 中 `write_snapshot`／`read_snapshot` 的兩條單元測試不再適用；研究改讀凍結資料，`lab/` 不再直接呼叫連線正式資料庫的 runtime。單向相依、`uv` workspace、MLflow 隔離與搜尋／評估起點分離照舊有效。
