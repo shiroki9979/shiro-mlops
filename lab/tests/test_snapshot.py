@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from lab.backtest import recursive_regression_params
 from lab.snapshot import SnapshotWeatherMismatchError, read_snapshot, snapshot_path, write_snapshot
 from lab.snapshot import main as snapshot_main
 from shiro_mlops.core.database import ensure_timescale_hypertables
@@ -21,6 +22,7 @@ from shiro_mlops.tasks.runner import (
     load_training_data,
     train_task,
 )
+from shiro_mlops.tasks.types.recursive_regression import RecursiveRegressionModel
 from sqlalchemy import create_engine
 from tests.helpers import (
     canonical_observation_batch,
@@ -37,8 +39,9 @@ AS_OF = datetime(2026, 9, 20, 23, 30)
 @pytest.fixture
 def task() -> TaskDefinition:
     shipped = deployed_task(DYNAMIC_HORIZON_FORECAST)
-    params = shipped.params.model_copy(
-        update={"model": shipped.params.model.model_copy(update={"n_estimators": 20})}
+    shipped_params = recursive_regression_params(shipped)
+    params = shipped_params.model_copy(
+        update={"model": shipped_params.model.model_copy(update={"n_estimators": 20})}
     )
     policies = shipped.policies.model_copy(update={"min_training_hours": HOURS})
     return replace(shipped, params=params, policies=policies)
@@ -91,6 +94,8 @@ def test_write_and_read_snapshot_round_trip_trains_identical_model(
     restored_trained = fit_task(task, restored)
     direct_trained = train_task(task, runtime, as_of=AS_OF)
     assert restored_trained.metrics == direct_trained.metrics
+    assert isinstance(restored_trained.model, RecursiveRegressionModel)
+    assert isinstance(direct_trained.model, RecursiveRegressionModel)
     assert restored_trained.model.booster.model_to_string() == (
         direct_trained.model.booster.model_to_string()
     )
@@ -123,6 +128,8 @@ def test_snapshot_round_trip_with_staggered_load_and_weather_gaps_trains_identic
     restored_trained = fit_task(task, restored)
     direct_trained = train_task(task, gapped_runtime, as_of=AS_OF)
     assert restored_trained.metrics == direct_trained.metrics
+    assert isinstance(restored_trained.model, RecursiveRegressionModel)
+    assert isinstance(direct_trained.model, RecursiveRegressionModel)
     assert restored_trained.model.booster.model_to_string() == (
         direct_trained.model.booster.model_to_string()
     )

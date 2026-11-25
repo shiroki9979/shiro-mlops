@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-25
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -53,8 +53,10 @@ uv run --package lab python -m lab.snapshot dynamic_horizon_forecast --as-of 202
 uv run ruff check .
 uv run ruff format --check .
 
-# Type check src/ (settings in pyproject.toml [tool.mypy])
+# Type check src/, lab/ and scripts/ (settings in pyproject.toml [tool.mypy]; needs lab's dependencies,
+# so sync with `uv sync --all-packages --all-extras`). Lab studies are checked one at a time.
 uv run mypy
+for study in lab/*/study.py; do uv run mypy "$study"; done
 
 # Repository convention & Markdown checks (also run in CI)
 uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates doc-metadata comment-kinds blob-limits --base origin/dev

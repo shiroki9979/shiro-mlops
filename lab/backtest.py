@@ -24,7 +24,10 @@ from shiro_mlops.tasks.runner import fit_task
 from shiro_mlops.tasks.types import get_task_type
 from shiro_mlops.tasks.types.base import InputRequirements, PredictionData, TrainingData
 from shiro_mlops.tasks.types.recursive_regression import TASK_TYPE_NAME as RECURSIVE_REGRESSION
-from shiro_mlops.tasks.types.recursive_regression import training_features
+from shiro_mlops.tasks.types.recursive_regression import (
+    RecursiveRegressionParams,
+    training_features,
+)
 
 from lab.timestamps import normalize_taiwan_timestamp
 
@@ -195,6 +198,13 @@ def split_search_and_eval_origins(
     return split
 
 
+def recursive_regression_params(task: TaskDefinition) -> RecursiveRegressionParams:
+    """``task.params`` typed as recursive-regression params; other task types are rejected."""
+    if not isinstance(task.params, RecursiveRegressionParams):
+        raise ValueError(f"expected a {RECURSIVE_REGRESSION} task, not {task.task_type}")
+    return task.params
+
+
 def training_row_count(
     task: TaskDefinition, data: TrainingData, origin: datetime | pd.Timestamp | str
 ) -> int:
@@ -203,10 +213,7 @@ def training_row_count(
     Weighted weather has no value in hours where any reference point is missing, and
     those rows are dropped, so this discloses each candidate's training-row loss.
     """
-    if task.task_type != RECURSIVE_REGRESSION:
-        raise ValueError(
-            f"training_row_count supports {RECURSIVE_REGRESSION}, not {task.task_type}"
-        )
+    params = recursive_regression_params(task)
     normalized = normalize_taiwan_timestamp(origin)
     load, weather = _prepare_backtest_frames(task, data)
     truncated = TrainingData(
@@ -214,7 +221,7 @@ def training_row_count(
         weather=weather[weather[DATETIME_COL] <= normalized].reset_index(drop=True),
         validation_start=normalized + pd.Timedelta(hours=1),
     )
-    return len(training_features(task.params, truncated))
+    return len(training_features(params, truncated))
 
 
 def verify_non_overlapping_target_windows(

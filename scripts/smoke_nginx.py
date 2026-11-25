@@ -147,9 +147,11 @@ def check_route_serves(base_url: str, path: str, expected: str, app: str) -> Non
 def check_built_asset(base_url: str, document: str, prefix: str) -> None:
     finder = AssetFinder(prefix)
     finder.feed(document)
-    require(finder.asset_path is not None, f"Built index has no {prefix} reference")
-    status, _, headers = fetch(base_url, finder.asset_path)
-    require(status == 200, f"Built asset {finder.asset_path} returned HTTP {status}")
+    asset_path = finder.asset_path
+    if asset_path is None:
+        raise AssertionError(f"Built index has no {prefix} reference")
+    status, _, headers = fetch(base_url, asset_path)
+    require(status == 200, f"Built asset {asset_path} returned HTTP {status}")
     content_type = headers.get("Content-Type", "")
     require(
         "javascript" in content_type or "text/css" in content_type,
@@ -157,7 +159,7 @@ def check_built_asset(base_url: str, document: str, prefix: str) -> None:
     )
     require(
         "immutable" in headers.get("Cache-Control", ""),
-        f"Built asset {finder.asset_path} is not cached as immutable",
+        f"Built asset {asset_path} is not cached as immutable",
     )
 
 

@@ -44,16 +44,20 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        # --all-packages adds the lab workspace member's dependencies, which mypy needs to check lab/.
         run: |
-          uv sync --all-extras
+          uv sync --all-packages --all-extras
 
       - name: Lint with ruff
         run: |
           uv run ruff check .
           uv run ruff format --check .
 
-      - name: Type check src with mypy
-        run: uv run mypy
+      - name: Type check src, lab and scripts with mypy
+        # Each lab study is a script named study.py; one run per study keeps the names from clashing.
+        run: |
+          uv run mypy
+          for study in lab/*/study.py; do uv run mypy "$study"; done
 
       - name: Check Python runs through uv, Docker images and pip installs are pinned, actions and uv are pinned, tech-debt markers name an issue, comment refs resolve
         run: uv run python scripts/check_conventions.py python-uv docker-pins action-pins debt-markers comment-refs
