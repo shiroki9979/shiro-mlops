@@ -18,7 +18,7 @@ export const zhTW = {
   },
   nav: {
     sectionTitle: '工程主控台',
-    monitoring: '模型漂移監控',
+    monitoring: '監控',
     dataExplorer: '營運資料檢視器',
     settings: '系統連線設定',
   },
@@ -51,29 +51,8 @@ export const zhTW = {
     label: '介面語系',
   },
   monitoring: {
-    title: '模型資料漂移與資料來源狀態',
-    description: '漂移摘要仍為示範資料；資料來源狀態與營運資料檢視器共用同一契約。',
-    drift: {
-      title: 'Evidently AI 特徵漂移監控報告',
-      description: '基準資料集（訓練集）與近 7 日推論特徵分佈檢驗',
-      overall: '整體資料分佈健康 (92% 無顯著漂移)',
-      testAndThreshold: (test: string, threshold: string) => `檢定演算法：${test} ｜ 漂移門檻值：${threshold}`,
-      scoreLabel: '漂移指標',
-      normal: '無漂移',
-      warning: '輕微偏離',
-      features: {
-        temperatureNorth: '台北測站氣溫',
-        relativeHumidity: '相對濕度',
-        loadLag24h: '24 小時前負載滯後',
-        loadRollingMean7d: '7 天滾動均值',
-        calendarFlags: '假日指標',
-      },
-      tests: {
-        wasserstein: 'Wasserstein 距離',
-        psi: 'PSI（母體穩定度指標）',
-        chiSquare: '卡方檢定',
-      },
-    },
+    title: '資料來源監控',
+    description: '資料來源狀態與營運資料檢視器共用同一契約。特徵漂移監控尚未實作。',
     sources: {
       title: '資料來源狀態',
       loading: '載入資料來源狀態中...',

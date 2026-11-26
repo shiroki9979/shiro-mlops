@@ -19,7 +19,7 @@ export const en: Messages = {
   },
   nav: {
     sectionTitle: 'Engineering Console',
-    monitoring: 'Model Drift Monitoring',
+    monitoring: 'Monitoring',
     dataExplorer: 'Data Explorer',
     settings: 'System Connection',
   },
@@ -52,30 +52,9 @@ export const en: Messages = {
     label: 'Interface language',
   },
   monitoring: {
-    title: 'Model Drift & Data Source Status',
+    title: 'Data Source Monitoring',
     description:
-      'The drift summary is still demo data; data source status shares the same contract as the Data Explorer.',
-    drift: {
-      title: 'Evidently AI Feature Drift Report',
-      description: 'Reference dataset (training set) vs. inference feature distributions over the last 7 days',
-      overall: 'Overall distribution healthy (92% without significant drift)',
-      testAndThreshold: (test, threshold) => `Test: ${test} | Drift threshold: ${threshold}`,
-      scoreLabel: 'Drift Metric',
-      normal: 'No drift',
-      warning: 'Minor drift',
-      features: {
-        temperatureNorth: 'Taipei station temperature',
-        relativeHumidity: 'Relative humidity',
-        loadLag24h: '24-hour load lag',
-        loadRollingMean7d: '7-day rolling mean',
-        calendarFlags: 'Weekend/holiday indicator',
-      },
-      tests: {
-        wasserstein: 'Wasserstein Distance',
-        psi: 'PSI (Population Stability Index)',
-        chiSquare: 'Chi-Square Test',
-      },
-    },
+      'Data source status shares the same contract as the Data Explorer. Feature drift monitoring is not implemented yet.',
     sources: {
       title: 'Data Source Status',
       loading: 'Loading data source status...',

@@ -1,18 +1,18 @@
 # shiro-mlops
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-22
+> - Last Updated: 2026-11-26
 
 Hybrid Local/AWS MLOps platform for dynamic horizon load forecasting with Feast, Dagster, MLflow, and LightGBM.
 
 ## Architecture
 
-- **Orchestration**: Dagster (Software-Defined Assets for ingestion, feature materialization, training, evaluation, and drift detection)
+- **Orchestration**: Dagster (Software-Defined Assets for ingestion, feature materialization, training, evaluation, and model health monitoring)
 - **Feature Store**: Feast (Offline Store: local Parquet under `DATA_DIR`, Online Store: Docker Redis, Registry: local)
 - **Tracking & Registry**: MLflow (Self-hosted on PostgreSQL + local artifact storage)
 - **Forecasting Model**: LightGBM (Recursive multi-step forecasting with dynamic exogenous weather forecasts from CWA)
 - **Serving & API**: FastAPI (Dynamic horizon load predictions)
-- **Monitoring**: Evidently AI (Data Drift, Target Drift, and Evaluation Metrics)
+- **Monitoring**: per-task monitoring assets check each model's validation metrics against the health thresholds in its task config; feature drift monitoring is not implemented yet ([Rules of ML](docs/explanation/rules-of-ml.md))
 - **Infrastructure**: AWS + Terraform (S3, IAM OIDC; the cloud only serves the precomputed Forecast View, see ADR-0015)
 - **Frontend**: `frontend/` pnpm workspace (React 19 + TypeScript + Vite + TanStack): the Forecast View app, the local-only Engineering Console app under `/console/`, and a shared package (ADR-0014)
 

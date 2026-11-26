@@ -1,6 +1,5 @@
 import { createRoute } from '@tanstack/react-router'
 import { rootRoute } from './__root'
-import { DriftReportCard } from '@/components/monitoring/drift-report-card'
 import { DataSourceStatus } from '@/components/monitoring/data-source-status'
 import { Activity } from 'lucide-react'
 import { useMessages } from '@/i18n/messages'
@@ -27,7 +26,6 @@ function MonitoringPage() {
         </div>
       </div>
 
-      <DriftReportCard />
       <DataSourceStatus />
     </div>
   )
