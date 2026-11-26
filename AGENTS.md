@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-25
+> - Last Updated: 2026-11-26
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -23,6 +23,7 @@ Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform f
   - [markdown-metadata.md](docs/reference/markdown-metadata.md): the Markdown header contract every doc follows: H1 on line 1, the `> - Key: value` metadata block, allowed keys, `Status` values and the `doc-metadata` rule codes. Read it before creating a doc or editing a header.
 - **Architecture Decisions**: Consult [docs/adr/](docs/adr/) for rationale behind hybrid topology, Feast storage, LightGBM recursive forecaster, Dagster SDA, TimescaleDB, `uv`, CWA ingestion isolation, derived hourly actual load, ML task decoupling (task config + task types), native model persistence, the frozen baseline DDL with recorded schema migrations ([ADR-0017](docs/adr/0017-freeze-baseline-ddl-and-record-schema-migrations.md)): a change to an existing table is a migration, not a DDL edit, the co-located `lab/` research workspace ([ADR-0011](docs/adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)), the static, precomputed Forecast View as the only cloud surface ([ADR-0015](docs/adr/0015-publish-forecast-view-as-static-precomputed-output.md), superseding ADR-0001), and the public repository ([ADR-0016](docs/adr/0016-make-repository-public.md)): read it before changing workflows, since Actions logs are public, fork PRs must be assumed, and self-hosted runners and push rulesets are out.
 - **Research Workspace (`lab/`)**: `lab/` is a `uv` workspace member that depends unidirectionally on `shiro_mlops` (`src/` must NEVER import `lab`). Use it to freeze point-in-time training table snapshots, run rolling-origin backtests (滾動起點回測), and record hyperparameter studies under `lab/<YYYY-MM-DD>-<topic>/`.
+- **Rules of ML**: [docs/explanation/rules-of-ml.md](docs/explanation/rules-of-ml.md) maps Google's 43 rules onto this repo, with the known gaps. Read it before changing features, training objectives, evaluation or adoption criteria, monitoring, or the training/serving data path.
 - **Roadmap & Work Tickets**: [docs/ROADMAP.md](docs/ROADMAP.md) indexes milestones (goals, acceptance criteria, priority). Work tickets, their Definition of Done and status live in GitHub issues; operational acceptance has its own `ops-acceptance` issues. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 - **Code Review Standards**: When reviewing a change, apply [CODING_STANDARDS.md](CODING_STANDARDS.md) for repo-specific judgement rules; mechanical rules run in CI.
 - **Operational Guides**:
