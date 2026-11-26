@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.config import Settings, settings
@@ -199,6 +200,165 @@ def test_resolver_falls_back_to_latest_release_holding_the_reference_point(
     source = result.sources[0]["temperature"]
     assert source.kind == "three_day"
     assert source.issued_at == pd.Timestamp("2026-08-20 19:00")
+
+
+def _issues(result) -> list[pd.Timestamp | None]:
+    return [point["temperature"].issued_at for point in result.sources]
+
+
+def test_resolver_serves_hours_before_the_newest_release_from_a_fresh_older_one(
+    store: CWAWeatherStore,
+) -> None:
+    """Degraded only when no version issued within seven hours supplies the value (#367)."""
+    _store_three_day(store, datetime(2026, 8, 20, 5, 30), tuple(range(6, 18)), 30.0)
+    _store_three_day(store, datetime(2026, 8, 20, 11, 30), tuple(range(12, 18)), 32.0)
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 11),
+        horizon_hours=2,
+        as_of=datetime(2026, 8, 20, 12, 15),
+        fields=("temperature",),
+    )
+
+    assert result.mode == "normal"
+    assert result.dataframe["temperature"].tolist() == [30.0, 32.0]
+    assert [point["temperature"].kind for point in result.sources] == ["three_day"] * 2
+    assert _issues(result) == [pd.Timestamp("2026-08-20 05:30"), pd.Timestamp("2026-08-20 11:30")]
+
+
+def test_resolver_degrades_an_hour_only_a_stale_older_release_holds(
+    store: CWAWeatherStore,
+) -> None:
+    _store_three_day(store, datetime(2026, 8, 20, 5), tuple(range(6, 18)), 30.0)
+    _store_three_day(store, datetime(2026, 8, 20, 11, 30), tuple(range(12, 18)), 32.0)
+    store.upsert_cwa_observation_batch(
+        canonical_observation_batch(
+            pd.DataFrame(
+                {
+                    "datetime": [datetime(2026, 8, 19, 11)],
+                    "location": ["Taipei"],
+                    "temperature": [28.0],
+                    "relative_humidity": [75.0],
+                }
+            )
+        )
+    )
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 11),
+        horizon_hours=2,
+        as_of=datetime(2026, 8, 20, 12, 15),
+        fields=("temperature",),
+    )
+
+    assert result.mode == "degraded"
+    assert result.dataframe["temperature"].tolist() == [28.0, 32.0]
+    assert [point["temperature"].kind for point in result.sources] == [
+        "previous_day_observation",
+        "three_day",
+    ]
+
+
+def test_resolver_never_interpolates_between_two_releases(store: CWAWeatherStore) -> None:
+    """Both endpoints come from the one version the value is attributed to."""
+    older_end = replace(township_forecast(datetime(2026, 8, 20, 12), 33.0), geocode=TAIPEI.geocode)
+    older_start = replace(township_forecast(datetime(2026, 8, 20, 9), 30.0), geocode=TAIPEI.geocode)
+    store.upsert_cwa_forecast_releases(
+        [forecast_release(datetime(2026, 8, 20, 5, 30), (older_start, older_end))]
+    )
+    _store_three_day(store, datetime(2026, 8, 20, 11, 30), (12, 15), 36.0)
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 11),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12, 15),
+        fields=("temperature",),
+    )
+
+    assert result.dataframe["temperature"].tolist() == [pytest.approx(32.0)]
+    assert _issues(result) == [pd.Timestamp("2026-08-20 05:30")]
+
+
+def test_resolver_prefers_a_fresh_older_three_day_release_to_a_newer_weekly_one(
+    store: CWAWeatherStore,
+) -> None:
+    _store_three_day(store, datetime(2026, 8, 20, 5, 30), (12,), 30.0)
+    _store_three_day(store, datetime(2026, 8, 20, 11, 30), (13,), 32.0)
+    _store_weekly(store, datetime(2026, 8, 20, 11, 30), 25.0)
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+        fields=("temperature",),
+    )
+
+    assert result.dataframe["temperature"].tolist() == [30.0]
+    assert result.sources[0]["temperature"].kind == "three_day"
+
+
+def test_resolver_takes_a_field_the_newest_release_lacks_from_an_older_one(
+    store: CWAWeatherStore,
+) -> None:
+    def release(issued_at: datetime, temperature: float, humidity: float | None):
+        point = township_forecast(
+            datetime(2026, 8, 20, 12), temperature, relative_humidity_pct=humidity
+        )
+        return forecast_release(issued_at, (replace(point, geocode=TAIPEI.geocode),))
+
+    store.upsert_cwa_forecast_releases([release(datetime(2026, 8, 20, 5, 30), 30.0, 70.0)])
+    store.upsert_cwa_forecast_releases([release(datetime(2026, 8, 20, 11, 30), 32.0, None)])
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+    )
+
+    assert result.mode == "normal"
+    assert result.dataframe.loc[0, "temperature"] == 32.0
+    assert result.dataframe.loc[0, "relative_humidity"] == 70.0
+    assert result.sources[0]["temperature"].issued_at == pd.Timestamp("2026-08-20 11:30")
+    assert result.sources[0]["relative_humidity"].issued_at == pd.Timestamp("2026-08-20 05:30")
+
+
+def test_resolver_serves_the_newest_correction_published_by_the_as_of_time(
+    store: CWAWeatherStore,
+) -> None:
+    """A correction updated after the as-of time did not exist yet at prediction time."""
+    point = replace(township_forecast(datetime(2026, 8, 20, 12), 30.0), geocode=TAIPEI.geocode)
+    issued_at = datetime(2026, 8, 20, 11)
+    for updated_at, temperature in (("11:00", 30.0), ("11:20", 31.0), ("12:20", 99.0)):
+        store.upsert_cwa_forecast_releases(
+            [
+                replace(
+                    forecast_release(issued_at, (replace(point, temperature_c=temperature),)),
+                    source_updated_at=pd.Timestamp(f"2026-08-20 {updated_at}"),
+                )
+            ]
+        )
+
+    result = resolve_weather(
+        store,
+        reference_point=TAIPEI,
+        start_time=datetime(2026, 8, 20, 12),
+        horizon_hours=1,
+        as_of=datetime(2026, 8, 20, 12),
+        fields=("temperature",),
+    )
+
+    assert result.dataframe["temperature"].tolist() == [31.0]
+    assert result.sources[0]["temperature"].source_updated_at == pd.Timestamp("2026-08-20 11:20")
 
 
 def test_resolver_interpolates_short_horizon_between_persisted_forecast_points(
@@ -543,28 +703,36 @@ def test_resolver_does_not_read_observations_after_the_as_of_time() -> None:
         )
 
     assert store.fetch_cwa_station_observations.call_args.kwargs["end_time"] == as_of
-    assert store.fetch_cwa_forecast_rows.call_args.kwargs["source_updated_before"] == as_of
 
 
-def test_resolver_reads_only_releases_young_enough_to_serve() -> None:
+def test_resolver_reads_only_releases_young_enough_to_serve(
+    store: CWAWeatherStore, sqlite_engine: Engine
+) -> None:
     """A release older than seven hours is stale whatever it holds, so it is never read."""
-    store = MagicMock(spec=CWAWeatherStore)
-    store.fetch_cwa_forecast_rows.return_value = pd.DataFrame()
-    store.fetch_cwa_station_observations.return_value = pd.DataFrame()
-    as_of = datetime(2026, 8, 20, 12)
+    for issued_at in pd.date_range("2026-08-13 12:00", "2026-08-20 06:00", freq="6h"):
+        _store_three_day(store, issued_at.to_pydatetime(), (13,), 30.0)
+    statements: list[tuple[str, dict]] = []
 
-    with pytest.raises(WeatherCoverageError):
-        resolve_weather(
+    def record(conn, cursor, statement, parameters, *_args) -> None:
+        statements.append((statement, parameters))
+
+    event.listen(sqlite_engine, "before_cursor_execute", record)
+    try:
+        result = resolve_weather(
             store,
             reference_point=TAIPEI,
             start_time=datetime(2026, 8, 20, 13),
             horizon_hours=1,
-            as_of=as_of,
+            as_of=datetime(2026, 8, 20, 12),
+            fields=("temperature",),
         )
+    finally:
+        event.remove(sqlite_engine, "before_cursor_execute", record)
 
-    assert store.fetch_cwa_forecast_rows.call_args.kwargs["issued_after"] == pd.Timestamp(
-        datetime(2026, 8, 20, 5)
-    )
+    assert _issues(result) == [pd.Timestamp("2026-08-20 06:00")]
+    forecast_reads = [sql for sql, _ in statements if "raw_cwa_township_forecast" in sql]
+    assert len(forecast_reads) == 1
+    assert "issued_at >= " in forecast_reads[0]
 
 
 def test_resolver_does_not_interpolate_wind_direction() -> None:

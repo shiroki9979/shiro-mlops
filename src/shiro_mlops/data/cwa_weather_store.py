@@ -7,7 +7,7 @@ observation, issue and validity instants in Taiwan-local time.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, NamedTuple
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
@@ -15,7 +15,6 @@ from sqlalchemy.engine import Connection, Engine
 
 from shiro_mlops.core.constants import LOCATION_COL, RELATIVE_HUMIDITY_COL, TEMPERATURE_COL
 from shiro_mlops.core.storage_time import (
-    from_storage_time,
     from_storage_time_series,
     to_storage_time,
     to_storage_time_or_none,
@@ -47,18 +46,6 @@ FORECAST_ROW_COLUMNS = [
 FORECAST_TIME_COLUMNS = ("issued_at", "source_updated_at", "valid_from", "valid_to")
 
 
-class ForecastVersion(NamedTuple):
-    """Identity of one forecast vintage, comparable across the release and forecast tables.
-
-    Both tables store the instants as aware UTC; the identity holds them read back as
-    Taiwan-local naive datetimes, so every stored form of one instant yields one key.
-    """
-
-    dataset_id: str
-    issued_at: datetime
-    source_updated_at: datetime
-
-
 @dataclass(frozen=True)
 class _WindowBound:
     """One side of a forecast validity window and the neighbouring point beyond it."""
@@ -88,7 +75,7 @@ _VALID_END = _WindowBound(
 
 @dataclass(frozen=True)
 class _ForecastRowFilter:
-    """Canonical forecast row filters; issue cutoffs with a geocode select vintages point-in-time."""
+    """Canonical forecast row filters; every vintage they admit is read, none is chosen."""
 
     geocode: str | None
     dataset_id: str | None
@@ -99,37 +86,23 @@ class _ForecastRowFilter:
     valid_end: datetime | None
     include_adjacent_points: bool
 
-    @property
-    def selects_versions(self) -> bool:
-        return self.geocode is not None and self.issued_before is not None
-
     def row_conditions(self) -> tuple[list[str], dict[str, Any]]:
-        clauses, params = self.release_conditions()
-        if self.geocode is not None:
-            clauses.append("geocode = :geocode")
-            params["geocode"] = self.geocode
+        clauses = ["1=1"]
+        params: dict[str, Any] = {}
+        for column, operator, name, value in (
+            ("dataset_id", "=", "dataset_id", self.dataset_id),
+            ("geocode", "=", "geocode", self.geocode),
+            ("issued_at", "<=", "issued_before", self.issued_before),
+            ("source_updated_at", "<=", "source_updated_before", self.source_updated_before),
+            ("issued_at", ">=", "issued_after", self.issued_after),
+        ):
+            if value is not None:
+                clauses.append(f"{column} {operator} :{name}")
+                params[name] = value
         for bound, value in ((_VALID_START, self.valid_start), (_VALID_END, self.valid_end)):
             if value is not None:
                 clauses.append(_forecast_window_filter(bound, self.include_adjacent_points))
                 params[bound.param] = value
-        return clauses, params
-
-    def release_conditions(self) -> tuple[list[str], dict[str, Any]]:
-        """Conditions shared by forecast rows and their release headers."""
-        clauses = ["1=1"]
-        params: dict[str, Any] = {}
-        if self.dataset_id is not None:
-            clauses.append("dataset_id = :dataset_id")
-            params["dataset_id"] = self.dataset_id
-        if self.issued_before is not None:
-            clauses.append("issued_at <= :issued_before")
-            params["issued_before"] = self.issued_before
-        if self.source_updated_before is not None:
-            clauses.append("source_updated_at <= :source_updated_before")
-            params["source_updated_before"] = self.source_updated_before
-        if self.issued_after is not None:
-            clauses.append("issued_at >= :issued_after")
-            params["issued_after"] = self.issued_after
         return clauses, params
 
 
@@ -152,47 +125,8 @@ def _forecast_window_filter(bound: _WindowBound, include_adjacent_points: bool) 
     ))"""
 
 
-def _forecast_version_key(row: pd.Series) -> ForecastVersion:
-    """Build the forecast-vintage identity of a release header or forecast row."""
-    return ForecastVersion(
-        str(row["dataset_id"]),
-        from_storage_time(row["issued_at"], column="issued_at"),
-        from_storage_time(row["source_updated_at"], column="source_updated_at"),
-    )
-
-
-def _select_forecast_versions(
-    headers: pd.DataFrame,
-    available_versions: pd.DataFrame,
-) -> set[ForecastVersion]:
-    """Select, per forecast dataset, the newest release holding rows for the geocode.
-
-    Release completeness is judged across the whole allowlist, so an ``incomplete``
-    release still serves any geocode it does hold.
-    """
-    if headers.empty:
-        return set()
-    available = {_forecast_version_key(row) for _, row in available_versions.iterrows()}
-    selected: set[ForecastVersion] = set()
-    for _, releases in headers.groupby("dataset_id"):
-        ordered = releases.sort_values(["issued_at", "source_updated_at"], ascending=False)
-        for _, release in ordered.iterrows():
-            version = _forecast_version_key(release)
-            if version in available:
-                selected.add(version)
-                break
-    return selected
-
-
-def _read_forecast_rows(
-    conn: Connection, filters: _ForecastRowFilter, versions: set[ForecastVersion] | None = None
-) -> pd.DataFrame:
-    """Rows matching ``filters``; with ``versions``, only the rows of those vintages."""
+def _read_forecast_rows(conn: Connection, filters: _ForecastRowFilter) -> pd.DataFrame:
     clauses, params = filters.row_conditions()
-    if versions is not None:
-        version_clause, version_params = _version_condition(versions)
-        clauses.append(version_clause)
-        params.update(version_params)
     query = f"""
         SELECT dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode,
                location_name, temperature_c, dew_point_c, apparent_temperature_c,
@@ -204,51 +138,6 @@ def _read_forecast_rows(
                  issued_at DESC, source_updated_at DESC
     """
     return pd.read_sql_query(text(query), conn, params=params)
-
-
-def _version_condition(versions: set[ForecastVersion]) -> tuple[str, dict[str, Any]]:
-    """Equality on each vintage's key, so the row read never scans the geocode's history."""
-    if not versions:
-        return "1=0", {}
-    clauses: list[str] = []
-    params: dict[str, Any] = {}
-    for index, version in enumerate(sorted(versions)):
-        clauses.append(
-            f"(dataset_id = :v{index}_dataset AND issued_at = :v{index}_issued"
-            f" AND source_updated_at = :v{index}_updated)"
-        )
-        params[f"v{index}_dataset"] = version.dataset_id
-        params[f"v{index}_issued"] = to_storage_time(version.issued_at)
-        params[f"v{index}_updated"] = to_storage_time(version.source_updated_at)
-    return f"({' OR '.join(clauses)})", params
-
-
-def _read_selected_versions(conn: Connection, filters: _ForecastRowFilter) -> set[ForecastVersion]:
-    """The vintage each dataset serves at the cutoff, among those holding rows for the geocode."""
-    clauses, params = filters.release_conditions()
-    headers = pd.read_sql_query(
-        text(
-            f"""
-            SELECT dataset_id, issued_at, source_updated_at
-            FROM raw_cwa_forecast_release
-            WHERE {" AND ".join(clauses)}
-            """
-        ),
-        conn,
-        params=params,
-    )
-    available_versions = pd.read_sql_query(
-        text(
-            f"""
-            SELECT DISTINCT dataset_id, issued_at, source_updated_at
-            FROM raw_cwa_township_forecast
-            WHERE geocode = :geocode AND {" AND ".join(clauses)}
-            """
-        ),
-        conn,
-        params={**params, "geocode": filters.geocode},
-    )
-    return _select_forecast_versions(headers, available_versions)
 
 
 def _forecast_rows_in_taiwan_time(frame: pd.DataFrame) -> pd.DataFrame:
@@ -473,13 +362,14 @@ class CWAWeatherStore:
         valid_end: datetime | str | None = None,
         include_adjacent_points: bool = False,
     ) -> pd.DataFrame:
-        """Fetch canonical forecast rows, optionally constrained by point-in-time cutoff.
+        """Fetch canonical forecast rows of every vintage the filters admit.
 
-        With a geocode and ``issued_before``, each dataset serves its newest release holding
-        rows for the geocode, chosen first, and only that release's rows are read.
-        ``issued_after`` leaves out releases issued before it; serving passes the staleness
-        limit, since an older release would be discarded as stale anyway, so the choice
-        never reads the geocode's whole history.
+        The store chooses no version: which vintage supplies a value is the weather
+        resolution's rule. ``issued_after`` leaves out vintages issued before it; serving
+        passes the staleness limit, since an older vintage would be discarded as stale
+        anyway, so a point-in-time read never scans the geocode's whole history.
+        ``include_adjacent_points`` adds, per vintage, the nearest point beyond each
+        window bound as an interpolation endpoint.
 
         Cutoffs and window bounds are Taiwan-local instants or their text; an omitted bound
         binds no condition.
@@ -495,8 +385,7 @@ class CWAWeatherStore:
             include_adjacent_points=include_adjacent_points,
         )
         with self._engine.connect() as conn:
-            versions = _read_selected_versions(conn, filters) if filters.selects_versions else None
-            frame = _read_forecast_rows(conn, filters, versions)
+            frame = _read_forecast_rows(conn, filters)
         return _forecast_rows_in_taiwan_time(frame)
 
     def fetch_weather_range(

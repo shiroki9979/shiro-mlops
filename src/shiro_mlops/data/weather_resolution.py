@@ -5,7 +5,7 @@ exactly when some value it used is a substitute, so callers derive the mode from
 the sources and never store or recompute it themselves.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -316,21 +316,50 @@ class _ObservationFallback:
         return self._climatology[key]
 
 
+_ForecastProjection: TypeAlias = Callable[
+    [pd.DataFrame, pd.Timestamp, str], "tuple[object, pd.Series] | None"
+]
+_FORECAST_PROJECTIONS: dict[WeatherSourceKind, _ForecastProjection] = {
+    WeatherSourceKind.THREE_DAY: _point_value,
+    WeatherSourceKind.WEEKLY: _interval_value,
+}
+"""Each forecast product's projection onto an hour, in the order products are tried."""
+
+
+def _vintages_newest_first(forecasts: pd.DataFrame) -> dict[WeatherSourceKind, list[pd.DataFrame]]:
+    """Each product's fresh vintages, the newest issue and then the newest correction first.
+
+    A vintage is projected on its own, so one value never mixes two versions.
+    """
+    vintages: dict[WeatherSourceKind, list[pd.DataFrame]] = {
+        kind: [] for kind in _FORECAST_PROJECTIONS
+    }
+    if forecasts.empty:
+        return vintages
+    for (dataset_id, *_), rows in forecasts.groupby(list(_VERSION_FIELDS), sort=True):
+        kind = FORECAST_DATASET_KINDS.get(str(dataset_id))
+        if kind is not None:
+            vintages[kind].insert(0, rows.sort_values(["valid_from", "valid_to"]))
+    return vintages
+
+
 def _resolve_value(
-    datasets: dict[WeatherSourceKind, pd.DataFrame],
+    vintages: dict[WeatherSourceKind, list[pd.DataFrame]],
     fallback: _ObservationFallback,
     moment: pd.Timestamp,
     column: str,
 ) -> tuple[object, WeatherValueSource | None]:
-    """One hour's value of ``column`` and its source, or no source when nothing covers it."""
-    point = _point_value(datasets[WeatherSourceKind.THREE_DAY], moment, column)
-    if point is not None:
-        value, row = point
-        return value, WeatherValueSource.forecast(WeatherSourceKind.THREE_DAY, row)
-    interval = _interval_value(datasets[WeatherSourceKind.WEEKLY], moment, column)
-    if interval is not None:
-        value, row = interval
-        return value, WeatherValueSource.forecast(WeatherSourceKind.WEEKLY, row)
+    """One hour's value of ``column`` and its source, or no source when nothing covers it.
+
+    Every fresh three-day vintage is tried, newest first, before any weekly one, and only
+    then the observation substitutes (GLOSSARY 降級預報).
+    """
+    for kind, project in _FORECAST_PROJECTIONS.items():
+        for vintage in vintages[kind]:
+            found = project(vintage, moment, column)
+            if found is not None:
+                value, row = found
+                return value, WeatherValueSource.forecast(kind, row)
     value, substitute = fallback.value(moment, column)
     if substitute is None:
         return None, None
@@ -351,8 +380,12 @@ def resolve_weather(
     The township forecast area and fallback station both come from the reference
     point, so the prediction subject never decides where weather is read. Each
     hour and field takes, in order, a fresh three-day value, a fresh weekly value,
-    the previous-day observation, then climatology; freshness is judged by the
-    forecast version that supplies the value. Only observation fills degrade.
+    the previous-day observation, then climatology; within a product every fresh
+    version is tried newest first, and freshness is judged by the forecast version
+    that supplies the value. Only observation fills degrade.
+
+    This module owns version choice: the store reads every vintage issued within
+    the staleness limit in one bounded query and chooses none.
 
     Raises ``WeatherCoverageError`` naming the reference point at the first value
     none of these covers, and ``ValueError`` when ``horizon_hours`` is below one.
@@ -382,21 +415,14 @@ def resolve_weather(
             station_id=reference_point.station_id,
         )
     )
-    datasets = {
-        kind: (
-            forecasts[forecasts["dataset_id"] == dataset_id]
-            if "dataset_id" in forecasts.columns
-            else pd.DataFrame()
-        )
-        for dataset_id, kind in FORECAST_DATASET_KINDS.items()
-    }
+    vintages = _vintages_newest_first(forecasts)
     rows: list[dict[str, object]] = []
     sources: list[dict[str, WeatherValueSource]] = []
     for moment in moments:
         output: dict[str, object] = {DATETIME_COL: moment, LOCATION_COL: reference_point.alias}
         point_sources: dict[str, WeatherValueSource] = {}
         for output_name in fields:
-            value, source = _resolve_value(datasets, fallback, moment, FORECAST_FIELDS[output_name])
+            value, source = _resolve_value(vintages, fallback, moment, FORECAST_FIELDS[output_name])
             if source is None:
                 raise WeatherCoverageError(
                     f"{reference_point.alias}: No weather coverage for "
