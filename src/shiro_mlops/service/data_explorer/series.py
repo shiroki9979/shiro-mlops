@@ -81,7 +81,7 @@ class SeriesOptions:
     different reading (the forecast version). The time window, bucketing, limits and
     gap-fill come from this module. `slot_lag` is how long after its timestamp a slot is
     expected to exist (an hourly load row labels the hour it summarises, so it is due only
-    once that hour has ended).
+    once that hour has ended); the dataset's `ingestion_grace` is added on top.
 
     `count_rows` makes each value the number of rows in the bucket instead of a time
     aggregate of a field: `fields` and `agg` are then not request parameters, the response
@@ -361,7 +361,8 @@ class SeriesReader:
     def _fill_slots(self, window: TimeWindow, bucket: Bucket) -> list[datetime]:
         if not self.options.gap_fill:
             return []
-        last_due = min(window.end, now_taiwan() - self.options.slot_lag)
+        due_by = now_taiwan() - self.options.slot_lag - self.dataset.ingestion_grace
+        last_due = min(window.end, due_by)
         return [
             start
             for start in expected_bucket_starts(window, bucket, self.dataset.cadence)

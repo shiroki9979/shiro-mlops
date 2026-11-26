@@ -217,6 +217,23 @@ def test_missing_slots_run_ascending_from_the_window_start_to_the_last_due_slot(
     assert slots[-1] == last_due
 
 
+@pytest.mark.parametrize(
+    ("now", "due_slots"),
+    [(datetime(2026, 9, 20, 13, 19, 59), []), (datetime(2026, 9, 20, 13, 20), ["13:00"])],
+    ids=["before-grace", "after-grace"],
+)
+def test_an_observation_hour_is_missing_only_after_its_scheduled_fetch_and_retries(
+    sqlite_engine: Engine, monkeypatch: pytest.MonkeyPatch, now: datetime, due_slots: list[str]
+) -> None:
+    """HH:00 的觀測由 HH:10 的擷取（含重試退避）寫入；寬限 20 分鐘內不列為缺口（#373）。"""
+    monkeypatch.setattr("shiro_mlops.service.data_explorer.dataset_query.now_taiwan", lambda: now)
+    window = {"start": "2026-09-20T13:00:00+08:00", "end": "2026-09-20T14:00:00+08:00"}
+
+    gaps = DatasetLister(sqlite_engine, DATASETS["cwa_observations"]).list(window).missing_slots
+
+    assert sorted({gap[11:16] for gap in gaps}) == due_slots
+
+
 @pytest.mark.parametrize("dataset", DATASETS.values(), ids=lambda dataset: dataset.id)
 def test_an_empty_dataset_reports_only_its_definition_and_a_warning(
     sqlite_engine: Engine, dataset: Dataset

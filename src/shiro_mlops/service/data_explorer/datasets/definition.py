@@ -140,8 +140,9 @@ class GapMembers:
 class GapPolicy:
     """Which slots of a list window are missing: each due `cadence` slot no row fills.
 
-    A slot is due once it has happened and `slot_lag` has passed since it started. A row
-    fills the slot it falls in, or with `exact_instant` only the slot it is stamped at.
+    A slot is due once it has happened and `slot_lag` plus the dataset's `ingestion_grace`
+    have passed since it started. A row fills the slot it falls in, or with `exact_instant`
+    only the slot it is stamped at.
     """
 
     exact_instant: bool = False
@@ -246,7 +247,12 @@ class Dataset:
     `project` turns one page of rows into response items, and `gaps` declares which slots
     the list reports missing. `status_policy` and `freshness` declare how `GET /data/status`
     judges completeness and where it reads the newest row (by default the dataset's own
-    relation and time column). `series` declares the chart series endpoint, and `resolve_version`
+    relation and time column). `update_interval` is how often the source brings a newer
+    instant, by default `cadence`: a forecast version is charted hourly but released every few
+    hours. `ingestion_grace` is how long after an instant is due its scheduled ingestion may
+    still be storing it: status freshness, list gaps and chart gap-fill all wait that long.
+    `arrival_lag` is the whole wait from an instant to its stored row.
+    `series` declares the chart series endpoint, and `resolve_version`
     resolves the forecast version both list and series read. Inconsistent declarations
     raise `ValueError`.
     """
@@ -268,6 +274,8 @@ class Dataset:
     filters: tuple[Filter, ...] = ()
     gaps: GapPolicy | None = None
     freshness: FreshnessSource | None = None
+    update_interval: timedelta | None = None
+    ingestion_grace: timedelta = timedelta(0)
     series: SeriesOptions | None = None
     resolve_version: VersionResolver | None = None
 
@@ -287,6 +295,17 @@ class Dataset:
     def clauses(self, db: ExplorerDb, filters: Mapping[str, Any]) -> Clauses:
         """Pinned clauses plus every declared filter present in `filters`."""
         return self._clauses(db, filters, self.filters)
+
+    @property
+    def expected_update_interval(self) -> timedelta:
+        """`update_interval`, or `cadence` when the dataset declares none."""
+        return self.cadence if self.update_interval is None else self.update_interval
+
+    @property
+    def arrival_lag(self) -> timedelta:
+        """How long after its instant a row is expected stored: the gap `slot_lag` plus grace."""
+        slot_lag = self.gaps.slot_lag if self.gaps is not None else timedelta(0)
+        return slot_lag + self.ingestion_grace
 
     @property
     def freshness_source(self) -> FreshnessSource:
