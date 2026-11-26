@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 
 from shiro_mlops.core.config import settings
-from shiro_mlops.core.schema_migrations import apply_schema_migrations
+from shiro_mlops.core.schema_migrations import apply_schema_migrations, hold_schema_lock
 from shiro_mlops.core.storage_time import register_sqlite_datetime_adapter
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,11 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
     baseline DDL runs first, then every schema migration the database has not recorded
     (src/shiro_mlops/core/schema_migrations.py). If tables already exist with rows,
     converts them to hypertables with migrate_data => TRUE.
+
+    On TimescaleDB the baseline runs in one transaction under the schema lock, so
+    processes starting together do not race to create a table the baseline adds. On a
+    database that is fully set up, the baseline takes no table lock and waits for no
+    reader.
     """
     db_engine = engine or get_timescale_engine()
     dialect_obj = getattr(db_engine, "dialect", None)
@@ -171,7 +176,10 @@ def ensure_timescale_hypertables(engine: Engine | None = None) -> None:
         apply_schema_migrations(db_engine)
         return
 
-    _execute_sql_statements(db_engine, split_sql_statements(ddl))
+    with db_engine.begin() as connection:
+        hold_schema_lock(connection)
+        for statement in split_sql_statements(ddl):
+            connection.execute(text(statement))
     apply_schema_migrations(db_engine)
     logger.info("TimescaleDB hypertables verified and initialized successfully.")
 

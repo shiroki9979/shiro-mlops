@@ -25,6 +25,7 @@ RECORDED_IDS = [
     "0002_add_taipower_load_source_column",
     "0003_migrate_taipower_load_subject",
     "0004_drop_cwa_header_status_columns",
+    "0005_add_cwa_township_forecast_location_name",
 ]
 
 
