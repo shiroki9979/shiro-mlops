@@ -1,6 +1,8 @@
 """Schema migrations are recorded once in ``schema_migration`` instead of re-inferred (ADR-0017)."""
 
+import json
 from collections.abc import Callable, Iterator
+from datetime import datetime
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -17,7 +19,14 @@ from shiro_mlops.core.schema_migrations import (
     UnknownSchemaMigrationError,
     apply_schema_migrations,
 )
-from tests.helpers import create_legacy_load_table, create_location_keyed_load_table
+from shiro_mlops.data.taipower_unit_generation_repository import (
+    TaipowerUnitGenerationRepository,
+)
+from tests.helpers import (
+    MIGRATIONS_BEFORE_UNIT_BATCH,
+    create_legacy_load_table,
+    create_location_keyed_load_table,
+)
 
 # 已寫進既有資料庫的 id 是持久契約；改名會讓舊資料庫被當成記錄了不認得的遷移。
 RECORDED_IDS = [
@@ -26,6 +35,7 @@ RECORDED_IDS = [
     "0003_migrate_taipower_load_subject",
     "0004_drop_cwa_header_status_columns",
     "0005_add_cwa_township_forecast_location_name",
+    "0006_move_unit_generation_payload_to_batch",
 ]
 
 
@@ -273,3 +283,105 @@ def test_database_from_a_newer_program_version_refuses_schema_setup(engine: Engi
 
     with pytest.raises(UnknownSchemaMigrationError, match="0099_from_newer"):
         ensure_timescale_hypertables(engine)
+
+
+def _unit_payload(slot: str, unit_names: list[str]) -> str:
+    rows = [{"機組類型": "燃氣", "機組名稱": name} for name in unit_names]
+    return json.dumps({"DateTime": slot, "aaData": rows}, ensure_ascii=False)
+
+
+def insert_legacy_unit_row(
+    engine: Engine, observed_at: str, unit_name: str, source_time: str, payload: str
+) -> None:
+    """Write a unit row as before 0006, carrying the whole response it was parsed from."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO raw_taipower_unit_generation_snapshot (
+                    observed_at, unit_type, unit_name, source_time,
+                    capacity_mw, net_generation_mw, capacity_ratio_pct, remark,
+                    raw_payload
+                ) VALUES (
+                    :observed_at, '燃氣', :unit_name, :source_time,
+                    742.7, 670.4, 90.265, NULL, :payload
+                )
+                """
+            ),
+            {
+                "observed_at": observed_at,
+                "unit_name": unit_name,
+                "source_time": source_time,
+                "payload": payload,
+            },
+        )
+
+
+def insert_unit_rows_carrying_the_payload(engine: Engine) -> None:
+    """Model rows written before 0006: every unit row repeats its slot's whole response."""
+    slots = {
+        "2026-09-05 09:30:00+00:00": ("2026-09-05T17:30:00", ["大潭CC#1", "大潭CC#3"]),
+        "2026-09-05 09:40:00+00:00": ("2026-09-05T17:40:00", ["大潭CC#1", "大潭CC#3"]),
+    }
+    for observed_at, (source_slot, unit_names) in slots.items():
+        payload = _unit_payload(source_slot, unit_names)
+        for name in unit_names:
+            insert_legacy_unit_row(engine, observed_at, name, observed_at, payload)
+
+
+def test_unit_generation_response_moves_from_every_row_to_one_batch(
+    baseline_engine: Engine,
+) -> None:
+    """Each slot's response is kept once in the batch header and no longer on the unit rows."""
+    apply_schema_migrations(baseline_engine, migrations=MIGRATIONS_BEFORE_UNIT_BATCH)
+    insert_unit_rows_carrying_the_payload(baseline_engine)
+
+    ensure_timescale_hypertables(baseline_engine)
+
+    assert "raw_payload" not in table_columns(
+        baseline_engine, "raw_taipower_unit_generation_snapshot"
+    )
+    repository = TaipowerUnitGenerationRepository(engine=baseline_engine, auto_init=False)
+    batch = repository.fetch(datetime(2026, 9, 5, 17, 40))
+    assert batch is not None
+    assert batch.raw_payload == {
+        "DateTime": "2026-09-05T17:40:00",
+        "aaData": [
+            {"機組類型": "燃氣", "機組名稱": "大潭CC#1"},
+            {"機組類型": "燃氣", "機組名稱": "大潭CC#3"},
+        ],
+    }
+    assert [snapshot.unit_name for snapshot in batch.snapshots] == ["大潭CC#1", "大潭CC#3"]
+    earlier = repository.fetch(datetime(2026, 9, 5, 17, 30))
+    assert earlier is not None
+    assert earlier.raw_payload["DateTime"] == "2026-09-05T17:30:00"
+
+
+def test_unit_generation_batch_takes_the_latest_response_of_a_rerun_slot(
+    baseline_engine: Engine,
+) -> None:
+    """A rerun that lost a unit left that row on the earlier response; the header takes the later."""
+    apply_schema_migrations(baseline_engine, migrations=MIGRATIONS_BEFORE_UNIT_BATCH)
+    observed_at = "2026-09-05 09:30:00+00:00"
+    insert_legacy_unit_row(
+        baseline_engine,
+        observed_at,
+        "大潭CC#1",
+        "2026-09-05 09:20:00+00:00",
+        _unit_payload("2026-09-05T17:20:00", ["大潭CC#1", "大潭CC#3"]),
+    )
+    insert_legacy_unit_row(
+        baseline_engine,
+        observed_at,
+        "大潭CC#3",
+        observed_at,
+        _unit_payload("2026-09-05T17:30:00", ["大潭CC#3"]),
+    )
+
+    ensure_timescale_hypertables(baseline_engine)
+
+    batch = TaipowerUnitGenerationRepository(engine=baseline_engine, auto_init=False).fetch(
+        datetime(2026, 9, 5, 17, 30)
+    )
+    assert batch is not None
+    assert batch.raw_payload["DateTime"] == "2026-09-05T17:30:00"

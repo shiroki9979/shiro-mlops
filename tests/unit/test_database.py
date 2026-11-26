@@ -466,6 +466,24 @@ def test_fresh_schema_has_no_cwa_header_status_column(tmp_path) -> None:
         engine.dispose()
 
 
+def test_fresh_schema_keeps_unit_generation_responses_in_the_batch_header(tmp_path) -> None:
+    """New unit rows carry no response; each slot's response lives once in the batch header."""
+    from shiro_mlops.core.database import ensure_timescale_hypertables
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh_unit_generation.db'}")
+    try:
+        ensure_timescale_hypertables(engine)
+
+        assert header_columns(engine, "raw_taipower_unit_generation_batch") == [
+            "observed_at",
+            "raw_payload",
+            "created_at",
+        ]
+        assert "raw_payload" not in header_columns(engine, "raw_taipower_unit_generation_snapshot")
+    finally:
+        engine.dispose()
+
+
 def test_existing_cwa_headers_lose_status_column_repeatably(tmp_path) -> None:
     from shiro_mlops.core.database import ensure_timescale_hypertables
 
@@ -542,16 +560,23 @@ def test_convert_timescale_ddl_to_sqlite_statements():
 
 
 def test_sqlite_and_timescale_schema_parity(tmp_path):
-    """Verify SQLite schema dynamically derived from 01_init_hypertables.sql has 100% parity."""
+    """Verify SQLite schema dynamically derived from 01_init_hypertables.sql has 100% parity.
+
+    Only the baseline runs: migrations change tables after it (ADR-0017), so the schema they
+    leave is compared with TimescaleDB's by
+    tests/integration/test_data_explorer_timescaledb_schema_migrations.py instead.
+    """
     import re
 
-    from shiro_mlops.core.database import ensure_timescale_hypertables
+    from shiro_mlops.core.database import convert_timescale_ddl_to_sqlite
 
     db_path = tmp_path / "parity.db"
     engine = create_engine(f"sqlite:///{db_path}")
 
     try:
-        ensure_timescale_hypertables(engine)
+        with engine.begin() as connection:
+            for statement in convert_timescale_ddl_to_sqlite(get_timescale_init_ddl()):
+                connection.execute(text(statement))
         inspector = inspect(engine)
         sqlite_tables = set(inspector.get_table_names())
 

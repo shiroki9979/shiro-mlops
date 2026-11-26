@@ -2,8 +2,10 @@
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+from itertools import groupby
 
 from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationBatch
 from shiro_mlops.service.data_explorer.datasets import (
     NATIONAL_SUPPLY_DEMAND,
     REGIONAL_SUPPLY_DEMAND,
@@ -15,7 +17,7 @@ from tests.helpers import (
     regional_supply_demand_snapshots,
     rfc3339,
     supply_demand_snapshot,
-    unit_generation_snapshots,
+    unit_generation_batch,
 )
 
 
@@ -98,7 +100,8 @@ def assert_unit_reader_pages(
     test_repo: TimeSeriesRepository,
 ) -> None:
     observed = datetime(2026, 9, 5, 17, 30)
-    seed = unit_generation_snapshots(observed)[0]
+    seed_batch = unit_generation_batch(observed)
+    seed = seed_batch.snapshots[0]
     rows = [
         replace(
             seed,
@@ -119,7 +122,14 @@ def assert_unit_reader_pages(
         replace(seed, unit_type="燃氣", unit_name="B", net_generation_mw=None),
         replace(seed, unit_type="燃氣", unit_name="A", net_generation_mw=1.0),
     ]
-    test_repo.unit_generation_store.upsert(rows)
+    for slot, slot_rows in groupby(
+        sorted(rows, key=lambda row: row.observed_at), key=lambda row: row.observed_at
+    ):
+        test_repo.unit_generation_store.upsert(
+            TaipowerUnitGenerationBatch(
+                observed_at=slot, raw_payload=seed_batch.raw_payload, snapshots=tuple(slot_rows)
+            )
+        )
     reader = DatasetLister(test_repo.engine, UNIT_GENERATION)
     params = {
         "start": rfc3339(observed),

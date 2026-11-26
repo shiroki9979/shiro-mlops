@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from shiro_mlops.data.taipower_unit_generation import (
+    TaipowerUnitGenerationBatch,
+    TaipowerUnitGenerationSnapshot,
     UnitGenerationParseError,
     parse_unit_generation_payload,
 )
@@ -19,8 +21,12 @@ def test_parse_unit_generation_payload_keeps_mw_zero_and_remarks() -> None:
     with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
         payload = json.load(f)
 
-    snapshots = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+    observed_at = datetime(2026, 9, 5, 17, 30)
+    batch = parse_unit_generation_payload(payload, observed_at=observed_at)
+    snapshots = batch.snapshots
 
+    assert batch.observed_at == observed_at
+    assert batch.raw_payload == payload
     assert len(snapshots) == 4
     assert snapshots[0].unit_name == "大潭CC#1"
     assert snapshots[0].unit_type == "燃氣"
@@ -29,8 +35,6 @@ def test_parse_unit_generation_payload_keeps_mw_zero_and_remarks() -> None:
     assert snapshots[0].capacity_ratio_pct == pytest.approx(90.265)
     assert snapshots[0].remark is None
     assert snapshots[0].source_time == datetime(2026, 9, 5, 17, 30)
-    assert snapshots[0].raw_payload == payload
-    assert len(snapshots[0].raw_payload["aaData"]) == 4
 
     offline = snapshots[1]
     assert offline.unit_name == "大潭CC#3"
@@ -125,7 +129,9 @@ def test_parse_unit_generation_payload_skips_rows_missing_identity() -> None:
         ],
     }
 
-    snapshots = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+    snapshots = parse_unit_generation_payload(
+        payload, observed_at=datetime(2026, 9, 5, 17, 30)
+    ).snapshots
 
     assert len(snapshots) == 1
     assert snapshots[0].unit_name == "有效機組"
@@ -159,7 +165,9 @@ def test_parse_unit_generation_payload_preserves_non_empty_remarks() -> None:
         ],
     }
 
-    snapshots = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+    snapshots = parse_unit_generation_payload(
+        payload, observed_at=datetime(2026, 9, 5, 17, 30)
+    ).snapshots
 
     assert snapshots[0].remark == "-"
     assert snapshots[1].remark is None
@@ -229,7 +237,9 @@ def test_parse_unit_generation_payload_skips_non_agreed_format_errors() -> None:
         ],
     }
 
-    snapshots = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+    snapshots = parse_unit_generation_payload(
+        payload, observed_at=datetime(2026, 9, 5, 17, 30)
+    ).snapshots
 
     assert len(snapshots) == 1
     assert snapshots[0].unit_name == "有效機組"
@@ -240,7 +250,6 @@ def test_parse_unit_generation_payload_skips_non_agreed_format_errors() -> None:
 
 def test_unit_generation_snapshot_dataclass_rejects_fake_identities() -> None:
     """TaipowerUnitGenerationSnapshot dataclass 建構時應拒絕空值或假識別值。"""
-    from shiro_mlops.data.taipower_unit_generation import TaipowerUnitGenerationSnapshot
 
     with pytest.raises(ValueError, match="unit_type"):
         TaipowerUnitGenerationSnapshot(
@@ -252,7 +261,6 @@ def test_unit_generation_snapshot_dataclass_rejects_fake_identities() -> None:
             net_generation_mw=50.0,
             capacity_ratio_pct=50.0,
             remark=None,
-            raw_payload={},
         )
 
     with pytest.raises(ValueError, match="unit_type"):
@@ -265,7 +273,6 @@ def test_unit_generation_snapshot_dataclass_rejects_fake_identities() -> None:
             net_generation_mw=50.0,
             capacity_ratio_pct=50.0,
             remark=None,
-            raw_payload={},
         )
 
     with pytest.raises(ValueError, match="unit_name"):
@@ -278,7 +285,6 @@ def test_unit_generation_snapshot_dataclass_rejects_fake_identities() -> None:
             net_generation_mw=50.0,
             capacity_ratio_pct=50.0,
             remark=None,
-            raw_payload={},
         )
 
 
@@ -288,3 +294,42 @@ def test_parse_unit_generation_payload_rejects_empty_valid_rows() -> None:
 
     with pytest.raises(UnitGenerationParseError, match="No valid unit rows"):
         parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+
+
+def test_parsed_batch_keeps_the_response_as_received() -> None:
+    """呼叫端事後修改來源 dict 不得改動 batch 保存的完整回應。"""
+    with open(FIXTURES_DIR / "taipower_unit_generation_sample.json", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    batch = parse_unit_generation_payload(payload, observed_at=datetime(2026, 9, 5, 17, 30))
+    payload["aaData"][0]["淨發電量(MW)"] = "999.9"
+
+    assert batch.raw_payload["aaData"][0]["淨發電量(MW)"] == "670.4"
+
+
+def _snapshot(observed_at: datetime) -> TaipowerUnitGenerationSnapshot:
+    return TaipowerUnitGenerationSnapshot(
+        observed_at=observed_at,
+        unit_type="燃氣",
+        unit_name="大潭CC#1",
+        source_time=observed_at,
+        capacity_mw=742.7,
+        net_generation_mw=670.4,
+        capacity_ratio_pct=90.265,
+        remark=None,
+    )
+
+
+def test_unit_generation_batch_requires_snapshots_from_its_own_slot() -> None:
+    """batch 是一次成功回應：至少一個機組快照，且都屬於同一個觀測時刻。"""
+    slot = datetime(2026, 9, 5, 17, 30)
+
+    with pytest.raises(ValueError, match="at least one"):
+        TaipowerUnitGenerationBatch(observed_at=slot, raw_payload={}, snapshots=())
+
+    with pytest.raises(ValueError, match="observed_at"):
+        TaipowerUnitGenerationBatch(
+            observed_at=slot,
+            raw_payload={},
+            snapshots=(_snapshot(datetime(2026, 9, 5, 17, 40)),),
+        )

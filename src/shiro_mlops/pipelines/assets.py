@@ -225,17 +225,20 @@ def raw_taipower_load(context: AssetExecutionContext) -> pd.DataFrame:
 def raw_taipower_unit_generation_snapshot(
     context: AssetExecutionContext,
 ) -> list[TaipowerUnitGenerationSnapshot]:
-    """Asset: unit net-generation snapshots upserted by observation slot and unit identity."""
+    """Asset: unit net-generation batch upserted by observation slot and unit identity.
+
+    The output holds the snapshots only; the source response stays in the batch header.
+    """
     observed_at = _observation_slot(context)
     source: UnitGenerationSource = getattr(context.resources, TAIPOWER_UNIT_GENERATION_SOURCE)
-    snapshots = parse_unit_generation_payload(source.fetch_payload(), observed_at=observed_at)
+    batch = parse_unit_generation_payload(source.fetch_payload(), observed_at=observed_at)
     context.log.info(
         "Fetched %s unit-generation snapshots for observed_at=%s",
-        len(snapshots),
-        snapshots[0].observed_at.isoformat(),
+        len(batch.snapshots),
+        batch.observed_at.isoformat(),
     )
-    getattr(context.resources, TIME_SERIES_REPO).unit_generation_store.upsert(snapshots)
-    return snapshots
+    getattr(context.resources, TIME_SERIES_REPO).unit_generation_store.upsert(batch)
+    return list(batch.snapshots)
 
 
 @multi_asset(

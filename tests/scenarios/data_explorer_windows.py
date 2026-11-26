@@ -89,8 +89,8 @@ def _all_dataset_fixtures(start: datetime, times: tuple[datetime, ...]) -> tuple
         ),
         SqlFixture(
             "raw_taipower_unit_generation_snapshot",
-            "observed_at, unit_type, unit_name, source_time, raw_payload",
-            ":time, 'thermal', :name, :time, '{}'",
+            "observed_at, unit_type, unit_name, source_time",
+            ":time, 'thermal', :name, :time",
             "observed_at = :time AND unit_type = 'thermal' AND unit_name = :name",
             rows(
                 lambda t, i: {"time": t, "name": f"edge-{i}"},

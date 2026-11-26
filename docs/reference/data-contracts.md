@@ -127,17 +127,23 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - 功率欄位以來源單位 `萬瓩` 保存：`generation_wan_kw`（可為 NULL）、`load_wan_kw`（必填）。
      - `raw_payload` (JSONB, NOT NULL) 保存該列來源欄位物件。
      - 永久保留歷史快照，不設定資料保留政策。
-  8. `raw_taipower_unit_generation_snapshot`:
+  8. `raw_taipower_unit_generation_batch` 與 `raw_taipower_unit_generation_snapshot`:
      - **資料來源**：台電官方開放資料端點 `https://service.taipower.com.tw/data/opendata/apply/file/d006001/001.json`（政府資料開放平臺資料集「各機組發電量即時資訊(含外購電力)」）。
      - 保存台電自有及外購電力各機組即時淨發電量快照，與全台／區域供需快照及 `raw_taipower_load` 分離，且不得成為既有訓練特徵的輸入。
-     - `observed_at` (TIMESTAMPTZ, NOT NULL)：Dagster 排程觸發的快照觀測時間。
-     - `unit_type` (VARCHAR(128), NOT NULL)：來源 `機組類型`（去除明顯 HTML 標記後保存）。
-     - `unit_name` (VARCHAR(128), NOT NULL)：來源 `機組名稱`，為機組識別之一部分。
-     - **Constraint**: `PRIMARY KEY (observed_at, unit_type, unit_name)`；同一排程 tick 重跑時更新同一機組快照。
-     - `source_time` (TIMESTAMPTZ, NOT NULL)：來源 payload 的 `DateTime`（以 `Asia/Taipei` 解讀後寫入 UTC）。
-     - 功率與比率以來源單位保存：`capacity_mw`、`net_generation_mw`（可為 NULL，含 `N/A` 或 `-`）、`capacity_ratio_pct`（可為 NULL；來源百分比字串去除 `%` 後保存）、`remark`（可為 NULL；空白備註視為空值）。零發電（`0.0`）為合法數值並保留停機／歲修等備註。
-     - `raw_payload` (JSONB, NOT NULL) 保存該次成功回應的完整 JSON，包含頂層 `DateTime` 與全部 `aaData` 機組列。
-     - 永久保留歷史快照，不設定資料保留政策。
+     - 每次成功回應寫入一筆 batch header 與其機組快照，兩者在同一交易內寫入；完整來源回應僅在 header 保存一次，不複製到各機組列。header 存在而沒有任何機組列代表儲存毀損，讀取時拒絕（`ValueError`）。
+     - **`raw_taipower_unit_generation_batch`**（一般資料表，非 hypertable）：
+       - `observed_at` (TIMESTAMPTZ, NOT NULL)：與機組快照相同的排程觀測時間，為 batch 識別。
+       - `raw_payload` (JSONB, NOT NULL)：該次成功回應的完整 JSON，包含頂層 `DateTime` 與全部 `aaData` 機組列，含解析時略過的列。
+       - **Constraint**: `PRIMARY KEY (observed_at)`；同一排程 tick 重跑時以新回應更新 header。重跑的回應少了某機組時，該機組的快照列不刪除、維持前一次的值，但 header 只保存新回應，因此該列的來源物件不再可追溯。
+     - **`raw_taipower_unit_generation_snapshot`**：
+       - `observed_at` (TIMESTAMPTZ, NOT NULL)：Dagster 排程觸發的快照觀測時間。
+       - `unit_type` (VARCHAR(128), NOT NULL)：來源 `機組類型`（去除明顯 HTML 標記後保存）。
+       - `unit_name` (VARCHAR(128), NOT NULL)：來源 `機組名稱`，為機組識別之一部分。
+       - **Constraint**: `PRIMARY KEY (observed_at, unit_type, unit_name)`；同一排程 tick 重跑時更新同一機組快照。
+       - `source_time` (TIMESTAMPTZ, NOT NULL)：來源 payload 的 `DateTime`（以 `Asia/Taipei` 解讀後寫入 UTC）。
+       - 功率與比率以來源單位保存：`capacity_mw`、`net_generation_mw`（可為 NULL，含 `N/A` 或 `-`）、`capacity_ratio_pct`（可為 NULL；來源百分比字串去除 `%` 後保存）、`remark`（可為 NULL；空白備註視為空值）。零發電（`0.0`）為合法數值並保留停機／歲修等備註。
+     - **回應移入 header 的遷移**：舊資料庫的每個機組列都帶 `raw_payload`，內容為該觀測時刻的完整回應。遷移 `0006_move_unit_generation_payload_to_batch` 為每個 `observed_at` 建立一筆 header，取 `source_time` 最新的一列的 `raw_payload`（同為最新時依 `(unit_type, unit_name)` 取第一列），再移除機組列的 `raw_payload` 欄。同一 tick 重跑時回應少了某機組，該機組列仍帶較早的回應與較早的 `source_time`，因此不會被選為 header。遷移後仍在執行舊版程式的 process 寫入機組快照時會因欄位不存在而失敗；新啟動的舊版程式遇到紀錄表裡的 `0006` 會拒絕啟動（§3.4 不支援降版）。移除欄位不會立即釋放磁碟空間：PostgreSQL 在列被改寫前（例如對各 chunk 執行 `VACUUM FULL`）仍保留已移除欄位的值。
+     - 兩表皆永久保留歷史，不設定資料保留政策。
   9. `issued_forecast`（已發布預報 header，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）：
      - 每個發布時刻一列，由 `issued_forecast_job`（[Dagster 排程](dagster-schedules.md)）寫入；隨需 `/predict` 不寫入。一般資料表，非 hypertable。
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：發布時刻，即排程 tick 時刻與預報的 `as_of`，不取整點（例如 `10:15`）。
@@ -201,6 +207,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 | `0003_migrate_taipower_load_subject` | `raw_taipower_load.location` 改名為 `subject`，`Taipei` 改為 `nationwide` |
 | `0004_drop_cwa_header_status_columns` | 移除 `raw_cwa_observation_batch` 與 `raw_cwa_forecast_release` 的 `status` |
 | `0005_add_cwa_township_forecast_location_name` | `raw_cwa_township_forecast` 補上 `location_name`（原為基線裡的 `ADD COLUMN IF NOT EXISTS`）；SQLite 不執行 |
+| `0006_move_unit_generation_payload_to_batch` | 機組快照的完整回應移入 `raw_taipower_unit_generation_batch`，每個 `observed_at` 一筆，再移除 `raw_taipower_unit_generation_snapshot.raw_payload`（§3 第 8 項） |
 
 - **銜接**：`0001` 至 `0004` 早於紀錄表，各自檢視 schema 判斷是否已套用，因此紀錄表出現前的資料庫第一次執行時只補上紀錄、不重做變更。`0005` 起不寫檢視邏輯。
 - **交易**：每筆遷移與它的紀錄列在同一個交易；失敗時一起回滾、例外往外拋，下次執行重試。此原子性只對 TimescaleDB 保證；SQLite 執行 DDL 時即提交，只含 DDL 的遷移在 SQLite 上可能留下變更而沒有紀錄。
