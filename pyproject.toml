@@ -12,7 +12,9 @@ dependencies = [
     "dagster>=1.7.0",
     "dagster-webserver>=1.7.0",
     "feast>=0.38.0",
-    "mlflow>=2.14.0",
+    # WHY-NOT(mlflow): the Compose MLflow server installs this locked version, and MLflow refuses
+    # to start on a database a newer release migrated; local databases are already at 3.16's schema.
+    "mlflow>=3.16.0",
     "lightgbm>=4.3.0",
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
