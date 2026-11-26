@@ -1,20 +1,33 @@
 """Opt-in schema migration acceptance against an isolated local TimescaleDB (ADR-0017)."""
 
+import json
 import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine
 
-from shiro_mlops.core.database import ensure_timescale_hypertables, get_timescale_engine
+from shiro_mlops.core.database import (
+    ensure_timescale_hypertables,
+    get_timescale_engine,
+    get_timescale_init_ddl,
+    split_sql_statements,
+)
 from shiro_mlops.core.schema_migrations import (
     MIGRATIONS,
     SchemaMigration,
     apply_schema_migrations,
 )
+from shiro_mlops.core.storage_time import to_storage_time
+from shiro_mlops.data.taipower_unit_generation_repository import (
+    TaipowerUnitGenerationRepository,
+)
+from tests.helpers import MIGRATIONS_BEFORE_UNIT_BATCH
 
 ACCEPTANCE_MIGRATION_ID = "9001_acceptance_only"
 ACCEPTANCE_TABLE = "schema_migration_acceptance"
@@ -25,6 +38,8 @@ CONCURRENT_STARTUPS = 3
 # 未修正前，同時啟動的三個 process 每輪幾乎都有兩個失敗；跑幾輪讓偶然全數成功不足以通過。
 CONCURRENT_STARTUP_ROUNDS = 3
 LOCATION_NAME_MIGRATION_ID = "0005_add_cwa_township_forecast_location_name"
+ISOLATED_SCHEMA = "schema_migration_isolated_acceptance"
+UNIT_GENERATION_SNAPSHOT_TABLE = "raw_taipower_unit_generation_snapshot"
 
 
 @pytest.fixture
@@ -189,3 +204,85 @@ def test_township_forecast_without_location_name_gains_it_by_migration(
             ).scalar_one()
             == 1
         )
+
+
+@pytest.fixture
+def isolated_schema_engine(data_explorer_timescaledb_engine: Engine) -> Iterator[Engine]:
+    """An engine whose tables live in a schema of their own, so no other test's rows show."""
+    with data_explorer_timescaledb_engine.begin() as connection:
+        connection.execute(text(f"CREATE SCHEMA {ISOLATED_SCHEMA}"))
+    engine = get_timescale_engine(
+        data_explorer_timescaledb_engine.url.render_as_string(hide_password=False),
+        connect_args={"options": f"-c search_path={ISOLATED_SCHEMA},public"},
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with data_explorer_timescaledb_engine.begin() as connection:
+            connection.execute(text(f"DROP SCHEMA {ISOLATED_SCHEMA} CASCADE"))
+
+
+def test_unit_rows_carrying_the_payload_move_it_to_the_batch_by_migration(
+    isolated_schema_engine: Engine,
+) -> None:
+    """On the hypertable, 0006 keeps one response per slot in the header and drops the column."""
+    engine = isolated_schema_engine
+    with engine.begin() as connection:
+        for statement in split_sql_statements(get_timescale_init_ddl()):
+            connection.execute(text(statement))
+    apply_schema_migrations(engine, migrations=MIGRATIONS_BEFORE_UNIT_BATCH)
+    slot = datetime(2026, 9, 5, 17, 30)
+    payload = {"DateTime": "2026-09-05T17:30:00", "aaData": [{"機組名稱": "遷移驗收"}]}
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"INSERT INTO {UNIT_GENERATION_SNAPSHOT_TABLE} "
+                "(observed_at, unit_type, unit_name, source_time, raw_payload) "
+                "VALUES (:observed_at, '燃氣', :unit_name, :observed_at, :payload)"
+            ),
+            [
+                {
+                    "observed_at": to_storage_time(slot),
+                    "unit_name": unit_name,
+                    "payload": json.dumps(payload, ensure_ascii=False),
+                }
+                for unit_name in ("遷移驗收#1", "遷移驗收#2")
+            ],
+        )
+
+    ensure_timescale_hypertables(engine)
+
+    assert "raw_payload" not in {
+        column["name"] for column in inspect(engine).get_columns(UNIT_GENERATION_SNAPSHOT_TABLE)
+    }
+    batch = TaipowerUnitGenerationRepository(engine=engine, auto_init=False).fetch(slot)
+    assert batch is not None
+    assert batch.raw_payload == payload
+    assert [snapshot.unit_name for snapshot in batch.snapshots] == ["遷移驗收#1", "遷移驗收#2"]
+
+
+def migrated_schema(engine: Engine, tables: set[str]) -> dict[str, tuple[set, list[str]]]:
+    """Each table's (column name, nullable) pairs and primary key after every migration."""
+    inspector = inspect(engine)
+    return {
+        table: (
+            {(column["name"], column["nullable"]) for column in inspector.get_columns(table)},
+            inspector.get_pk_constraint(table)["constrained_columns"],
+        )
+        for table in tables
+    }
+
+
+def test_sqlite_and_timescaledb_schemas_match_after_every_migration(
+    migrated_engine: Engine, tmp_path: Path
+) -> None:
+    """Tests run on SQLite; after the migrations change tables, both dialects must still agree."""
+    sqlite_engine = create_engine(f"sqlite:///{tmp_path / 'migrated.db'}")
+    try:
+        ensure_timescale_hypertables(sqlite_engine)
+        tables = set(inspect(sqlite_engine).get_table_names())
+
+        assert migrated_schema(migrated_engine, tables) == migrated_schema(sqlite_engine, tables)
+    finally:
+        sqlite_engine.dispose()

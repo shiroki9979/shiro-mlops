@@ -1,4 +1,4 @@
-"""Parse Taipower unit net-generation payloads into snapshots; the HTTP adapter fetches them."""
+"""Parse Taipower unit net-generation payloads into batches; the HTTP adapter fetches them."""
 
 from __future__ import annotations
 
@@ -35,7 +35,10 @@ class UnitGenerationFormatError(ValueError):
 
 @dataclass(frozen=True)
 class TaipowerUnitGenerationSnapshot:
-    """Typed unit net-generation snapshot ready for persistence."""
+    """Typed net generation of one unit at one observation slot.
+
+    The source response the snapshot came from belongs to its ``TaipowerUnitGenerationBatch``.
+    """
 
     observed_at: datetime
     unit_type: str
@@ -45,7 +48,6 @@ class TaipowerUnitGenerationSnapshot:
     net_generation_mw: float | None
     capacity_ratio_pct: float | None
     remark: str | None
-    raw_payload: dict[str, Any]
 
     def __post_init__(self) -> None:
         if not is_valid_unit_identity(self.unit_type):
@@ -64,6 +66,29 @@ class TaipowerUnitGenerationSnapshot:
             math.isnan(self.capacity_ratio_pct) or math.isinf(self.capacity_ratio_pct)
         ):
             raise ValueError(f"Invalid capacity_ratio_pct: {self.capacity_ratio_pct!r}")
+
+
+@dataclass(frozen=True)
+class TaipowerUnitGenerationBatch:
+    """One successful source response and the unit snapshots parsed from it.
+
+    The response is kept once per observation slot, not on every snapshot. It holds every
+    ``aaData`` row as published, including rows the parser skipped.
+    """
+
+    observed_at: datetime
+    raw_payload: dict[str, Any]
+    snapshots: tuple[TaipowerUnitGenerationSnapshot, ...]
+
+    def __post_init__(self) -> None:
+        if not self.snapshots:
+            raise ValueError("A unit-generation batch needs at least one snapshot")
+        stray = [s.observed_at for s in self.snapshots if s.observed_at != self.observed_at]
+        if stray:
+            raise ValueError(
+                f"Snapshot observed_at {stray[0]!r} differs from batch observed_at "
+                f"{self.observed_at!r}"
+            )
 
 
 def _strip_noise(value: Any) -> str:
@@ -150,7 +175,6 @@ def _parse_row(
     *,
     observed_at: datetime,
     source_time: datetime,
-    source_payload: dict[str, Any],
 ) -> TaipowerUnitGenerationSnapshot | None:
     unit_type = _normalize_unit_identity(row.get("機組類型"))
     unit_name = _normalize_unit_identity(row.get("機組名稱"))
@@ -188,7 +212,6 @@ def _parse_row(
         net_generation_mw=net_generation_mw,
         capacity_ratio_pct=capacity_ratio_pct,
         remark=_parse_optional_remark(row.get("備註")),
-        raw_payload=deepcopy(source_payload),
     )
 
 
@@ -196,8 +219,8 @@ def parse_unit_generation_payload(
     payload: dict[str, Any],
     *,
     observed_at: datetime,
-) -> list[TaipowerUnitGenerationSnapshot]:
-    """Validate unit-generation JSON rows into typed snapshots; skip incomplete rows."""
+) -> TaipowerUnitGenerationBatch:
+    """Validate unit-generation JSON rows into a batch of typed snapshots; skip incomplete rows."""
     if not isinstance(payload, dict):
         raise UnitGenerationParseError("Payload must be a JSON object")
 
@@ -218,14 +241,15 @@ def parse_unit_generation_payload(
             row,
             observed_at=observed_at,
             source_time=source_time,
-            source_payload=payload,
         )
         if snapshot is not None:
             snapshots.append(snapshot)
 
     if not snapshots:
         raise UnitGenerationParseError("No valid unit rows")
-    return snapshots
+    return TaipowerUnitGenerationBatch(
+        observed_at=observed_at, raw_payload=deepcopy(payload), snapshots=tuple(snapshots)
+    )
 
 
 class UnitGenerationSource(Protocol):

@@ -188,6 +188,14 @@ SELECT create_hypertable(
 );
 
 -- 5. 台電機組即時淨發電量快照：與供需／逐時負載分表保存，不進入訓練特徵。
+--    完整來源回應每個觀測時刻只在 batch header 保存一次；機組列的 raw_payload 由遷移 0006 移除。
+CREATE TABLE IF NOT EXISTS raw_taipower_unit_generation_batch (
+    observed_at TIMESTAMPTZ NOT NULL,
+    raw_payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (observed_at)
+);
+
 CREATE TABLE IF NOT EXISTS raw_taipower_unit_generation_snapshot (
     observed_at TIMESTAMPTZ NOT NULL,
     unit_type VARCHAR(128) NOT NULL,

@@ -25,6 +25,7 @@ from shiro_mlops.data.taipower_supply_demand import (
 )
 from shiro_mlops.data.taipower_supply_demand_repository import TaipowerSupplyDemandRepository
 from shiro_mlops.data.taipower_unit_generation import (
+    TaipowerUnitGenerationBatch,
     TaipowerUnitGenerationClient,
     TaipowerUnitGenerationSnapshot,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "TaipowerSupplyDemandClient",
     "TaipowerSupplyDemandRepository",
     "TaipowerSupplyDemandSnapshot",
+    "TaipowerUnitGenerationBatch",
     "TaipowerUnitGenerationClient",
     "TaipowerUnitGenerationRepository",
     "TaipowerUnitGenerationSnapshot",

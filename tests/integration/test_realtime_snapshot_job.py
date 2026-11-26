@@ -30,6 +30,7 @@ from tests.helpers import (
     FixtureSource,
     run_creation_time,
     scheduled_run_tags,
+    unit_snapshots,
 )
 
 SCHEDULED_EXECUTION_TIME = datetime(2026, 9, 5, 17, 30, tzinfo=ZoneInfo(TAIWAN_TZ))
@@ -77,7 +78,7 @@ def _slots_written(repo: TimeSeriesRepository, slot: datetime) -> dict[str, int]
     return {
         "national": 0 if national is None else 1,
         "regional": len(repo.regional_supply_demand_store.fetch(slot)),
-        "unit": len(repo.unit_generation_store.fetch(slot)),
+        "unit": len(unit_snapshots(repo, slot)),
     }
 
 
@@ -140,7 +141,7 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     assert north_reg.load_wan_kw == pytest.approx(1091.7)
     assert north_reg.generation_wan_kw == pytest.approx(1155.4)
 
-    unit_records = test_repo.unit_generation_store.fetch(slot)
+    unit_records = unit_snapshots(test_repo, slot)
     assert len(unit_records) == 4
     target_unit = next(u for u in unit_records if u.unit_name == "大潭CC#1")
     assert target_unit.net_generation_mw == pytest.approx(670.4)
@@ -164,7 +165,7 @@ def test_realtime_snapshot_job_shared_tick_and_idempotent_rerun(
     assert len(updated_reg) == 4
     assert next(r for r in updated_reg if r.region == "北部").load_wan_kw == pytest.approx(1300.0)
 
-    updated_unit = test_repo.unit_generation_store.fetch(slot)
+    updated_unit = unit_snapshots(test_repo, slot)
     assert len(updated_unit) == 4
     assert next(
         u for u in updated_unit if u.unit_name == "大潭CC#1"
@@ -204,7 +205,7 @@ def test_realtime_snapshot_job_transient_failure_retries_and_succeeds(
 
     assert test_repo.supply_demand_store.fetch(slot) is not None
     assert len(test_repo.regional_supply_demand_store.fetch(slot)) == 4
-    assert len(test_repo.unit_generation_store.fetch(slot)) == 4
+    assert len(unit_snapshots(test_repo, slot)) == 4
 
 
 def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_write(
@@ -224,7 +225,7 @@ def test_realtime_snapshot_job_persistent_failure_exhausts_retries_and_does_not_
     assert sources.unit.calls == 3
 
     # 驗證失敗的機組來源絕對不寫入任何資料
-    assert len(test_repo.unit_generation_store.fetch(slot)) == 0
+    assert len(unit_snapshots(test_repo, slot)) == 0
 
 
 @pytest.mark.parametrize(

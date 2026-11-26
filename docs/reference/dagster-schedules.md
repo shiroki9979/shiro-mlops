@@ -1,7 +1,7 @@
 # Dagster 資產排程與觸發規格
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-26
 
 ---
 
@@ -67,8 +67,8 @@
 2. **`taipower_supply_demand_snapshot_job`**：
    - **排程**：`*/10 * * * *`；抓取失敗時在同一 run 內有限次重試，不另以更高頻率輪詢。全台與機組快照最多重試兩次、每次間隔十秒；區域快照為全台逐時實際負載的唯一來源且無法回補，最多重試三次，以十秒起算指數退避（依序等待 10、30、70 秒，約 110 秒內結束）。
    - **管線鏈路**：`raw_taipower_supply_demand_snapshot`、`raw_taipower_regional_supply_demand_snapshot` 與 `raw_taipower_unit_generation_snapshot` 資產擷取台電當前全台供需、各區域供需與各機組即時淨發電量並 upsert 至 TimescaleDB；三者皆不得進入任何任務的 `{task_id}__training_job` 或 `{task_id}__monitoring_job`；區域快照僅能經由 `hourly_actual_load_job` 推算後間接供訓練使用。
-   - **來源 port**：三個資產的 fetch 皆由 Dagster resource 注入（`taipower_supply_demand_source`、`taipower_regional_supply_demand_source`、`taipower_unit_generation_source`），只回傳來源原始 payload；asset 以各來源 module 的 parse 函式轉為 typed 快照後 upsert。正式環境綁定 `Taipower*Client` HTTP adapter（端點取自 settings），測試綁定 fixture adapter。
-   - **冪等性**：三個資產以 [執行來源與 as_of](#執行來源與-as_of) 取得同一個 run 的 as_of，宣告沒有 tick 時退回現在，再以 `floor_to_ten_minutes` 向下取整成 10 分鐘觀測 slot；adapter 不決定 slot，資產也沒有 tick 設定欄位。排程 run 寫入 tick 的 slot；手動 materialize、無 tick 的排程評估與重新執行的 run 都寫入 run 建立時刻的 slot，三個資產一定落在同一個 slot。重新執行不沿用原 tick：台電即時 API 只回傳當下的值，寫進原 tick 的 slot 會覆寫或補上一筆標錯時間的快照。全台快照以 `observed_at` 為鍵；區域快照以 `(observed_at, region)` 為鍵；機組快照以 `(observed_at, unit_type, unit_name)` 為鍵。相同 slot 重跑時皆更新同一快照。
+   - **來源 port**：三個資產的 fetch 皆由 Dagster resource 注入（`taipower_supply_demand_source`、`taipower_regional_supply_demand_source`、`taipower_unit_generation_source`），只回傳來源原始 payload；asset 以各來源 module 的 parse 函式轉為 typed 快照後 upsert。機組資產的輸出只含機組快照，完整回應只寫入資料庫的 batch header（[資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 第 8 項）。正式環境綁定 `Taipower*Client` HTTP adapter（端點取自 settings），測試綁定 fixture adapter。
+   - **冪等性**：三個資產以 [執行來源與 as_of](#執行來源與-as_of) 取得同一個 run 的 as_of，宣告沒有 tick 時退回現在，再以 `floor_to_ten_minutes` 向下取整成 10 分鐘觀測 slot；adapter 不決定 slot，資產也沒有 tick 設定欄位。排程 run 寫入 tick 的 slot；手動 materialize、無 tick 的排程評估與重新執行的 run 都寫入 run 建立時刻的 slot，三個資產一定落在同一個 slot。重新執行不沿用原 tick：台電即時 API 只回傳當下的值，寫進原 tick 的 slot 會覆寫或補上一筆標錯時間的快照。全台快照以 `observed_at` 為鍵；區域快照以 `(observed_at, region)` 為鍵；機組快照以 `(observed_at, unit_type, unit_name)` 為鍵，同一次回應的 batch header 以 `observed_at` 為鍵。相同 slot 重跑時皆更新同一快照。
    - **資料完整度與失敗政策**：
      - 全台：`curr_load` 與 `curr_util_rate` 為必填欄位；缺少、無法解析，或 HTTP／重試最終失敗時，asset 必須失敗且不得寫入快照。預估尖峰、昨日尖峰與實際最高供電能力資料組可缺少，對應 typed 欄位保存為 `NULL`，完整來源回應仍保存於 `raw_payload`。
      - 區域：來源列缺少核心 `時間`、`區域` 或 `用電(萬瓩)`、或無法解析時，略過該列且不寫入該區域快照；`發電(萬瓩)` 可缺少並保存為 `NULL`。HTTP／重試最終失敗，或成功回應中無任何有效區域列時，asset 必須失敗且不得寫入。

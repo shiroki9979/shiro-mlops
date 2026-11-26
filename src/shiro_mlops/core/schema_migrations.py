@@ -191,6 +191,40 @@ def _add_cwa_township_forecast_location_name(connection: Connection) -> None:
     )
 
 
+def _move_unit_generation_payload_to_batch(connection: Connection) -> None:
+    """Keep each unit-generation response once per slot instead of on every unit row (#372).
+
+    Every unit row of a slot was written with the same response, except after a rerun whose
+    response lacked a unit: that unit's row kept the earlier response and its earlier
+    ``source_time``. The header therefore takes the payload of a row with the latest
+    ``source_time``, ties broken by ``(unit_type, unit_name)``.
+    Dropping the column frees no disk space by itself: PostgreSQL keeps the dropped values
+    until the rows are rewritten, for example by ``VACUUM FULL`` on each chunk.
+    """
+    connection.execute(
+        text(
+            """
+            INSERT INTO raw_taipower_unit_generation_batch (observed_at, raw_payload)
+            SELECT observed_at, raw_payload
+            FROM (
+                SELECT
+                    observed_at,
+                    raw_payload,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY observed_at
+                        ORDER BY source_time DESC, unit_type, unit_name
+                    ) AS unit_rank
+                FROM raw_taipower_unit_generation_snapshot
+            ) AS ranked
+            WHERE unit_rank = 1
+            """
+        )
+    )
+    connection.execute(
+        text("ALTER TABLE raw_taipower_unit_generation_snapshot DROP COLUMN raw_payload")
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0001_isolate_legacy_cwa_weather", _isolate_legacy_cwa_weather),
     SchemaMigration("0002_add_taipower_load_source_column", _add_taipower_load_source_column),
@@ -198,6 +232,9 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0004_drop_cwa_header_status_columns", _drop_cwa_header_status_columns),
     SchemaMigration(
         "0005_add_cwa_township_forecast_location_name", _add_cwa_township_forecast_location_name
+    ),
+    SchemaMigration(
+        "0006_move_unit_generation_payload_to_batch", _move_unit_generation_payload_to_batch
     ),
 )
 

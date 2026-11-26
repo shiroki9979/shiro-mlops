@@ -26,7 +26,7 @@ from shiro_mlops.pipelines.assets import (
     raw_taipower_unit_generation_snapshot,
 )
 from shiro_mlops.pipelines.schedules import taipower_supply_demand_snapshot_schedule
-from tests.helpers import FIXTURES_DIR, FixtureSource, scheduled_run_tags
+from tests.helpers import FIXTURES_DIR, FixtureSource, scheduled_run_tags, unit_snapshots
 
 # daemon 晚了幾秒才評估 tick 時，asset 仍須落在 tick 所在的觀測 slot。
 TICK = datetime(2026, 9, 5, 17, 30, 42, tzinfo=ZoneInfo("Asia/Taipei"))
@@ -104,7 +104,7 @@ SOURCES = [
         source_key=TAIPOWER_UNIT_GENERATION_SOURCE,
         payload=_json_fixture("taipower_unit_generation_sample.json"),
         revise=_revise_unit,
-        rows=lambda repo, slot: repo.unit_generation_store.fetch(slot),
+        rows=unit_snapshots,
         row_count=4,
         revised_value=lambda rows: (
             next(row for row in rows if row.unit_name == "大潭CC#1").net_generation_mw

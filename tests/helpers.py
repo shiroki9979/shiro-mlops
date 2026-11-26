@@ -21,11 +21,12 @@ from dagster import (
     build_schedule_context,
     define_asset_job,
 )
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from shiro_mlops.core.constants import NATIONWIDE_SUBJECT
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
+from shiro_mlops.core.schema_migrations import MIGRATIONS
 from shiro_mlops.core.storage_time import to_storage_time
 from shiro_mlops.data.cwa_client import (
     DEFAULT_CWA_LOCATIONS,
@@ -45,6 +46,7 @@ from shiro_mlops.data.taipower_supply_demand import (
     parse_supply_demand_payload,
 )
 from shiro_mlops.data.taipower_unit_generation import (
+    TaipowerUnitGenerationBatch,
     TaipowerUnitGenerationSnapshot,
     parse_unit_generation_payload,
 )
@@ -131,9 +133,9 @@ def regional_supply_demand_snapshots(
     )
 
 
-def unit_generation_snapshots(
+def unit_generation_batch(
     observed_at: datetime | None = None,
-) -> list[TaipowerUnitGenerationSnapshot]:
+) -> TaipowerUnitGenerationBatch:
     """共用正式 fixture，避免測試間複製或相依私有 builder。"""
     with (FIXTURES_DIR / "taipower_unit_generation_sample.json").open(encoding="utf-8") as file:
         payload = json.load(file)
@@ -141,6 +143,14 @@ def unit_generation_snapshots(
         payload,
         observed_at=observed_at or datetime(2026, 9, 5, 17, 30),
     )
+
+
+def unit_snapshots(
+    repo: TimeSeriesRepository, observed_at: datetime
+) -> list[TaipowerUnitGenerationSnapshot]:
+    """The unit snapshots stored for ``observed_at``; empty when no batch was written."""
+    batch = repo.unit_generation_store.fetch(observed_at)
+    return [] if batch is None else list(batch.snapshots)
 
 
 def township_forecast(
@@ -250,14 +260,31 @@ def derived_load_series(engine: Engine, *, subject: str = NATIONWIDE_SUBJECT) ->
     return HourlyActualLoadStore(engine).series(end=datetime.max, subject=subject)
 
 
-def forget_schema_migrations(engine: Engine) -> None:
-    """Empty the migration record, as in a database older than the record (ADR-0017).
+# 0001 至 0004 早於紀錄表，各自檢視 schema 決定是否已套用，可在已遷移的資料庫上重跑（ADR-0017 §2.1）。
+PROBING_MIGRATIONS = MIGRATIONS[:4]
+# 0006 之前的 schema：機組列仍各自帶完整回應 raw_payload。
+MIGRATIONS_BEFORE_UNIT_BATCH = tuple(
+    migration
+    for migration in MIGRATIONS
+    if migration.id < "0006_move_unit_generation_payload_to_batch"
+)
 
-    A test that rebuilds a legacy table shape in an already migrated database calls
-    this too; otherwise the recorded migrations are skipped and the shape stays legacy.
+
+def forget_schema_migrations(engine: Engine) -> None:
+    """Forget the migrations that predate the record, as in a database older than it (ADR-0017).
+
+    A test that rebuilds a legacy table shape in an already migrated database calls this;
+    otherwise the recorded migrations are skipped and the shape stays legacy. Only
+    0001 to 0004 are forgotten: they probe the schema and redo nothing already applied,
+    while a later migration assumes the shape it was written for and cannot run twice.
     """
     with engine.begin() as connection:
-        connection.execute(text("DELETE FROM schema_migration"))
+        connection.execute(
+            text("DELETE FROM schema_migration WHERE id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": [migration.id for migration in PROBING_MIGRATIONS]},
+        )
 
 
 def create_legacy_load_table(engine: Engine) -> None:

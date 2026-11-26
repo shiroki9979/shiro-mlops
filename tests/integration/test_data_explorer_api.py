@@ -27,7 +27,7 @@ from tests.helpers import (
     rfc3339,
     supply_demand_snapshot,
     township_forecast,
-    unit_generation_snapshots,
+    unit_generation_batch,
     write_derived_load,
 )
 from tests.scenarios.data_explorer_gaps import (
@@ -581,7 +581,7 @@ def test_unit_generation_preserves_zero_and_nullable_fields(explorer_client) -> 
     """機組零發電必須保留，契約允許空值不得被當成缺失，且不以固定數量判定不完整。"""
     client, repo = explorer_client
     observed = _now().replace(minute=10, second=0, microsecond=0)
-    repo.unit_generation_store.upsert(unit_generation_snapshots(observed))
+    repo.unit_generation_store.upsert(unit_generation_batch(observed))
 
     page = client.get(
         "/data/power/units",
@@ -657,8 +657,8 @@ def test_power_endpoints_paginate_newest_first(explorer_client) -> None:
     repo.supply_demand_store.upsert(supply_demand_snapshot(newer))
     repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(older))
     repo.regional_supply_demand_store.upsert(regional_supply_demand_snapshots(newer))
-    repo.unit_generation_store.upsert(unit_generation_snapshots(older))
-    repo.unit_generation_store.upsert(unit_generation_snapshots(newer))
+    repo.unit_generation_store.upsert(unit_generation_batch(older))
+    repo.unit_generation_store.upsert(unit_generation_batch(newer))
 
     pages = (
         ("/data/power/supply-demand", 1),

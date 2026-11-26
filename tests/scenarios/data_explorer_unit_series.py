@@ -41,8 +41,8 @@ def _seeded_units(
             text(
                 "INSERT INTO raw_taipower_unit_generation_snapshot "
                 "(observed_at, unit_type, unit_name, source_time, capacity_mw, "
-                "net_generation_mw, raw_payload) VALUES (:observed_at, :unit_type, "
-                ":unit_name, :observed_at, 500.0, :net_generation_mw, '{}')"
+                "net_generation_mw) VALUES (:observed_at, :unit_type, "
+                ":unit_name, :observed_at, 500.0, :net_generation_mw)"
             ),
             records,
         )

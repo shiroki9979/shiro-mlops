@@ -18,7 +18,7 @@ from tests.helpers import (
     DatasetLister,
     rfc3339,
     supply_demand_snapshot,
-    unit_generation_snapshots,
+    unit_generation_batch,
 )
 from tests.scenarios.data_explorer_power import (
     assert_national_reader_pages,
@@ -108,7 +108,7 @@ def test_unit_generation_reader_preserves_zero_and_nullable_fields(
 ) -> None:
     """機組零發電必須保留，契約允許空值不得被當成缺失。"""
     observed = datetime(2026, 9, 5, 17, 10)
-    test_repo.unit_generation_store.upsert(unit_generation_snapshots(observed))
+    test_repo.unit_generation_store.upsert(unit_generation_batch(observed))
     reader = DatasetLister(test_repo.engine, UNIT_GENERATION)
     window = {
         "start": rfc3339(observed - timedelta(hours=1)),
