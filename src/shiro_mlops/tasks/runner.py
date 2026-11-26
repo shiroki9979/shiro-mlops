@@ -174,12 +174,19 @@ def load_training_data(
 ) -> TrainingData:
     """Gate on accumulation, then read target history and observed weather up to ``as_of``.
 
-    The training window is derived from the accumulated target rows themselves.
+    The gate counts all accumulated history; the read keeps only the training window
+    (``policies.max_training_hours``) when the task declares one. Observed weather and
+    the validation split follow the target rows that were read.
     """
     readiness = check_training_readiness(task, runtime, as_of=as_of)
     if not readiness.ready:
         raise TaskNotReady(readiness)
-    load = _fetch_target(task, runtime.hourly_actual_load, start=None, through=as_of)
+    load = _fetch_target(
+        task,
+        runtime.hourly_actual_load,
+        start=_training_window_start(task.policies.max_training_hours, as_of),
+        through=as_of,
+    )
     if load.empty:
         raise ValueError(f"No {task.subject} target rows at or before {as_of.isoformat()}")
     first, last = load[DATETIME_COL].min(), load[DATETIME_COL].max()
@@ -566,6 +573,13 @@ def _fetch_target(
     end = floor_to_hour(through) + ONE_HOUR
     load = hourly_actual_load.series(start=start, end=end, subject=task.subject)
     return load.assign(**{SUBJECT_COL: task.subject})[TARGET_COLUMNS]
+
+
+def _training_window_start(max_training_hours: int | None, as_of: datetime) -> datetime | None:
+    """First hour of the ``max_training_hours`` ending at the hour holding ``as_of``; None reads all."""
+    if max_training_hours is None:
+        return None
+    return floor_to_hour(as_of) + ONE_HOUR - timedelta(hours=max_training_hours)
 
 
 def _validation_start(times: pd.Series, validation_fraction: float) -> pd.Timestamp:

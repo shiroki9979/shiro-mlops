@@ -152,6 +152,27 @@ def test_training_reads_no_target_hour_starting_after_as_of(
     assert data.load["datetime"].max() == ANCHOR - pd.Timedelta(hours=1)
 
 
+def test_training_reads_only_the_training_window_ending_at_as_of(
+    task: TaskDefinition, runtime: TaskRuntime
+) -> None:
+    """A 400-hour window over 504 stored hours keeps the latest 400 and splits within them."""
+    windowed = replace(
+        task,
+        policies=task.policies.model_copy(
+            update={"min_training_hours": 300, "max_training_hours": 400}
+        ),
+    )
+
+    data = load_training_data(windowed, runtime, as_of=FRESH_AS_OF)
+
+    first_hour = ANCHOR - pd.Timedelta(hours=399)
+    assert data.load["datetime"].min() == first_hour
+    assert data.load["datetime"].max() == ANCHOR
+    assert len(data.load) == 400
+    assert data.weather["datetime"].min() == first_hour
+    assert data.validation_start == first_hour + pd.Timedelta(hours=320)
+
+
 def test_training_data_splits_the_latest_validation_fraction_of_target_hours(
     task: TaskDefinition, runtime: TaskRuntime
 ) -> None:

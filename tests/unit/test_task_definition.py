@@ -95,6 +95,8 @@ def test_shipped_definition_describes_the_high_load_alert() -> None:
     assert task.params.threshold.window_days == 28
     assert task.params.threshold.quantile == 0.9
     assert task.policies.min_training_hours == 1344
+    # 365 日的標籤，加上第一個標籤之前的 28 日門檻窗。
+    assert task.policies.max_training_hours == (365 + 28) * 24
     assert task.policies.stale_anchor_max_lag_hours == 3
     assert task.params.lookback_hours >= 672 + max(task.params.lags)
     assert task.health.min_precision > 0.0
@@ -257,6 +259,25 @@ def test_non_positive_stale_anchor_lag_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(TaskDefinitionError, match="policies.stale_anchor_max_lag_hours"):
         load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+
+def test_training_window_shorter_than_the_minimum_accumulation_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A window below the minimum accumulation could never hold the history training waits for."""
+    text = _definition().replace(
+        "min_training_hours = 672", "min_training_hours = 672\nmax_training_hours = 671"
+    )
+    path = _write(tmp_path, text)
+
+    with pytest.raises(TaskDefinitionError, match="max_training_hours.*min_training_hours"):
+        load_task_definition(path, DEFAULT_CWA_LOCATIONS)
+
+
+def test_training_window_is_unbounded_unless_declared(tmp_path: Path) -> None:
+    task = load_task_definition(_write(tmp_path, _definition()), DEFAULT_CWA_LOCATIONS)
+
+    assert task.policies.max_training_hours is None
 
 
 def test_malformed_toml_names_the_file(tmp_path: Path) -> None:
