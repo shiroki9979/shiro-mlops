@@ -258,9 +258,10 @@ def week_of_releases(store: CWAWeatherStore) -> CWAWeatherStore:
     return store
 
 
-def test_a_lower_issue_bound_keeps_the_newest_release_it_admits(
+def test_a_lower_issue_bound_reads_every_release_it_admits(
     week_of_releases: CWAWeatherStore,
 ) -> None:
+    """The store chooses no version; resolving which one supplies a value is not its rule."""
     rows = week_of_releases.fetch_cwa_forecast_rows(
         geocode="63000050",
         issued_before=CUTOFF,
@@ -270,10 +271,9 @@ def test_a_lower_issue_bound_keeps_the_newest_release_it_admits(
         valid_end=LAST_ISSUE + pd.Timedelta(hours=3),
     )
 
-    assert set(rows["issued_at"]) == {LAST_ISSUE}
-    assert rows["valid_from"].tolist() == list(
-        pd.date_range(LAST_ISSUE + pd.Timedelta(hours=1), periods=3, freq="h")
-    )
+    window = list(pd.date_range(LAST_ISSUE + pd.Timedelta(hours=1), periods=3, freq="h"))
+    by_issue = rows.groupby("issued_at")["valid_from"].apply(list).to_dict()
+    assert by_issue == {LAST_ISSUE - pd.Timedelta(hours=6): window, LAST_ISSUE: window}
 
 
 def test_a_lower_issue_bound_admits_a_release_issued_exactly_on_it(
@@ -308,27 +308,33 @@ def test_no_release_inside_the_lower_issue_bound_reads_nothing(
     assert list(rows.columns) == FORECAST_ROW_COLUMNS
 
 
-def test_a_point_in_time_read_returns_only_rows_of_the_selected_release(
+def test_adjacent_points_come_from_each_release_itself(
     week_of_releases: CWAWeatherStore,
 ) -> None:
-    """Older releases overlap the window too; only the newest release's rows come back."""
+    """Interpolation endpoints beyond the window never cross into another vintage."""
     rows = week_of_releases.fetch_cwa_forecast_rows(
         geocode="63000050",
         issued_before=CUTOFF,
         source_updated_before=CUTOFF,
-        valid_start=LAST_ISSUE - pd.Timedelta(hours=3),
+        issued_after=CUTOFF - pd.Timedelta(hours=7),
+        valid_start=LAST_ISSUE - pd.Timedelta(hours=1),
         valid_end=LAST_ISSUE + pd.Timedelta(hours=3),
         include_adjacent_points=True,
     )
 
-    assert set(rows["issued_at"]) == {LAST_ISSUE}
-    assert rows["valid_from"].min() == LAST_ISSUE + pd.Timedelta(hours=1)
+    hours = rows.groupby("issued_at")["valid_from"].apply(
+        lambda times: [int((time - LAST_ISSUE) / pd.Timedelta(hours=1)) for time in times]
+    )
+    assert hours.to_dict() == {
+        LAST_ISSUE - pd.Timedelta(hours=6): [-2, -1, 0, 1, 2, 3, 4],
+        LAST_ISSUE: [1, 2, 3, 4],
+    }
 
 
 def test_a_point_in_time_read_with_a_lower_bound_reads_only_recent_vintages(
     week_of_releases: CWAWeatherStore, sqlite_engine: Engine
 ) -> None:
-    """Without the bound, choosing a version read every vintage the geocode ever had."""
+    """Without the bound, a point-in-time read scanned every vintage the geocode ever had."""
     statements: list[tuple[str, dict]] = []
 
     def record(conn, cursor, statement, parameters, *_args) -> None:
@@ -350,4 +356,4 @@ def test_a_point_in_time_read_with_a_lower_bound_reads_only_recent_vintages(
 
     reads = [statement for statement, _ in statements if "raw_cwa_" in statement]
     assert reads
-    assert all("issued_at >= " in statement or "issued_at = " in statement for statement in reads)
+    assert all("issued_at >= " in statement for statement in reads)
