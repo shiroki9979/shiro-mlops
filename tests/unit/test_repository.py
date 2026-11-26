@@ -248,6 +248,23 @@ def test_load_and_cwa_writes_store_one_aware_utc_text_form(
     ]
 
 
+def test_refetching_a_forecast_release_records_the_latest_fetch_and_keeps_first_write(
+    repository: TimeSeriesRepository,
+) -> None:
+    """每小時重新擷取到同一版本時，`fetched_at` 改為該次擷取時間；首次寫入時間留在 `created_at`。"""
+    release = forecast_release(datetime(2026, 8, 20, 11, 0), ())
+    store = repository.cwa_weather_store
+    store.upsert_cwa_forecast_releases([replace(release, fetched_at=datetime(2026, 8, 20, 11, 40))])
+    with repository.engine.begin() as conn:
+        conn.execute(text("UPDATE raw_cwa_forecast_release SET created_at = '2000-01-01 00:00:00'"))
+
+    store.upsert_cwa_forecast_releases([replace(release, fetched_at=datetime(2026, 8, 20, 12, 40))])
+
+    assert _stored_text(
+        repository.engine, "raw_cwa_forecast_release", "fetched_at, created_at"
+    ) == [("2026-08-20 04:40:00+00:00", "2000-01-01 00:00:00")]
+
+
 def test_load_and_cwa_reads_return_taiwan_local_naive_instants(
     repository: TimeSeriesRepository,
 ) -> None:
