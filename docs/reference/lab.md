@@ -15,7 +15,7 @@
 | `read_snapshot(task, as_of, *, variant=None, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原；快照記錄的天氣與 `task.weather` 不同時拋 `SnapshotWeatherMismatchError`；未記錄天氣的舊快照不檢查 |
 | `snapshot_path(task, as_of, *, variant=None, snapshots_dir) -> Path` | 無 `variant` 時回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`，有 `variant` 時回傳 `<snapshots_dir>/<task_id>/<variant>/<as_of>.parquet`；`variant` 限小寫英數與連字號，否則拋 `ValueError`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
 
-快照即訓練當下讀取的資料：任務設定 `policies.max_training_hours` 時，快照同樣只含訓練窗內的歷史；需要更長歷史的研究，以 `write_snapshot` 傳入移除上限的任務設定（`policies.model_copy(update={"max_training_hours": None})`）並指定 `variant`；CLI 不提供此選項。
+快照即訓練當下讀取的資料：任務設定 `policies.max_training_hours` 時，快照同樣只含訓練窗內的歷史，CLI 沒有移除上限的選項（凍結更長歷史的步驟見[如何執行一次 lab 研究](../how-to/run-lab-study.md#需要比訓練窗更長的歷史時)）。
 
 訓練表只保存加權天氣（[ADR-0012](../adr/0012-combine-weather-reference-points-into-weighted-weather.md)），代表點或權重不同的候選須各自凍結快照，以 `variant` 區分；放假日等 `[params]` 差異可共用同一份快照。
 

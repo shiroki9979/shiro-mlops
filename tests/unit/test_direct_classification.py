@@ -154,20 +154,20 @@ def test_training_rows_describe_the_target_hour_by_its_lead_from_the_anchor() ->
         from_anchor["datetime"] - anchor == pd.to_timedelta(from_anchor["lead_hours"], "h")
     ).all()
     assert (from_anchor["hour"] == from_anchor["datetime"].dt.hour).all()
-    float32 = {"rel": 1e-6}
+    float32_precision = {"rel": 1e-6}
     assert from_anchor["temperature"].tolist() == pytest.approx(
-        temperature_at[from_anchor["datetime"]].tolist(), **float32
+        temperature_at[from_anchor["datetime"]].tolist(), **float32_precision
     )
     assert from_anchor["load_mw_lag_24"].tolist() == pytest.approx(
-        [load_at[anchor - pd.Timedelta(hours=24)]] * MAX_LEAD_HOURS, **float32
+        [load_at[anchor - pd.Timedelta(hours=24)]] * MAX_LEAD_HOURS, **float32_precision
     )
     assert from_anchor["anchor_load_mw"].tolist() == pytest.approx(
-        [load_at[anchor]] * MAX_LEAD_HOURS, **float32
+        [load_at[anchor]] * MAX_LEAD_HOURS, **float32_precision
     )
 
 
 def test_training_features_are_float32_so_a_year_of_rows_fits_in_memory() -> None:
-    """Each anchor spans 168 rows, so a year of hourly load yields over a million rows (#371)."""
+    """Each anchor spans 168 rows, so a year of hourly load yields over a million rows."""
     rows = training_rows(PARAMS, _training_data())
 
     identity = {"anchor", "datetime", "load_mw", "is_high_load"}

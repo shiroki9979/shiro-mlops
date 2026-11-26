@@ -1,7 +1,7 @@
 # 如何執行一次 lab 研究
 
 > - Created: 2026-11-09
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-26
 
 在 `lab/` 研究工作區探索特徵配方與超參數的工程師與研究者，可依本指南對指定 ML 任務走完從凍結時間點訓練表快照、執行滾動起點回測、比較候選參數，到撰寫符合團隊重現規範的研究報告（`README.md`）並回寫 TOML 的完整流程。同庫單向相依與快照架構的取捨理由見 [ADR-0011](../adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)，領域名詞定義見 [GLOSSARY.md](../../GLOSSARY.md)，本指南不重複說明。
 
@@ -85,6 +85,26 @@ sha256sum data/lab/snapshots/dynamic_horizon_forecast/2026-11-08T22:00:00.parque
    ```
 
 三點加權只在各點同一整點皆有觀測時才有值，候選快照的訓練列數可能少於基線；比較候選時一併記錄各快照的列數。
+
+### 需要比訓練窗更長的歷史時
+
+任務設定 `policies.max_training_hours`（例如高負載預警的 393 日）時，CLI 凍結的快照只含訓練窗內的歷史。研究需要更長的歷史時，在研究腳本中移除上限後凍結，並以 `variant` 和正式快照區分：
+
+```python
+from dataclasses import replace
+
+from lab.snapshot import write_snapshot
+from shiro_mlops.data.repository import TimeSeriesRepository
+from shiro_mlops.tasks.deployed import deployed_task
+from shiro_mlops.tasks.runner import TaskRuntime
+
+task = deployed_task("high_load_alert")
+unbounded = replace(task, policies=task.policies.model_copy(update={"max_training_hours": None}))
+runtime = TaskRuntime.from_composition_root(TimeSeriesRepository())
+write_snapshot(unbounded, runtime, "2026-11-08T22:00:00", variant="full-history")
+```
+
+研究報告須註明快照不受訓練窗上限限制：以這份快照評估的候選，訓練時看到的歷史比正式訓練長。
 
 ---
 

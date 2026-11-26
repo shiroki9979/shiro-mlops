@@ -10,6 +10,7 @@ LightGBM's native text format plus JSON metadata (ADR-0010).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -64,7 +65,7 @@ METRIC_NAMES = ("precision", "recall", "f1")
 NON_FEATURE_COLUMNS = frozenset({ANCHOR_COL, DATETIME_COL, LOAD_MW_COL, LABEL_COL})
 FIXED_LIGHTGBM_PARAMS: dict[str, Any] = {**LIGHTGBM_BASE_PARAMS, "objective": "binary"}
 # WHY-NOT(FEATURE_DTYPE): 不沿用 float64：每個錨點展開 168 列，一年逐時負載即超過百萬列，
-# float32 讓特徵表減半；負載數萬 MW 在 float32 下的解析度仍小於 0.01 MW（#371）。
+# float32 讓特徵表減半；負載數萬 MW 在 float32 下的解析度仍小於 0.01 MW。
 FEATURE_DTYPE = np.float32
 
 
@@ -237,10 +238,16 @@ class DirectClassificationModel:
                 f"ending at anchor {anchor.isoformat()}"
             )
         targets = pd.DatetimeIndex(pd.to_datetime(data.weather[DATETIME_COL]))
-        _require_trained_leads(_lead_hours(pd.DatetimeIndex([anchor] * len(targets)), targets))
-        rows = _target_rows(known, np.zeros(len(targets), dtype=int), targets, self.params.day_off)
-        for column in self.weather_columns:
-            rows[column] = data.weather[column].to_numpy(dtype=FEATURE_DTYPE)
+        the_one_anchor = np.zeros(len(targets), dtype=int)
+        weather_in_order = np.arange(len(targets))
+        rows = _target_rows(
+            known,
+            the_one_anchor,
+            targets,
+            _TargetWeather(data.weather[self.weather_columns], weather_in_order),
+            self.params.day_off,
+        )
+        _require_trained_leads(rows[LEAD_HOURS_COL].to_numpy())
         probability = self._probabilities(rows)
         return pd.DataFrame(
             {
@@ -299,33 +306,34 @@ def training_rows(params: DirectClassificationParams, data: TrainingData) -> pd.
     """
     load = _load_series(data.load)
     known = _anchor_features(params, load).dropna(subset=[THRESHOLD_COL])
-    positions = np.repeat(np.arange(len(known)), MAX_LEAD_HOURS)
+    anchor_position = np.repeat(np.arange(len(known)), MAX_LEAD_HOURS)
     leads = np.tile(np.arange(1, MAX_LEAD_HOURS + 1), len(known))
-    anchor_hours = pd.DatetimeIndex(known.index)
-    targets = anchor_hours[positions] + pd.to_timedelta(leads, unit="h")
-    weather = _complete_weather(data.weather)
-    at_weather = weather.index.get_indexer(targets)
-    at_load = load.index.get_indexer(targets)
-    target_load = np.where(at_load >= 0, load.to_numpy()[at_load], np.nan)
-    keep = (at_weather >= 0) & ~np.isnan(target_load)
-    rows = _target_rows(known, positions[keep], targets[keep], params.day_off)
-    for column in weather.columns:
-        rows[column] = weather[column].to_numpy(dtype=FEATURE_DTYPE)[at_weather[keep]]
+    targets = pd.DatetimeIndex(known.index)[anchor_position] + pd.to_timedelta(leads, unit="h")
+    weather = _by_hour(data.weather.dropna())
+    weather_position = weather.index.get_indexer(targets)
+    load_position = load.index.get_indexer(targets)
+    target_load = np.where(load_position >= 0, load.to_numpy()[load_position], np.nan)
+    keep = (weather_position >= 0) & ~np.isnan(target_load)
+    rows = _target_rows(
+        known,
+        anchor_position[keep],
+        targets[keep],
+        _TargetWeather(weather, weather_position[keep]),
+        params.day_off,
+    )
     rows[LOAD_MW_COL] = target_load[keep]
-    rows[LABEL_COL] = target_load[keep] > known[THRESHOLD_COL].to_numpy()[positions[keep]]
+    rows[LABEL_COL] = target_load[keep] > known[THRESHOLD_COL].to_numpy()[anchor_position[keep]]
     return rows
 
 
-def _complete_weather(weather: pd.DataFrame) -> pd.DataFrame:
-    """Observed weather indexed by hour, keeping only hours where every field has a value."""
-    hourly = weather.assign(**{DATETIME_COL: pd.to_datetime(weather[DATETIME_COL])}).dropna()
+def _by_hour(frame: pd.DataFrame) -> pd.DataFrame:
+    """Index rows by their hour; when an hour repeats, the last row stands."""
+    hourly = frame.assign(**{DATETIME_COL: pd.to_datetime(frame[DATETIME_COL])})
     return hourly.drop_duplicates(DATETIME_COL, keep="last").set_index(DATETIME_COL)
 
 
 def _load_series(load: pd.DataFrame) -> pd.Series:
-    series = load.assign(**{DATETIME_COL: pd.to_datetime(load[DATETIME_COL])})
-    series = series.drop_duplicates(DATETIME_COL, keep="last").set_index(DATETIME_COL)
-    return series[LOAD_MW_COL].astype(float).sort_index()
+    return _by_hour(load)[LOAD_MW_COL].astype(float).sort_index()
 
 
 def _anchor_features(params: DirectClassificationParams, load: pd.Series) -> pd.DataFrame:
@@ -349,48 +357,53 @@ def _anchor_features(params: DirectClassificationParams, load: pd.Series) -> pd.
     return features
 
 
-def _target_rows(
-    known: pd.DataFrame, positions: np.ndarray, targets: pd.DatetimeIndex, day_off: bool
-) -> pd.DataFrame:
-    """Pair the anchors at ``positions`` of ``known`` with target hours, adding lead and calendar.
+@dataclass(frozen=True)
+class _TargetWeather:
+    """Weather fields (no time column) and, per row, the position of its target hour in them."""
 
-    Columns are built straight from position-indexed arrays, so the anchor features are
-    copied once, already as ``FEATURE_DTYPE``, rather than repeated and then converted.
+    fields: pd.DataFrame
+    position: np.ndarray
+
+
+def _target_rows(
+    known: pd.DataFrame,
+    anchor_position: np.ndarray,
+    targets: pd.DatetimeIndex,
+    weather: _TargetWeather,
+    day_off: bool,
+) -> pd.DataFrame:
+    """Pair anchors with target hours, adding lead, the target's calendar and its weather.
+
+    Training and prediction both build their rows here, so every feature column is
+    ``FEATURE_DTYPE`` on both paths. Columns come straight from position-indexed arrays,
+    so each anchor feature is copied once.
     """
-    anchors = pd.DatetimeIndex(known.index)[positions]
+    anchors = pd.DatetimeIndex(known.index)[anchor_position]
     columns: dict[str, Any] = {ANCHOR_COL: anchors}
     for column in known.columns:
-        columns[column] = known[column].to_numpy(dtype=FEATURE_DTYPE)[positions]
+        columns[column] = _feature(known[column], anchor_position)
     columns[DATETIME_COL] = targets
-    columns[LEAD_HOURS_COL] = _lead_hours(anchors, targets).astype(FEATURE_DTYPE)
-    rows = pd.DataFrame(columns, copy=False)
-    return _with_target_calendar(rows, targets, day_off)
-
-
-def _lead_hours(anchors: pd.DatetimeIndex, targets: pd.DatetimeIndex) -> np.ndarray:
-    return np.asarray((targets - anchors) // pd.Timedelta(hours=1))
-
-
-def _with_target_calendar(
-    rows: pd.DataFrame, targets: pd.DatetimeIndex, day_off: bool
-) -> pd.DataFrame:
-    """Add each target hour's calendar features, computed once per distinct target hour.
-
-    Training pairs every target hour with up to ``MAX_LEAD_HOURS`` anchors, so the
-    calendar is derived on the distinct hours and spread back by position.
-    """
+    lead = (targets - anchors) // pd.Timedelta(hours=1)
+    columns[LEAD_HOURS_COL] = np.asarray(lead).astype(FEATURE_DTYPE)
     distinct = targets.unique()
     calendar = create_calendar_features(pd.DataFrame({DATETIME_COL: distinct}), day_off=day_off)
-    at = distinct.get_indexer(targets)
+    distinct_position = distinct.get_indexer(targets)
     for column in calendar.columns.drop(DATETIME_COL):
-        rows[column] = calendar[column].to_numpy(dtype=FEATURE_DTYPE)[at]
-    return rows
+        columns[column] = _feature(calendar[column], distinct_position)
+    for column in weather.fields.columns:
+        columns[column] = _feature(weather.fields[column], weather.position)
+    return pd.DataFrame(columns, copy=False)
+
+
+def _feature(values: pd.Series, position: np.ndarray) -> np.ndarray:
+    """The values at ``position`` as a ``FEATURE_DTYPE`` feature column."""
+    return np.take(values.to_numpy(dtype=FEATURE_DTYPE), position)
 
 
 def _require_trained_leads(leads: np.ndarray) -> None:
     outside = leads[(leads < 1) | (leads > MAX_LEAD_HOURS)]
     if outside.size:
         raise ValueError(
-            f"Target hours at lead {sorted(set(outside.tolist()))} fall outside the trained lead "
+            f"Target hours at lead {sorted({int(lead) for lead in outside})} fall outside the trained lead "
             f"range 1..{MAX_LEAD_HOURS} hours from the anchor"
         )

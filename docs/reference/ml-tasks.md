@@ -90,7 +90,7 @@ Dagster 與 API 只經 runner 使用任務。runner 擁有 I/O 與共用元件�
 | 函式 | 行為 |
 | :--- | :--- |
 | `check_training_readiness(task, runtime, *, as_of=None)` | 回傳累積摘要，其 `outcome`（`AccumulationOutcome`）為三種結果之一：`BLOCKED_BY_LEGACY_ROWS`（有 `source IS NULL` 的舊列，不論有效逐時觀測是否已達門檻）、`BELOW_MINIMUM_ACCUMULATION`（有效逐時觀測未達最低累積）、`MINIMUM_ACCUMULATION_REACHED`（唯一可訓練的結果）；`ready` 與 `reason` 皆由 `outcome` 導出。傳入 `as_of` 時只計該時間以前的有效逐時負載，全表任何時間的 legacy 列仍阻擋訓練；未傳入時供排程 skip 與 smoke check 檢查目前累積量 |
-| `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`（門檻以全部已累積的歷史判定）；讀取 `as_of` 以前的目標序列與同期觀測天氣，任務設定 `policies.max_training_hours` 時只讀 `(floor(as_of) + 1h - max_training_hours, as_of]`，並以讀到的目標小時依 `validation_fraction` 推導 `validation_start`。觀測天氣為加權天氣：各代表點在同一觀測整點皆有值才合成，任一點缺少的整點沒有加權值，交由任務類型既有的缺值規則處理 |
+| `load_training_data(task, runtime, *, as_of)` | 未達門檻拋 `TaskNotReady`（門檻以全部已累積的歷史判定）；讀取 `as_of` 以前的目標序列與同期觀測天氣，任務設定 `policies.max_training_hours` 時只讀 `[floor(as_of) + 1h - max_training_hours, as_of]`（`max_training_hours` 個整點，含起點），並以讀到的目標小時依 `validation_fraction` 推導 `validation_start`。觀測天氣為加權天氣：各代表點在同一觀測整點皆有值才合成，任一點缺少的整點沒有加權值，交由任務類型既有的缺值規則處理 |
 | `train_task(task, runtime, *, as_of) -> Trained` | `load_training_data` 後交由 `fit_task` |
 | `fit_task(task, data) -> Trained` | 以已讀取且通過門檻的 `TrainingData` 交由任務類型訓練 |
 | `training_table(data)`／`training_data_from_table(task, table)` | 以目標序列與觀測天氣的時間軸聯集將 `TrainingData` 攤平序列化以便跨 run 保存（包含無負載但有觀測天氣的小時），並無損還原：`load` 只保留有 `load_mw` 的列、`weather` 只保留有任一氣象欄位值的列（完全沒有觀測天氣的小時仍為缺口而非 NaN 列），`validation_start` 由還原後的目標小時以相同切分規則重算 |
