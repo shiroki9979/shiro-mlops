@@ -109,7 +109,8 @@ def test_threshold_is_the_configured_quantile_of_the_window_ending_at_the_anchor
 
     predictions = trained.model.predict(_prediction_data(load))
 
-    assert predictions["threshold_mw"].tolist() == pytest.approx([151.3] * HORIZON_HOURS)
+    # 容差小於 float32 在 151 附近的間距，回應的門檻不得是 float32 捨入後的值。
+    assert predictions["threshold_mw"].tolist() == pytest.approx([151.3] * HORIZON_HOURS, abs=1e-9)
 
 
 def test_training_threshold_uses_no_load_after_the_anchor() -> None:
@@ -153,9 +154,39 @@ def test_training_rows_describe_the_target_hour_by_its_lead_from_the_anchor() ->
         from_anchor["datetime"] - anchor == pd.to_timedelta(from_anchor["lead_hours"], "h")
     ).all()
     assert (from_anchor["hour"] == from_anchor["datetime"].dt.hour).all()
-    assert from_anchor["temperature"].tolist() == temperature_at[from_anchor["datetime"]].tolist()
-    assert (from_anchor["load_mw_lag_24"] == load_at[anchor - pd.Timedelta(hours=24)]).all()
-    assert (from_anchor["anchor_load_mw"] == load_at[anchor]).all()
+    float32 = {"rel": 1e-6}
+    assert from_anchor["temperature"].tolist() == pytest.approx(
+        temperature_at[from_anchor["datetime"]].tolist(), **float32
+    )
+    assert from_anchor["load_mw_lag_24"].tolist() == pytest.approx(
+        [load_at[anchor - pd.Timedelta(hours=24)]] * MAX_LEAD_HOURS, **float32
+    )
+    assert from_anchor["anchor_load_mw"].tolist() == pytest.approx(
+        [load_at[anchor]] * MAX_LEAD_HOURS, **float32
+    )
+
+
+def test_training_features_are_float32_so_a_year_of_rows_fits_in_memory() -> None:
+    """Each anchor spans 168 rows, so a year of hourly load yields over a million rows (#371)."""
+    rows = training_rows(PARAMS, _training_data())
+
+    identity = {"anchor", "datetime", "load_mw", "is_high_load"}
+    features = rows.drop(columns=list(identity))
+    assert not features.empty
+    assert features.dtypes.eq(np.float32).all(), features.dtypes[features.dtypes != np.float32]
+
+
+def test_load_barely_above_the_threshold_is_labelled_high_despite_float32_features() -> None:
+    """P90 of 1..168 MW is 151.3 MW; 151.300005 MW exceeds it but rounds to the same float32."""
+    anchor = pd.Timestamp(LAST_HOUR) - pd.Timedelta(hours=1)
+    window_values = [float(value) for value in range(1, WINDOW_DAYS * 24 + 1)]
+    load = _window_load([*window_values, 151.300005], pd.Timestamp(LAST_HOUR))
+    _, weather = hourly_load_with_weather(len(load), LAST_HOUR)
+
+    rows = training_rows(PARAMS, TrainingData(load, weather, pd.Timestamp(LAST_HOUR)))
+
+    next_hour = rows[(rows["anchor"] == anchor) & (rows["lead_hours"] == 1)]
+    assert next_hour["is_high_load"].tolist() == [True]
 
 
 def test_trains_one_classifier_and_reports_precision_recall_f1(trained) -> None:
