@@ -57,7 +57,8 @@ def _served_task() -> TaskDefinition:
 
 
 def get_served_tasks(request: Request) -> ServedTasks:
-    return request.app.state.served_tasks
+    served: ServedTasks = request.app.state.served_tasks
+    return served
 
 
 Served = Annotated[ServedTasks, Depends(get_served_tasks)]

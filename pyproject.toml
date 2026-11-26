@@ -72,7 +72,7 @@ files = ["src", "lab", "scripts"]
 # module name; CI checks each one in its own run.
 exclude = ['^lab/\d{4}-\d{2}-\d{2}-[^/]+/']
 plugins = ["pydantic.mypy"]
-warn_unused_ignores = true
+strict = true
 
 # lab/tests imports tests.helpers; tests/ is not type checked, so its errors stay hidden.
 [[tool.mypy.overrides]]

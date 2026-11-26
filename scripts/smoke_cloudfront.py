@@ -34,7 +34,7 @@ class CheckFailedError(Exception):
 
 class NoRedirectHandler(HTTPRedirectHandler):
     # A 3xx surfaces as an HTTPError carrying its own status, so it fails the check.
-    def redirect_request(self, *args, **kwargs) -> None:
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
         return None
 
 

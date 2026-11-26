@@ -14,6 +14,7 @@ from dagster import (
     define_asset_job,
     schedule,
 )
+from dagster._core.definitions.unresolved_asset_job_definition import UnresolvedAssetJobDefinition
 
 from shiro_mlops.core.datetime_utils import TAIWAN_TZ
 from shiro_mlops.pipelines.execution_origin import tick_run_request
@@ -70,7 +71,7 @@ cwa_forecast_schedule = ScheduleDefinition(
 # 台電即時快照擷取（全台／區域／機組）
 def build_taipower_supply_demand_snapshot_job(
     op_retry_policy: RetryPolicy | None = TAIPOWER_REALTIME_SNAPSHOT_RETRY_POLICY,
-):
+) -> UnresolvedAssetJobDefinition:
     """建立台電即時快照擷取資產工作。"""
     return define_asset_job(
         name="taipower_supply_demand_snapshot_job",

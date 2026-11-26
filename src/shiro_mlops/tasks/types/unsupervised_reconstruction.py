@@ -262,7 +262,8 @@ class _Scaler:
         )
 
     def transform(self, features: np.ndarray) -> np.ndarray:
-        return (features - self.mean) / self.scale
+        scaled: np.ndarray = (features - self.mean) / self.scale
+        return scaled
 
 
 class UnsupervisedReconstructionModel:
@@ -408,7 +409,8 @@ def _load_reconstruction_errors(
     scaled = scaler.transform(features)
     reconstructed = network.predict(scaled)
     load = slice(0, window_hours)
-    return np.mean((reconstructed[:, load] - scaled[:, load]) ** 2, axis=1)
+    errors: np.ndarray = np.mean((reconstructed[:, load] - scaled[:, load]) ** 2, axis=1)
+    return errors
 
 
 def _require_supported_activations(directory: Path, metadata: Mapping[str, object]) -> None:

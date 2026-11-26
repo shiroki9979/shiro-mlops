@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import fmean
+from typing import Any
 
 import pandas as pd
 
@@ -169,7 +170,7 @@ def _latest_region_loads_by_source_time(
     return loads
 
 
-def _to_frame(rows: list[dict]) -> pd.DataFrame:
+def _to_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     frame = pd.DataFrame(rows, columns=[DATETIME_COL, LOAD_MW_COL, SAMPLE_COUNT_COL])
     frame[DATETIME_COL] = pd.to_datetime(frame[DATETIME_COL])
     return frame

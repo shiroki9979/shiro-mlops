@@ -68,7 +68,8 @@ _EMPTY_DROPPED = BeforeValidator(_without_empty_values)
 
 
 def _engine(request: Request) -> Engine:
-    return request.app.state.repository.engine
+    engine: Engine = request.app.state.repository.engine
+    return engine
 
 
 def _ensure_enabled() -> None:
