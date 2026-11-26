@@ -43,6 +43,24 @@ def test_forecast_and_audit_status_follow_the_latest_release_on_each_request(
         assert audits.latest_release_stale is None
 
 
+def test_forecast_ingestion_age_follows_the_latest_fetch_of_the_current_release(
+    test_repo: TimeSeriesRepository,
+) -> None:
+    """預報版本每小時重新擷取；擷取年齡看最近一次擷取，來源年齡看發布時間（#374）。"""
+    release = forecast_release(datetime(2026, 9, 20, 5), ())
+    for fetched_hour in (5, 6, 7):
+        test_repo.cwa_weather_store.upsert_cwa_forecast_releases(
+            [replace(release, fetched_at=datetime(2026, 9, 20, fetched_hour, 40))]
+        )
+
+    statuses = DatasetQuery(test_repo.engine).status(datetime(2026, 9, 20, 8)).datasets
+
+    for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
+        status = next(item for item in statuses if item.id == dataset_id)
+        assert status.ingestion_age_seconds == 20 * 60
+        assert status.source_age_seconds == 3 * 3600
+
+
 @pytest.mark.parametrize(
     ("age", "expected"),
     [(FORECAST_STALE_AFTER, False), (FORECAST_STALE_AFTER + timedelta(minutes=1), True)],

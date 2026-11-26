@@ -2,6 +2,8 @@
 --
 -- 本檔是凍結的基線（ADR-0017）：既有表的 CREATE TABLE 不再修改，對既有表的變更一律寫成
 -- src/shiro_mlops/core/schema_migrations.py 的遷移。新增整張表仍直接加在本檔。
+-- 每次啟動都執行本檔，所以只能有建立缺少物件的語句（IF NOT EXISTS）；ALTER TABLE 即使
+-- 什麼都不改也會鎖住整張表（#374）。
 CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 
 -- 0. Schema 遷移紀錄：每筆已套用的遷移一列，由 shiro_mlops.core.schema_migrations 寫入。
@@ -113,9 +115,6 @@ CREATE TABLE IF NOT EXISTS raw_cwa_township_forecast (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (dataset_id, issued_at, source_updated_at, valid_from, valid_to, geocode)
 );
-
-ALTER TABLE raw_cwa_township_forecast
-ADD COLUMN IF NOT EXISTS location_name VARCHAR(128);
 
 SELECT create_hypertable(
     'raw_cwa_township_forecast',

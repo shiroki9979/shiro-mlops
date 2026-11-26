@@ -1,5 +1,6 @@
 """Unit tests for TimescaleDB configuration, DDL initialization, and database helpers."""
 
+import re
 from importlib.resources import files
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from shiro_mlops.core.database import (
     get_timescale_engine,
     get_timescale_init_ddl,
     init_db,
+    split_sql_statements,
 )
 from tests.helpers import (
     create_legacy_load_table,
@@ -224,6 +226,24 @@ def test_timescale_ddl_contains_migrate_data():
     assert "migrate_data => TRUE" in content
     # Ensure hypertables have migrate_data set
     assert content.count("migrate_data => TRUE") >= 5
+
+
+BASELINE_STATEMENT = re.compile(
+    r"(CREATE EXTENSION IF NOT EXISTS|CREATE TABLE IF NOT EXISTS|SELECT create_hypertable\()",
+    re.IGNORECASE,
+)
+
+
+def test_baseline_ddl_only_creates_what_is_missing():
+    """每次啟動都執行基線；改動既有表的語句會在每次啟動時鎖住那張表（#374）。
+
+    例如 ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` 即使欄位已存在也取 ACCESS EXCLUSIVE，
+    所以對既有表的變更只能寫成遷移（ADR-0017）。
+    """
+    for statement in split_sql_statements(get_timescale_init_ddl()):
+        assert BASELINE_STATEMENT.match(statement), statement
+        if statement.upper().startswith("SELECT"):
+            assert "if_not_exists => TRUE" in statement, statement
 
 
 def test_ensure_timescale_hypertables_creates_tables_and_is_idempotent(tmp_path):

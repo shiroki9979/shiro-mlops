@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-26
 
 ---
 
@@ -96,7 +96,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - `dataset_id` (VARCHAR(16), NOT NULL)：`F-D0047-089` 或 `F-D0047-091`。
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：來源 `IssueTime`，為預報版本識別。
      - `source_updated_at` (TIMESTAMPTZ, NOT NULL)：來源 `Update`；同一發布時間的修正版以此區分。
-     - `fetched_at` (TIMESTAMPTZ, NOT NULL)：首次取得此版本的時間。
+     - `fetched_at` (TIMESTAMPTZ, NOT NULL)：最近一次取得此版本的時間。每小時的擷取只要仍取得同一版本，就以該次回應更新 `fetched_at`、`missing_geocodes` 與 `raw_payload`。首次寫入時間記在 `created_at`，重新擷取時不變。Data Explorer 以此欄計算鄉鎮預報與預報版本審計的最新入庫時間與 `ingestion_age_seconds`，所以擷取停止時擷取年齡會持續增加，與看 `issued_at` 的來源年齡分開。
      - `missing_geocodes` (JSONB, NOT NULL)：未出現在此版本中的 allowlist 行政區代碼；完整度語意與 `status` 欄遷移同觀測批次的 `missing_station_ids`。
      - `raw_payload` (JSONB, NOT NULL)：完整來源回應。
      - **Constraint**: `PRIMARY KEY (dataset_id, issued_at, source_updated_at)`；每小時檢查時以此去重。
@@ -189,8 +189,8 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
   - `applied_at` (TIMESTAMPTZ, NOT NULL DEFAULT NOW())：套用時刻。
   - **Constraint**: `PRIMARY KEY (id)`。
 - **查詢**：`SELECT * FROM schema_migration ORDER BY id` 即資料庫已套用的遷移。程式不提供讀取函式。
-- **基線凍結**：基線 DDL 裡既有表的 `CREATE TABLE` 不再修改；對既有表的變更一律在 `src/shiro_mlops/core/schema_migrations.py` 的 `MIGRATIONS` 末尾新增一筆。新增整張表仍直接加進基線 DDL。
-- **套用**：`ensure_timescale_hypertables` 是唯一入口，由 API 啟動與每個建立 repository 的 Dagster run 執行。它先執行基線，再依序套用紀錄表裡沒有的遷移；全新與既有資料庫走同一條路。全部已記錄時只做一次查詢。
+- **基線凍結**：基線 DDL 裡既有表的 `CREATE TABLE` 不再修改；對既有表的變更一律在 `src/shiro_mlops/core/schema_migrations.py` 的 `MIGRATIONS` 末尾新增一筆。新增整張表仍直接加進基線 DDL。基線每次啟動都執行，所以只含建立缺少物件的語句（`CREATE ... IF NOT EXISTS`、`create_hypertable(..., if_not_exists => TRUE)`）；`ALTER TABLE` 即使什麼都不改也會取 ACCESS EXCLUSIVE，不得放進基線。
+- **套用**：`ensure_timescale_hypertables` 是唯一入口，由 API 啟動與每個建立 repository 的 Dagster run 執行。它先執行基線，再依序套用紀錄表裡沒有的遷移；全新與既有資料庫走同一條路。全部已記錄時，遷移只做一次查詢；基線不取任何表的鎖，不必等正在讀取的交易。
 - **已發布的遷移**：
 
 | `id` | 變更 |
@@ -199,10 +199,11 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 | `0002_add_taipower_load_source_column` | `raw_taipower_load` 補上可為 `NULL` 的 `source` |
 | `0003_migrate_taipower_load_subject` | `raw_taipower_load.location` 改名為 `subject`，`Taipei` 改為 `nationwide` |
 | `0004_drop_cwa_header_status_columns` | 移除 `raw_cwa_observation_batch` 與 `raw_cwa_forecast_release` 的 `status` |
+| `0005_add_cwa_township_forecast_location_name` | `raw_cwa_township_forecast` 補上 `location_name`（原為基線裡的 `ADD COLUMN IF NOT EXISTS`）；SQLite 不執行 |
 
 - **銜接**：`0001` 至 `0004` 早於紀錄表，各自檢視 schema 判斷是否已套用，因此紀錄表出現前的資料庫第一次執行時只補上紀錄、不重做變更。`0005` 起不寫檢視邏輯。
 - **交易**：每筆遷移與它的紀錄列在同一個交易；失敗時一起回滾、例外往外拋，下次執行重試。此原子性只對 TimescaleDB 保證；SQLite 執行 DDL 時即提交，只含 DDL 的遷移在 SQLite 上可能留下變更而沒有紀錄。
-- **同時執行**：TimescaleDB 上有未記錄的遷移時，交易先取 advisory lock（`pg_advisory_xact_lock`），取得後重查紀錄表再決定是否執行，同一筆遷移只執行一次。SQLite 不加鎖。
+- **同時執行**：TimescaleDB 上，基線與每筆遷移共用同一把 advisory lock（`pg_advisory_xact_lock`）。基線在單一交易內先取鎖再執行，同時啟動的 process 因此不會同時建立基線新增的表。有未記錄的遷移時，該遷移的交易先取鎖，取得後重查紀錄表再決定是否執行，同一筆遷移只執行一次。SQLite 不加鎖。
 - **不支援降版**：紀錄表出現程式不認得的 `id` 時，`ensure_timescale_hypertables` 拋出 `UnknownSchemaMigrationError`，不執行任何遷移；API 啟動失敗，Dagster run 失敗。
 
 ## 4. Feast 特徵庫視圖 (Feature View Schema)
