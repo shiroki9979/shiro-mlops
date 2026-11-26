@@ -49,13 +49,31 @@ class TaskDefinitionError(ValueError):
 
 
 class TaskPolicies(BaseModel):
-    """Shared-component parameters; task types must not reimplement these rules."""
+    """Shared-component parameters; task types must not reimplement these rules.
+
+    ``max_training_hours`` bounds the training window: training reads only that many
+    hours of target history ending at ``as_of``; omitted, it reads all history.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     min_training_hours: PositiveInt
     stale_anchor_max_lag_hours: PositiveInt
     validation_fraction: float = Field(gt=0.0, lt=1.0)
+    max_training_hours: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def _window_holds_the_minimum_accumulation(self) -> TaskPolicies:
+        if (
+            self.max_training_hours is not None
+            and self.max_training_hours < self.min_training_hours
+        ):
+            raise ValueError(
+                f"max_training_hours={self.max_training_hours} is shorter than "
+                f"min_training_hours={self.min_training_hours}; the training window could "
+                "never hold the history training waits for"
+            )
+        return self
 
 
 def _validate_cron(expression: str) -> str:

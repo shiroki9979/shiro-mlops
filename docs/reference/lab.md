@@ -1,7 +1,7 @@
 # 研究空間（`lab/`）介面與報告契約
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-26
 
 ---
 
@@ -14,6 +14,8 @@
 | `write_snapshot(task, runtime, as_of, *, variant=None, snapshots_dir) -> Path` | 以 `load_training_data` + `training_table` 凍結訓練表，並於 parquet 記錄 `task.weather` 的代表點、權重與欄位；目標檔已存在時拋 `FileExistsError` 且不改動原檔；`as_of` 晚於現在時拋 `ValueError`（快照不可重寫，以未來時刻命名的檔案內容只到當下）；先完整寫入同目錄的暫存檔再以 hard link 放到定位，寫入中斷不會在目標路徑留下殘缺檔，兩次同時凍結同一快照時後完成者拋 `FileExistsError`；`TaskNotReady` 原樣拋出 |
 | `read_snapshot(task, as_of, *, variant=None, snapshots_dir) -> TrainingData` | 讀回 parquet 後以 `training_data_from_table` 還原；快照記錄的天氣與 `task.weather` 不同時拋 `SnapshotWeatherMismatchError`；未記錄天氣的舊快照不檢查 |
 | `snapshot_path(task, as_of, *, variant=None, snapshots_dir) -> Path` | 無 `variant` 時回傳 `<snapshots_dir>/<task_id>/<as_of>.parquet`，有 `variant` 時回傳 `<snapshots_dir>/<task_id>/<variant>/<as_of>.parquet`；`variant` 限小寫英數與連字號，否則拋 `ValueError`；`as_of` 一律換算為 Asia/Taipei 無時區時間 |
+
+快照即訓練當下讀取的資料：任務設定 `policies.max_training_hours` 時，快照同樣只含訓練窗內的歷史；需要更長歷史的研究，以 `write_snapshot` 傳入移除上限的任務設定（`policies.model_copy(update={"max_training_hours": None})`）並指定 `variant`；CLI 不提供此選項。
 
 訓練表只保存加權天氣（[ADR-0012](../adr/0012-combine-weather-reference-points-into-weighted-weather.md)），代表點或權重不同的候選須各自凍結快照，以 `variant` 區分；放假日等 `[params]` 差異可共用同一份快照。
 

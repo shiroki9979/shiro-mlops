@@ -11,6 +11,9 @@ fields = ["temperature", "relative_humidity"]
 [policies]
 # 每筆標籤前都需完整 28 日門檻窗（672 小時），再加 672 小時的訓練列：未滿 1344 小時不得訓練。
 min_training_hours = 1344
+# 訓練窗上限：365 日的標籤加上第一個標籤前的 28 日門檻窗（393 日）。每個錨點展開 168 列，
+# 不設上限時訓練列隨歷史無上限成長；一年的標籤仍涵蓋每個季節的尖峰。
+max_training_hours = 9432
 # 預警以最新實際負載為錨點，無替代起點；落後請求時間超過此時數即拒絕而非降級。
 stale_anchor_max_lag_hours = 3
 validation_fraction = 0.2
