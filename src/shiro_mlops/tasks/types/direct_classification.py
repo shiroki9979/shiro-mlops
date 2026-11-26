@@ -338,7 +338,22 @@ def _target_rows(known: pd.DataFrame, targets: pd.Series, day_off: bool) -> pd.D
     rows[DATETIME_COL] = targets.to_numpy()
     lead = pd.to_timedelta(rows[DATETIME_COL] - rows[ANCHOR_COL])
     rows[LEAD_HOURS_COL] = lead // pd.Timedelta(hours=1)
-    return create_calendar_features(rows, day_off=day_off)
+    return _with_target_calendar(rows, day_off)
+
+
+def _with_target_calendar(rows: pd.DataFrame, day_off: bool) -> pd.DataFrame:
+    """Add each target hour's calendar features, computed once per distinct target hour.
+
+    Training pairs every target hour with up to ``MAX_LEAD_HOURS`` anchors, so the
+    calendar is derived on the distinct hours and spread back by position.
+    """
+    targets = pd.DatetimeIndex(rows[DATETIME_COL])
+    distinct = targets.unique()
+    calendar = create_calendar_features(pd.DataFrame({DATETIME_COL: distinct}), day_off=day_off)
+    at = distinct.get_indexer(targets)
+    for column in calendar.columns.drop(DATETIME_COL):
+        rows[column] = calendar[column].to_numpy()[at]
+    return rows
 
 
 def _require_trained_leads(leads: pd.Series) -> None:
