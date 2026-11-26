@@ -31,6 +31,11 @@ AUDIT_STATUS_COLUMN = "status"
 AUDIT_COUNT_UNIT = "count"
 HOURLY = timedelta(hours=1)
 FORECAST_RELEASE_ORDER = ("issued_at", "source_updated_at", "dataset_id")
+FORECAST_RELEASE_INTERVAL = timedelta(hours=6)
+"""How often CWA releases a township forecast version: a guess from the seven-hour stale rule.
+
+The repository records no published release schedule; replace it once one is confirmed.
+"""
 
 OBSERVATION_BATCH_AUDIT = AuditHeader(
     table=CWA_OBSERVATION_BATCH_TABLE,
@@ -146,6 +151,7 @@ CWA_FORECAST_AUDITS = Dataset(
     project=each(_forecast_audit_item),
     status_policy=LatestAudit(FORECAST_RELEASE_AUDIT),
     freshness=FORECAST_RELEASES,
+    update_interval=FORECAST_RELEASE_INTERVAL,
     filters=(
         Exact(name="dataset_id"),
         OneOf(name=AUDIT_STATUS_COLUMN, values=CWA_INGESTION_STATUSES),

@@ -11,6 +11,7 @@ from typing import Any, NamedTuple
 from shiro_mlops.core.config import settings
 from shiro_mlops.service.data_explorer.datasets.audits import (
     FORECAST_RELEASE_AUDIT,
+    FORECAST_RELEASE_INTERVAL,
     FORECAST_RELEASES,
     OBSERVATION_BATCH_AUDIT,
 )
@@ -37,6 +38,10 @@ from shiro_mlops.service.data_explorer.values import (
 )
 
 HOURLY = timedelta(hours=1)
+# SYNC(src/shiro_mlops/pipelines/schedules.py, docs/reference/data-explorer.md): fetch cron and retries.
+OBSERVATION_FETCH_GRACE = timedelta(minutes=20)
+"""The fetch runs at ten past each hour and its retries back off up to about six minutes, so
+the hour's observations are stored by twenty past."""
 
 
 class ObservationSeriesField(StrEnum):
@@ -120,6 +125,7 @@ CWA_OBSERVATIONS = Dataset(
     gaps=GapPolicy(
         members=GapMembers(column="station_id", expected=_allowlisted_station_ids, listed=True)
     ),
+    ingestion_grace=OBSERVATION_FETCH_GRACE,
     series=OBSERVATION_SERIES,
 )
 
@@ -341,6 +347,7 @@ CWA_FORECASTS = Dataset(
     project=each(_forecast_item),
     status_policy=LatestAudit(FORECAST_RELEASE_AUDIT, flags_stale_release=True),
     freshness=FORECAST_RELEASES,
+    update_interval=FORECAST_RELEASE_INTERVAL,
     filters=(
         Exact(name="dataset_id"),
         Exact(name="geocode"),

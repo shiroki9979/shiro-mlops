@@ -77,6 +77,29 @@ def test_latest_release_stale_shares_the_resolver_seven_hour_threshold(
     assert forecasts.latest_release_stale is expected
 
 
+@pytest.mark.parametrize(
+    ("age", "freshness"),
+    [
+        (timedelta(hours=2, seconds=1), "fresh"),
+        (timedelta(hours=12), "fresh"),
+        (timedelta(hours=12, seconds=1), "warning"),
+    ],
+)
+def test_forecast_freshness_follows_the_release_interval_not_the_chart_slot(
+    test_repo: TimeSeriesRepository, age: timedelta, freshness: str
+) -> None:
+    """預報約每 6 小時發布一版：錯過兩版（12 小時）才 warning，不以圖表的 1 小時時段判定（#373）。"""
+    issued_at = datetime(2026, 9, 20, 11)
+    test_repo.cwa_weather_store.upsert_cwa_forecast_releases([forecast_release(issued_at, ())])
+
+    statuses = DatasetQuery(test_repo.engine).status(issued_at + age).datasets
+
+    for dataset_id in ("cwa_forecasts", "cwa_forecast_audits"):
+        status = next(item for item in statuses if item.id == dataset_id)
+        assert (status.freshness, status.completeness) == (freshness, "complete")
+        assert status.overall == ("healthy" if freshness == "fresh" else "warning")
+
+
 @pytest.mark.parametrize("minute", [0, 15])
 def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
     test_repo: TimeSeriesRepository, minute: int
@@ -88,6 +111,34 @@ def test_complete_hourly_load_has_no_gaps_before_the_current_hour_ends(
 
     assert load.completeness == "complete"
     assert load.missing_identifiers == []
+
+
+@pytest.mark.parametrize(
+    ("as_of", "expected"),
+    [
+        (datetime(2026, 9, 20, 13, 0, 1), ("fresh", "complete", [])),
+        (datetime(2026, 9, 20, 13, 4), ("fresh", "complete", [])),
+        (datetime(2026, 9, 20, 13, 9, 59), ("fresh", "complete", [])),
+        (
+            datetime(2026, 9, 20, 13, 10, 1),
+            ("fresh", "incomplete", ["2026-09-20T12:00:00+08:00"]),
+        ),
+        (
+            datetime(2026, 9, 20, 14, 10, 1),
+            ("warning", "incomplete", ["2026-09-20T12:00:00+08:00", "2026-09-20T13:00:00+08:00"]),
+        ),
+    ],
+)
+def test_hourly_load_waits_for_the_scheduled_derivation_before_reporting_the_hour(
+    test_repo: TimeSeriesRepository, as_of: datetime, expected: tuple[str, str, list[str]]
+) -> None:
+    """12:00 那一小時由 13:05 的推算寫入：寬限過後才列缺漏，錯過兩次推算才標過期（#373）。"""
+    write_derived_load(test_repo.engine, derived_hourly_load(24, datetime(2026, 9, 20, 11)))
+
+    status = DatasetQuery(test_repo.engine).status(as_of)
+    load = next(dataset for dataset in status.datasets if dataset.id == "hourly_load")
+
+    assert (load.freshness, load.completeness, load.missing_identifiers) == expected
 
 
 def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_latest(
@@ -106,27 +157,29 @@ def test_national_supply_demand_window_includes_the_snapshot_a_day_before_the_la
     assert national.missing_identifiers[-1] == "2026-09-05T17:20:00+08:00"
 
 
-def test_freshness_uses_dataset_cadence_and_two_missed_cycles() -> None:
+def test_freshness_uses_the_update_interval_and_two_missed_cycles() -> None:
     """超過兩個預期週期未更新才標 warning；ingestion 與 source age 分開計算。"""
     as_of = datetime(2026, 8, 20, 14, 0)
     source_at = datetime(2026, 8, 20, 13, 50)
     ingested_at = datetime(2026, 8, 20, 13, 55)
 
     fresh = evaluate_freshness(
-        cadence_seconds=600,
+        update_interval=timedelta(minutes=10),
         as_of=as_of,
         latest_source_at=source_at,
         latest_ingested_at=ingested_at,
+        arrival_lag=timedelta(0),
     )
     assert fresh.state == "fresh"
     assert fresh.source_age_seconds == 600
     assert fresh.ingestion_age_seconds == 300
 
     stale = evaluate_freshness(
-        cadence_seconds=3600,
+        update_interval=timedelta(hours=1),
         as_of=as_of,
         latest_source_at=datetime(2026, 8, 20, 11, 0),
         latest_ingested_at=datetime(2026, 8, 20, 11, 5),
+        arrival_lag=timedelta(0),
     )
     assert stale.state == "warning"
     assert stale.source_age_seconds == 3 * 3600

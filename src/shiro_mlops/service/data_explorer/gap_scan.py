@@ -35,13 +35,15 @@ class GapScan:
         return self.dataset.gaps
 
     def due_missing_slots(self, window: TimeWindow, now: datetime) -> list[str]:
-        """Missing slots of the window that have happened by `now` and are due, ascending."""
+        """Missing slots of the window that have happened by `now` and are due, ascending.
+
+        A slot is due once the dataset's `arrival_lag` has passed since it started.
+        """
         elapsed_end = min(window.end, now)
         if elapsed_end < window.start:
             return []
-        return self.missing_slots(
-            TimeWindow(window.start, elapsed_end), due_by=now - self.policy.slot_lag
-        )
+        due_by = now - self.dataset.arrival_lag
+        return self.missing_slots(TimeWindow(window.start, elapsed_end), due_by=due_by)
 
     def missing_slots(self, window: TimeWindow, *, due_by: datetime | None = None) -> list[str]:
         """Each expected slot from the first at or after `window.start` that no row fills."""

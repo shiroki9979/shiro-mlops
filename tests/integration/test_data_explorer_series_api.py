@@ -140,6 +140,34 @@ def test_hours_not_yet_derived_are_not_gap_filled(
     ]
 
 
+@pytest.mark.parametrize(
+    ("minutes_past", "filled"),
+    [(9, []), (10, [("2026-11-18T11:00:00+08:00", None)])],
+    ids=["derivation-running", "derivation-due"],
+)
+def test_an_ended_hour_is_gap_filled_only_after_the_scheduled_derivation(
+    series_client_for, monkeypatch: pytest.MonkeyPatch, minutes_past: int, filled: list
+) -> None:
+    """11:00 那一小時由 12:05 的推算寫入；寬限內圖表不補 null，與列表缺口一致（#373）。"""
+    client, repo = series_client_for
+    hour = datetime(2026, 11, 18, 10, 0)
+    write_derived_load(repo.engine, pd.DataFrame({DATETIME_COL: [hour], LOAD_MW_COL: [30000.0]}))
+    monkeypatch.setattr(
+        "shiro_mlops.service.data_explorer.series.now_taiwan",
+        lambda: hour + timedelta(hours=2, minutes=minutes_past),
+    )
+
+    response = client.get(
+        LOAD_SERIES_PATH, params={**_window(hour, hour + timedelta(hours=5)), "bucket": "1h"}
+    )
+
+    points = response.json()["series"][0]["points"]
+    assert [(point["t"], point["v"]) for point in points] == [
+        ("2026-11-18T10:00:00+08:00", 30000.0),
+        *filled,
+    ]
+
+
 @pytest.mark.parametrize("scenario", AUDIT_SERIES_SCENARIOS, ids=lambda scenario: scenario.__name__)
 def test_audit_series_scenarios_on_sqlite(scenario, test_repo: TimeSeriesRepository) -> None:
     scenario(test_repo)

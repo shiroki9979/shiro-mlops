@@ -46,6 +46,10 @@ TEN_MINUTES = timedelta(minutes=10)
 COMPLETENESS_VALUES = ("complete", "incomplete")
 LOAD_HOUR_DUE_AFTER = timedelta(hours=1)
 """An hourly load row labels the hour it summarises, so the hour is due once it has ended."""
+# SYNC(src/shiro_mlops/pipelines/schedules.py, docs/reference/data-explorer.md): derivation cron.
+LOAD_DERIVATION_GRACE = timedelta(minutes=10)
+"""The derivation runs at five past each hour and only reads stored snapshots, so it has
+stored the ended hour by ten past."""
 
 
 class HourlyLoadSeriesField(StrEnum):
@@ -172,6 +176,7 @@ HOURLY_LOAD = Dataset(
     pinned=(Pinned("source = :source", {"source": REGIONAL_SNAPSHOT_SUM_SOURCE}),),
     filters=(Exact(name="subject", narrows_gaps=True),),
     gaps=GapPolicy(slot_lag=LOAD_HOUR_DUE_AFTER),
+    ingestion_grace=LOAD_DERIVATION_GRACE,
     series=HOURLY_LOAD_SERIES,
 )
 

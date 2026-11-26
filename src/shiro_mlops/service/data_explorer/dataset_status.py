@@ -130,10 +130,11 @@ def _populated_status(
     source_at = row_time(latest, "source_at")
     ingested_at = row_time(latest, "ingested_at")
     freshness = evaluate_freshness(
-        cadence_seconds=int(dataset.cadence.total_seconds()),
+        update_interval=dataset.expected_update_interval,
         as_of=as_of,
         latest_source_at=source_at,
         latest_ingested_at=ingested_at,
+        arrival_lag=dataset.arrival_lag,
     )
     completeness: Completeness = "incomplete" if missing else "complete"
     return PopulatedDatasetStatus(
