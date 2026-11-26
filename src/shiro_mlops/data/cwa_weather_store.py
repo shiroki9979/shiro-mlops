@@ -377,7 +377,13 @@ class CWAWeatherStore:
         return frame
 
     def upsert_cwa_forecast_releases(self, releases: list[CWAForecastRelease]) -> int:
-        """Persist all products from one forecast ingestion run in one transaction."""
+        """Persist all products from one forecast ingestion run in one transaction.
+
+        The hourly run fetches the current version again until CWA issues the next one.
+        A version already stored takes this run's ``fetched_at``, ``missing_geocodes`` and
+        ``raw_payload``, so ``fetched_at`` is the latest fetch of the version; ``created_at``
+        keeps its first write.
+        """
         with self._engine.begin() as conn:
             return sum(self._upsert_cwa_forecast_release(conn, release) for release in releases)
 

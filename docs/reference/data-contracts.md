@@ -96,7 +96,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - `dataset_id` (VARCHAR(16), NOT NULL)：`F-D0047-089` 或 `F-D0047-091`。
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：來源 `IssueTime`，為預報版本識別。
      - `source_updated_at` (TIMESTAMPTZ, NOT NULL)：來源 `Update`；同一發布時間的修正版以此區分。
-     - `fetched_at` (TIMESTAMPTZ, NOT NULL)：首次取得此版本的時間。
+     - `fetched_at` (TIMESTAMPTZ, NOT NULL)：最近一次取得此版本的時間。每小時的擷取只要仍取得同一版本，就以該次回應更新 `fetched_at`、`missing_geocodes` 與 `raw_payload`。首次寫入時間記在 `created_at`，重新擷取時不變。Data Explorer 以此欄計算鄉鎮預報與預報版本審計的最新入庫時間與 `ingestion_age_seconds`，所以擷取停止時擷取年齡會持續增加，與看 `issued_at` 的來源年齡分開。
      - `missing_geocodes` (JSONB, NOT NULL)：未出現在此版本中的 allowlist 行政區代碼；完整度語意與 `status` 欄遷移同觀測批次的 `missing_station_ids`。
      - `raw_payload` (JSONB, NOT NULL)：完整來源回應。
      - **Constraint**: `PRIMARY KEY (dataset_id, issued_at, source_updated_at)`；每小時檢查時以此去重。
