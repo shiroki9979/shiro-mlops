@@ -1,7 +1,7 @@
 # ADR-0017：凍結基線 DDL，schema 遷移依序套用並留下紀錄
 
 > - Created: 2026-11-23
-> - Last Updated: 2026-11-23
+> - Last Updated: 2026-11-26
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[資料模型與契約](../reference/data-contracts.md)
@@ -27,7 +27,7 @@ DDL 凍結為**基線**，之後對既有表的變更一律寫成**遷移**；�
 ### 2.1 基線與遷移
 
 - **基線凍結**：`01_init_hypertables.sql` 裡既有表的 `CREATE TABLE` 不再修改。新增整張表仍直接加進這份 DDL。
-- **基線每次都執行**：`ensure_timescale_hypertables` 照舊先執行基線（全部是 `IF NOT EXISTS`），再套用遷移。
+- **基線每次都執行**：`ensure_timescale_hypertables` 照舊先執行基線，再套用遷移。基線只含建立缺少物件的語句（`IF NOT EXISTS`），不含任何 `ALTER TABLE`；在 TimescaleDB 上於單一交易內、取得 advisory lock 後執行（§2.3）。
 - **同一條路**：全新與既有資料庫都是「執行基線，然後依序套用紀錄表裡沒有的遷移」，不分辨資料庫的來歷。全新資料庫因此會實際執行每一筆遷移。
 - **既有四筆遷移的銜接**：登記為 `0001` 至 `0004`，並保留各自的檢視邏輯。紀錄表出現前的資料庫沒有這四筆紀錄，第一次執行時各自檢視、已套用者不做事，然後寫入紀錄。`0005` 起的遷移不需要檢視邏輯。
 
@@ -42,7 +42,7 @@ DDL 凍結為**基線**，之後對既有表的變更一律寫成**遷移**；�
 
 - **兩態**：每筆遷移與它的紀錄列在同一個交易。失敗時兩者一起回滾、例外往外拋，下次執行重試。紀錄表不存「失敗」或「進行中」。
 - **原子性只對 TimescaleDB 保證**：SQLite 執行 DDL 時即提交，只含 DDL 的遷移在 SQLite 上可能留下變更而沒有紀錄。SQLite 只用於測試。
-- **同時執行**：TimescaleDB 上有未記錄的遷移時，在該遷移的交易內取 advisory lock，取得後重查紀錄表再決定是否執行。全部已記錄時只做一次查詢、不取鎖。SQLite 不加鎖。
+- **同時執行**：TimescaleDB 上，基線與遷移共用同一把 advisory lock。基線的交易先取鎖再執行，同時啟動的 process 依序建立基線新增的表。有未記錄的遷移時，在該遷移的交易內取鎖，取得後重查紀錄表再決定是否執行。全部已記錄時，遷移只做一次查詢、不另外取鎖；基線不取任何表的鎖。SQLite 不加鎖。
 - **不支援降版**：紀錄表出現程式不認得的 `id` 時拋出 `UnknownSchemaMigrationError`，API 啟動失敗，Dagster run 失敗。資料庫無法連線時 API 只記錄錯誤並照常啟動，這裡不能比照：資料庫連得上、資料也在，`/ready` 會回報就緒。
 
 ### Rationale & Alternatives Considered
@@ -67,16 +67,17 @@ DDL 凍結為**基線**，之後對既有表的變更一律寫成**遷移**；�
   - 紀錄表出現前的程式版本不取鎖。新舊版本同時執行時，`0001` 至 `0004` 靠保留的檢視邏輯與 `IF EXISTS` 維持安全。
 - **不做／延後範圍（Out of Scope / Deferred）**：
   - 需要操作員處理的資料狀態不在紀錄範圍內。負載表的 `source IS NULL` 舊列仍由全台逐時實際負載的累積盤點回報；升級後 `source` 仍可為 `NULL` 的缺口見 [#358](https://github.com/shiroki9979/shiro-mlops/issues/358)。
-  - 基線裡 `raw_cwa_township_forecast` 的 `ADD COLUMN IF NOT EXISTS location_name` 維持原狀，不改寫為遷移。
   - 降版、遷移的 dry-run 與讀取紀錄的 Python 函式。
 
 ## 4. Compliance
 
 - 單元測試（SQLite）：全新資料庫依序記錄全部 `id`，重跑不增不減；紀錄表出現前的各種舊樣貌升級後都被記錄；已記錄的遷移不再被呼叫；遷移失敗時不留紀錄並於下次重試；紀錄表有不認得的 `id` 時拋出 `UnknownSchemaMigrationError`，API 因此啟動失敗；已發布的 `id` 不得變動。
-- TimescaleDB opt-in 驗收：兩個連線同時套用時遷移只執行一次；遷移中途失敗時 DDL 一併回滾；紀錄表不是 hypertable。
-- Code Review 清單：不得修改基線裡既有表的 `CREATE TABLE`；不得更改或重新排序已發布的遷移 `id`；遷移函式不得自行開啟或提交交易；`0005` 起的遷移不寫檢視邏輯。
+- 單元測試：基線的每個語句都是 `CREATE ... IF NOT EXISTS` 或 `create_hypertable(..., if_not_exists => TRUE)`。
+- TimescaleDB opt-in 驗收：兩個連線同時套用時遷移只執行一次；遷移中途失敗時 DDL 一併回滾；紀錄表不是 hypertable；同時啟動時基線新增的表只建立一次、沒有啟動失敗；已完全遷移的資料庫啟動時不等待正在讀取任何表的交易。
+- Code Review 清單：不得修改基線裡既有表的 `CREATE TABLE`，也不得在基線加入 `ALTER TABLE`；不得更改或重新排序已發布的遷移 `id`；遷移函式不得自行開啟或提交交易；`0005` 起的遷移不寫檢視邏輯。
 
 ## 5. Notes
 
 - 決策經 2026-11-23 的設計討論定案（[GitHub #296](https://github.com/shiroki9979/shiro-mlops/issues/296)），來源為 2026-11-22 的隱式狀態機盤點（[#284](https://github.com/shiroki9979/shiro-mlops/issues/284)）。
 - 第四筆遷移（移除 CWA header 的 `status` 欄，[#339](https://github.com/shiroki9979/shiro-mlops/issues/339)）在設計定案的同一天合併，它的啟動競態由 [#291](https://github.com/shiroki9979/shiro-mlops/issues/291) 個別修正，是本決策處理的問題的實例。
+- 2026-11-26：[#374](https://github.com/shiroki9979/shiro-mlops/issues/374) 第 5 項在 TimescaleDB 上重現了兩個問題，§2.1、§2.3 因此修訂，原本「基線裡 `location_name` 的 `ADD COLUMN IF NOT EXISTS` 維持原狀」的延後項目取消。一是基線不取鎖：同時啟動的 process 會同時建立基線新增的表，後到者以 `pg_type_typname_nsp_index` 唯一鍵衝突失敗，三個 process 同時啟動時每輪約有兩個失敗。二是那條 `ALTER TABLE` 即使欄位已存在也取 ACCESS EXCLUSIVE，每個 Dagster step 與 API 啟動都要等 `raw_cwa_township_forecast` 上所有正在讀取的交易結束。修訂後基線改在 advisory lock 下執行，那條 `ALTER TABLE` 改寫為遷移 `0005_add_cwa_township_forecast_location_name`。

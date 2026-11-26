@@ -11,6 +11,12 @@ unapplied or applied; a failure rolls both back and the next run retries. Timesc
 guarantees this for DDL as well. SQLite commits DDL as it runs, so a migration made of
 DDL alone can leave its change behind without a record there.
 
+On TimescaleDB the baseline and each migration run under one advisory lock
+(``hold_schema_lock``), so processes that start together set up the schema one at a
+time. The baseline runs at every startup, so it only creates what is missing; anything
+that changes an existing table, even ``ADD COLUMN IF NOT EXISTS``, locks that table and
+belongs here.
+
 Migrations 0001 to 0004 predate the record. Each keeps the probe it used to decide
 whether it had been applied, which is what lets a database older than the record be
 recorded without redoing work. A migration added from 0005 on needs no probe.
@@ -35,8 +41,8 @@ _LEGACY_CWA_HEADER_STATUS_COLUMN = "status"
 # 當時的 schema，日後表改名不應改變已套用遷移的意義；該模組也匯入本模組，反向匯入會成環。
 _CWA_HEADER_TABLES = ("raw_cwa_observation_batch", "raw_cwa_forecast_release")
 
-# WHY-NOT(_MIGRATION_LOCK_KEY): 固定值而非每個遷移各一把鎖。所有 process 必須搶同一把鎖，
-# 後到者才會等前者提交後重查紀錄；值本身無意義，只需不與其他 advisory lock 使用者相撞。
+# WHY-NOT(_MIGRATION_LOCK_KEY): 固定值而非每個遷移各一把鎖。基線與每筆遷移都搶同一把鎖，
+# 後到者才會等前者提交後才建表或重查紀錄；值本身無意義，只需不與其他 advisory lock 使用者相撞。
 _MIGRATION_LOCK_KEY = 2960_0017
 
 
@@ -165,12 +171,51 @@ def _drop_cwa_header_status_columns(connection: Connection) -> None:
         )
 
 
+def _add_cwa_township_forecast_location_name(connection: Connection) -> None:
+    """Add the township name column to forecast tables created before it existed (#374).
+
+    This was an ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` in the baseline, which every
+    startup ran: PostgreSQL takes ACCESS EXCLUSIVE before it checks for the column, so each
+    Dagster step and API start waited behind every reader of the hypertable. The baseline's
+    ``CREATE TABLE`` already has the column, so on a fresh database this changes nothing.
+    SQLite is skipped: its databases come from that ``CREATE TABLE`` in tests, the baseline
+    statement never ran there, and SQLite has no ``ADD COLUMN IF NOT EXISTS``.
+    """
+    if connection.dialect.name == "sqlite":
+        return
+    connection.execute(
+        text(
+            "ALTER TABLE raw_cwa_township_forecast "
+            "ADD COLUMN IF NOT EXISTS location_name VARCHAR(128)"
+        )
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration("0001_isolate_legacy_cwa_weather", _isolate_legacy_cwa_weather),
     SchemaMigration("0002_add_taipower_load_source_column", _add_taipower_load_source_column),
     SchemaMigration("0003_migrate_taipower_load_subject", _migrate_taipower_load_subject),
     SchemaMigration("0004_drop_cwa_header_status_columns", _drop_cwa_header_status_columns),
+    SchemaMigration(
+        "0005_add_cwa_township_forecast_location_name", _add_cwa_township_forecast_location_name
+    ),
 )
+
+
+def hold_schema_lock(connection: Connection) -> None:
+    """Serialize schema setup across processes until this connection's transaction ends.
+
+    The API and each Dagster run set up the schema on their own, often at the same moment.
+    Without the lock two of them can both find a table missing and both create it, and the
+    later one fails. SQLite is used only by tests and takes no lock.
+
+    Parameters
+    ----------
+    connection : Connection
+        Connection inside the transaction that runs the schema change.
+    """
+    if connection.dialect.name != "sqlite":
+        connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK_KEY})
 
 
 def apply_schema_migrations(
@@ -217,10 +262,7 @@ def _apply_unless_recorded(engine: Engine, migration: SchemaMigration) -> None:
     that waited for the lock must see that the holder already applied the migration.
     """
     with engine.begin() as connection:
-        if connection.dialect.name != "sqlite":
-            connection.execute(
-                text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK_KEY}
-            )
+        hold_schema_lock(connection)
         already_recorded = connection.execute(
             text(f"SELECT 1 FROM {SCHEMA_MIGRATION_TABLE} WHERE id = :id"), {"id": migration.id}
         ).first()
