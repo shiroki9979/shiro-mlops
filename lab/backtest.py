@@ -111,6 +111,31 @@ class OriginSplit:
         return len({origin.date() for origin in self.eval_origins})
 
 
+@dataclass(frozen=True)
+class RejectedOrigin:
+    """A candidate origin and the first origin check it failed (docs/reference/lab.md §2)."""
+
+    origin: pd.Timestamp
+    check: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class OriginScreening:
+    """Every hourly candidate origin in a snapshot, split by the origin checks."""
+
+    eligible: tuple[pd.Timestamp, ...]
+    rejected: tuple[RejectedOrigin, ...]
+
+
+class OriginRejectedError(ValueError):
+    """An origin failed one of the origin checks; ``check`` names which one."""
+
+    def __init__(self, message: str, *, check: str) -> None:
+        super().__init__(message)
+        self.check = check
+
+
 def eligible_origins(
     task: TaskDefinition,
     data: TrainingData,
@@ -118,11 +143,21 @@ def eligible_origins(
     *,
     min_history_hours: int | None = None,
 ) -> tuple[pd.Timestamp, ...]:
-    """Every hourly origin that ``rolling_origin_backtest`` would accept for ``data``.
+    """Every hourly origin that ``rolling_origin_backtest`` would accept for ``data``."""
+    return screen_origins(task, data, horizon_hours, min_history_hours=min_history_hours).eligible
 
-    Runs the same origin checks as the backtest, prediction input gate included,
-    without fitting a model, so a study can see how many origins its snapshot
-    offers before choosing any.
+
+def screen_origins(
+    task: TaskDefinition,
+    data: TrainingData,
+    horizon_hours: int,
+    *,
+    min_history_hours: int | None = None,
+) -> OriginScreening:
+    """Run the backtest's origin checks on every hourly candidate in ``data``, without fitting.
+
+    The checks include the prediction input gate, so a study can see how many origins its
+    snapshot offers, and why the rest fail, before choosing any.
     """
     if horizon_hours < 1:
         raise ValueError("horizon_hours must be >= 1.")
@@ -131,20 +166,22 @@ def eligible_origins(
     )
     context = _build_context(task, data, horizon_hours, effective_min_history)
     if context.load.empty:
-        return ()
+        return OriginScreening(eligible=(), rejected=())
     candidates = pd.date_range(
         context.load[DATETIME_COL].iloc[0],
         context.load[DATETIME_COL].iloc[-1] - pd.Timedelta(hours=horizon_hours),
         freq="h",
     )
-    accepted = []
+    accepted: list[pd.Timestamp] = []
+    rejected: list[RejectedOrigin] = []
     for origin in candidates:
         try:
             _check_origin(context, origin)
-        except ValueError:
+        except OriginRejectedError as error:
+            rejected.append(RejectedOrigin(origin, error.check, str(error)))
             continue
         accepted.append(origin)
-    return tuple(accepted)
+    return OriginScreening(eligible=tuple(accepted), rejected=tuple(rejected))
 
 
 def origin_runs(
@@ -407,10 +444,11 @@ def _slice_and_validate_origin_history(
     train_load = load[load[DATETIME_COL] <= origin].reset_index(drop=True)
     accumulated_hours = int(train_load[DATETIME_COL].nunique())
     if accumulated_hours < min_history_hours:
-        raise ValueError(
+        raise OriginRejectedError(
             f"Origin {origin.isoformat()} failed minimum history check: "
             f"{accumulated_hours} valid load hours <= origin, "
-            f"requires min_history_hours={min_history_hours}."
+            f"requires min_history_hours={min_history_hours}.",
+            check="minimum history",
         )
     return train_load
 
@@ -433,15 +471,17 @@ def _admit_origin_inputs(
             subject=context.task.subject,
         )
     except InsufficientLoadHistoryError as error:
-        raise ValueError(
+        raise OriginRejectedError(
             f"Origin {origin.isoformat()} failed lookback load completeness check "
             f"(prediction input gate): {error} "
-            f"(first missing: {'NaT' if error.first_missing is None else error.first_missing.isoformat()})"
+            f"(first missing: {'NaT' if error.first_missing is None else error.first_missing.isoformat()})",
+            check="lookback load completeness",
         ) from error
     except TaskUnavailableError as error:
-        raise ValueError(
+        raise OriginRejectedError(
             f"Origin {origin.isoformat()} failed horizon weather completeness check "
-            f"(prediction input gate): {error}"
+            f"(prediction input gate): {error}",
+            check="horizon weather completeness",
         ) from error
 
 
@@ -456,10 +496,11 @@ def _slice_and_validate_horizon_load(
     )
     missing_horizon_load = horizon_times.difference(pd.DatetimeIndex(horizon_load[DATETIME_COL]))
     if len(missing_horizon_load) > 0:
-        raise ValueError(
+        raise OriginRejectedError(
             f"Origin {origin.isoformat()} failed horizon load completeness check: "
             f"missing {len(missing_horizon_load)} hour(s) in target horizon "
-            f"(first missing: {missing_horizon_load[0].isoformat()})."
+            f"(first missing: {missing_horizon_load[0].isoformat()}).",
+            check="horizon load completeness",
         )
     return horizon_load
 

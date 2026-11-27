@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from lab.origins import main as origins_main
 from lab.snapshot import write_snapshot
@@ -33,10 +34,26 @@ def task() -> TaskDefinition:
 
 @pytest.fixture
 def snapshots_dir(task: TaskDefinition, tmp_path: Path) -> Path:
+    return _write_snapshot(task, tmp_path)
+
+
+@pytest.fixture
+def gapped_snapshots_dir(task: TaskDefinition, tmp_path: Path) -> Path:
+    return _write_snapshot(task, tmp_path, missing_load=LOAD_GAP)
+
+
+LOAD_GAP = pd.date_range("2026-09-15T10:00", "2026-09-15T12:00", freq="h")
+
+
+def _write_snapshot(
+    task: TaskDefinition, tmp_path: Path, missing_load: pd.DatetimeIndex | None = None
+) -> Path:
     engine = create_engine(f"sqlite:///{tmp_path / 'origins.db'}")
     ensure_timescale_hypertables(engine)
     repository = TimeSeriesRepository(engine=engine)
     load, weather = hourly_load_with_weather(HOURS, LAST_HOUR)
+    if missing_load is not None:
+        load = load[~load["datetime"].isin(missing_load)]
     write_derived_load(repository.engine, load)
     repository.cwa_weather_store.upsert_cwa_observation_batch(
         canonical_observation_batch(weather.assign(location="Taipei"))
@@ -87,3 +104,36 @@ def test_cli_reports_when_the_snapshot_cannot_cover_the_evaluation_days(
 
     assert "split: unavailable" in output
     assert "sufficient: no" in output
+
+
+def test_cli_explain_groups_rejected_origins_by_the_failed_check(
+    task: TaskDefinition,
+    gapped_snapshots_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # 負載缺 09-15 10:00–12:00：目標時段含缺口的 24 個起點先被拒，缺口進入 168 小時 lookback 後其餘起點全被拒。
+    output = _run(task, gapped_snapshots_dir, monkeypatch, capsys, "--explain")
+
+    assert "run: 2026-09-08T23:00:00 .. 2026-09-14T09:00:00 (131 h)" in output
+    assert "rejected: 2026-08-31T00:00:00 .. 2026-09-08T22:00:00 (215 h): minimum history" in output
+    assert (
+        "rejected: 2026-09-14T10:00:00 .. 2026-09-15T09:00:00 (24 h): horizon load completeness"
+        in output
+    )
+    assert (
+        "rejected: 2026-09-15T10:00:00 .. 2026-09-19T23:00:00 (110 h): lookback load completeness"
+        in output
+    )
+    assert "first missing: 2026-09-15T10:00:00" in output
+
+
+def test_cli_omits_rejections_without_explain(
+    task: TaskDefinition,
+    gapped_snapshots_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = _run(task, gapped_snapshots_dir, monkeypatch, capsys)
+
+    assert "rejected:" not in output

@@ -1,7 +1,7 @@
 # 如何執行一次 lab 研究
 
 > - Created: 2026-11-09
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 
 在 `lab/` 研究工作區探索特徵配方與超參數的工程師與研究者，可依本指南對指定 ML 任務走完從凍結時間點訓練表快照、執行滾動起點回測、比較候選參數，到撰寫符合團隊重現規範的研究報告（`README.md`）並回寫 TOML 的完整流程。同庫單向相依與快照架構的取捨理由見 [ADR-0011](../adr/0011-co-locate-lab-workspace-with-unidirectional-dependency.md)，領域名詞定義見 [GLOSSARY.md](../../GLOSSARY.md)，本指南不重複說明。
 
@@ -117,6 +117,7 @@ uv run --package lab python -m lab.origins dynamic_horizon_forecast --as-of 2026
 ```
 
 - `run:` 各行為合格起點的連續區間；區間之間的空缺來自負載或觀測氣象缺口。
+- 加上 `--explain` 另列被拒絕的起點：`rejected:` 各行為連續且失敗於同一項檢查的區間，下一行 `latest reason:` 為區間最後一個起點的拒絕原因。最後一段 `lookback load completeness` 的 `first missing:` 即擋住最新起點的負載缺口，缺口移出 lookback 後起點才會恢復合格。
 - `search origins:`／`eval origins:` 為建議切分；`sufficient: no` 表示評估起點不足，該快照只能產出探索報告。
 - 天氣候選的快照加上與凍結時相同的 `--variant`、`--reference-points` 與 `--weights`；三點加權的合格起點可能比基線少，研究應使用各候選合格起點的交集。
 

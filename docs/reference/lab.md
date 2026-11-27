@@ -1,7 +1,7 @@
 # 研究空間（`lab/`）介面與報告契約
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 
 ---
 
@@ -38,7 +38,7 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 - **起點語意**：起點為最後一筆已知實際負載的整點，預報目標為 `origin + 1h .. origin + horizon_hours`（`target_hours(origin, horizon_hours)`）。`origins` 正規化後不得重複，重複時拋 `ValueError`：重複的起點會在每項指標重複計入，`predictions` 卻只保留一筆。
 - **訓練**：負載與氣象皆截斷為 `datetime <= origin`，`validation_start = origin + 1h`（驗證集為空）。
 - **預報**：`PredictionData` 由預測輸入關卡（`admit_prediction_inputs`，[ML 任務設定 §2](ml-tasks.md#2-任務類型介面taskstypes)）建構，與 serving 相同：`anchor = origin`，`load_history` 只含 `(origin - lookback_hours, origin]` 的負載（含起點當小時）；`weather` 為目標時段的完整逐時軸，由回測以正式的觀測氣象對齊規則（2 小時內向後對齊）填入後交給關卡。
-- **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `ValueError` 並指出起點與條件；關卡的拒絕以 `raise ValueError(...) from error` 包裝，原例外保留於 `__cause__`；訊息含關卡的拒絕訊息，第 2 項另附 lookback 內第一個缺負載的小時（`first missing: ...`），第 3 項的天氣部分由關卡訊息指出第一個缺值的目標小時：
+- **起點有效性**：每個起點須同時滿足下列條件，任一不合格拋 `OriginRejectedError`（`ValueError` 子類別，`check` 屬性為條件名稱：`minimum history`、`lookback load completeness`、`horizon weather completeness`、`horizon load completeness`）並指出起點與條件；關卡的拒絕以 `raise ValueError(...) from error` 包裝，原例外保留於 `__cause__`；訊息含關卡的拒絕訊息，第 2 項另附 lookback 內第一個缺負載的小時（`first missing: ...`），第 3 項的天氣部分由關卡訊息指出第一個缺值的目標小時：
   1. `datetime <= origin` 的有效負載小時數達 `min_history_hours`（預設取任務設定 `policies.min_training_hours`）。由回測判定。
   2. 任務類型 `history_coverage` 要求的 lookback 負載完整；遞迴回歸即 `(origin - lookback_hours, origin]` 的逐時負載完整（含起點當小時）。由預測輸入關卡判定，回測與 serving 接受的起點一致。
   3. 目標時段的實際負載有值（由回測判定），且對齊後觀測氣象的 `weather.fields` 皆有值（由預測輸入關卡判定）。
@@ -58,12 +58,13 @@ CLI：`uv run --package lab python -m lab.regional_weights --start <ISO> --end <
 
 | 介面 | 行為 |
 | :--- | :--- |
-| `eligible_origins(task, data, horizon_hours, *, min_history_hours=None)` | 以上述三項起點有效性條件（含預測輸入關卡）逐一檢查快照內每個整點，回傳 `rolling_origin_backtest` 會接受的全部起點 |
+| `screen_origins(task, data, horizon_hours, *, min_history_hours=None)` | 以上述三項起點有效性條件（含預測輸入關卡）逐一檢查快照內每個整點，回傳 `OriginScreening`：`eligible` 為 `rolling_origin_backtest` 會接受的全部起點，`rejected` 為其餘整點的 `RejectedOrigin(origin, check, reason)`，`check` 為第一個不合格的條件 |
+| `eligible_origins(task, data, horizon_hours, *, min_history_hours=None)` | `screen_origins(...).eligible` |
 | `origin_runs(origins)` | 將排序後的起點分組為連續整點區間 `(first, last)` |
 | `split_search_and_eval_origins(eligible, *, horizon_hours, eval_calendar_days, hour_step)` | 只取整點為 `hour_step` 倍數的起點；最後 `eval_calendar_days` 個日曆日為評估起點，搜尋起點為 `<= 第一個評估起點 - horizon_hours` 者，並以 `verify_non_overlapping_target_windows` 驗證；沒有可用的評估或搜尋起點，或 `hour_step` 不在 1–24、`eval_calendar_days`、`horizon_hours` 小於 1 時拋 `ValueError` |
 | `training_row_count(task, data, origin)` | 遞迴回歸任務在 `origin` 截斷後實際訓練的列數（缺任一 lag 或天氣的列已剔除），用於揭露加權天氣嚴格缺值的訓練列損失 |
 
-CLI：`uv run --package lab python -m lab.origins <task_id> --as-of <ISO> [--variant <name> --reference-points ... --weights ...] [--horizon-hours 24] [--eval-days 7] [--hour-step 6]`，輸出合格起點數、日曆日數、連續區間、建議的搜尋／評估切分，以及評估起點是否涵蓋 `--eval-days` 個日曆日（`sufficient: yes|no`）。
+CLI：`uv run --package lab python -m lab.origins <task_id> --as-of <ISO> [--variant <name> --reference-points ... --weights ...] [--horizon-hours 24] [--eval-days 7] [--hour-step 6] [--explain]`，輸出合格起點數、日曆日數、連續區間、建議的搜尋／評估切分，以及評估起點是否涵蓋 `--eval-days` 個日曆日（`sufficient: yes|no`）。`--explain` 另將被拒絕的起點依連續整點與 `check` 分組，每組輸出 `rejected: <first> .. <last> (<n> h): <check>` 與該組最後一個起點的拒絕原因（`latest reason:`）。
 
 `candidate.beats(baseline)`：起點清單與視界相同時，`overall_mape` 嚴格較低即為贏；起點或視界不同時拋 `ValueError`。回測使用觀測氣象，結果為「氣象已知」條件下的條件式數字，不代表正式 serving 誤差，也不是其上界或下界。
 

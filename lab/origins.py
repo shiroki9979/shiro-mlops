@@ -7,10 +7,17 @@ evaluation origins on enough calendar days, without fitting any model.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 
+import pandas as pd
 from shiro_mlops.tasks.deployed import deployed_task
 
-from lab.backtest import eligible_origins, origin_runs, split_search_and_eval_origins
+from lab.backtest import (
+    RejectedOrigin,
+    origin_runs,
+    screen_origins,
+    split_search_and_eval_origins,
+)
 from lab.snapshot import (
     add_snapshot_selection_arguments,
     parse_snapshot_selection,
@@ -47,6 +54,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_HOUR_STEP,
         help="Use origins whose hour is a multiple of this (default 6).",
     )
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Also list the rejected origins, grouped by the origin check they failed.",
+    )
     add_snapshot_selection_arguments(parser)
     return parse_snapshot_selection(parser, argv)
 
@@ -56,13 +68,15 @@ def main(argv: list[str] | None = None) -> int:
     task = task_for_selection(deployed_task(args.task_id), args)
     selection = {"variant": args.variant, "snapshots_dir": args.snapshots_dir}
     data = read_snapshot(task, args.as_of, **selection)
-    eligible = eligible_origins(task, data, args.horizon_hours)
+    screening = screen_origins(task, data, args.horizon_hours)
+    eligible = screening.eligible
     print(f"snapshot: {snapshot_path(task, args.as_of, **selection)}")
     print(f"eligible origins: {len(eligible)}")
     print(f"calendar days: {len({origin.date() for origin in eligible})}")
     for first, last in origin_runs(eligible):
-        hours = int((last - first).total_seconds() // 3600) + 1
-        print(f"run: {first.isoformat()} .. {last.isoformat()} ({hours} h)")
+        print(f"run: {first.isoformat()} .. {last.isoformat()} ({_span_hours(first, last)} h)")
+    if args.explain:
+        _print_rejections(screening.rejected)
     try:
         split = split_search_and_eval_origins(
             eligible,
@@ -82,6 +96,40 @@ def main(argv: list[str] | None = None) -> int:
     print(f"eval calendar days: {split.eval_calendar_days}")
     print(f"sufficient: {'yes' if split.eval_calendar_days >= args.eval_days else 'no'}")
     return 0
+
+
+def _print_rejections(rejected: Sequence[RejectedOrigin]) -> None:
+    """One line per run of consecutive origins failing the same check, with the run's last reason.
+
+    The last origin's reason names the gap that still blocks the latest origins, which is
+    what decides when the snapshot will offer enough of them.
+    """
+    for run in _rejection_runs(rejected):
+        first, last = run[0], run[-1]
+        print(
+            f"rejected: {first.origin.isoformat()} .. {last.origin.isoformat()} "
+            f"({_span_hours(first.origin, last.origin)} h): {last.check}"
+        )
+        print(f"  latest reason: {last.reason}")
+
+
+def _rejection_runs(rejected: Sequence[RejectedOrigin]) -> list[list[RejectedOrigin]]:
+    runs: list[list[RejectedOrigin]] = []
+    for item in rejected:
+        previous = runs[-1][-1] if runs else None
+        if (
+            previous is not None
+            and previous.check == item.check
+            and item.origin - previous.origin == pd.Timedelta(hours=1)
+        ):
+            runs[-1].append(item)
+        else:
+            runs.append([item])
+    return runs
+
+
+def _span_hours(first: pd.Timestamp, last: pd.Timestamp) -> int:
+    return int((last - first).total_seconds() // 3600) + 1
 
 
 if __name__ == "__main__":
