@@ -73,18 +73,17 @@ files = ["src", "lab", "scripts"]
 # module name; CI checks each one in its own run.
 exclude = ['^lab/\d{4}-\d{2}-\d{2}-[^/]+/']
 plugins = ["pydantic.mypy"]
+# scikit-learn ships no type information and has no maintained stub package; stubs/sklearn
+# declares only the API this repo calls, so a new sklearn import fails until it is stubbed.
+# tests/unit/test_sklearn_stubs.py checks them against the installed release: signatures with
+# stubtest, and the fitted attributes on a trained regressor.
+mypy_path = "stubs"
 strict = true
 
 # lab/tests imports tests.helpers; tests/ is not type checked, so its errors stay hidden.
 [[tool.mypy.overrides]]
 module = ["tests", "tests.*"]
 follow_imports = "silent"
-
-# scikit-learn ships no type information and has no maintained stub package, so mypy reads
-# its imports as Any.
-[[tool.mypy.overrides]]
-module = ["sklearn", "sklearn.*"]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
