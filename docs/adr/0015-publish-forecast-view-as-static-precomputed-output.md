@@ -116,7 +116,7 @@ M4 要以單一 AWS 展示環境、每月 10 美元以內、AWS 預設網址公�
 
 ## 5. Notes
 
-- 決策經 2026-11-19 的設計訪談定案（[GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127)，地圖 [#123](https://github.com/shiroki9979/shiro-mlops/issues/123)）。成本與可行性取自 #124、#125 的研究報告；其中 AWS 文件類事實為搜尋摘錄，實作前應開原頁複核。
+- 決策經 2026-11-19 的設計訪談定案（[GitHub #127](https://github.com/shiroki9979/shiro-mlops/issues/127)，地圖 [#123](https://github.com/shiroki9979/shiro-mlops/issues/123)）。成本與可行性取自 #124、#125 的調查報告；其中 AWS 文件類事實為搜尋摘錄，實作前應開原頁複核。
 - 本 ADR 取代 ADR-0001。修訂了 ADR-0013 §2.3 的公開欄位（加入統計截至時刻），也使 ADR-0006 的 S3 Gold／Feast offline 層與 ADR-0014 §2.1 的雲端 FastAPI 前提不再成立；各 ADR 的 Notes 已記錄。ADR-0007 不受影響。
 - 實作追蹤：[ROADMAP M4](../ROADMAP.md) TICKET-405（修訂）、TICKET-408–411；TICKET-407 不再需要。
 - 2026-11-20：§2.2 交由 [GitHub #128](https://github.com/shiroki9979/shiro-mlops/issues/128) 的 CloudFront 配置已定案，記錄於 [預報檢視託管規格](../reference/forecast-view-hosting.md)，未另開 ADR（設定可隨時調整，不符合難以逆轉的條件）。重點：同一 bucket 分 `site/` 與 `published/` 兩個 prefix，CI 與地端 key 各寫一個；SPA fallback 用只掛在預設 behavior 的 CloudFront Function，不用 custom error response，讓 `/published/` 缺檔照實回錯誤；快取由 CloudFront 依 behavior 決定，部署不做 invalidation；採隨用隨付與 `PriceClass_200`，固定費率 Free 方案因前提未證實而延後，重新評估條件見 SPEC §8.6。實作追蹤：TICKET-412，並修訂 TICKET-405、408–410。
