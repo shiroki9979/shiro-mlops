@@ -9,9 +9,11 @@ import pytest
 from check_conventions import (
     BLOB_SIZE_LIMIT,
     GitRange,
+    Violation,
     check_blob_limits,
     check_doc_dates,
     check_doc_metadata,
+    check_terms,
     main,
 )
 
@@ -1168,3 +1170,20 @@ def test_doc_metadata_reports_a_noncompliant_doc_in_a_new_directory(
     _commit(repo, {"docs/new-area/guide.md": _doc("2026-10-01")}, "2026-10-01")
 
     assert main(["doc-metadata"]) == 1
+
+
+def test_terms_skips_docs_research_and_avoid_lines_but_flags_other_lines(repo: Path) -> None:
+    _commit(
+        repo,
+        {
+            "docs/research/survey.md": "# Survey\n\n舊稱端口。\n",
+            "GLOSSARY.md": "# Glossary\n\n- **連接埠**：服務端口。\n  _Avoid_：端口。\n",
+            "docs/guide.md": "# Guide\n\n服務端口如下。\n",
+        },
+        "2026-11-27",
+    )
+
+    assert check_terms(repo) == [
+        Violation("GLOSSARY.md", 3, "banned term '端口'; use '連接埠'"),
+        Violation("docs/guide.md", 3, "banned term '端口'; use '連接埠'"),
+    ]

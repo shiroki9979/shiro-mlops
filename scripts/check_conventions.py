@@ -134,6 +134,10 @@ CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
 BANNED_TERMS = {
     "端口": "連接埠",
 }
+TERMS_EXEMPT_DIRS = ("docs/research/",)
+"""Path prefixes whose Markdown quotes banned terms on purpose: surveys of the old vocabulary."""
+AVOID_LINE_MARKER = "_Avoid_"
+"""A GLOSSARY entry's line naming the terms to avoid, so it must spell out the banned ones."""
 
 HOST_PYTHON = re.compile(r"(?:.*/)?python(?:3(?:\.\d+)?)?")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -1176,8 +1180,13 @@ def check_terms(repo_root: Path) -> list[Violation]:
     return [
         Violation(path, hit.line, f"banned term '{hit.term}'; use '{hit.replacement}'")
         for path in tracked_markdown(repo_root)
+        if not is_terms_exempt_path(path)
         for hit in find_banned_terms((repo_root / path).read_text(encoding="utf-8"))
     ]
+
+
+def is_terms_exempt_path(path: str) -> bool:
+    return path.startswith(TERMS_EXEMPT_DIRS)
 
 
 def check_doc_metadata(repo_root: Path) -> list[Violation]:
@@ -1201,6 +1210,7 @@ def find_banned_terms(text: str) -> list[TermHit]:
     return [
         TermHit(number, term, replacement)
         for number, line in enumerate(text.splitlines(), start=1)
+        if not line.lstrip().startswith(AVOID_LINE_MARKER)
         for term, replacement in BANNED_TERMS.items()
         if term in line
     ]
