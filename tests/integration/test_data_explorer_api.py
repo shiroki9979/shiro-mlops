@@ -18,6 +18,7 @@ from shiro_mlops.service.api import create_app
 from shiro_mlops.service.data_explorer.cursor import encode_cursor
 from shiro_mlops.service.data_explorer.datasets import CWA_FORECASTS, HOURLY_LOAD
 from shiro_mlops.service.data_explorer.query import ExplorerQuery
+from shiro_mlops.service.data_explorer.status import MISSED_CYCLE_WARNING
 from tests.helpers import (
     TAIWAN,
     create_legacy_load_table,
@@ -292,17 +293,32 @@ def test_status_and_hourly_load_contract(explorer_client) -> None:
     assert all(item["datetime"].endswith("+08:00") for item in body["items"])
 
 
+def _whole_hours_beyond(span: timedelta) -> timedelta:
+    """The fewest whole hours strictly longer than `span`."""
+    return timedelta(hours=span // timedelta(hours=1) + 1)
+
+
+@pytest.mark.parametrize("minutes_past_hour", [0, 5, 30])
 def test_hourly_load_explorer_ignores_legacy_rows_during_database_upgrade(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, minutes_past_hour: int
 ) -> None:
+    """升級中殘留的舊表列不得當成推算負載，且結果不隨整點後經過的分鐘而變。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'upgraded_load.db'}")
     try:
         create_legacy_load_table(engine)
         ensure_timescale_hypertables(engine)
         repo = TimeSeriesRepository(engine=engine, auto_init=False)
-        current_hour = _now().replace(minute=0)
-        legacy_hour = current_hour - timedelta(hours=1)
-        derived_hour = current_hour - timedelta(hours=3)
+        current_hour = datetime(2026, 9, 6, 8)
+        clock = current_hour + timedelta(minutes=minutes_past_hour)
+        monkeypatch.setattr(
+            "shiro_mlops.service.data_explorer.dataset_query.now_taiwan", lambda: clock
+        )
+        legacy_hour = current_hour - _whole_hours_beyond(HOURLY_LOAD.arrival_lag)
+        # SYNC(src/shiro_mlops/service/data_explorer/status.py): evaluate_freshness threshold.
+        stale_after = (
+            HOURLY_LOAD.expected_update_interval * MISSED_CYCLE_WARNING + HOURLY_LOAD.arrival_lag
+        )
+        derived_hour = current_hour - _whole_hours_beyond(stale_after)
         _upsert_hours(repo, [derived_hour])
         insert_legacy_load_row(engine, legacy_hour, 99999.0)
         monkeypatch.setattr(settings, "DATA_EXPLORER_ENABLED", True)
