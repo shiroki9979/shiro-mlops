@@ -144,6 +144,23 @@ def test_banned_term_reports_line_and_preferred_replacement() -> None:
     assert [(hit.line, hit.term, hit.replacement) for hit in hits] == [(3, "端口", "連接埠")]
 
 
+@pytest.mark.parametrize(
+    ("line", "term", "replacement"),
+    [
+        ("Dagster UI 呈現資料世系。", "世系", "資產依賴圖"),
+        ("匯出資產位於同一張血緣圖。", "血緣", "資產依賴圖或出處"),
+        ("交付包須通過平台端驗收關卡。", "驗收關卡", "可服務檢查"),
+        ("此時回傳不可用預報。", "不可用預報", "無法產出"),
+    ],
+)
+def test_retired_governance_term_reports_its_replacement(
+    line: str, term: str, replacement: str
+) -> None:
+    hits = find_banned_terms(f"# Title\n\n{line}\n")
+
+    assert [(hit.line, hit.term, hit.replacement) for hit in hits] == [(3, term, replacement)]
+
+
 def test_preferred_term_is_not_reported() -> None:
     assert find_banned_terms("服務連接埠如下\n") == []
 
