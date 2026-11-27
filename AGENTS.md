@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 
 Welcome to `shiro-mlops`. This repository is a hybrid Local/AWS MLOps platform for dynamic horizon power load forecasting.
 
@@ -60,7 +60,7 @@ uv run mypy
 for study in lab/*/study.py; do uv run mypy "$study"; done
 
 # Repository convention & Markdown checks (also run in CI)
-uv run python scripts/check_conventions.py python-uv docker-pins action-pins terms debt-markers comment-refs doc-dates doc-metadata comment-kinds blob-limits --base origin/dev
+uv run python scripts/check_conventions.py python-uv docker-pins action-pins pin-sync terms debt-markers comment-refs doc-dates doc-metadata comment-kinds blob-limits --base origin/dev
 npx markdownlint-cli2 "**/*.md"
 
 # Local API dev server

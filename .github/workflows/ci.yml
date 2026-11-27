@@ -16,7 +16,8 @@ env:
   # infra/terraform/main.tf and infra/terraform/bootstrap/main.tf.
   TERRAFORM_VERSION: "1.11.4"
   # Every setup-uv step installs this version. Must match the ghcr.io/astral-sh/uv image that
-  # docker/Dockerfile.api, docker/Dockerfile.dagster and docker/Dockerfile.mlflow copy.
+  # docker/Dockerfile.api, docker/Dockerfile.dagster and docker/Dockerfile.mlflow copy
+  # (scripts/check_conventions.py pin-sync). Dependabot updates neither: raise them by hand.
   UV_VERSION: "0.11.32"
 
 # Actions are pinned to a commit SHA with their release as a comment, and setup-uv to an exact
@@ -59,8 +60,8 @@ jobs:
           uv run mypy
           for study in lab/*/study.py; do uv run mypy "$study"; done
 
-      - name: Check Python runs through uv, Docker images and pip installs are pinned, actions and uv are pinned, tech-debt markers name an issue, comment refs resolve
-        run: uv run python scripts/check_conventions.py python-uv docker-pins action-pins debt-markers comment-refs
+      - name: Check Python runs through uv, Docker images and pip installs are pinned, actions and uv are pinned, copies of a pinned version agree, tech-debt markers name an issue, comment refs resolve
+        run: uv run python scripts/check_conventions.py python-uv docker-pins action-pins pin-sync debt-markers comment-refs
 
       # Stands in for a push ruleset, which a public repository cannot have (ADR-0016).
       - name: Check no commit in the PR adds a file over the size limit or with a blocked extension

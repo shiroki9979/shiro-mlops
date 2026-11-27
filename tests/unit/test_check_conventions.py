@@ -8,6 +8,7 @@ from check_conventions import (
     Violation,
     check_action_pins,
     check_docker_pins,
+    check_pin_sync,
     check_python_uv,
     doc_date_violation,
     doc_metadata_violations,
@@ -763,6 +764,130 @@ def test_quoted_stage_names_are_stages_and_a_digest_needs_a_tag() -> None:
     )
 
     assert _images(dockerfile) == [(3, f"nginx{DIGEST}")]
+
+
+def _pinned_repo(
+    tmp_path: Path,
+    *,
+    uv_env: str = "0.11.32",
+    uv_image: str = "0.11.32",
+    compose_db: str = "2.28.3-pg15",
+    script_db: str = "2.28.3-pg15",
+    lock_versions: tuple[str, str] = ("5.100.0", "5.100.0"),
+) -> Path:
+    """A repo with every copy of a version that pin-sync compares, each set as given."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(
+        "env:\n"
+        f'  UV_VERSION: "{uv_env}"\n'
+        "jobs:\n"
+        "  a:\n"
+        "    steps:\n"
+        f"      - uses: astral-sh/setup-uv@{CHECKOUT_SHA} # v2\n"
+        "        with:\n"
+        "          version: ${{ env.UV_VERSION }}\n"
+    )
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "Dockerfile.api").write_text(
+        f"FROM python:3.11-slim{DIGEST}\n"
+        f"COPY --from=ghcr.io/astral-sh/uv:{uv_image}{DIGEST} /uv /bin/uv\n"
+    )
+    (docker / "docker-compose.yml").write_text(
+        f"services:\n  postgres:\n    image: timescale/timescaledb:{compose_db}{DIGEST}\n"
+    )
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "acceptance.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "docker run --rm \\\n"
+        f"  timescale/timescaledb:{script_db}{DIGEST} >/dev/null\n"
+        f'readonly STUB_IMAGE="python:3.11.18-alpine{DIGEST}"\n'
+    )
+    for layer, version in zip((".", "bootstrap"), lock_versions, strict=True):
+        directory = tmp_path / "infra" / "terraform" / layer
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / ".terraform.lock.hcl").write_text(
+            'provider "registry.terraform.io/hashicorp/aws" {\n'
+            f'  version     = "{version}"\n'
+            '  constraints = "~> 5.0"\n'
+            "}\n"
+        )
+    return tmp_path
+
+
+def test_pin_sync_passes_when_every_copy_agrees(tmp_path: Path) -> None:
+    assert check_pin_sync(_pinned_repo(tmp_path)) == []
+
+
+def test_pin_sync_reports_each_uv_copy_when_the_workflow_and_a_dockerfile_disagree(
+    tmp_path: Path,
+) -> None:
+    repo = _pinned_repo(tmp_path, uv_image="0.11.33")
+
+    assert check_pin_sync(repo) == [
+        Violation(
+            ".github/workflows/ci.yml",
+            8,
+            "uv pins disagree: 0.11.32 here, 0.11.33 at docker/Dockerfile.api:2; "
+            "update every copy together",
+        ),
+        Violation(
+            "docker/Dockerfile.api",
+            2,
+            "uv pins disagree: 0.11.33 here, 0.11.32 at .github/workflows/ci.yml:8; "
+            "update every copy together",
+        ),
+    ]
+
+
+def test_pin_sync_reports_a_script_image_that_differs_from_the_compose_image(
+    tmp_path: Path,
+) -> None:
+    repo = _pinned_repo(tmp_path, compose_db="2.28.4-pg15")
+
+    assert [(violation.path, violation.line) for violation in check_pin_sync(repo)] == [
+        ("docker/docker-compose.yml", 3),
+        ("scripts/acceptance.sh", 3),
+    ]
+    assert check_pin_sync(repo)[1].message == (
+        f"image timescale/timescaledb pins disagree: 2.28.3-pg15{DIGEST} here, "
+        f"2.28.4-pg15{DIGEST} at docker/docker-compose.yml:3; update every copy together"
+    )
+
+
+def test_pin_sync_reports_a_provider_locked_to_different_versions_in_two_layers(
+    tmp_path: Path,
+) -> None:
+    repo = _pinned_repo(tmp_path, lock_versions=("5.100.0", "5.101.0"))
+
+    assert check_pin_sync(repo) == [
+        Violation(
+            "infra/terraform/.terraform.lock.hcl",
+            2,
+            "provider registry.terraform.io/hashicorp/aws pins disagree: 5.100.0 here, "
+            "5.101.0 at infra/terraform/bootstrap/.terraform.lock.hcl:2; "
+            "update every copy together",
+        ),
+        Violation(
+            "infra/terraform/bootstrap/.terraform.lock.hcl",
+            2,
+            "provider registry.terraform.io/hashicorp/aws pins disagree: 5.101.0 here, "
+            "5.100.0 at infra/terraform/.terraform.lock.hcl:2; update every copy together",
+        ),
+    ]
+
+
+def test_pin_sync_compares_uv_image_variants_by_release_and_leaves_loose_pins_to_action_pins(
+    tmp_path: Path,
+) -> None:
+    repo = _pinned_repo(tmp_path, uv_env="latest", uv_image="0.11.32-python3.11-bookworm")
+    (repo / "docker" / "Dockerfile.dagster").write_text(
+        f"COPY --from=ghcr.io/astral-sh/uv:0.11.32{DIGEST} /uv /bin/uv\n"
+    )
+
+    assert check_pin_sync(repo) == []
 
 
 ADR_PATH = "docs/adr/0001-title.md"

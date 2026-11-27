@@ -12,7 +12,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The image must match the postgres service image in docker/docker-compose.yml.
+# The image must match the postgres service image in docker/docker-compose.yml
+# (scripts/check_conventions.py pin-sync); Dependabot updates only the compose copy.
 docker run --rm -d --name "$container" \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pagination_acceptance \
