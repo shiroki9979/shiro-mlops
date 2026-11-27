@@ -1,7 +1,7 @@
 # ADR-0015：預報檢視在雲端只公開預先算好的預報，地端負責全部運算
 
 > - Created: 2026-11-19
-> - Last Updated: 2026-11-21
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[ADR-0014](0014-keep-engineering-console-local-and-split-frontend-apps.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -48,7 +48,7 @@ M4 要以單一 AWS 展示環境、每月 10 美元以內、AWS 預設網址公�
 
 ### 2.3 地端到雲端的匯出
 
-- **Dagster 資產**：匯出是 Dagster 資產，位於已發布預報與預報實績之後，每小時隨發布執行。失敗時在地端 Dagster 執行紀錄可見，與其他資產在同一張血緣圖（[ADR-0004](0004-dagster-asset-based-orchestration.md)）。
+- **Dagster 資產**：匯出是 Dagster 資產，位於已發布預報與預報實績之後，每小時隨發布執行。失敗時在地端 Dagster 執行紀錄可見，與其他資產在同一張資產依賴圖（[ADR-0004](0004-dagster-asset-based-orchestration.md)）。
 - **先寫地端，再上傳**：匯出一律先寫入地端目錄；有設定 S3 時，再把同樣的檔案上傳到 bucket 的資料 prefix。沒有 AWS 憑證時，地端展示照常運作。
 - **憑證**：地端使用專用 IAM 使用者的長期 access key，放在地端 `.env`，手動輪替。權限只允許寫入資料 prefix，不能刪除，也不能讀寫其他 prefix。key 外洩時，最多能竄改公開展示的兩份 JSON，可由舊版本復原（§2.6）。前端產物由 CI 經 OIDC 上傳，與地端 key 的權限互不重疊。
 

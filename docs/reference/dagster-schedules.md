@@ -1,7 +1,7 @@
 # Dagster 資產排程與觸發規格
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 
 ---
 
@@ -25,8 +25,8 @@
 
      | 種類 | 名稱 | 內容 |
      | :--- | :--- | :--- |
-     | 資產 | `{task_id}__features` | 經 runner `load_training_data` 讀取並套用最低累積，輸出 `training_table`（以目標序列與觀測天氣的時間軸聯集為主鍵序列化：`datetime`、`subject`、`load_mw` 與 `weather.fields`，保留負載缺漏小時的觀測天氣；`rows` metadata 為訓練表總列數）；lineage 依賴 `raw_taipower_load` 與 `raw_cwa_station_observation`，但不執行它們 |
-     | 資產 | `{task_id}__model` | 以 `training_data_from_table` 還原上游訓練表後經 `fit_task` 訓練，不再重讀資料庫；模型存入 `DATA_DIR/models/{task_id}/`，並寫入 MLflow（見下）。輸出 `task_id`、`metrics`、`run_id`、`model_version`、`model_path`、`training_rows`；materialization metadata 除各 metric 外，另記 `model_sha256`（剛保存的模型目錄雜湊，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)）與 `mlflow_model_version`（MLflow model version；MLflow 不可用、`run_id` 為 `local_run` 時為空值，`model_sha256` 照常記錄） |
+     | 資產 | `{task_id}__features` | 經 runner `load_training_data` 讀取並套用最低累積，輸出 `training_table`（以目標序列與觀測天氣的時間軸聯集為主鍵序列化：`datetime`、`subject`、`load_mw` 與 `weather.fields`，保留負載缺漏小時的觀測天氣；`rows` metadata 為訓練表總列數）；資產依賴（`deps`）`raw_taipower_load` 與 `raw_cwa_station_observation`，但不執行它們 |
+     | 資產 | `{task_id}__model` | 以 `training_data_from_table` 還原上游訓練表後經 `fit_task` 訓練，不再重讀資料庫；模型存入 `DATA_DIR/models/{task_id}/`，並寫入 MLflow（見下）。輸出 `task_id`、`metrics`、`run_id`、`model_version`、`model_path`、`training_rows`；materialization metadata 除各 metric 外，另記 `model_sha256`（剛保存的模型目錄雜湊，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型存放tasksmodel_storepy)）與 `mlflow_model_version`（MLflow model version；MLflow 不可用、`run_id` 為 `local_run` 時為空值，`model_sha256` 照常記錄） |
      | 資產 | `{task_id}__monitoring` | 經 runner `monitor_task` 以有界查詢讀取有效逐時觀測數與 `as_of` 以前最新一列（僅 `source = 'regional_snapshot_sum'`），再由任務類型 `assess_health` 以任務設定 `[health]` 門檻判定；輸出 `task_id`、`status`（`HEALTHY`／`WARNING`）、`health_reason`、`metrics`、`training_rows`、`target_hours`（有效逐時目標觀測數）、`latest_target_time`、`latest_target_value`（目前任務的目標皆為逐時實際負載，單位 MW） |
      | job | `{task_id}__training_job` | selection 為 `{task_id}__features` 及其所有下游（model、monitoring，以及只掛在該任務的資產，例如 Feast 匯出） |
      | job | `{task_id}__monitoring_job` | selection 僅含 `{task_id}__monitoring`；model 輸出取自最近一次訓練的 I/O Manager 產物，不重跑讀取訓練歷史的 features |
@@ -34,7 +34,7 @@
      | 排程 | `{task_id}__monitoring_schedule` | cron 取自 `[schedule].monitoring`，時區 `Asia/Taipei`；除最低累積外，另需訓練紀錄有模型（`{task_id}__model` 已有 materialization），不看模型目錄（見下方冷啟動階段） |
 
    - **邊界**：擷取資產（台電快照、逐時負載推算、CWA 觀測與預報）以資料來源為中心、跨任務共用，不隨任務生成；任務的兩個 job 皆不得選取任何擷取資產，也不得選取 `issued_forecast`（見第 6 項）、`forecast_track_record`（見第 7 項）或 `forecast_view_export`（見第 8 項）。資產只經 runner（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）取門檻、資料、訓練與監控結果。
-   - **冷啟動階段（`pipelines/cold_start.py`）**：`read_cold_start` 從三個輸入判定任務的階段與原因：最低累積的結果（見下方「最低累積」）、模型目錄（`DATA_DIR/models/{task_id}/` 有沒有由模型存放安裝的模型，規則同 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy) 的 `has_installed_model`）、訓練紀錄（`{task_id}__model` 有沒有 materialization）。只判斷兩邊有沒有模型：不載入模型、不比對雜湊（訓練先安裝模型目錄、再寫 materialization，比對雜湊會把每次訓練中間的空檔判成不一致）。五個階段為封閉集合，每個都帶原因：
+   - **冷啟動階段（`pipelines/cold_start.py`）**：`read_cold_start` 從三個輸入判定任務的階段與原因：最低累積的結果（見下方「最低累積」）、模型目錄（`DATA_DIR/models/{task_id}/` 有沒有由模型存放安裝的模型，規則同 [ML 任務設定 §4](ml-tasks.md#4-模型存放tasksmodel_storepy) 的 `has_installed_model`）、訓練紀錄（`{task_id}__model` 有沒有 materialization）。只判斷兩邊有沒有模型：不載入模型、不比對雜湊（訓練先安裝模型目錄、再寫 materialization，比對雜湊會把每次訓練中間的空檔判成不一致）。五個階段為封閉集合，每個都帶原因：
 
      | 階段 | 條件 | 原因 |
      | :--- | :--- | :--- |
@@ -92,13 +92,13 @@
    - **排程**：`15 * * * *`（`Asia/Taipei`），排在逐時負載推算（:05）與觀測擷取（:10）之後。以 `tick_run_request` 把 tick 同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），資產沒有設定欄位。
    - **發布時刻**：發布時刻即排程 tick 時刻，也是預報的 `as_of`，不取整點（決策見 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)）。
    - **管線鏈路**：經 runner `predict_task`（[ML 任務設定 §3](ml-tasks.md#3-runnertasksrunnerpy)）以 H = 168 預報，降級與負載起點過舊規則照舊；以 `load_model_with_sha256` 在同一把鎖下取得載入的模型與其雜湊，經 `time_series_repo` resource 交出的已發布預報 store（`issued_forecast_store`）寫入 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的 `issued_forecast` 與 `issued_forecast_step`。不讀模型健康檢查：`{task_id}__monitoring` 為 `WARNING` 時照常發布。已安裝的模型以不同於任務設定的輸入配方訓練時（`ModelRecipeMismatchError`，[ML 任務設定 §2](ml-tasks.md#2-任務類型介面taskstypes)），以 `Failure` 結束、不寫入，訊息列出不同的項目；排程照常觸發，直到重新訓練。
-   - **lineage**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，因此任務 job 不會帶出發布（見第 1 項邊界）。`issued_forecast_job` 不選取任何擷取資產。
+   - **資產依賴（`deps`）**：只依賴 `raw_taipower_load`、`raw_cwa_station_observation` 與 `raw_cwa_township_forecast`，但不執行它們；不依賴 `{task_id}__model`，因此任務 job 不會帶出發布（見第 1 項邊界）。`issued_forecast_job` 不選取任何擷取資產。
    - **只有定時發布才算**：資產宣告沒有 tick 時拒絕（[執行來源與 as_of](#執行來源與-as_of)），退回現在等於在 tick 以外的時刻補發。只有排程 tick 發起的 run 以該 tick 發布；手動 materialize、在 launchpad 自填 tick 標籤的 run、從排程 tick 預覽發起的 run，以及重新執行的 run 皆以 `Failure` 結束、不寫入，因此不補發。無 tick 的手動排程評估以 `SkipReason` 略過、不產生 run。隨需 `/predict` 不寫入。
    - **無法產出**：排程與資產都以第 1 項的 `read_model_presence` 判斷有沒有模型可發布，只看模型目錄、不查最低累積。模型目錄沒有由模型存放安裝的模型時，排程以 `SkipReason` 略過：兩邊都沒有模型時為尚無 `dynamic_horizon_forecast__model` materialization 的原因，只有訓練紀錄時為「紀錄與目錄不一致」的原因。只有模型目錄時（例如刪除 `dagster_home` volume 但保留 `data/models/`）照常發布，MLflow 附註（`mlflow_model_version`）依 [資料契約 §3](data-contracts.md#3-地端時序資料庫模型-timescaledb-hypertables) 的雜湊比對規則留空。模型目錄在 tick 之後、run 載入之前消失時，資產以 `Failure` 結束、description 與上述排程的略過原因相同（說明沒有模型，或紀錄與目錄不一致）並附 `issued_at` metadata，不寫入。負載起點過舊、天氣不可用、歷史不足（`TaskUnavailableError`）時，資產以 `Failure` 結束、description 為 runner 的原因並附 `issued_at` metadata，不寫入。
    - **不設重試政策**：`issued_forecast` 資產與 `issued_forecast_job` 皆無重試政策；重新執行的 run 不寫入（見上）。理由見 [ADR-0013 §2.1](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md#21-已發布預報) 的不補發與 [#136](https://github.com/shiroki9979/shiro-mlops/issues/136)。
    - **冪等性**：同一發布時刻已有紀錄（例如 commit 後崩潰被重跑）時不預報、不寫入、不覆寫，資產成功並以 metadata `already_issued = true` 標示；預報完成後寫入時才發現已有紀錄者，同樣不覆寫並以 `already_issued = true` 標示。新寫入時 metadata 另記 `load_anchor`、`status`、`model_sha256` 與步數。
 7. **`forecast_track_record`（預報實績，[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)）**：
-   - **定義**：固定資產 `forecast_track_record`，位於 `pipelines/forecast_track_record.py`，不進任務資產工廠。lineage 依賴 `issued_forecast` 與 `raw_taipower_load`，但不執行它們；任務的兩個 job 與 `issued_forecast_job` 皆不選取它。
+   - **定義**：固定資產 `forecast_track_record`，位於 `pipelines/forecast_track_record.py`，不進任務資產工廠。資產依賴（`deps`）`issued_forecast` 與 `raw_taipower_load`，但不執行它們；任務的兩個 job 與 `issued_forecast_job` 皆不選取它。
    - **排程**：job `forecast_track_record_job` 與排程 `forecast_track_record_schedule` 同位於 `pipelines/forecast_track_record.py`。排程為 `25 * * * *`（`Asia/Taipei`），排在發布（:15）之後；以 `tick_run_request` 把 tick 同時作為 `run_key` 與 tick 標籤（[執行來源與 as_of](#執行來源與-as_of)），資產沒有設定欄位。無 tick 的手動排程評估兩者都不帶，run 以建立時刻為準。job 只選取 `forecast_track_record`，不選取任何擷取資產，也不選取 `issued_forecast`，因此發布失敗或略過時照常彙整。排程預設停用，冷啟動時與擷取排程一起開啟，不需等待首次訓練。
    - **重試政策**：`forecast_track_record_job` 失敗時在同一 run 內最多重試兩次，每次間隔六十秒，用盡後仍遠早於下一個 tick。彙整只讀資料庫、從頭重算且不保存歷次結果，可吸收短暫的資料庫中斷。重試在同一 run 內、沿用同一 as_of，排程觸發與手動執行的 run 都得到同一統計窗。`issued_forecast` 刻意不重試（第 6 項），是因為重試會沿用原 tick 為預報的 `as_of` 卻讀到其後入庫的負載；彙整的統計截至時刻只界定統計窗，讀到其後入庫的資料不違反 point-in-time，不受此限。
    - **統計截至時刻 E**：run 的 as_of 取整點。資產宣告沒有 tick 時退回現在（[執行來源與 as_of](#執行來源與-as_of)）：排程 tick 發起的 run 為該 tick，手動執行與重新執行的 run 為 run 建立時刻。重新執行排程 run 時不沿用原 tick，否則會以較早的截至時刻覆蓋最新一次 materialization，讓下一次預報檢視匯出退回舊的統計截至時刻。
@@ -109,7 +109,7 @@
    - **重算**：每次都從頭重算、不保存歷次結果，因此允許手動執行、重試與重新執行，事後推算補上的小時在下次彙整自然計入。尚無已發布預報時照常成功，累積天數為 0。
    - **輸出與 metadata**：輸出格式見 [資料契約 §5.1](data-contracts.md#51-預報實績-forecast_track_record)。materialization metadata 記 `cutoff`（統計截至時刻）、`accumulated_days`、`window_pairs`（窗內總配對數）與 `lead_24_pairs`（窗內提前 24 的配對數，未滿 7 天也記），只在 Dagster UI 可見，不匯出。
 8. **`forecast_view_export`（預報檢視匯出，[ADR-0015](../adr/0015-publish-forecast-view-as-static-precomputed-output.md)）**：
-   - **定義**：固定資產 `forecast_view_export`、job `forecast_view_export_job` 與排程 `forecast_view_export_schedule`，位於 `pipelines/forecast_view_export.py`，不進任務資產工廠。以 input 讀取最近一次 `forecast_track_record` 的 artifact，lineage 另依賴 `issued_forecast`，兩者都不執行；最新已發布預報由 `time_series_repo` resource 交出的已發布預報 store（`issued_forecast_store`，`src/shiro_mlops/data/issued_forecast_repository.py` 的 `IssuedForecastRepository`）以 `fetch_latest` 讀取。任務的兩個 job、`issued_forecast_job` 與 `forecast_track_record_job` 皆不選取它。
+   - **定義**：固定資產 `forecast_view_export`、job `forecast_view_export_job` 與排程 `forecast_view_export_schedule`，位於 `pipelines/forecast_view_export.py`，不進任務資產工廠。以 input 讀取最近一次 `forecast_track_record` 的 artifact，另以資產依賴（`deps`）連到 `issued_forecast`，兩者都不執行；最新已發布預報由 `time_series_repo` resource 交出的已發布預報 store（`issued_forecast_store`，`src/shiro_mlops/data/issued_forecast_repository.py` 的 `IssuedForecastRepository`）以 `fetch_latest` 讀取。任務的兩個 job、`issued_forecast_job` 與 `forecast_track_record_job` 皆不選取它。
    - **排程**：`35 * * * *`（`Asia/Taipei`），排在發布（:15）與預報實績彙整（:25，含重試約於 :28 前結束）之後。tick 轉為台灣本地時間 ISO 字串作為 `run_key`，刻意不帶 tick 標籤與資產設定：匯出的是執行當下最新的已發布預報與預報實績，與 tick 時刻無關。job 只選取 `forecast_view_export`，因此彙整失敗或略過時照常匯出最新已發布預報，預報實績則沿用上一次成功彙整的統計截至時刻。排程預設停用，冷啟動時與 `forecast_track_record_schedule` 一起開啟，不需等待首次訓練。
    - **先寫地端，再上傳**：兩份 JSON（格式見 [資料契約 §6](data-contracts.md#6-預報檢視公開-jsonpublished)）先寫入 `DATA_DIR/published/`，每個檔案先寫暫存檔再以 rename 替換，Nginx 不會讀到寫一半的檔案；全部寫完後，有設定 `FORECAST_VIEW_S3_BUCKET` 時再以 `PutObject` 上傳同樣的位元組到 bucket 的 `published/` prefix（`Content-Type: application/json`，不設 `Cache-Control`）。未設定 bucket 時不建立 S3 client。上傳設定見 [預報檢視託管 §1](forecast-view-hosting.md#1-s3-配置與寫入權限)。
    - **失敗與重試**：上傳失敗時 run 失敗、在地端 Dagster 執行紀錄可見，地端目錄已是本次內容。`forecast_view_export_job` 失敗時在同一 run 內最多重試兩次、每次間隔六十秒；匯出覆寫固定檔名，重試、手動執行與重新執行皆安全。從未 materialize 過 `forecast_track_record` 時（全新環境），input 為空，匯出照常寫出並上傳最新已發布預報，預報實績寫出累積 0 天、統計截至時刻為匯出 run 建立時刻整點的空狀態（資產經 [執行來源與 as_of](#執行來源與-as_of) 宣告退回現在；匯出排程不帶 tick，排程、手動與重新執行的 run 皆以 run 建立時刻為準，同一 run 內的重試得到同一截至時刻）（[資料契約 §6.2](data-contracts.md#62-預報實績-forecast_track_recordjson)）。曾 materialize 過但 artifact 遺失時，input 讀取失敗，run 以錯誤結束，不當成全新環境。
