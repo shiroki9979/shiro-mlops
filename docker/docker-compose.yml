@@ -56,6 +56,18 @@ services:
         condition: service_healthy
     volumes:
       - mlflow_artifacts:/mlflow/artifacts
+    # The server exits on a schema it cannot run (an older MLflow over a newer database), and
+    # restart: unless-stopped turns that into a silent restart loop; the healthcheck lets
+    # `docker compose up` report it through the services that wait on mlflow. The image has no
+    # curl, so the probe uses Python. start_period covers the first-start schema migration,
+    # which scripts/ci_backend_smoke.sh allows up to 180 s.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+      start_interval: 2s
 
   api:
     build:
@@ -126,7 +138,7 @@ services:
       redis:
         condition: service_healthy
       mlflow:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:

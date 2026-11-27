@@ -4,6 +4,7 @@ import re
 import tomllib
 from pathlib import Path
 
+import yaml
 from sqlalchemy.engine import make_url
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -60,3 +61,16 @@ def test_dockerfile_installs_only_packages_the_lockfile_constrains() -> None:
     ]
     assert {"mlflow", "psycopg2-binary"} <= set(packages)
     assert set(packages) <= _locked_packages()
+
+
+def test_services_waiting_on_mlflow_wait_for_a_passing_healthcheck() -> None:
+    """MLflow 遇到無法執行的 schema 會反覆重啟；等到健康才啟動，compose up 才會報出失敗。"""
+    services = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))["services"]
+    assert "healthcheck" in services["mlflow"]
+    waits = {
+        name: service["depends_on"]["mlflow"]["condition"]
+        for name, service in services.items()
+        if "mlflow" in service.get("depends_on", {})
+    }
+    assert waits, "no service waits on mlflow"
+    assert set(waits.values()) == {"service_healthy"}, waits
