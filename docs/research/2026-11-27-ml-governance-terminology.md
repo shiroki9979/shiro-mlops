@@ -16,8 +16,8 @@
   - lineage 的三種寫法拆成兩個詞：Dagster 的依賴關係寫「資產依賴圖」，成品的來歷寫「出處」；「研究出處」成為 GLOSSARY 詞條（[§4.2](#42-lineage-的三種寫法)）。
   - `docs/research/` 的文件改稱「調查報告」，「研究報告」留給 `lab/` 研究主題的 README。
 - **值得補進 M11 設計的業界概念有三項**：平台模型的退回、釘選模型的新舊與健康判定、健康判定規則歸輸出契約（[§6](#6-業界有repo-沒有的概念)）。
-- **#376 的業界用語對照有兩處要修正**：MLflow `MetricThreshold` 只能表達「至少好多少」，表達不了平台重訓的 5% 容忍；Google 的 model validation 指效能對基準的比較，不是「能不能服務」（[§4.3](#43-376-業界用語對照的查證)）。
-- **來源限制**：本次環境連不到 NIST、聯準會、EUR-Lex、ISO、arXiv 與 Google Cloud 文件等主機。這些來源的說法只取自搜尋引擎對原頁的摘錄，或標為未查證（[§9](#9-限制)）。
+- **#376 的業界用語對照有兩處要修正**：MLflow `MetricThreshold` 只能表達「至少好多少」，表達不了平台重訓的 5% 容忍；Google 的 model validation 是部署前的整套離線檢查，同時包含效能對基準的比較與基礎設施相容性測試，不能單指「能不能服務」（[§4.3](#43-376-業界用語對照的查證)）。
+- **來源限制**：NIST、SR 11-7、Google MLOps 文章、Model Cards 與 Datasheets 都已讀原文。EU AI Act（EUR-Lex 擋下自動讀取）、ML Test Score 的條目（PDF 所在主機未放行）、ISTQB、Nygard 與 Gama 等人的 survey 仍只有搜尋摘錄，ISO 標準的術語標為未查證（[§9](#9-限制)）。
 
 ## 1. 範圍與方法
 
@@ -76,8 +76,8 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 ### 2.1 治理框架與角色責任
 
-- **NIST 的 AI actors**：AI RMF 依生命週期把參與者分成 AI Design、AI Development、AI Deployment、Operation and Monitoring、TEVV 等任務類別，並主張執行 verification 與 validation 的人最好與執行 test 與 evaluation 的人不同（[NIST AI 100-1][nist-rmf]、[Appendix A][nist-actors]，搜尋摘錄）。研究者約略對應 AI Development，平台維護者對應 AI Deployment 與 Operation and Monitoring。repo 的角色依交付契約劃分，不依生命週期階段劃分，兩者沒有撞名。
-- **SR 11-7 的 effective challenge**：由客觀、知情、具備適當誘因、能力與影響力的人，對模型與其結果做的批判性審查（[SR 11-7][sr117]，搜尋摘錄）。SR 11-7 對模型負責人、開發者、使用者與驗證者的分工，本次沒有讀到原文，標未查證。
+- **NIST 的 AI actors**：AI RMF 依生命週期把參與者分成 AI Design、AI Development、AI Deployment、Operation and Monitoring、TEVV 等任務類別，並主張執行 verification 與 validation 的人最好與執行 test 與 evaluation 的人不同（[NIST AI 100-1][nist-rmf]、[Appendix A][nist-actors]，原文）。研究者約略對應 AI Development，平台維護者對應 AI Deployment 與 Operation and Monitoring。repo 的角色依交付契約劃分，不依生命週期階段劃分，兩者沒有撞名。
+- **SR 11-7 的 effective challenge**：由客觀、知情、具備適當誘因、能力與影響力的人，對模型與其結果做的批判性審查（[SR 11-7][sr117]，原文）。SR 11-7 把模型風險管理的角色分成 ownership、controls 與 compliance：業務單位的 model owner 對模型的使用與表現負最終責任；controls 一方負責風險衡量、限額與監控，並管理獨立驗證與審查流程（[SR 11-7][sr117]，原文）。
 - **EU AI Act**：intended purpose 指 provider 預定的用途；serious incident 包括對關鍵基礎設施的管理或運轉造成嚴重且不可逆的中斷；Annex III 第 2 點把電力供應管理與運轉的安全元件列為高風險（[EU AI Act][eu-ai-act]，搜尋摘錄）。本 repo 不作為電網運轉的安全元件，也不在歐盟市場提供，本報告不做適用性判斷，只取用語。provider 與 deployer 的定義本次沒有讀到，標未查證。
 - **ISO/IEC 42001 與 22989**：前者是 AI 管理系統的要求標準，後者是 AI 概念與術語標準（[42001][iso-42001]、[22989][iso-22989]，搜尋摘錄）。[ISO OBP][iso-obp] 連不到，所有術語條目標未查證。
 - **營運驗收**：ISTQB 的 acceptance testing 是「著重判定是否接受系統的測試層級」，operational acceptance testing 是「判定維運或系統管理人員能否接受系統的驗收測試」（[ISTQB Glossary][istqb]，搜尋摘錄）。repo 的營運驗收以正式資料在運行環境證明一個里程碑（[issue-tracker.md][repo-issue-tracker]），和 OAT 同屬「由營運面接受」這一類。
@@ -103,12 +103,12 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 - **TFX InfraValidator**：在實際的 serving 基礎設施中確認模型「mechanically fine」，模式有 `LOAD_ONLY` 與 `LOAD_AND_QUERY`，「不在乎預測對不對，只看請求是否成功」；Pusher 的說法是 InfraValidator 在模型「mechanically servable」時給 blessing（[InfraValidator][tfx-infra]、[Pusher][tfx-pusher]，原文）。這對應 repo 驗收的載入與試推論兩段；repo 另有一段靜態宣告檢查。
 - **TFX Evaluator 與 TFMA**：Evaluator 拿新模型和 baseline（例如目前 serving 的模型）在同一份評估資料上比較，達到相對 baseline 的條件就判 blessed；沒有 baseline 的第一次執行會忽略 change threshold（[Evaluator][tfx-evaluator]，原文）。TFMA 分 value threshold（絕對上下界）與 change threshold（比較 `v_c - v_b` 或 `v_c / v_b`，並指定方向）；TFX 範例以 absolute `-1e-10` 表示「AUC 不低於基準」（[TFMA model validations][tfma-validations]、[Evaluator][tfx-evaluator]，原文）。
 - **MLflow**：`MetricThreshold` 有 `threshold`、`min_absolute_change`、`min_relative_change`。後兩者是「候選模型通過與 baseline 比較所需的最小變化」：`min_absolute_change` 必須為正，`min_relative_change` 介於 0 與 1。`validate_evaluation_results(validation_thresholds, candidate_result, baseline_result)` 未通過時拋出例外，取代 `mlflow.evaluate` 中已棄用的 model validation（[validation.py][mlflow-validation]，原文）。
-- **Google MLOps 文章**：model validation 指「確認模型適合部署，也就是預測表現優於某個基準」；部署前有 offline model validation，部署後另有以 canary 或 A/B 進行的 online model validation（[MLOps 文章][google-mlops]，搜尋摘錄）。
-- **NIST**：validation 引 ISO 9000:2015 的定義，「以客觀證據確認特定預定用途或應用的需求已被滿足」（[NIST AI 100-1][nist-rmf]，搜尋摘錄）。
-- **SR 11-7**：back-testing 是 outcomes analysis 的一種，比較實際結果與模型在未用於開發的期間所做的預測；benchmarking 把模型的輸入與輸出和其他資料或模型的估計比較（[SR 11-7][sr117]，搜尋摘錄）。滾動起點回測相當於模擬的 back-testing，#376 第 9 點的 naive 基準相當於 benchmarking。
+- **Google MLOps 文章**：model validation 指「確認模型適合部署，也就是預測表現優於某個基準」。CT 管線的 offline model validation 一步列了四件事：以測試資料產生評估指標；和目前的模型（例如 production model、baseline model）比較，確認新模型較好才晉升上線；確認各資料區段的表現一致；測試模型能否部署，包括基礎設施相容性與 prediction service API 的一致性。部署後另有以 canary 或 A/B 進行的 online model validation（[MLOps 文章][google-mlops]，原文）。
+- **NIST**：validation 引 ISO 9000:2015 的定義，「以客觀證據確認特定預定用途或應用的需求已被滿足」（[NIST AI 100-1][nist-rmf]，原文）。
+- **SR 11-7**：back-testing 是 outcomes analysis 的一種，比較實際結果與模型在未用於開發的期間所做的預測；benchmarking 把模型的輸入與輸出和其他資料或模型的估計比較（[SR 11-7][sr117]，原文）。滾動起點回測相當於模擬的 back-testing，#376 第 9 點的 naive 基準相當於 benchmarking。
 - **scikit-learn**：`TimeSeriesSplit` 是 k-fold 的變體，後一個訓練集包含前一個；一般的交叉驗證假設樣本獨立同分佈，用在時間序列會高估表現（[cross_validation.rst][sklearn-cv]，原文）。
 
-結論：業界的 validation 至少有三種邊界：NIST 與 ISO 的「需求已滿足」、Google 的「效能優於基準」、SR 11-7 的整套獨立審查。它不能當成驗收或評估閘門的英文名稱。
+結論：業界的 validation 至少有三種邊界：NIST 與 ISO 的「需求已滿足」、Google 的部署前整套離線檢查（效能比較加上基礎設施相容性）、SR 11-7 的整套獨立審查。它不能當成驗收或評估閘門的英文名稱：Google 的用法同時涵蓋兩者，另外兩種又比兩者都廣。
 
 ### 2.4 資料版本、時點正確性與世系
 
@@ -118,7 +118,7 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 - **MLflow 與 SageMaker 的 model lineage**：MLflow 把「哪個 experiment 與 run 產生了這個模型版本」稱為 lineage（[registry][mlflow-registry]，原文）；SageMaker ML Lineage Tracking 記錄訓練一個模型用到的資料集、job 與成品，用途是重現與稽核（[ML Lineage Tracking][sm-lineage]，原文）。這兩者的 lineage 實際上是 PROV 意義的 provenance。
 - **Feast 的 point-in-time join**：以 event timestamp 判定，也就是「特徵被觀測或產生的事件時間」，entity row 的時間是可取用資料的上界（[feature retrieval][feast-retrieval]，原文）。這是 repo 的資料時間，不是知悉時間。
 - **SageMaker 的重現前提**：只要能取得當時確切的資料集，就能重現模型（[ML Lineage Tracking][sm-lineage]，原文）。這和凍結資料的用途相同。
-- **Datasheets**：每個資料集附一份 datasheet，記錄動機、組成、蒐集過程與建議用途（[Datasheets for Datasets][datasheets]，搜尋摘錄）。
+- **Datasheets**：每個資料集附一份 datasheet，記錄動機、組成、蒐集過程與建議用途；論文依 Motivation、Composition、Collection Process、Preprocessing/cleaning/labeling、Uses、Distribution、Maintenance 七節列出問題（[Datasheets for Datasets][datasheets]，原文）。
 
 結論：英文的 lineage 同時涵蓋「job 或資產之間的資料流向圖」與「一個模型的來歷」兩個概念。repo 的中文要把這兩者分開，見 [§4.2](#42-lineage-的三種寫法)。
 
@@ -134,13 +134,13 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 - **概念漂移**：Gama 等人的 survey 把 real concept drift 定義為 `p(y|X)` 的改變（[Gama et al.][gama]，搜尋摘錄）。GLOSSARY 的概念漂移（相同氣溫與日曆條件下負載模式改變）與此一致。
 - **特徵漂移**：Vertex AI 把「訓練資料與預測資料之間的 skew」與「預測資料隨時間的 drift」分成兩種設定（[model_monitoring.proto][vertex-monitoring]，原文）；SageMaker 以訓練資料集建立 baseline，再把預測資料和 baseline 比較（[Model Monitor][sm-monitor]，原文）。GLOSSARY 的特徵漂移只寫「偏離基準分佈」，沒有說基準取自訓練資料還是先前期間，所以只部分對應。
 - **模型品質監控**：SageMaker 把推論時擷取的預測與事後的 ground truth 合併比較，所用指標「取決於 ML 問題類型」（[model quality][sm-quality]，原文）。這和預報實績的做法一致：已發布預報與事後實際負載對照。
-- **模型新舊**：ML Test Score 列有「測試模型是否過舊」與「上線前測試模型品質」（[ML Test Score][ml-test-score]，搜尋摘錄）。
+- **模型新舊**：ML Test Score 列有「測試模型是否過舊」與「上線前測試模型品質」（[ML Test Score][ml-test-score]：摘要頁為原文，只說明共 28 項測試與監控需求；條目內容為搜尋摘錄，PDF 所在的 `storage.googleapis.com` 未放行）。
 - **誤差指標**：MAE、MSE、RMSE、MAPE 的定義見 scikit-learn 文件（[model_evaluation.rst][sklearn-metrics]，原文），與 GLOSSARY 一致。
 
 ### 2.7 文件與稽核紀錄
 
 - **ADR**：Nygard 2011 年提出的格式含 Title、Context、Decision、Status、Consequences；被推翻的決定保留原檔並標為 superseded（[Documenting Architecture Decisions][nygard]，搜尋摘錄）。repo 的 ADR 與此一致。
-- **Model Cards**：伴隨已訓練模型的短文件，提供在多種條件下的基準評估，是 Datasheets 的互補（[Model Cards][model-cards]，搜尋摘錄）。論文的章節名稱本次沒有讀到，標未查證。SageMaker Model Cards 的實作記錄 intended uses（用途、適用與不適用的情境、開發時的假設）、risk rating、訓練細節與評估結果（[SageMaker Model Cards][sm-cards]，原文）。
+- **Model Cards**：伴隨已訓練模型的短文件，提供在多種條件下的基準評估，是 Datasheets 的互補；論文提出的章節是 Model Details、Intended Use、Factors、Metrics、Evaluation Data、Training Data、Quantitative Analyses、Ethical Considerations、Caveats and Recommendations（[Model Cards][model-cards]，原文）。SageMaker Model Cards 的實作記錄 intended uses（用途、適用與不適用的情境、開發時的假設）、risk rating、訓練細節與評估結果（[SageMaker Model Cards][sm-cards]，原文）。
 - **稽核軌跡**：SageMaker 的 staging construct 保留模型核准與階段轉換的歷史（[staging construct][sm-staging]，原文）；ML Lineage Tracking 的用途之一是稽核與合規查核（[ML Lineage Tracking][sm-lineage]，原文）。repo 以 #377 的 append-only 資料表與 git 歷史承擔同樣的功能。
 - **repo 內兩種研究文件**：`lab/<YYYY-MM-DD>-<topic>/README.md` 是 [lab.md §5][repo-lab] 定義的研究報告，含重現紀錄欄位；`docs/research/` 下是調查類的紀錄文件，依 [markdown-metadata.md][repo-metadata] 以 `Status` 標示進行或結案。
 
@@ -152,8 +152,8 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 | repo 用語 | repo 的現行邊界 | 業界對應用語 | 來源 | 邊界 | 建議 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 研究者 (Researcher) | 在研究空間以凍結資料探索、訓練、評估，需要時交出模型交付包的角色 | AI Development actor；model developer | [NIST][nist-actors]（搜尋摘錄）；SR 11-7（未查證） | 部分 | 保留：業界依生命週期劃分角色，repo 依交付契約劃分，沒有撞名。 |
-| 平台維護者 (Platform Maintainer) | 負責擷取、平台訓練、serving 與監控，並「驗收模型交付包、決定釘選」 | AI Deployment、Operation and Monitoring actor；model owner | [NIST][nist-actors]（搜尋摘錄）；SR 11-7（未查證） | 部分 | 保留，修定義：驗收已是 `src/` 的純函式、閘門判定不得人工推翻（#277、#376），人的責任是審查釘選變更的 PR，定義中的「驗收模型交付包」應改寫。 |
+| 研究者 (Researcher) | 在研究空間以凍結資料探索、訓練、評估，需要時交出模型交付包的角色 | AI Development actor；model developer | [NIST][nist-actors]、[SR 11-7][sr117] | 部分 | 保留：業界依生命週期劃分角色，repo 依交付契約劃分，沒有撞名。 |
+| 平台維護者 (Platform Maintainer) | 負責擷取、平台訓練、serving 與監控，並「驗收模型交付包、決定釘選」 | AI Deployment、Operation and Monitoring actor；model owner | [NIST][nist-actors]、[SR 11-7][sr117] | 部分 | 保留，修定義：驗收已是 `src/` 的純函式、閘門判定不得人工推翻（#277、#376），人的責任是審查釘選變更的 PR，定義中的「驗收模型交付包」應改寫。 |
 | 營運驗收 (Operational Acceptance) | `ops-acceptance` issue：以正式資料在運行環境證明一個里程碑，證據貼齊才關閉 | operational acceptance testing；acceptance testing | [ISTQB][istqb]（搜尋摘錄） | 部分 | 保留：與 OAT 同屬營運面的接受，撞名由模型層讓出，見 §4.1。 |
 
 ### 3.2 模型登錄、版本與晉升
@@ -165,10 +165,10 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 | 成品 | 平台模型與交付包共用的檔案形式：一個目錄，含宣告檔與原生模型檔，以 SHA-256 識別 | model artifact；MLflow Model（含任意檔案的目錄加 `MLmodel`） | [SageMaker Model Cards][sm-cards]、[MLflow Model][mlflow-model] | 部分 | 補對照：英文寫 model artifact，不單寫 artifact，因為 [data-contracts.md §5][repo-data-contracts] 的 artifact 指 Dagster I/O 產物。 |
 | 候選模型 (Candidate Model) | 等待評估閘門判定的模型版本 | candidate model | [MLflow][mlflow-validation]、[TFMA][tfma-validations] | 一致 | 補對照：candidate model 可作英文對照；challenger 留在 `_Avoid_`，因為對手依路徑不同（平台模型或現役模型）。 |
 | 釘選 (Pin) | 指定通過閘門的交付包為現役模型，不到期，平台訓練不覆蓋 | alias 指派；`Approved`；version alias；promote | [MLflow][mlflow-workflow]、[SageMaker][sm-approve]、[Vertex][vertex-service] | 部分 | 保留：promote 留在 `_Avoid_`，MLflow 的 promote 指跨環境推進版本，範圍不同。 |
-| 退回 (Rollback) | 改回同一任務先前曾生效的交付包，免過閘門，須重新通過驗收 | rollback | [SageMaker][sm-approve]；[Google][google-mlops]（搜尋摘錄） | 部分 | 保留：業界的 rollback 不限交付包；平台模型的退回列為值得補進設計，見 §6。 |
-| 下架 (Retirement) | 停止提供某個 ML 任務，不刪除紀錄與交付包 | decommissioning and phasing out | [NIST GOVERN 1.7][nist-rmf]（搜尋摘錄） | 部分 | 補對照：decommissioning 可作英文對照。 |
-| 平台模型 (Platform Model) | 最近一次通過評估閘門的平台訓練結果；有釘選時待命 | 無直接對應；continuous training 的產出 | [Google][google-mlops]（搜尋摘錄） | 不同 | 保留：業界沒有「待命中的平台模型」這一層。 |
-| 現役模型 (Serving Model) | 目前回答隨需預測並產出已發布預報的模型版本 | production model；champion alias 指向的版本；default version | [MLflow][mlflow-registry]、[Vertex][vertex-service] | 部分 | 補對照：production model 邊界一致，建議從 `_Avoid_` 移到英文對照；champion 留在 `_Avoid_`；Vertex 的 default version 是未指定版本時的預設，不是現役。 |
+| 退回 (Rollback) | 改回同一任務先前曾生效的交付包，免過閘門，須重新通過驗收 | rollback | [SageMaker][sm-approve]、[Google][google-mlops] | 部分 | 保留：業界的 rollback 不限交付包；平台模型的退回列為值得補進設計，見 §6。 |
+| 下架 (Retirement) | 停止提供某個 ML 任務，不刪除紀錄與交付包 | decommissioning and phasing out | [NIST GOVERN 1.7][nist-rmf] | 部分 | 補對照：decommissioning 可作英文對照。 |
+| 平台模型 (Platform Model) | 最近一次通過評估閘門的平台訓練結果；有釘選時待命 | 無直接對應；continuous training 的產出 | [Google][google-mlops] | 不同 | 保留：業界沒有「待命中的平台模型」這一層。 |
+| 現役模型 (Serving Model) | 目前回答隨需預測並產出已發布預報的模型版本 | production model；champion alias 指向的版本；default version | [MLflow][mlflow-registry]、[Vertex][vertex-service]、[Google][google-mlops] | 部分 | 補對照：production model 邊界一致（Google 的 MLOps 文章也以它稱目前服務中的模型），建議從 `_Avoid_` 移到英文對照；champion 留在 `_Avoid_`；Vertex 的 default version 是未指定版本時的預設，不是現役。 |
 | 期望狀態 | 人決定、以 PR 修改的 `serving/<task_id>.toml`（釘選與自動訓練 flag） | desired state | [Kubernetes][k8s-controller]、[OpenGitOps][gitops-glossary] | 一致 | 補對照：desired state 可作英文對照；期望沒有生效時寫「期望未生效」，不寫 drift 或漂移。 |
 | 生效紀錄 | reconciler 驗證期望狀態後寫入的 append-only 紀錄：哪個 SHA、依什麼判定、何時生效 | lifecycle audit trail；current state | [SageMaker][sm-staging]、[Kubernetes][k8s-controller] | 部分 | 保留：英文建議 activation record，不用 deployment 或 promotion，見 §8。 |
 | reconciler | Dagster sensor，驗證期望狀態後才寫生效紀錄 | reconciliation；controller | [OpenGitOps][gitops-principles]、[Kubernetes][k8s-controller] | 一致 | 保留：英文技術詞，在 `docs/reference/` 補 OpenGitOps 對照。 |
@@ -180,11 +180,11 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 | repo 用語 | repo 的現行邊界 | 業界對應用語 | 來源 | 邊界 | 建議 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 驗收 (Acceptance) | 平台確認一個模型版本能被服務：靜態檢查、載入、試推論；不比好壞 | infra validation；acceptance testing；model validation | [TFX][tfx-infra]、[ISTQB][istqb]（搜尋摘錄）、[Google][google-mlops]（搜尋摘錄） | 不同 | 改名為「可服務檢查 (Servability Check)」，驗收列入 `_Avoid_`，見 §4.1。 |
-| 評估閘門 (Evaluation Gate) | 以核心指標在同一段資料上比較候選模型與對手，有拘束力；資料不足判待定 | Evaluator validation 與 blessing；`validate_evaluation_results`；model validation | [TFX][tfx-evaluator]、[MLflow][mlflow-validation]、[Google][google-mlops]（搜尋摘錄） | 部分 | 保留；`_Avoid_` 補 model validation（業界三種邊界都不同於本詞）。 |
+| 驗收 (Acceptance) | 平台確認一個模型版本能被服務：靜態檢查、載入、試推論；不比好壞 | infra validation；acceptance testing；model validation | [TFX][tfx-infra]、[ISTQB][istqb]（搜尋摘錄）、[Google][google-mlops] | 不同 | 改名為「可服務檢查 (Servability Check)」，驗收列入 `_Avoid_`，見 §4.1。 |
+| 評估閘門 (Evaluation Gate) | 以核心指標在同一段資料上比較候選模型與對手，有拘束力；資料不足判待定 | Evaluator validation 與 blessing；`validate_evaluation_results`；model validation | [TFX][tfx-evaluator]、[MLflow][mlflow-validation]、[Google][google-mlops] | 部分 | 保留；`_Avoid_` 補 model validation（業界三種邊界都不同於本詞）。 |
 | 核心指標 (Core Metric) | 評估閘門唯一的比較依據，由輸出契約定義 | validation threshold 所掛的 metric | [MLflow][mlflow-validation]、[TFMA][tfma-validations] | 部分 | 保留：業界允許多個指標同時設門檻，本詞刻意只有一個。 |
 | 待定 | 評估窗不足時的判定，候選不取代對手，資料夠了自動重評 | 無對應；TFX 沒有 baseline 時忽略 change threshold | [TFX][tfx-evaluator] | 不同 | 保留：資料表中的值寫 `inconclusive`，不寫 `pending`，因為 SageMaker 的 `PendingManualApproval` 指等人核准。 |
-| 滾動起點回測 (Rolling-Origin Backtest) | 多個起點、只用起點前已知的資料預報、依提前時數彙整誤差 | time series cross-validation；back-testing | [scikit-learn][sklearn-cv]；[SR 11-7][sr117]（搜尋摘錄） | 部分 | 補對照：`_Avoid_` 的「交叉驗證」理由改寫為「一般指打亂順序的 k-fold；時間序列交叉驗證不含知悉時間規則」。 |
+| 滾動起點回測 (Rolling-Origin Backtest) | 多個起點、只用起點前已知的資料預報、依提前時數彙整誤差 | time series cross-validation；back-testing | [scikit-learn][sklearn-cv]、[SR 11-7][sr117] | 部分 | 補對照：`_Avoid_` 的「交叉驗證」理由改寫為「一般指打亂順序的 k-fold；時間序列交叉驗證不含知悉時間規則」。 |
 
 ### 3.4 資料版本、時點正確性與世系
 
@@ -221,10 +221,10 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 | 特徵漂移 (Feature Drift) | 近期實際氣溫或負載的分佈偏離基準分佈 | data drift；virtual drift；training-serving skew 與 prediction drift | [Vertex][vertex-monitoring]、[SageMaker][sm-monitor]；[Gama et al.][gama]（搜尋摘錄） | 部分 | 補對照：定義寫明基準分佈取自訓練資料（業界稱 skew）或先前期間（業界稱 drift）。 |
 | 概念漂移 (Concept Drift) | 相同氣溫與日曆條件下，負載模式系統性轉變 | real concept drift | [Gama et al.][gama]（搜尋摘錄） | 一致 | 補對照：real concept drift 可作英文對照。 |
 | 提前時數 (Lead Time) | 目標小時與發布時刻相差的小時數 | lead time；forecast horizon | 本次未另查一手來源 | 一致 | 保留：GLOSSARY 已有英文 Lead Time。 |
-| 預報實績 (Forecast Track Record) | 已發布預報與事後實際負載對照的誤差紀錄，是營運紀錄 | model quality monitoring；outcomes analysis | [SageMaker][sm-quality]；[SR 11-7][sr117]（搜尋摘錄） | 部分 | 保留：`_Avoid_` 已排除回測，與 SR 11-7 把 back-testing 列為 outcomes analysis 之一的分法相容。 |
+| 預報實績 (Forecast Track Record) | 已發布預報與事後實際負載對照的誤差紀錄，是營運紀錄 | model quality monitoring；outcomes analysis | [SageMaker][sm-quality]、[SR 11-7][sr117] | 部分 | 保留：`_Avoid_` 已排除回測，與 SR 11-7 把 back-testing 列為 outcomes analysis 之一的分法相容。 |
 | 統計截至時刻 (Track Record Cutoff) | 一份預報實績涵蓋目標小時的終點 | 本次來源未見對應詞 | — | 不同 | 保留。 |
 | 累積天數 (Accumulated Days)／累積不足 | 最近 30 天內有可比對小時的日數，滿 7 天才公開指標 | 本次來源未見對應詞 | — | 不同 | 保留。 |
-| 預報實績回顧 (Forecast Track Record Review) | 對一段預報實績的文字解讀，每項說法附證據 | outcomes analysis 的分析部分 | SR 11-7（未查證） | 部分 | 保留。 |
+| 預報實績回顧 (Forecast Track Record Review) | 對一段預報實績的文字解讀，每項說法附證據 | outcomes analysis 的分析部分 | [SR 11-7][sr117] | 部分 | 保留。 |
 
 ### 3.7 文件與稽核紀錄
 
@@ -316,11 +316,11 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 | #376 的說法 | 查證結果 | 來源 |
 | :--- | :--- | :--- |
-| 能不能服務叫 model／infra validation（TFX InfraValidator），在本地圖是驗收 | infra validation 成立：它檢查模型在 serving 基礎設施中能否載入與查詢，不管預測對錯。model validation 不成立：Google 以它指效能優於基準，相當於評估閘門。 | [TFX InfraValidator][tfx-infra]、[Google][google-mlops]（搜尋摘錄） |
+| 能不能服務叫 model／infra validation（TFX InfraValidator），在本地圖是驗收 | infra validation 成立：它檢查模型在 serving 基礎設施中能否載入與查詢，不管預測對錯。model validation 不成立：Google 的 offline model validation 同時包含效能比較與基礎設施相容性測試，橫跨驗收與評估閘門，不能單指驗收。 | [TFX InfraValidator][tfx-infra]、[Google][google-mlops] |
 | 夠不夠好叫 value threshold，在本 repo 是 `[health]` | 形式相同，角色不同：TFMA 的 value threshold 會擋下候選模型；`[health]` 依 #376 第 8 點只用於監控，不參與閘門。 | [TFMA][tfma-validations] |
 | 誰比較好叫 champion/challenger，TFX Evaluator 對 baseline 判 blessing | Evaluator 的部分成立。但 InfraValidator 也輸出 blessing，所以 blessing 不專指評估閘門的判定，GLOSSARY 把它列入 `_Avoid_` 是對的。champion 在 MLflow 文件只是 alias 名稱的範例；champion/challenger 作為方法名的一手出處本次沒有查到。 | [TFX Evaluator][tfx-evaluator]、[InfraValidator][tfx-infra]、[MLflow][mlflow-registry] |
 | MLflow 用 `MetricThreshold` 的 `min_absolute_change`／`min_relative_change` | 存在，但方向只有「至少好多少」：`min_absolute_change` 必須為正，`min_relative_change` 介於 0 與 1，設 0 等於「不比基準差」。平台重訓的「5% 容忍的不劣於」表達不了。TFMA 的 change threshold 可以設成允許候選略差（TFX 範例以 absolute `-1e-10` 表示「AUC 不低於基準」）。交付包的「嚴格優於」兩者都能表達。 | [MLflow validation.py][mlflow-validation]、[TFMA][tfma-validations]、[TFX Evaluator][tfx-evaluator] |
-| 把勝出者換上去叫 promotion，在本地圖是釘選或平台模型更新 | 成立：MLflow 以 promote 指把版本推向 staging 或 production 環境，Google 以它指新模型上線前的晉升。 | [MLflow workflow][mlflow-workflow]、[Google][google-mlops]（搜尋摘錄） |
+| 把勝出者換上去叫 promotion，在本地圖是釘選或平台模型更新 | 成立：MLflow 以 promote 指把版本推向 staging 或 production 環境，Google 以它指新模型通過驗證後晉升上線（promoted to production）。 | [MLflow workflow][mlflow-workflow]、[Google][google-mlops] |
 | 來源見 #272 研究檔第 2.3 節與 3.10 節 | 研究檔已遺失，改指本報告 §2.2、§2.3 與本節。 | — |
 
 ## 5. 其他改名與統一寫法
@@ -335,20 +335,20 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 | 概念 | 業界來源 | 結論 | 理由或影響 |
 | :--- | :--- | :--- | :--- |
-| 平台模型的退回 | [SageMaker][sm-approve]：使用專案範本時，把已核准版本改為 `Rejected` 會重新部署最新一個 `Approved` 版本；[Google][google-mlops]：管線要能退回前一個模型版本（搜尋摘錄） | 值得補進設計 | 影響 #270「平台模型本身的退回」。平台模型只留一份，又不能被釘選；通過閘門的平台模型上線後變差時，止損只能等下一次平台重訓勝出，或另交一份能贏過它的交付包。若變差的原因也影響重訓（例如上游資料錯誤），而該任務從未有交付包生效過，就沒有不靠研究者的止損路徑。建議保留前一份平台模型，並讓退回涵蓋它。 |
+| 平台模型的退回 | [SageMaker][sm-approve]：使用專案範本時，把已核准版本改為 `Rejected` 會重新部署最新一個 `Approved` 版本；[Google][google-mlops]：ML metadata 要保留指向前一個訓練好的模型的指標，以便退回前一個模型版本 | 值得補進設計 | 影響 #270「平台模型本身的退回」。平台模型只留一份，又不能被釘選；通過閘門的平台模型上線後變差時，止損只能等下一次平台重訓勝出，或另交一份能贏過它的交付包。若變差的原因也影響重訓（例如上游資料錯誤），而該任務從未有交付包生效過，就沒有不靠研究者的止損路徑。建議保留前一份平台模型，並讓退回涵蓋它。 |
 | 模型新舊（model staleness） | [ML Test Score][ml-test-score]：測試模型是否過舊（搜尋摘錄） | 值得補進設計 | 影響 #270「釘選模型的監控」。釘選不會到期，釘選期間監控評估的是平台模型（#274），交付包的訓練截止會無聲地變舊。建議監控報告列出現役模型的訓練截止距今多久，並以預報實績（已發布預報帶 `model_sha256`）計算現役模型本身的核心指標。 |
 | 健康判定依問題類型 | [SageMaker][sm-quality]：模型品質監控的指標取決於 ML 問題類型 | 值得補進設計 | 影響 #270「`[health]` 的健康判定規則改歸輸出契約還是監控本身」。交付包的任務類型可以和平台模型不同（#376 第 5 點）；規則若留在任務類型的 `assess_health`，同一個 ML 任務換了模型就換了健康規則。建議歸輸出契約，和評分器、核心指標放在一起。 |
-| Model card | [Model Cards][model-cards]（搜尋摘錄）、[SageMaker Model Cards][sm-cards] | 知悉但不採用 | 宣告（#277 的七節）、判定報告（#377 第 16 點）與輸出契約已涵蓋模型細節、訓練資料與評估；沒有要在多個模型之間挑選的外部使用者。 |
-| Intended use、out-of-scope use | [SageMaker Model Cards][sm-cards]；[NIST MAP 1.1][nist-rmf]、[EU AI Act Art. 3(12)][eu-ai-act]（搜尋摘錄） | 知悉但不採用 | 用途由 ML 任務與輸出契約固定，不隨模型版本改變；交付包不能宣告契約以外的產出（#279）。 |
-| 模型清冊（model inventory） | [NIST GOVERN 1.6][nist-rmf]（搜尋摘錄）；SR 11-7（未查證） | 知悉但不採用 | `tasks/` 與 `serving/` 一對一（#388），加上生效紀錄，已列出每個 ML 任務與它的現役模型。 |
-| 獨立驗證；V&V 與 T&E 分離 | [NIST Appendix A][nist-actors]（搜尋摘錄）；SR 11-7（未查證） | 知悉但不採用 | 單人維護。以「判定一律由平台以成品重算、不採信交付包附上的證據」（#376 第 12 點）機械化代替。 |
-| Effective challenge | [SR 11-7][sr117]（搜尋摘錄） | 知悉但不採用 | 需要另一位有影響力的審查者；本 repo 只有 PR review 與公開 repo 的讀者。 |
-| Datasheet | [Datasheets for Datasets][datasheets]（搜尋摘錄） | 知悉但不採用 | 資料來源與 schema 已在 [data-contracts.md][repo-data-contracts]，凍結資料的清單記錄切面；沒有外部資料集使用者。 |
-| 模型退役（decommissioning） | [NIST GOVERN 1.7][nist-rmf]（搜尋摘錄） | 知悉但不採用 | 已由下架與交付包的保留下限（#411）涵蓋，只補英文對照。 |
-| 事件通報（serious incident、incident reporting） | [EU AI Act Art. 3(49)][eu-ai-act]、[NIST AI 600-1 MANAGE 4.3][nist-600]（搜尋摘錄） | 知悉但不採用 | 沒有須通報的使用者或主管機關；預報檢視的錯誤以 issue 處理，已發布預報原樣保存，可供事後追查。 |
-| 線上驗證（canary、A/B、shadow） | [Google][google-mlops]（搜尋摘錄） | 知悉但不採用 | #376 已否決影子部署：以 `known_by` 事後回測等效；單機部署，沒有流量可分。 |
+| Model card | [Model Cards][model-cards]、[SageMaker Model Cards][sm-cards] | 知悉但不採用 | 宣告（#277 的七節）、判定報告（#377 第 16 點）與輸出契約已涵蓋模型細節、訓練資料與評估；沒有要在多個模型之間挑選的外部使用者。 |
+| Intended use、out-of-scope use | [SageMaker Model Cards][sm-cards]；[NIST MAP 1.1][nist-rmf]；[EU AI Act Art. 3(12)][eu-ai-act]（搜尋摘錄） | 知悉但不採用 | 用途由 ML 任務與輸出契約固定，不隨模型版本改變；交付包不能宣告契約以外的產出（#279）。 |
+| 模型清冊（model inventory） | [NIST GOVERN 1.6][nist-rmf]；[SR 11-7][sr117]：由專人維護全公司的模型清冊 | 知悉但不採用 | `tasks/` 與 `serving/` 一對一（#388），加上生效紀錄，已列出每個 ML 任務與它的現役模型。 |
+| 獨立驗證；V&V 與 T&E 分離 | [NIST Appendix A][nist-actors]；[SR 11-7][sr117]：獨立驗證與 effective challenge | 知悉但不採用 | 單人維護。以「判定一律由平台以成品重算、不採信交付包附上的證據」（#376 第 12 點）機械化代替。 |
+| Effective challenge | [SR 11-7][sr117] | 知悉但不採用 | 需要另一位有影響力的審查者；本 repo 只有 PR review 與公開 repo 的讀者。 |
+| Datasheet | [Datasheets for Datasets][datasheets] | 知悉但不採用 | 資料來源與 schema 已在 [data-contracts.md][repo-data-contracts]，凍結資料的清單記錄切面；沒有外部資料集使用者。 |
+| 模型退役（decommissioning） | [NIST GOVERN 1.7][nist-rmf] | 知悉但不採用 | 已由下架與交付包的保留下限（#411）涵蓋，只補英文對照。 |
+| 事件通報（serious incident、incident reporting） | [EU AI Act Art. 3(49)][eu-ai-act]（搜尋摘錄）；[NIST AI 600-1 MANAGE 4.3][nist-600] | 知悉但不採用 | 沒有須通報的使用者或主管機關；預報檢視的錯誤以 issue 處理，已發布預報原樣保存，可供事後追查。 |
+| 線上驗證（canary、A/B、shadow） | [Google][google-mlops] | 知悉但不採用 | #376 已否決影子部署：以 `known_by` 事後回測等效；單機部署，沒有流量可分。 |
 | 人工核准狀態（`PendingManualApproval`） | [SageMaker][sm-approve] | 知悉但不採用 | 閘門判定有拘束力，不得人工推翻（#376）；人的決定只在期望狀態的 PR。 |
-| 人為推翻與申訴（appeal and override） | [NIST MANAGE 4.1][nist-rmf]（搜尋摘錄） | 知悉但不採用 | 理由同上；止損以解除釘選與退回達成。 |
+| 人為推翻與申訴（appeal and override） | [NIST MANAGE 4.1][nist-rmf] | 知悉但不採用 | 理由同上；止損以解除釘選與退回達成。 |
 | 風險分級（risk rating） | [SageMaker Model Cards][sm-cards]；[EU AI Act Annex III][eu-ai-act]（搜尋摘錄） | 知悉但不採用 | 單一領域的展示專案，不作為電網運轉的安全元件。 |
 | 訓練與 serving 的偏差（training-serving skew） | [Vertex][vertex-monitoring] | 知悉但不採用 | 已是 #270「訓練與 serving 的特徵一致性」的未決項目；評估閘門以預報天氣評分，偏差的後果會反映在核心指標。只把 skew 記為該項目的英文對照。 |
 | 推論輸入的擷取保存（data capture） | [SageMaker Model Monitor][sm-monitor] | 知悉但不採用 | 預測輸入可依知悉時間近似重建（ADR-0018）；是否保存仍由 #270「已發布預報記錄模型來源」的未決部分決定。 |
@@ -434,32 +434,25 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 ### 9.1 連不到的主機
 
-2026-11-27 初次撰寫時以 `curl` 與 WebFetch 測試，下列主機被本環境的網路政策拒絕。
+初次撰寫時，NIST、聯準會、EUR-Lex、ISO、arXiv 與 Google 的主機都被本環境的網路政策拒絕，相關說法只取自搜尋摘錄。之後 `nvlpubs.nist.gov`、`airc.nist.gov`、`www.federalreserve.gov`、`eur-lex.europa.eu`、`www.iso.org`、`arxiv.org`、`docs.cloud.google.com`、`research.google` 加進了允許清單，同日以 `curl` 重讀原文複核。WebFetch 對這些主機仍回報 `getaddrinfo ENOTFOUND`，所以複核只用 `curl`。
 
-**後來放行、但仍讀不到**：`nvlpubs.nist.gov`、`airc.nist.gov`、`www.federalreserve.gov`、`eur-lex.europa.eu`、`www.iso.org`、`arxiv.org`、`docs.cloud.google.com`、`research.google` 之後加進了環境的允許清單。同日複核時，WebFetch 對其中 `nvlpubs.nist.gov`、`www.federalreserve.gov`、`eur-lex.europa.eu`、`arxiv.org`、`docs.cloud.google.com`、`research.google`、`airc.nist.gov` 仍回報無法解析主機名稱（`getaddrinfo ENOTFOUND`），`www.iso.org` 未再測。這些主機承載的說法維持搜尋摘錄，§9.2 的項目都沒有變動。
+複核後仍讀不到的主機：
 
-各主機承載的來源：
-
-- `nvlpubs.nist.gov`、`airc.nist.gov`（後來放行）：NIST AI 100-1、AI 600-1、Appendix A。
-- `www.federalreserve.gov`（後來放行）：SR 11-7。
-- `eur-lex.europa.eu`（後來放行）：EU AI Act。
-- `www.iso.org`，含 [ISO OBP][iso-obp]（後來放行）：ISO/IEC 42001、22989。
-- `arxiv.org`（後來放行）、`export.arxiv.org`（未放行）：Model Cards、Datasheets。
-- `docs.cloud.google.com`（後來放行；`cloud.google.com` 的頁面都轉址到這裡）：Google MLOps 文章。
-- `research.google`（後來放行）、`research.google.com`（未放行）：ML Test Score。搜尋結果中的 PDF 位於 `research.google.com/pubs/archive/`，這個主機不在允許清單內。
+- `eur-lex.europa.eu`：回應 HTTP 202 且內容為空，是自動讀取的防護頁，不是網路政策。EU AI Act 維持搜尋摘錄。
+- `www.iso.org`，含 [ISO OBP][iso-obp]：回應 HTTP 403。ISO/IEC 42001、22989 的術語維持未查證。
+- `storage.googleapis.com`（未放行）：ML Test Score 的 PDF 放在這裡；`research.google` 的論文頁只有摘要。
 - 未放行，改讀各專案 GitHub 上的文件原始檔或原始碼：`mlflow.org`、`www.tensorflow.org`、`docs.dagster.io`、`docs.feast.dev`、`openlineage.io`、`www.w3.org`、`kubernetes.io`、`opengitops.dev`。
 - 未放行，維持搜尋摘錄：`glossary.istqb.org`、`cognitect.com`、`dl.acm.org`、`otexts.com`。
 
 ### 9.2 搜尋摘錄與未查證
 
-- **搜尋摘錄**：NIST AI 100-1 與 AI 600-1、SR 11-7、EU AI Act、Google MLOps 文章、ML Test Score、Model Cards、Datasheets、ISTQB Glossary、Nygard 的 ADR 文章、Gama 等人的 survey。措辭沒有逐字核對，主機開放後應開原頁複核。NIST 的 MANAGE 4.3 只在 AI 600-1 的摘錄中見到，不是 AI 100-1。
+- **以原文複核後改動的說法**：Google 的 offline model validation 除了效能比較，也包括「測試模型能否部署，含基礎設施相容性與 prediction service API 的一致性」。初稿依摘錄寫成「Google 的 model validation 只指效能優於基準」，已修正 §2.3、§3.3 與 §4.3；結論「model validation 不能當驗收或評估閘門的英文名稱」不變，理由改為它同時涵蓋兩者。其餘 NIST、SR 11-7、Model Cards、Datasheets 的說法與原文一致，只把標記改為原文。
+- **以原文補上的項目**：SR 11-7 的角色分工（ownership、controls、compliance，model owner 負最終責任）與全公司模型清冊；Model Cards 與 Datasheets 的章節名稱。
+- **搜尋摘錄**：EU AI Act、ML Test Score 的條目、ISTQB Glossary、Nygard 的 ADR 文章、Gama 等人的 survey。措辭沒有逐字核對，主機開放後應開原頁複核。
 - **未查證**：
   - ISO/IEC 42001 與 22989 的全部術語內容。
-  - SR 11-7 的角色分工與 model inventory 原文。
   - EU AI Act 的 provider、deployer 定義，以及 Article 11、12、72、73 的條文。
   - ML Test Score 中 rollback、canary 與訓練可重現的條目。
-  - Model Cards 與 Datasheets 的章節名稱。
-  - Google 文章 offline model validation 清單是否含基礎設施相容性。
   - 雙時間資料庫的 transaction time 定義，以及 champion/challenger 作為方法名的一手出處。
   - Hyndman 等人對 time series cross-validation 的說法（本報告改引 scikit-learn）。
 
@@ -468,7 +461,7 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 1. **驗收改模型層**，與 issue 的初步看法相反（§4.1）。判斷依據是 repo 內「驗收」的通用用法與英文 Acceptance 的業界邊界；如果維護者更重視「交付」與「驗收」的中文配對，備案仍可解決撞名。
 2. **研究報告與調查報告的切分**（§5）。撞名的影響較小，若維護者認為不值得，維持現狀也只是語意不夠精確。
 3. **英文命名建議**：生效紀錄的 activation、既有模型接軌的 `grandfathered`、可服務檢查的規則代碼前綴，都沒有業界標準詞可依。
-4. **把 production model 從 `_Avoid_` 移出**。邊界一致，但 production 在 repo 也可能被讀成 `main` 分支或正式環境。
+4. **把 production model 從 `_Avoid_` 移出**。邊界一致，Google 的 MLOps 文章也這樣用；但 production 在 repo 也可能被讀成 `main` 分支或正式環境。
 5. **禁詞中的模型家族**：歷史 ADR 要改寫還是豁免，未定。
 
 ## 10. 來源清單
@@ -490,13 +483,13 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 | [W3C PROV-DM][prov-dm] | W3C Recommendation 2013-04-30，取自 `w3c/prov` commit `aa82bd7` | 原文（GitHub） |
 | [Kubernetes controller][k8s-controller] | `kubernetes/website` commit `61712dd` | 原文（GitHub） |
 | [OpenGitOps principles][gitops-principles]、[glossary][gitops-glossary] | `open-gitops/documents` commit `9752f1d` | 原文（GitHub） |
-| [NIST AI 100-1][nist-rmf]、[Appendix A][nist-actors]、[NIST AI 600-1][nist-600] | AI RMF 1.0（2023-01） | 搜尋摘錄 |
-| [SR 11-7][sr117] | 2011-04-04 | 搜尋摘錄 |
-| [EU AI Act][eu-ai-act] | Regulation (EU) 2024/1689，含 2026-07-27 合併版 | 搜尋摘錄 |
-| [Google MLOps 文章][google-mlops] | 線上文件，無版本號 | 搜尋摘錄 |
-| [ML Test Score][ml-test-score] | Breck et al., IEEE Big Data 2017 | 搜尋摘錄 |
-| [Model Cards for Model Reporting][model-cards] | arXiv 1810.03993v2 | 搜尋摘錄 |
-| [Datasheets for Datasets][datasheets] | arXiv 1803.09010v8 | 搜尋摘錄 |
+| [NIST AI 100-1][nist-rmf]、[Appendix A][nist-actors]、[NIST AI 600-1][nist-600] | AI RMF 1.0（2023-01）；AI 600-1（2024-07） | 原文（PDF；Appendix A 另見 AIRC 線上版） |
+| [SR 11-7][sr117] | 2011-04-04 附件 | 原文（PDF） |
+| [EU AI Act][eu-ai-act] | Regulation (EU) 2024/1689，含 2026-07-27 合併版 | 搜尋摘錄（EUR-Lex 擋下自動讀取） |
+| [Google MLOps 文章][google-mlops] | 線上文件，Last reviewed 2024-08-28 | 原文 |
+| [ML Test Score][ml-test-score] | Breck et al., IEEE Big Data 2017 | 摘要頁為原文；條目為搜尋摘錄 |
+| [Model Cards for Model Reporting][model-cards] | arXiv 1810.03993v2 | 原文（PDF） |
+| [Datasheets for Datasets][datasheets] | arXiv 1803.09010v8 | 原文（PDF） |
 | [ISTQB Glossary][istqb] | v3.5 release notes 所載定義 | 搜尋摘錄 |
 | [Documenting Architecture Decisions][nygard] | 2011-11-15 | 搜尋摘錄 |
 | [A Survey on Concept Drift Adaptation][gama] | ACM Computing Surveys 46(4), 2014 | 搜尋摘錄 |
