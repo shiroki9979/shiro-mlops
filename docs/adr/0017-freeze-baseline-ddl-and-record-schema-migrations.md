@@ -1,12 +1,16 @@
 # ADR-0017：凍結基線 DDL，schema 遷移依序套用並留下紀錄
 
 > - Created: 2026-11-23
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[資料模型與契約](../reference/data-contracts.md)
 
 ---
+
+## Plain Language Summary
+
+資料庫的表格結構原本由一份建表腳本定義。每次要改既有的表格，就修改這份腳本，再另外寫一段程式把舊資料庫改成同樣的結構。資料庫不記得自己被改過哪些，所以每段程式都得自己檢查「我做過了沒」，多個程式同時啟動時還曾因此互相衝突而失敗。我們決定把建表腳本凍結成起點，之後對既有表格的每次修改都寫成一筆有編號的變更，依序套用，並在資料庫裡記下已套用的項目。代價是那份腳本不再等於資料庫現在的結構，要連同所有變更一起看；程式退回舊版時也會拒絕啟動，只能還原備份或升回新版。
 
 ## 1. Context
 
