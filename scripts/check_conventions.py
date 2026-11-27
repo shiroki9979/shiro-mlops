@@ -133,6 +133,10 @@ CHECKS_REQUIRING_BASE = ("doc-dates", "comment-kinds", "blob-limits")
 # Single source for terminology: banned term -> preferred replacement.
 BANNED_TERMS = {
     "端口": "連接埠",
+    "世系": "資產依賴圖",
+    "血緣": "資產依賴圖或出處",
+    "驗收關卡": "可服務檢查",
+    "不可用預報": "無法產出",
 }
 TERMS_EXEMPT_DIRS = ("docs/research/",)
 """Path prefixes whose Markdown quotes banned terms on purpose: surveys of the old vocabulary."""
