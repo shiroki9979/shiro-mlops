@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Final
 
 import numpy as np
 import pandas as pd
@@ -51,8 +51,8 @@ TASK_TYPE_NAME = "unsupervised_reconstruction"
 ARRAYS_FILE = "model.npz"
 MODEL_FORMAT = ModelFormat(TASK_TYPE_NAME, version=1)
 # ADR-0010：numpy 前向計算只實作這兩種激活函數，訓練時固定之。
-HIDDEN_ACTIVATION = "relu"
-OUTPUT_ACTIVATION = "identity"
+HIDDEN_ACTIVATION: Final = "relu"
+OUTPUT_ACTIVATION: Final = "identity"
 RANDOM_STATE = 42
 # 與 recursive_regression 訓練特徵相同：觀測天氣最多向前補兩小時，更長的缺口不補值。
 WEATHER_FILL_LIMIT_HOURS = 2
