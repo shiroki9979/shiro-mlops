@@ -1,7 +1,7 @@
 # GitHub 儲存庫設定
 
 > - Created: 2026-11-22
-> - Last Updated: 2026-11-23
+> - Last Updated: 2026-11-27
 
 ---
 
@@ -46,12 +46,12 @@ fork PR 的 workflow 執行時：
 | — | Private vulnerability reporting | 開啟 | 讓回報者以 **Security → Report a vulnerability** 私下回報 |
 | Dependency Scanning | Dependency graph | 開啟 | Dependabot alerts 需要它 |
 | Dependency Scanning | Automatic dependency submission | Disabled | 只適用於建置時才算得出依賴的生態系；`uv.lock` 與 `pnpm-lock.yaml` 可直接讀取 |
-| Dependabot | Dependabot alerts | 開啟 | 依賴項有已知漏洞時發出 alert |
+| Dependabot | Dependabot alerts | 開啟 | 依賴項有已知漏洞時發出 alert。以 commit SHA 固定的 action、容器映像與 Terraform provider 都不會產生 alert，這些項目靠 version updates 收到更新 |
 | Dependabot | Malware alerts | 關閉 | 依賴項是已知惡意套件時發出 alert；要開時直接切換即可 |
 | Dependabot | Dependabot auto-triage rules | GitHub 預設規則（1 條） | 未自訂規則 |
 | Dependabot | Dependabot security updates | 關閉 | 單人維護的儲存庫只看 alert，再由人決定是否升級 |
 | Dependabot | Grouped security updates | 關閉 | 只在開啟 security updates 時有作用 |
-| Dependabot | Dependabot version updates | 關閉 | 沒有 `.github/dependabot.yml`，避免大量更新 PR |
+| Dependabot | Dependabot version updates | 開啟 | 由 [`.github/dependabot.yml`](../../.github/dependabot.yml) 設定：每月一次，同一 ecosystem 的更新合成一個 PR，避免大量更新 PR。涵蓋範圍見下方 |
 | Code Security | CodeQL analysis | Default setup | 語言由 GitHub 自動偵測；結果不列入 rulesets 的必要檢查 |
 | AI Scan | AI Scan for repositories、AI Scan for pull requests、Scan for AI applications | 關閉 | 會消耗 AI credits |
 | AI Scan | Copilot Autofix | 開啟 | 只在 CodeQL alert 中附上修正建議，不會自己開 PR |
@@ -59,6 +59,31 @@ fork PR 的 workflow 執行時：
 | Protection rules | Check runs failure threshold | 預設：Security alert severity level **High or higher**，Standard alert severity level **Only errors** | CodeQL 不在必要檢查內，這個門檻不會擋下合併 |
 | Secret Protection | Secret scanning | 開啟 | 掃描整個歷史與之後的推送，發現已知格式的機密時發出 alert |
 | Secret Protection | Push protection | 開啟 | 推送內容含已知格式的機密時直接拒絕 |
+
+### Dependabot version updates 的範圍
+
+[`.github/dependabot.yml`](../../.github/dependabot.yml) 涵蓋以 commit SHA、映像 digest 或 lock 檔固定的項目。每月第一天執行；新版發布滿 7 天才會被提出；PR 開在預設分支 `dev`，commit 訊息為 `build(deps): ...`，不加標籤。
+
+| Ecosystem | 目錄 | 更新的內容 | 分組 |
+| :--- | :--- | :--- | :--- |
+| `github-actions` | `/` | `.github/workflows/` 裡每個 `uses:` 的 SHA，以及同一行的 `# vX.Y.Z` 註解 | 一個 PR |
+| `docker` | `/docker`、`/frontend` | Dockerfile 的 `FROM` 映像，tag 與 digest 一起更新。`python` 只接受 patch 更新；`node` 不接受 major 更新 | 每個目錄一個 PR |
+| `docker-compose` | `/docker` | `docker-compose.yml` 的 `image:`，tag 與 digest 一起更新 | 一個 PR |
+| `terraform` | `/infra/terraform`、`/infra/terraform/bootstrap` | AWS provider 與兩層的 `.terraform.lock.hcl`，依 lock 檔已列出的平台重算 hash | 兩層合成一個 PR（`group-by: dependency-name`） |
+
+Dependabot PR 觸發的 workflow 拿不到 Actions secrets，只有唯讀的 `GITHUB_TOKEN`。PR 開進 `dev` 時跑的檢查都不需要 secret。
+
+下列固定項目不在 Dependabot 範圍內，要手動升級。有其他副本的項目，由 `scripts/check_conventions.py pin-sync` 在副本不一致時讓 CI 失敗：
+
+| 項目 | 位置 | 防止副本不一致的機制 |
+| :--- | :--- | :--- |
+| uv | `ci.yml` 的 `UV_VERSION`，以及 `docker/Dockerfile.api`、`Dockerfile.dagster`、`Dockerfile.mlflow` 的 `COPY --from=ghcr.io/astral-sh/uv:…`（Dependabot 只讀 `FROM`） | `pin-sync` |
+| TimescaleDB 驗收映像 | `scripts/run-data-explorer-timescaledb-acceptance.sh` | `pin-sync`：必須與 `docker-compose.yml` 的 postgres 映像相同，Dependabot 只更新 compose 那一份 |
+| Nginx smoke 的 stub 映像 | `scripts/ci_nginx_smoke.sh` 的 `STUB_IMAGE` | 無，只有這一份 |
+| Node | `frontend/package.json` 的 `engines.node` | `frontend/Dockerfile` 建置時比對 `engines.node`，Dependabot 更新 `node` 映像後，要在同一個 PR 調高 `engines.node`，否則 CI 的映像建置會失敗 |
+| Terraform CLI | `ci.yml` 的 `TERRAFORM_VERSION` | 無；須滿足兩層 `main.tf` 的 `required_version` |
+
+升級步驟：action 的 SHA 與映像 digest 見 `scripts/check_conventions.py` 中 `action-pins` 與 `docker-pins` 的說明；provider lock 檔見 [Terraform state 與部署權責](terraform-state-and-deployment.md)。Python 與前端套件（`uv.lock`、`pnpm-lock.yaml`）不在 version updates 範圍內，只靠 alerts。
 
 ## 4. 維護者帳號
 

@@ -26,6 +26,18 @@ Checks:
              `${{ env.NAME }}` naming a workflow-level `env:` entry that holds one.
              To fix: `git ls-remote https://github.com/<owner>/<repo> refs/tags/<release>^{}`
              (or the plain tag when it has no ^{} line) gives the commit SHA.
+  pin-sync   A version pinned in more than one file must be the same everywhere, since
+             Dependabot (.github/dependabot.yml) updates only some copies, or none: the uv
+             release of each setup-uv step in .github/workflows (resolved through `env:`) and
+             of each ghcr.io/astral-sh/uv tag in docker/Dockerfile* and frontend/Dockerfile*;
+             each image in docker/docker-compose*.yml and *.yaml and the same image, by name,
+             in scripts/*.sh; each provider's version across infra/terraform/.terraform.lock.hcl
+             and the lock files one directory below it. Every copy that differs from another
+             is reported with the others. Pins that are not exact are left to action-pins.
+             To fix: raise the stale copies to the release the others pin: UV_VERSION in
+             ci.yml or the uv image (name:tag@sha256:<digest>), the full image reference in
+             the script, or `terraform init -backend=false -upgrade` and `terraform providers
+             lock` in the other layer.
   terms      Tracked Markdown must not use banned terms; the preferred term is reported.
   doc-dates  Docs that --base...--head adds, modifies or renames must carry a last-updated header
              dated no earlier than the newest author date (in the author's timezone) of the
@@ -107,6 +119,11 @@ MAKEFILE = "Makefile"
 WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 DOCKERFILE_GLOBS = ("docker/Dockerfile*", "frontend/Dockerfile*")
 COMPOSE_GLOBS = ("docker/docker-compose*.yml", "docker/docker-compose*.yaml")
+SCRIPT_GLOBS = ("scripts/*.sh",)
+TERRAFORM_LOCK_GLOBS = (
+    "infra/terraform/.terraform.lock.hcl",
+    "infra/terraform/*/.terraform.lock.hcl",
+)
 EXCLUDED_DIRS = frozenset({"node_modules", ".venv"})
 DOC_SCOPE_EXCLUDED_ROOTS = frozenset({"lab", "data"})
 """Top-level directories whose Markdown the doc checks skip, besides EXCLUDED_DIRS at any depth."""
@@ -170,6 +187,12 @@ DOCKERFILE_COPY_FROM = re.compile(
     re.IGNORECASE,
 )
 SCRATCH_IMAGE = "scratch"
+UV_IMAGE = "ghcr.io/astral-sh/uv"
+SCRIPT_IMAGE = re.compile(
+    r"(?<![\w./:@-])(?P<image>[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64})"
+)
+LOCK_PROVIDER = re.compile(r'^provider\s+"(?P<address>[^"]+)"\s*\{')
+LOCK_VERSION = re.compile(r'^\s+version\s*=\s*"(?P<version>[^"]+)"')
 COMPOSE_IMAGE = re.compile(r"^\s*image:\s*(?P<quote>[\"']?)(?P<image>[^\s\"'#]+)(?P=quote)")
 DOCKERFILE_COMMENT = re.compile(r"^\s*#")
 PIP_PROGRAM = re.compile(r"(?:.*/)?pip(?:3(?:\.\d+)?)?")
@@ -356,6 +379,25 @@ class SourceLine:
 
 
 @dataclass(frozen=True)
+class Pin:
+    """One copy of a version that must match its other copies: `subject` names what is pinned."""
+
+    subject: str
+    path: str
+    line: int
+    value: str
+
+
+@dataclass(frozen=True)
+class UvSetup:
+    """A setup-uv step: its `uses:` line, its `with: version:` as written, and that resolved."""
+
+    uses_line: int
+    version: SourceLine | None
+    resolved: str | None
+
+
+@dataclass(frozen=True)
 class UnpinnedInstall:
     line: int
     packages: tuple[str, ...]
@@ -403,6 +445,7 @@ CHECKS: dict[str, Callable[[argparse.Namespace], list[Violation]]] = {
     "python-uv": lambda args: check_python_uv(REPO_ROOT),
     "docker-pins": lambda args: check_docker_pins(REPO_ROOT),
     "action-pins": lambda args: check_action_pins(REPO_ROOT),
+    "pin-sync": lambda args: check_pin_sync(REPO_ROOT),
     "terms": lambda args: check_terms(REPO_ROOT),
     "doc-dates": lambda args: check_doc_dates(GitRange(REPO_ROOT, args.base, args.head)),
     "doc-metadata": lambda args: check_doc_metadata(REPO_ROOT),
@@ -729,6 +772,100 @@ def check_action_pins(repo_root: Path) -> list[Violation]:
     ]
 
 
+def check_pin_sync(repo_root: Path) -> list[Violation]:
+    pins = uv_pins(repo_root) + compose_image_pins(repo_root) + provider_pins(repo_root)
+    return sorted(disagreeing_pins(pins), key=lambda violation: (violation.path, violation.line))
+
+
+def disagreeing_pins(pins: list[Pin]) -> list[Violation]:
+    groups: dict[str, list[Pin]] = {}
+    for pin in pins:
+        groups.setdefault(pin.subject, []).append(pin)
+    violations = []
+    for subject, group in groups.items():
+        for pin in group:
+            others = [other for other in group if other.value != pin.value]
+            if not others:
+                continue
+            elsewhere = ", ".join(f"{other.value} at {other.path}:{other.line}" for other in others)
+            message = f"{subject} pins disagree: {pin.value} here, {elsewhere}"
+            violations.append(
+                Violation(pin.path, pin.line, f"{message}; update every copy together")
+            )
+    return violations
+
+
+def uv_pins(repo_root: Path) -> list[Pin]:
+    """The exact uv release of each setup-uv step and of each ghcr.io/astral-sh/uv image tag."""
+    pins = [
+        Pin("uv", relative(path, repo_root), setup.version.line, setup.resolved)
+        for path in globbed(repo_root, WORKFLOW_GLOBS)
+        for setup in setup_uv_steps(path.read_text(encoding="utf-8"))
+        if setup.version is not None
+        and setup.resolved is not None
+        and EXACT_VERSION.fullmatch(setup.resolved)
+    ]
+    for path in globbed(repo_root, DOCKERFILE_GLOBS):
+        for number, match in dockerfile_images(path.read_text(encoding="utf-8")):
+            name, tag = image_name_and_tag(match["image"])
+            # WHY-NOT(partition): a variant tag such as 0.11.32-python3.11-bookworm ships the
+            # same uv release as 0.11.32, so only the release before the first `-` is compared.
+            release = tag.partition("-")[0]
+            if name == UV_IMAGE and EXACT_VERSION.fullmatch(release):
+                pins.append(Pin("uv", relative(path, repo_root), number, release))
+    return pins
+
+
+def compose_image_pins(repo_root: Path) -> list[Pin]:
+    """Each compose image, and each image in a script that compose also names."""
+    compose = [
+        (path, SourceLine(number, match["image"]))
+        for path in globbed(repo_root, COMPOSE_GLOBS)
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if (match := COMPOSE_IMAGE.match(line))
+    ]
+    scripts = [
+        (path, SourceLine(number, match["image"]))
+        for path in globbed(repo_root, SCRIPT_GLOBS)
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if not line.lstrip().startswith("#")
+        for match in SCRIPT_IMAGE.finditer(line)
+    ]
+    compose_names = {image_name_and_tag(image.text)[0] for _, image in compose}
+    return [
+        Pin(f"image {name}", relative(path, repo_root), image.line, image.text[len(name) + 1 :])
+        for path, image in compose + scripts
+        if (name := image_name_and_tag(image.text)[0]) in compose_names
+    ]
+
+
+def provider_pins(repo_root: Path) -> list[Pin]:
+    """Each provider version in the Terraform lock files."""
+    pins = []
+    for path in globbed(repo_root, TERRAFORM_LOCK_GLOBS):
+        address = None
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if provider := LOCK_PROVIDER.match(line):
+                address = provider["address"]
+            elif address is not None and (version := LOCK_VERSION.match(line)):
+                pins.append(
+                    Pin(
+                        f"provider {address}", relative(path, repo_root), number, version["version"]
+                    )
+                )
+                address = None
+    return pins
+
+
+def image_name_and_tag(image: str) -> tuple[str, str]:
+    """Split `name:tag@sha256:<digest>` into name and tag; a registry port stays in the name."""
+    reference = image.partition("@")[0]
+    name, colon, tag = reference.rpartition(":")
+    if not colon or "/" in tag:
+        return reference, ""
+    return name, tag
+
+
 def globbed(repo_root: Path, globs: Iterable[str]) -> list[Path]:
     return sorted(path for glob in globs for path in repo_root.glob(glob))
 
@@ -768,16 +905,21 @@ def find_unpinned_images(text: str) -> list[SourceLine]:
     """Images that FROM or COPY --from names without a digest; build stages are not images."""
     stages = {SCRATCH_IMAGE}
     hits = []
-    for number, line in enumerate(text.splitlines(), start=1):
-        match = DOCKERFILE_FROM.match(line) or DOCKERFILE_COPY_FROM.match(line)
-        if match is None:
-            continue
+    for number, match in dockerfile_images(text):
         image = match["image"]
         if image.lower() not in stages and not image.isdigit() and not TAGGED_DIGEST.search(image):
             hits.append(SourceLine(number, image))
         if match.re is DOCKERFILE_FROM and match["stage"]:
             stages.add(match["stage"].lower())
     return hits
+
+
+def dockerfile_images(text: str) -> Iterator[tuple[int, re.Match[str]]]:
+    """The line number and match of each FROM and COPY --from, build stages included."""
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = DOCKERFILE_FROM.match(line) or DOCKERFILE_COPY_FROM.match(line)
+        if match is not None:
+            yield number, match
 
 
 def find_unpinned_compose_images(text: str) -> list[SourceLine]:
@@ -944,19 +1086,26 @@ def find_unpinned_uv_setups(text: str) -> list[SourceLine]:
     at its version line, or at the `uses:` line when there is none; its text is the version as
     written, empty when missing.
     """
+    return [
+        setup.version or SourceLine(setup.uses_line, "")
+        for setup in setup_uv_steps(text)
+        if setup.resolved is None or not EXACT_VERSION.fullmatch(setup.resolved)
+    ]
+
+
+def setup_uv_steps(text: str) -> list[UvSetup]:
+    """Each astral-sh/setup-uv step and its `with: version:`, resolved through the `env:`."""
     lines = text.splitlines()
     env = workflow_env(lines)
-    hits = []
+    steps = []
     for index, ref in workflow_uses(text):
         if ref.partition("@")[0] != SETUP_UV_ACTION:
             continue
         key_column = lines[index].index("uses:")
         version = step_with_value(lines, step_lines(lines, index, key_column), "version")
-        if version is None:
-            hits.append(SourceLine(index + 1, ""))
-        elif not EXACT_VERSION.fullmatch(resolve_env(version.text, env)):
-            hits.append(version)
-    return hits
+        resolved = resolve_env(version.text, env) if version is not None else None
+        steps.append(UvSetup(index + 1, version, resolved))
+    return steps
 
 
 def workflow_uses(text: str) -> list[tuple[int, str]]:

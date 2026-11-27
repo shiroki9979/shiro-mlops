@@ -1,7 +1,7 @@
 # Terraform state 與部署權責
 
 > - Created: 2026-11-21
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-27
 
 ---
 
@@ -34,7 +34,7 @@
 - **backend 採 partial configuration**：backend 區塊只寫 `key`、`region`、`encrypt` 與 `use_lockfile`，bucket 名稱不寫進程式碼。本機以不提交的 backend 設定檔 `infra/terraform/state.s3.tfbackend`（內容只有一行 `bucket = "<state_bucket_name>"`，兩層共用；`.gitignore` 已排除 `*.tfbackend`）以 `-backend-config` 傳入。
 - **bootstrap 層的雞生蛋問題**：state bucket 由 bootstrap 層自己建立，因此 bootstrap 層第一次以本機 state apply，再以 `terraform init -migrate-state` 把 state 搬進 state bucket 的 `bootstrap/terraform.tfstate`。拆除時反向把 state 搬回本機。本機 state 以不提交的 `backend_override.tf`（`.gitignore` 已排除 `*_override.tf`）切換。
 - **離線檢查**：`make infra-check` 對兩層都以 `terraform init -backend=false` 初始化，不讀 state，也不需要 AWS 憑證。
-- **provider lock 檔**：兩層各自提交 `.terraform.lock.hcl`，記錄 AWS provider 的確切版本與 `linux_amd64`、`linux_arm64`、`darwin_amd64`、`darwin_arm64` 的 hash，兩層鎖在同一版本。`make infra-check` 與 `scripts/plan_terraform.sh`（PR plan 與 `main` 的部署）都以 `terraform init -lockfile=readonly` 執行：lock 檔缺少或不再滿足 `required_providers` 時 init 失敗，不會改寫它，因此 release PR 上看到的 plan 與合併後 apply 的 plan 用同一版 provider。`make infra-check` 另外檢查兩個 lock 檔都已入版控。升級 provider 時在兩層各執行 `terraform init -backend=false -upgrade`，再以 `terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_amd64 -platform=darwin_arm64` 補齊各平台的 hash，兩個 lock 檔在同一個 PR 提交。
+- **provider lock 檔**：兩層各自提交 `.terraform.lock.hcl`，記錄 AWS provider 的確切版本與 `linux_amd64`、`linux_arm64`、`darwin_amd64`、`darwin_arm64` 的 hash，兩層鎖在同一版本。`make infra-check` 與 `scripts/plan_terraform.sh`（PR plan 與 `main` 的部署）都以 `terraform init -lockfile=readonly` 執行：lock 檔缺少或不再滿足 `required_providers` 時 init 失敗，不會改寫它，因此 release PR 上看到的 plan 與合併後 apply 的 plan 用同一版 provider。`make infra-check` 另外檢查兩個 lock 檔都已入版控。Dependabot 每月提出 provider 更新，在同一個 PR 更新兩層的 lock 檔（[GitHub 儲存庫設定 §3](github-repository-settings.md#dependabot-version-updates-的範圍)），兩層版本不一致時 `scripts/check_conventions.py pin-sync` 讓 CI 失敗。手動升級 provider 時在兩層各執行 `terraform init -backend=false -upgrade`，再以 `terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_amd64 -platform=darwin_arm64` 補齊各平台的 hash，兩個 lock 檔在同一個 PR 提交。
 
 ## 3. 角色的信任與權限
 
