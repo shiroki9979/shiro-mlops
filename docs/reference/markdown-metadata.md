@@ -1,7 +1,7 @@
 # Markdown 文件 metadata
 
 > - Created: 2026-11-24
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-27
 > - Related: [ADR-0016](../adr/0016-make-repository-public.md)、[GitHub #389](https://github.com/shiroki9979/shiro-mlops/issues/389)
 
 本文件規定 repo 內 Markdown 文件檔頭的格式：第一行的 H1、緊接其後的 metadata 區塊、允許的 key 與值，以及檔頭不得出現的內容。格式由 `scripts/check_conventions.py doc-metadata` 檢查，日期是否隨內容更新由 `doc-dates` 檢查，兩者都只在 CI 執行，不依賴本機 hook（公開 repo 的 fork PR 不會安裝 hook，見 [ADR-0016](../adr/0016-make-repository-public.md)）。
@@ -15,6 +15,7 @@ metadata 只記錄文件「現在是什麼」；變更經過交給 git 的 commi
   - ADR：`docs/adr/` 下的 `NNNN-*.md`。
   - 一般文件：其餘所有文件，README 一律算一般文件。
 - 不設 spec 類型，也不設 `Decision` key。
+- **稱呼**：`docs/research/` 下的文件稱「調查報告」；「研究報告」專指 lab 研究主題的 README（`lab/<YYYY-MM-DD>-<topic>/README.md`），它有固定段落與重現紀錄，契約見 [lab 契約 §5](lab.md#5-研究報告labyyyy-mm-dd-topicreadmemd)。兩者的契約不同，不混用。
 
 ## 2. 檔頭格式
 
