@@ -1,0 +1,83 @@
+# Version updates for the references that are pinned to a commit SHA, an image digest or a
+# Terraform lock file (#370, #385). Updates run monthly and are grouped, so one maintainer sees
+# a few PRs a month. Pins Dependabot cannot see (uv, the Terraform CLI, images in scripts/*.sh)
+# are listed in docs/reference/github-repository-settings.md; scripts/check_conventions.py
+# pin-sync fails CI when an update here leaves one of their copies behind.
+#
+# PRs target the default branch, dev. Commit messages read `build(deps): ...`, and no labels
+# are added, so the tracker keeps only the labels in docs/agents/triage-labels.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # A release must be a week old before it is proposed, so a compromised tag that is
+    # caught and pulled within days never reaches a PR.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: build
+      include: scope
+    labels: []
+
+  # FROM lines only: the ghcr.io/astral-sh/uv image that COPY --from names is not updated.
+  - package-ecosystem: docker
+    directories:
+      - /docker
+      - /frontend
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      # The Python minor version follows .python-version, so the image only takes patches.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Node stays on the major in frontend/package.json engines.node. A newer release still
+      # fails the frontend image build until engines.node is raised in the same PR.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: build
+      include: scope
+    labels: []
+
+  - package-ecosystem: docker-compose
+    directory: /docker
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      docker-compose:
+        patterns: ["*"]
+    commit-message:
+      prefix: build
+      include: scope
+    labels: []
+
+  # Both layers lock the same provider version, so group-by raises them in one PR. Dependabot
+  # rehashes the lock files for the platforms they already list.
+  - package-ecosystem: terraform
+    directories:
+      - /infra/terraform
+      - /infra/terraform/bootstrap
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      terraform:
+        patterns: ["*"]
+        group-by: dependency-name
+    commit-message:
+      prefix: build
+      include: scope
+    labels: []
