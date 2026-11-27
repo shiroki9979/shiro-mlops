@@ -1,7 +1,7 @@
 # Domain Docs
 
 > - Created: 2026-08-25
-> - Last Updated: 2026-10-25
+> - Last Updated: 2026-11-27
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
@@ -46,6 +46,17 @@ Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
 When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
 
 If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+
+## Name terms against industry vocabulary
+
+When adding or renaming a glossary term, the canonical name is the 繁體中文 domain term with its English name in parentheses. Industry vocabulary (MLflow alias, champion/challenger, promotion, model validation, …) is a cross-reference, never the canonical name.
+
+- **Keep the existing name** unless one of two things holds: an industry term of the same name draws a different concept boundary, so outside readers would misread it; or two concepts inside the repo share a name. Only then propose a rename.
+- **Different boundary**: list the industry term under the entry's `_Avoid_`, as `評估閘門` does with champion/challenger.
+- **Same boundary**: the industry term may serve as the entry's English name or be recorded as a cross-reference; it still doesn't replace the 繁體中文 name.
+- **Banned terms**: only retired repo terms go into `BANNED_TERMS` in `scripts/check_conventions.py`; industry terms never do, because they legitimately appear as cross-references.
+
+The term-by-term mapping lives in [the ML governance terminology research](../research/2026-11-27-ml-governance-terminology.md).
 
 ## Flag ADR conflicts
 
