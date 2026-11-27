@@ -434,16 +434,21 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 
 ### 9.1 連不到的主機
 
-2026-11-27 以 `curl` 與 WebFetch 測試，下列主機被本環境的網路政策拒絕：
+2026-11-27 初次撰寫時以 `curl` 與 WebFetch 測試，下列主機被本環境的網路政策拒絕。
 
-- `nvlpubs.nist.gov`、`airc.nist.gov`（NIST AI 100-1、AI 600-1、Appendix A）
-- `www.federalreserve.gov`（SR 11-7）
-- `eur-lex.europa.eu`（EU AI Act）
-- `www.iso.org`，含 [ISO OBP][iso-obp]（ISO/IEC 42001、22989）
-- `arxiv.org`、`export.arxiv.org`（Model Cards、Datasheets）
-- `docs.cloud.google.com`（`cloud.google.com` 的頁面都轉址到這裡）、`research.google`、`research.google.com`（Google MLOps 文章、ML Test Score）
-- `mlflow.org`、`www.tensorflow.org`、`docs.dagster.io`、`docs.feast.dev`、`openlineage.io`、`www.w3.org`、`kubernetes.io`、`opengitops.dev`：改讀各專案 GitHub 上的文件原始檔或原始碼。
-- `glossary.istqb.org`、`cognitect.com`、`dl.acm.org`、`otexts.com`
+**後來放行、但仍讀不到**：`nvlpubs.nist.gov`、`airc.nist.gov`、`www.federalreserve.gov`、`eur-lex.europa.eu`、`www.iso.org`、`arxiv.org`、`docs.cloud.google.com`、`research.google` 之後加進了環境的允許清單。同日複核時，WebFetch 對其中 `nvlpubs.nist.gov`、`www.federalreserve.gov`、`eur-lex.europa.eu`、`arxiv.org`、`docs.cloud.google.com`、`research.google`、`airc.nist.gov` 仍回報無法解析主機名稱（`getaddrinfo ENOTFOUND`），`www.iso.org` 未再測。這些主機承載的說法維持搜尋摘錄，§9.2 的項目都沒有變動。
+
+各主機承載的來源：
+
+- `nvlpubs.nist.gov`、`airc.nist.gov`（後來放行）：NIST AI 100-1、AI 600-1、Appendix A。
+- `www.federalreserve.gov`（後來放行）：SR 11-7。
+- `eur-lex.europa.eu`（後來放行）：EU AI Act。
+- `www.iso.org`，含 [ISO OBP][iso-obp]（後來放行）：ISO/IEC 42001、22989。
+- `arxiv.org`（後來放行）、`export.arxiv.org`（未放行）：Model Cards、Datasheets。
+- `docs.cloud.google.com`（後來放行；`cloud.google.com` 的頁面都轉址到這裡）：Google MLOps 文章。
+- `research.google`（後來放行）、`research.google.com`（未放行）：ML Test Score。搜尋結果中的 PDF 位於 `research.google.com/pubs/archive/`，這個主機不在允許清單內。
+- 未放行，改讀各專案 GitHub 上的文件原始檔或原始碼：`mlflow.org`、`www.tensorflow.org`、`docs.dagster.io`、`docs.feast.dev`、`openlineage.io`、`www.w3.org`、`kubernetes.io`、`opengitops.dev`。
+- 未放行，維持搜尋摘錄：`glossary.istqb.org`、`cognitect.com`、`dl.acm.org`、`otexts.com`。
 
 ### 9.2 搜尋摘錄與未查證
 
