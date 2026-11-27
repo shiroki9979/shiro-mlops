@@ -23,6 +23,7 @@ from check_conventions import (
     find_unpinned_pip_installs,
     find_unpinned_uv_setups,
     is_debt_marker_source,
+    is_terms_exempt_path,
     python_comments,
 )
 
@@ -145,6 +146,36 @@ def test_banned_term_reports_line_and_preferred_replacement() -> None:
 
 def test_preferred_term_is_not_reported() -> None:
     assert find_banned_terms("服務連接埠如下\n") == []
+
+
+def test_banned_term_on_a_glossary_avoid_line_is_not_reported() -> None:
+    markdown = "- **連接埠 (Port)**：服務監聽的埠號。\n  _Avoid_：端口（舊稱）。\n"
+
+    assert find_banned_terms(markdown) == []
+
+
+def test_banned_term_outside_the_avoid_line_of_the_same_file_is_still_reported() -> None:
+    markdown = "- **連接埠 (Port)**：服務端口。\n  _Avoid_：端口（舊稱）。\n"
+
+    assert [hit.line for hit in find_banned_terms(markdown)] == [1]
+
+
+def test_avoid_marker_after_other_text_does_not_exempt_the_line() -> None:
+    assert [hit.line for hit in find_banned_terms("服務端口，見 _Avoid_：。\n")] == [1]
+
+
+@pytest.mark.parametrize(
+    ("path", "exempt"),
+    [
+        ("docs/research/2026-11-27-ml-governance-terminology.md", True),
+        ("docs/research/sub/notes.md", True),
+        ("docs/reference/data-contracts.md", False),
+        ("GLOSSARY.md", False),
+        ("lab/docs/research/notes.md", False),
+    ],
+)
+def test_only_markdown_under_docs_research_is_exempt_from_terms(path: str, exempt: bool) -> None:
+    assert is_terms_exempt_path(path) is exempt
 
 
 def test_last_updated_header_in_list_item_is_found() -> None:

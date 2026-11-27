@@ -54,7 +54,7 @@ When adding or renaming a glossary term, the canonical name is the 繁體中文 
 - **Keep the existing name** unless one of two things holds: an industry term of the same name draws a different concept boundary, so outside readers would misread it; or two concepts inside the repo share a name. Only then propose a rename.
 - **Different boundary**: list the industry term under the entry's `_Avoid_`, as `評估閘門` does with champion/challenger.
 - **Same boundary**: the industry term may serve as the entry's English name or be recorded as a cross-reference; it still doesn't replace the 繁體中文 name.
-- **Banned terms**: only retired repo terms go into `BANNED_TERMS` in `scripts/check_conventions.py`; industry terms never do, because they legitimately appear as cross-references.
+- **Banned terms**: only retired repo terms go into `BANNED_TERMS` in `scripts/check_conventions.py`; industry terms never do, because they legitimately appear as cross-references. The `terms` check skips the places that must spell out a retired term: GLOSSARY lines starting with `_Avoid_`, and Markdown under `docs/research/`.
 
 The term-by-term mapping lives in [the ML governance terminology research](../research/2026-11-27-ml-governance-terminology.md).
 
