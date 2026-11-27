@@ -1,13 +1,17 @@
 # ADR-0014：工程主控台只留地端，前端拆成預報檢視與工程主控台兩個應用
 
 > - Created: 2026-11-18
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[ADR-0013](0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[GLOSSARY.md](../../GLOSSARY.md)
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+前端原本是單一網站，同時包含可以對外公開的預報展示頁，以及只給工程師用的管理頁面（監控、設定與資料檢視）。兩者的界線不清楚：管理頁面的程式碼會送到每位訪客的瀏覽器，直接輸入網址也進得去。把管理頁面搬上雲端還得同步整個資料庫並加上登入機制，超出預算。因此決定管理頁面只留在專案自有的工作站上，雲端只部署展示頁，並把前端拆成兩個獨立的應用，只共用少數必須一致的元件。代價是要一次改寫前端的建置與部署設定，管理頁面的網址全部改變，而且離開工作站所在的網路就用不到管理頁面。
 
 ## 1. Context
 

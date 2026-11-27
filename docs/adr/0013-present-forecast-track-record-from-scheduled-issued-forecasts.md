@@ -1,13 +1,17 @@
 # ADR-0013：預報檢視以定時發布的預報實績呈現歷史表現
 
 > - Created: 2026-11-18
-> - Last Updated: 2026-11-20
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)、[GLOSSARY.md](../../GLOSSARY.md)
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+公開展示頁的「歷史表現」原本顯示的是寫死在網頁裡的假資料，系統也沒有保存過任何一份預報，無從對照事後的實際用電量。因此決定每小時固定產出一份未來七天的預報並永久保存、不得修改，等實際用電量出來後，拿兩者相比算出誤差，展示頁只顯示這種真正發布過的預報的成績。表現較差的時段，例如使用替代天氣資料的預報，也照樣計入，不挑著算。代價是工作站每小時要多算一次預報並保存；開始發布後至少七天，這一頁只會顯示「資料累積中」，而且過去的時段補不回來。
 
 ## 1. Context
 

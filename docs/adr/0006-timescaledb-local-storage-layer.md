@@ -1,11 +1,17 @@
 # ADR 0006: 地端引入 TimescaleDB 作為時序資料儲存庫與分層儲存架構
 
 > - Created: 2026-08-26
-> - Last Updated: 2026-11-20
+> - Last Updated: 2026-11-27
 > - Status: Accepted
 > - Related: [ADR-0001](0001-hybrid-topology-boundary.md)、[ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)
 > - Superseded by: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)
 > - Revisions: [Notes](#notes)
+
+---
+
+## Plain Language Summary
+
+台電與氣象的時間序列資料原本直接存成檔案（Parquet）。但台電的歷史資料偶爾會修正，這種檔案不能只改一筆，必須整個重寫；也沒有辦法直接用 SQL 查詢或接上監控圖表。因此決定在專案自有的工作站上用時序資料庫 TimescaleDB 存放原始資料，整理好的模型輸入再定期匯出成檔案，供特徵庫與雲端讀取。代價是工作站上多了一個要維護的資料庫，也多了一道從資料庫匯出檔案的步驟。其中「匯出到雲端」的部分已改由 [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md) 決定：整理好的資料只留在工作站，不再上傳雲端。
 
 ---
 

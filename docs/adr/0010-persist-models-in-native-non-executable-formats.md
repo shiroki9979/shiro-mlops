@@ -1,12 +1,16 @@
 # ADR-0010：模型以原生非執行格式保存
 
 > - Created: 2026-09-27
-> - Last Updated: 2026-11-20
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[資料契約 §5 Dagster Artifact 序列化與信任邊界](../reference/data-contracts.md#5-dagster-artifact-序列化與信任邊界)
 
 ---
+
+## Plain Language Summary
+
+訓練好的模型原本用 Python 的通用序列化格式（pickle）存檔，這種格式在讀檔時可以執行任意程式，等於把模型檔當成可信任的程式碼。專案的其他資料檔早已禁止這種格式，只有模型檔例外。因此決定禁止用這類格式保存或讀取模型，改用各模型自己的純資料格式：樹狀模型存成它原生的文字檔，神經網路只存權重數值與參數。代價是神經網路的計算要由專案自己實作並用測試核對，可用的網路結構因此受限；舊的模型檔也不能再讀，必須重新訓練。
 
 ## 1. Context
 

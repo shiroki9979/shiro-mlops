@@ -1,13 +1,17 @@
 # ADR-0009：以任務設定與任務類型解耦單一負載預報任務
 
 > - Created: 2026-09-27
-> - Last Updated: 2026-11-16
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0002](0002-feast-storage-layer-strategy.md)、[ADR-0003](0003-recursive-multi-step-forecasting.md)、[ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0010](0010-persist-models-in-native-non-executable-formats.md)、[GLOSSARY.md](../../GLOSSARY.md)
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+整個系統原本只為「全台電力負載預報」這一件事而寫，預測目標、氣象測站、模型種類等設定散落在程式各處，想再加一種預測工作就得到處修改。因此決定把每一種預測工作拆成兩層：一份設定檔寫明用哪些資料和參數，一段程式負責這一類工作怎麼訓練、評估與預測。抓取資料、處理天氣缺漏等共通邏輯由平台統一提供，各類工作不能自行改寫。為了確認這個設計可行，除了原本的負載預報，另外實作了高用電預警與用電異常偵測兩種工作。代價是多了一層設定格式要維護，設定檔跟著程式一起發布，改設定也要重新部署。
 
 ## 1. Context
 

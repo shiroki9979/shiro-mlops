@@ -1,13 +1,17 @@
 # ADR-0012：以加權天氣合成多氣象代表點
 
 > - Created: 2026-11-16
-> - Last Updated: 2026-11-16
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+預測的是全台灣的用電量，模型卻只看臺北一地的天氣，臺中與高雄的資料雖然已經在收集，卻沒有用上。因此決定把三地的天氣依固定比例加權平均成一個數值再交給模型，比例取自北、中、南三區的用電占比，寫在設定檔裡。任何一地改用替代資料時，整份預報就標示為降級；任何一地完全沒有資料時，就不產出預報，而不是拿剩下的地點湊數。代價是三地都有資料的時段比單一地點少，可用的訓練資料會減少；地點越多，因為缺資料而無法預報的機會也越高。
 
 ## 1. Context
 

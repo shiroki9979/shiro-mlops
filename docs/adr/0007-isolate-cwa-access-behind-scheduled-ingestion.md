@@ -1,12 +1,16 @@
 # ADR-0007：將 CWA 外部存取隔離於排程式入庫邊界
 
 > - Created: 2026-09-07
-> - Last Updated: 2026-11-22
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[Issue #30](https://github.com/shiroki9979/shiro-mlops/issues/30)
 
 ---
+
+## Plain Language Summary
+
+訓練和線上預測原本各自直接呼叫氣象署的 API，所以外部服務的延遲、重試與資料解析散落在多處，也無法重現某次預測當時實際拿到的是哪一版天氣預報。因此決定只有定時執行的擷取工作可以呼叫氣象署，並把拿到的每一版資料都存進資料庫；訓練、監控與線上預測一律只讀資料庫，資料缺少時也不能繞過去直接呼叫。代價是資料庫與排程工具成為預測的前提，排程中斷時預測只能改用替代的天氣資料，並對外標示為降級。
 
 ## 1. Context
 
