@@ -1,7 +1,7 @@
 # ADR 0004: 採用 Dagster 軟體定義資產 (SDA) 作為核心資料與模型編排引擎
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-08-23
+> - Last Updated: 2026-11-27
 > - Status: Accepted
 
 ---
@@ -25,7 +25,7 @@ MLOps 需要統一協調外部資料抓取 (Taipower/CWA)、特徵管線、Feast
 
 ### 優點
 
-- **強大的資料世系 (Lineage) 與可觀察性**：在 Dagster UI 中清晰可見從 Raw API 至 Drift Report 的依賴圖。
+- **完整的資產依賴圖與可觀察性**：在 Dagster UI 的 lineage 檢視中清晰可見從 Raw API 至 Drift Report 的資產依賴圖。
 - **環境隔離與測試性**：資產為標準 Python 函式，容易單獨撰寫單元測試或透過 Mock Fixture 驗證。
 - **儲存抽換無痛**：由環境變數切換 Local Parquet 與 S3，業務程式碼不需寫死儲存路徑。
 
@@ -35,4 +35,4 @@ MLOps 需要統一協調外部資料抓取 (Taipower/CWA)、特徵管線、Feast
 
 ### 適用情境
 
-- 現代化 Data Lakehouse 與重視資料品質、世系追蹤之 MLOps 架構。
+- 現代化 Data Lakehouse 與重視資料品質、追蹤資產依賴之 MLOps 架構。

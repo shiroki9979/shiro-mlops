@@ -1,7 +1,7 @@
 # 資料模型與契約 (Data Contracts)
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 
 ---
 
@@ -149,7 +149,7 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
      - `issued_at` (TIMESTAMPTZ, NOT NULL)：發布時刻，即排程 tick 時刻與預報的 `as_of`，不取整點（例如 `10:15`）。
      - `load_anchor` (TIMESTAMPTZ, NOT NULL)：負載起點，即遞迴預報起算的最新實際負載小時。
      - `status` (VARCHAR(16), NOT NULL)：預報運行狀態（[GLOSSARY](../../GLOSSARY.md) §3）`normal`／`degraded`，由預報當時各天氣數值的來源推導（§3.3）。資料庫不設 CHECK 約束；`IssuedForecast` 建構時以 `ForecastMode` 驗證，寫入與讀出遇到其他值皆拒絕（`ValueError`）。
-     - `model_sha256` (VARCHAR(64), NOT NULL)：模型版本識別，發布時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型保存tasksmodel_storepy)），不依賴 MLflow。
+     - `model_sha256` (VARCHAR(64), NOT NULL)：模型版本識別，發布時實際載入的模型目錄雜湊（完整 64 字元小寫十六進位，定義見 [ML 任務設定 §4](ml-tasks.md#4-模型存放tasksmodel_storepy)），不依賴 MLflow。
      - `mlflow_model_version` (VARCHAR(64))：MLflow 版本附註，可為 `NULL`；只作參考，模型版本以 `model_sha256` 為準。發布時從 Dagster instance 讀 `dynamic_horizon_forecast__model` 最新一次 materialization 的 metadata（[Dagster 排程](dagster-schedules.md)）：只有其 `model_sha256` 等於本次實際載入模型的雜湊時，才填入其 `mlflow_model_version`；雜湊不符（例如訓練恰在載入模型後完成）、缺少 metadata 或 MLflow 版本為空時為 `NULL`（寧缺勿錯）。不另呼叫 MLflow，附註的有無不影響是否發布。
      - **Constraint**: `PRIMARY KEY (issued_at)`；只新增、沒有更新路徑。同一發布時刻已存在時以 `ON CONFLICT (issued_at) DO NOTHING` 略過，header 與步數皆不改動。
      - 永久保留，不設定資料保留政策。
@@ -231,6 +231,8 @@ allowlist 同時是氣象代表點目錄：任務設定以 alias 引用氣象代
 - **訓練氣象缺口**：氣溫與相對濕度只能由較早觀測 forward-fill 最多兩小時；補值後仍缺少任一必要氣象欄位的 load row 必須移除。禁止 `bfill` 與固定氣象常數。
 
 ## 5. Dagster Artifact 序列化與信任邊界
+
+本節的 artifact 指 Dagster 資產經 `io_manager` 保存的 I/O 產物，與成品（model artifact，也就是模型目錄，見 [ML 任務設定 §4](ml-tasks.md#4-模型存放tasksmodel_storepy)）不同，兩者的格式與信任邊界各自規定。
 
 - 本機 `DATA_DIR` 下的 artifact 視為讀取時的非信任位元組；檔案系統寫入權限不等同於可安全執行其內容。
 - DataFrame artifact 使用 Parquet；非 DataFrame artifact 僅允許 JSON-compatible 值，並以 `SHIRO-JSON-V1` envelope 標記後保存。
