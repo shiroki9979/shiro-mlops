@@ -1,7 +1,7 @@
 # ADR-0018：研究以凍結資料讀取入庫資料，以知悉時間判定 T 時點所知
 
 > - Created: 2026-11-25
-> - Last Updated: 2026-11-25
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Proposed
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0012](0012-combine-weather-reference-points-into-weighted-weather.md)、[ADR-0017](0017-freeze-baseline-ddl-and-record-schema-migrations.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -11,7 +11,7 @@
 
 ## 1. Context
 
-M11 要讓**研究者**以 point-in-time 方式唯讀存取已入庫資料，資料要可凍結、可重現，並作為**模型交付包**的評估證據（用語見 [GLOSSARY.md](../../GLOSSARY.md)）。現行做法有三個缺口：
+M11 要讓**研究者**以 point-in-time 方式（以知悉時間判定，見 §2.1）唯讀存取已入庫資料，資料要可凍結、可重現，並能被研究報告的回測與**模型交付包**的研究出處引用（用語見 [GLOSSARY.md](../../GLOSSARY.md)）。現行做法有三個缺口：
 
 - **point-in-time 參數只篩資料時間**。`at_or_before`、`issued_before`、`as_of` 篩的是負載小時、觀測時間或氣象署發布時間，不篩本系統何時取得資料，所以只有在 T 當下執行時才正確。用過去的 T 回溯，就會多看到資料，例如負載起點晚一小時、T 之後才抓到的預報版本被當成已知（[盤點研究](https://github.com/shiroki9979/shiro-mlops/blob/research/point-in-time-reconstructability/docs/research/2026-11-22-point-in-time-reconstructability.md)，[#273](https://github.com/shiroki9979/shiro-mlops/issues/273)）。
 - **訓練表快照涵蓋太窄**。[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md) 的快照只有負載與加權觀測天氣。預報版本、逐代表點觀測、區域供需快照與已發布預報都不在裡面，所以回測只能在「氣象已知」的條件下進行。代表點不同的候選必須各凍一份快照，`lab/regional_weights.py` 也只好直接讀線上資料庫。
@@ -24,6 +24,8 @@ M11 要讓**研究者**以 point-in-time 方式唯讀存取已入庫資料，資
 研究一律讀**凍結資料**。凍結資料是與正式 schema 相同的 SQLite 檔，由平台的 repository 與 runner 唯讀讀取。判定「T 時點所知」時，預測輸入以知悉時間篩選，目標取最終值。
 
 ### 2.1 point-in-time 語意
+
+本 ADR 的 point-in-time 一律以知悉時間判定。Feast 的 point-in-time join 以資料時間（event timestamp）判定，兩者不同。
 
 - **預測輸入**：負載起點與歷史、預報版本與預報版本回退、降級替代觀測，一律以 `created_at ≤ T` 判定為已知。
 - **目標與評估用的實際值**：取凍結時的最終值，不篩知悉時間；事後推算的小時同樣有效。
@@ -41,7 +43,7 @@ M11 要讓**研究者**以 point-in-time 方式唯讀存取已入庫資料，資
 
 - **唯一入口**：`src/` 提供 `open_freeze(path)`，以 `mode=ro` 開啟凍結檔並依清單驗證 SHA-256，回傳的 `TaskRuntime` 包著同一個 `TimeSeriesRepository`。`lab/` 不得以其他方式建構 repository 或讀取資料庫連線設定，也不連線正式資料庫。
 - **知悉時間在 repository 層篩選**：runner 用到的預測輸入查詢（`fetch_latest_load`、`fetch_load_range`、`fetch_cwa_forecast_rows`、`fetch_cwa_station_observations`）加上必填參數 `known_by`，篩選 `created_at ≤ known_by`。`check_task_ready`、`predict_task`、`resolve_weather` 一律傳 `known_by=as_of`；`load_training_data` 不篩。serving 與回測走同一段程式。
-- **標準回測**：每個起點是模擬的發布時刻 T，對齊已發布預報的排程整點。負載起點取 `known_by=T` 下最新已知的小時，天氣照 serving 規則以預報版本、預報版本回退與降級解析，提前時數從 T 起算。報告記錄每個起點的預報運行狀態。以觀測天氣回測的「氣象已知」模式保留為選用的診斷，報告須標明模式；交付包的評估證據只認標準模式。
+- **標準回測**：每個起點是模擬的發布時刻 T，對齊已發布預報的排程整點。負載起點取 `known_by=T` 下最新已知的小時，天氣照 serving 規則以預報版本、預報版本回退與降級解析，提前時數從 T 起算。報告記錄每個起點的預報運行狀態。以觀測天氣回測的「氣象已知」模式保留為選用的診斷，報告須標明模式；研究報告的回測結論只認標準模式。
 - **取代訓練表快照**：研究以 `open_freeze` 取得 `TaskRuntime` 後，直接呼叫 `load_training_data(as_of=…)`。`write_snapshot`、`read_snapshot`、`snapshot_path`、`variant` 與 CLI 一併移除。報告的重現紀錄改記凍結資料的 SHA-256 與訓練截止 `as_of`。
 
 ### Rationale & Alternatives Considered
@@ -77,7 +79,7 @@ M11 要讓**研究者**以 point-in-time 方式唯讀存取已入庫資料，資
   - 兩份既有研究報告使用舊的訓練表快照，無法以新機制逐位元重現，只能保留為歷史紀錄。
 - **不做／延後範圍（Out of Scope / Deferred）**：
   - 研究者是否以預報天氣訓練（地圖「訓練與 serving 的特徵一致性」）。
-  - 凍結資料隨模型交付包搬運、平台端的副本與驗收方式（[#277](https://github.com/shiroki9979/shiro-mlops/issues/277) 與地圖「交付包的搬運與存放」）。
+  - 凍結資料隨模型交付包搬運與平台端的副本，以及交付包的可服務檢查（[#277](https://github.com/shiroki9979/shiro-mlops/issues/277) 與地圖「交付包的搬運與存放」）。
   - 研究者自帶外部資料與新資料來源的擷取。
   - 已發布預報保存當時的輸入。
 

@@ -541,7 +541,7 @@ repo 的事實取自 GLOSSARY、ADR、`docs/reference/`，以及 [#270](https://
 [iso-22989]: https://www.iso.org/standard/74296.html
 [iso-obp]: https://www.iso.org/obp
 [repo-issue-tracker]: ../agents/issue-tracker.md
-[repo-ml-tasks]: ../reference/ml-tasks.md#4-模型保存tasksmodel_storepy
+[repo-ml-tasks]: ../reference/ml-tasks.md#4-模型存放tasksmodel_storepy
 [repo-lab]: ../reference/lab.md#5-研究報告labyyyy-mm-dd-topicreadmemd
 [repo-metadata]: ../reference/markdown-metadata.md
 [repo-data-contracts]: ../reference/data-contracts.md#5-dagster-artifact-序列化與信任邊界

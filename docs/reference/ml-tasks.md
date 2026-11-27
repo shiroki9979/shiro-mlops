@@ -1,7 +1,7 @@
 # ML 任務設定與任務類型介面
 
 > - Created: 2026-11-20
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-27
 
 ---
 
@@ -43,7 +43,9 @@
 
 ## 2. 任務類型介面（`tasks/types/`）
 
-任務類型為純計算 adapter，不接觸 repository；以 `tasks/types/__init__.py` 的明確 registry（`TASK_TYPES`、`get_task_type(name)`）依名稱對應。
+任務類型為純計算 adapter，不接觸 repository；以 `tasks/types/__init__.py` 的明確 registry（`TASK_TYPES`、`get_task_type(name)`）依名稱對應。這個 registry 只是任務類型名稱到實作的對照，與 MLflow Model Registry 無關。
+
+業界最接近任務類型的概念是 MLflow 的 flavor，但兩者範圍不同：flavor 只是讓部署工具載入模型的保存慣例，任務類型還負責特徵、訓練、評估、健康判定與預測輸出。模型也不以 MLflow flavor 保存，而是任務類型自己的原生格式（§4）。
 
 - `name`、`params_model`：registry 名稱與 `[params]` 的 Pydantic model。
 - `prediction_item`：`POST /tasks/{task_id}/predict` 單一預測 item 中任務類型自身欄位的 Pydantic model（[REST API §4](rest-api.md#4-通用任務推論)），欄位取自 `TaskModel.predict` 輸出，其餘欄位忽略。繼承 `WeatherEchoingItem` 者，服務層另補上任務設定 `weather.fields` 的每個天氣欄位（`float`）與 `weather_sources`，因此 item 的天氣欄位跟隨任務設定，任務類型不寫死天氣欄位。
@@ -114,7 +116,9 @@ serving 以 store 的 `latest_observation(as_of)` 取得負載起點並檢查是
 
 預報運行狀態（[GLOSSARY](../../GLOSSARY.md) §3）只有一個出處：`data/weather_resolution.py` 的 `ForecastMode`（StrEnum，`normal`、`degraded` 兩值；無法產出不是運行狀態，只以上述拒絕表達）。`forecast_mode(sources)` 接受以序列或 mapping 巢狀的來源，在任一數值的來源 `is_substitute` 時回傳 `degraded`，否則 `normal`；`WeatherResolution.mode` 與加權天氣 `WeightedWeather.mode` 都是由各自來源推導的 property，不另存欄位或旗標。多代表點時加權天氣保留每個代表點的來源，因此任一點降級即整次降級（ADR-0012）；觀測天氣路徑的來源全為 `station_observation`，不是替代值，所以 `mode` 為 `normal`。`PredictionOutcome.mode` 型別為 `ForecastMode`，在來源序列化為 `weather_sources` 前由加權天氣推導；`Ready.mode` 同為 `ForecastMode`，`InputsUnavailable` 不帶 `mode`。
 
-## 4. 模型保存（`tasks/model_store.py`）
+## 4. 模型存放（`tasks/model_store.py`）
+
+模型存放為每個 ML 任務保存目前安裝的那一份模型目錄，以目錄雜湊識別版本。它不是 model registry：每個任務只有一份已安裝的模型，不保留舊版，也不記錄階段或核准狀態；API 與發布只從這裡載入模型。訓練另在 MLflow Model Registry 建立 model version，那只是附註（`mlflow_model_version`，[Dagster 排程](dagster-schedules.md)第 1 項），不決定載入哪個模型。
 
 - **模型版本識別**：`model_directory_sha256(directory) -> str` 為模型目錄檔案內容的 SHA-256（完整 64 字元小寫十六進位），不依賴 MLflow。目錄內所有檔案（含子目錄）依相對 POSIX 路徑排序，每個檔案依序餵入 UTF-8 相對路徑、一個 NUL 位元組、檔案大小（8 位元組 big-endian）與檔案內容；因此雜湊只取決於相對路徑與內容，不受檔案時間戳、列舉順序或目錄所在位置影響，改動任一檔案內容、新增或更名檔案則雜湊改變。訓練固定 seed，相同模型得到相同識別。
 - `save_model(root, task_id, model) -> SavedModel`：回傳 `SavedModel(directory, sha256)`，`sha256` 取自暫存目錄（即安裝的同一組檔案）。模型先寫入暫存目錄；Linux 上以 `renameat2(RENAME_EXCHANGE)` 原子交換新舊非空目錄，首次寫入則以單次 rename 安裝；核心或檔案系統不支援交換（`ENOSYS`、`EINVAL`）時，於同一把排他鎖內以 rename 依序移開舊目錄、安裝新目錄，讀取端因等待鎖而不會看到空窗；僅程序於兩次 rename 之間中止時，任務於下次訓練成功前沒有模型，遺留的舊目錄 `.<task_id>.previous` 於下次保存（持排他鎖、安裝前）清除。每任務檔案鎖 `root/.<task_id>.lock` 保護交換與讀取：只有保存端（排他鎖）會建立鎖檔，且於首次安裝模型目錄前建立；讀取端（共享鎖）以唯讀模式開啟既有鎖檔、不建立鎖檔，因此 `root` 可唯讀掛載（本機 compose 的 API 即唯讀掛載）。交換失敗時舊模型仍在正式路徑。`root` 為 `DATA_DIR/models`。
