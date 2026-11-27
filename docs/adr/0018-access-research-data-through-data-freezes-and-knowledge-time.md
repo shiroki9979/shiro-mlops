@@ -1,7 +1,7 @@
 # ADR-0018：研究以凍結資料讀取入庫資料，以知悉時間判定 T 時點所知
 
 > - Created: 2026-11-25
-> - Last Updated: 2026-11-25
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Proposed
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0012](0012-combine-weather-reference-points-into-weighted-weather.md)、[ADR-0017](0017-freeze-baseline-ddl-and-record-schema-migrations.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -13,7 +13,7 @@
 
 M11 要讓**研究者**以 point-in-time 方式唯讀存取已入庫資料，資料要可凍結、可重現，並作為**模型交付包**的評估證據（用語見 [GLOSSARY.md](../../GLOSSARY.md)）。現行做法有三個缺口：
 
-- **point-in-time 參數只篩資料時間**。`at_or_before`、`issued_before`、`as_of` 篩的是負載小時、觀測時間或氣象署發布時間，不篩本系統何時取得資料，所以只有在 T 當下執行時才正確。用過去的 T 回溯，就會多看到資料，例如負載起點晚一小時、T 之後才抓到的預報版本被當成已知（[盤點研究](https://github.com/shiroki9979/shiro-mlops/blob/research/point-in-time-reconstructability/docs/research/2026-11-22-point-in-time-reconstructability.md)，[#273](https://github.com/shiroki9979/shiro-mlops/issues/273)）。
+- **point-in-time 參數只篩資料時間**。`at_or_before`、`issued_before`、`as_of` 篩的是負載小時、觀測時間或氣象署發布時間，不篩本系統何時取得資料，所以只有在 T 當下執行時才正確。用過去的 T 回溯，就會多看到資料，例如負載起點晚一小時、T 之後才抓到的預報版本被當成已知（[#273](https://github.com/shiroki9979/shiro-mlops/issues/273)；它的研究檔原放在 `research/` 分支，已遺失，結論見該票）。
 - **訓練表快照涵蓋太窄**。[ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md) 的快照只有負載與加權觀測天氣。預報版本、逐代表點觀測、區域供需快照與已發布預報都不在裡面，所以回測只能在「氣象已知」的條件下進行。代表點不同的候選必須各凍一份快照，`lab/regional_weights.py` 也只好直接讀線上資料庫。
 - **快照的 `as_of` 不是「當時所知」**。快照是在凍結當下查詢「資料時間 ≤ `as_of`」，事後補算的小時也會被納入。可重現性只來自檔案不可覆寫。
 
