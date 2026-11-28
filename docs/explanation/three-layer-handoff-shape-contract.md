@@ -1,10 +1,10 @@
 # 模型交付包的三層形狀契約
 
 > - Created: 2026-11-26
-> - Last Updated: 2026-11-27
-> - Related: [GitHub #279](https://github.com/shiroki9979/shiro-mlops/issues/279)、[GitHub #275](https://github.com/shiroki9979/shiro-mlops/issues/275)、[GitHub #270](https://github.com/shiroki9979/shiro-mlops/issues/270)
+> - Last Updated: 2026-11-28
+> - Related: [ADR-0019](../adr/0019-serve-models-by-declaration-with-platform-owned-inference.md)、[GitHub #279](https://github.com/shiroki9979/shiro-mlops/issues/279)、[GitHub #275](https://github.com/shiroki9979/shiro-mlops/issues/275)、[GitHub #270](https://github.com/shiroki9979/shiro-mlops/issues/270)
 
-本文說明 M11 為模型交付包的輸入輸出形狀訂下的相容性設計：為什麼把形狀拆成三層、各層的邊界在哪裡、哪些變更需要修改 `src/`。這是 M11 的**目標設計，尚未實作**；現行契約仍以 [ML 任務 reference](../reference/ml-tasks.md) 為準。用語依 [GLOSSARY](../../GLOSSARY.md)「6. ML 任務」。
+本文說明 M11 為模型交付包的輸入輸出形狀訂下的相容性設計：為什麼把形狀拆成三層、各層的邊界在哪裡、哪些變更需要修改 `src/`。這是 M11 的**目標設計，尚未實作**；決策記錄在 [ADR-0019](../adr/0019-serve-models-by-declaration-with-platform-owned-inference.md)，契約草案見[研究空間契約 §6](../reference/lab.md#6-m11-契約草案尚未實作)，現行契約仍以 [ML 任務 reference](../reference/ml-tasks.md) 為準。用語依 [GLOSSARY](../../GLOSSARY.md)「6. ML 任務」。
 
 ## 1. 要解決的問題
 
@@ -130,7 +130,7 @@
 | 15 分鐘粒度的負載曲線 | 輸出契約（破壞性） | 是 | 新契約與新的 ML 任務 |
 | 估計器換成 XGBoost | 不屬於三層 | 是，一次 | 新的任務類型 |
 
-表中「開新的 ML 任務」需要新增一份任務設定。任務設定目前放在 `src/` 內，是否搬出另案決定（[GitHub #388](https://github.com/shiroki9979/shiro-mlops/issues/388)）。
+表中「開新的 ML 任務」需要新增一份任務設定與一份期望狀態檔。兩者都放在 `src/` 之外，所以不必改 `src/`，也不必重建映像（[ADR-0019 §2.6](../adr/0019-serve-models-by-declaration-with-platform-owned-inference.md#26-任務設定搬出平台程式)）。
 
 ## 9. 被否決的做法
 
@@ -143,8 +143,9 @@
 - **代表點留在任務設定，作為 ML 任務的身分**：研究者每改一次代表點或權重，就要改任務設定。
 - **承諾載入所有曾經通過可服務檢查的交付包**：支援期會沒有上限，舊格式的讀取程式永遠無法退場。
 
-## 10. 尚未決定的部分
+## 10. 相關決策
 
-- 交付包的內容與可服務檢查的項目：[GitHub #277](https://github.com/shiroki9979/shiro-mlops/issues/277)。本設計的可服務檢查規則（配方種類、目錄項目、輸出契約比對、時程範圍、擴充欄位）都是它的輸入。
-- 任務設定是否搬出 `src/`：[GitHub #388](https://github.com/shiroki9979/shiro-mlops/issues/388)。
-- 訓練與 serving 的特徵一致性、新資料來源的擷取、交付包的保留份數：記錄在 [M11 地圖](https://github.com/shiroki9979/shiro-mlops/issues/270)的 Not yet specified。
+- 成品的格式、宣告的內容、可服務檢查與任務設定的位置：[ADR-0019](../adr/0019-serve-models-by-declaration-with-platform-owned-inference.md)。
+- 成品怎麼成為現役模型（評估閘門、釘選、退回、保留份數）：[ADR-0020](../adr/0020-hand-off-trained-models-and-pin-the-serving-model.md)。
+- 宣告的欄位與可服務檢查的規則代碼草案：[研究空間契約 §6](../reference/lab.md#6-m11-契約草案尚未實作)。
+- 訓練是否改用預報天氣、全新資料來源的擷取，不在 M11 範圍內。

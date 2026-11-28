@@ -1,16 +1,18 @@
 # ADR-0010：模型以原生非執行格式保存
 
 > - Created: 2026-09-27
-> - Last Updated: 2026-11-27
+> - Last Updated: 2026-11-28
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[資料契約 §5 Dagster Artifact 序列化與信任邊界](../reference/data-contracts.md#5-dagster-artifact-序列化與信任邊界)
+> - Superseded by: [ADR-0020](0020-hand-off-trained-models-and-pin-the-serving-model.md)
+> - Revisions: [Notes](#5-notes)
 
 ---
 
 ## Plain Language Summary
 
-訓練好的模型原本用 Python 的通用序列化格式（pickle）存檔，這種格式在讀檔時可以執行任意程式，等於把模型檔當成可信任的程式碼。專案的其他資料檔早已禁止這種格式，只有模型檔例外。因此決定禁止用這類格式保存或讀取模型，改用各模型自己的純資料格式：樹狀模型存成它原生的文字檔，神經網路只存權重數值與參數。代價是神經網路的計算要由專案自己實作並用測試核對，可用的網路結構因此受限；舊的模型檔也不能再讀，必須重新訓練。
+訓練好的模型原本用 Python 的通用序列化格式（pickle）存檔，這種格式在讀檔時可以執行任意程式，等於把模型檔當成可信任的程式碼。專案的其他資料檔早已禁止這種格式，只有模型檔例外。因此決定禁止用這類格式保存或讀取模型，改用各模型自己的純資料格式：樹狀模型存成它原生的文字檔，神經網路只存權重數值與參數。代價是神經網路的計算要由專案自己實作並用測試核對，可用的網路結構因此受限；舊的模型檔也不能再讀，必須重新訓練。這條規則的精確定義、適用範圍（擴大到研究者交付的模型）與檢查方式，已改由 [ADR-0020](0020-hand-off-trained-models-and-pin-the-serving-model.md) 決定。
 
 ## 1. Context
 
@@ -50,3 +52,4 @@
 ## 5. Notes
 
 - 實作併入 ROADMAP M7 的任務類型介面切片（[GitHub #66](https://github.com/shiroki9979/shiro-mlops/issues/66)，見 ADR-0009）。
+- 2026-11-28：適用範圍、§4 Compliance 與 §3 延後項目中的「完整性雜湊」被 [ADR-0020](0020-hand-off-trained-models-and-pin-the-serving-model.md) §2.7 取代：規則擴大到模型交付包並寫成精確定義，檢查改為靜態允許清單與執行期 audit hook 兩道測試，載入前先比對目錄雜湊；簽章仍延後。各格式的選擇照舊有效。正文不動。

@@ -1,7 +1,7 @@
 # Rules of ML 對照：本專案的 ML 工程準則
 
 > - Created: 2026-11-26
-> - Last Updated: 2026-11-26
+> - Last Updated: 2026-11-28
 > - Related: [Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)、[ADR-0009](../adr/0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[ADR-0013](../adr/0013-present-forecast-track-record-from-scheduled-issued-forecasts.md)、[ADR-0018](../adr/0018-access-research-data-through-data-freezes-and-knowledge-time.md)
 
 本文消化 Martin Zinkevich 的《Rules of Machine Learning: Best Practices for ML Engineering》（Google，共 43 條規則），保留原文的規則編號與英文標題，逐條說明要點，並對照本專案已經怎麼做、還缺什麼、哪些條目不適用。原文以搜尋排序、廣告與推薦系統為例；本專案是以時間為索引的電力負載預報，需要轉譯的地方會說明轉譯方式。
@@ -321,7 +321,7 @@
 原文：*Beware that if you join data from a table at training and serving time, the data in the table may change.*
 
 - **要點**：訓練到 serving 之間，join 進來的特徵值可能已被更新，同一筆樣本的預測因此不同。最簡單的解法是在 serving 時記錄特徵（Rule 29）；表變動緩慢時，也可以每小時或每天保存一份表的副本，但無法完全解決。
-- **對照（部分落實）**：這正是 [ADR-0018](../adr/0018-access-research-data-through-data-freezes-and-knowledge-time.md)（`Proposed`）要處理的問題：現行的 point-in-time 參數只篩資料時間、不篩本系統何時取得資料，以過去的 T 回溯，會看到 T 之後才入庫的資料。ADR-0018 以知悉時間（`created_at <= T`）篩選預測輸入，並以凍結資料取代訓練表快照。在它實作之前，滾動起點回測的起點只在「資料時間不晚於起點」的意義上是 point-in-time。
+- **對照（部分落實）**：這正是 [ADR-0018](../adr/0018-access-research-data-through-data-freezes-and-knowledge-time.md)（已定案，尚未實作）要處理的問題：現行的 point-in-time 參數只篩資料時間、不篩本系統何時取得資料，以過去的 T 回溯，會看到 T 之後才入庫的資料。ADR-0018 以知悉時間（`created_at <= T`）篩選預測輸入，並以凍結資料取代訓練表快照。在它實作之前，滾動起點回測的起點只在「資料時間不晚於起點」的意義上是 point-in-time。
 
 #### Rule 32：盡可能在訓練與 serving 管線之間共用程式
 
@@ -432,7 +432,7 @@
 | 14 | 沒有偏差（平均誤差）與機率校準的檢查 | 無 |
 | 24 | 沒有量測新舊模型的預報差異 | ADR-0013 延後依模型版本的分析 |
 | 29 | 已發布預報不保存當時的輸入 | [ADR-0018](../adr/0018-access-research-data-through-data-freezes-and-knowledge-time.md) 延後 |
-| 31 | point-in-time 只篩資料時間，不篩知悉時間 | ADR-0018（`Proposed`） |
+| 31 | point-in-time 只篩資料時間，不篩知悉時間 | ADR-0018（已定案，尚未實作） |
 | 37 | 回測只有「氣象已知」模式，無法與預報實績比較 | ADR-0018 的標準回測 |
 
 ## 6. 出處與授權
