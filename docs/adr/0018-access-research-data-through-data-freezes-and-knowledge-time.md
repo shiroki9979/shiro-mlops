@@ -1,9 +1,9 @@
 # ADR-0018：研究只讀凍結下來的資料副本，並以資料的取得時間判斷當時是否已知
 
 > - Created: 2026-11-25
-> - Last Updated: 2026-11-27
+> - Last Updated: 2026-11-28
 > - Author: Bo-Xue Huang
-> - Status: Proposed
+> - Status: Accepted
 > - Related: [ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0012](0012-combine-weather-reference-points-into-weighted-weather.md)、[ADR-0017](0017-freeze-baseline-ddl-and-record-schema-migrations.md)、[GLOSSARY.md](../../GLOSSARY.md)
 > - Supersedes: [ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)
 
@@ -97,5 +97,6 @@ M11 要讓**研究者**以 point-in-time 方式（以知悉時間判定）唯讀
 
 ## 5. Notes
 
-- 決策經 2026-11-25 的設計討論定案（[GitHub #276](https://github.com/shiroki9979/shiro-mlops/issues/276)，地圖 [#270](https://github.com/shiroki9979/shiro-mlops/issues/270)），事實來源為 [#273](https://github.com/shiroki9979/shiro-mlops/issues/273) 的盤點。狀態維持 `Proposed`，待 M11 規格定稿時改為 `Accepted`。
+- 決策經 2026-11-25 的設計討論定案（[GitHub #276](https://github.com/shiroki9979/shiro-mlops/issues/276)，地圖 [#270](https://github.com/shiroki9979/shiro-mlops/issues/270)），事實來源為 [#273](https://github.com/shiroki9979/shiro-mlops/issues/273) 的盤點。
 - 部分取代 [ADR-0011](0011-co-locate-lab-workspace-with-unidirectional-dependency.md)：「訓練表層級的不可變快照」與候選方案 B、C 的取捨由本 ADR 取代；`lab` → `shiro_mlops` 的單向相依、`uv` workspace 與搜尋／評估起點分離照舊有效。
+- 2026-11-28：M11 規格定稿，狀態由 `Proposed` 改為 `Accepted`。§3 延後的「凍結資料隨模型交付包搬運」與交付包的可服務檢查，由 [ADR-0019](0019-serve-models-by-declaration-with-platform-owned-inference.md) 與 [ADR-0020](0020-hand-off-trained-models-and-pin-the-serving-model.md) 決定保留規則，搬運方式的草案見[研究空間契約 §6.6](../reference/lab.md#66-交付存放與保留)。
