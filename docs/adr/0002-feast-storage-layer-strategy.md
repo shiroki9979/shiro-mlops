@@ -1,9 +1,15 @@
 # ADR 0002: Feast 特徵庫之離線/線上儲存庫與註冊表配置策略
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-27
 > - Status: Accepted
 > - Revisions: [Notes](#notes)
+
+---
+
+## Plain Language Summary
+
+模型的輸入資料由特徵庫 Feast 管理，它需要三種儲存：離線資料、線上快速查詢，以及記錄資料定義的登記檔。全部採用雲端託管的資料庫服務，每月都有固定費用；全部放在單機，雲端的服務又讀不到。因此決定離線資料與登記檔都存成檔案，放在本機或 S3，線上查詢則用本機容器裡的 Redis。代價是檔案式的儲存只適合數百萬筆以內的資料，資料量再大就得搬到專門的分析平台。這個決定目前只適用於動態長度的負載預報這一項工作（見 [ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)）。
 
 ---
 

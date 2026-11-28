@@ -1,13 +1,17 @@
 # ADR-0008：由區域供需快照推算全台逐時實際負載
 
 > - Created: 2026-09-26
-> - Last Updated: 2026-11-17
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0004](0004-dagster-asset-based-orchestration.md)、[ADR-0006](0006-timescaledb-local-storage-layer.md)、[ADR-0007](0007-isolate-cwa-access-behind-scheduled-ingestion.md)、[台電逐時負載來源調查](../research/2026-09-16-taipower-hourly-actual-load-source.md)、[Issue #58](https://github.com/shiroki9979/shiro-mlops/issues/58)、[Issue #59](https://github.com/shiroki9979/shiro-mlops/issues/59)
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+模型需要全台每小時的實際用電量，才能訓練和當作預測的起點，但原本的資料來源已經失效，台電也沒有提供可以重新下載的逐時歷史資料。系統本來就每十分鐘保存一次台電公布的北、中、南、東四區用電量。因此決定把四區加總，再取每小時的平均，當作全台每小時的實際用電量；一小時內有效的資料太少時，該小時就留空，不用推估的數字補上。代價是這份資料只能從開始保存的那一刻往後累積，過去的補不回來，錯過的時段永久缺失，累積滿 28 天之前也不能訓練。這也是系統自己算出來的數字，不等於台電官方公布的用電量。
 
 ## 1. Context
 

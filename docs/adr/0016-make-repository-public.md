@@ -1,13 +1,17 @@
 # ADR-0016：儲存庫改為公開，不升級付費方案
 
 > - Created: 2026-11-22
-> - Last Updated: 2026-11-23
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0015](0015-publish-forecast-view-as-static-precomputed-output.md)、[GitHub Rulesets](../reference/github-rulesets.md)、[GitHub 儲存庫設定](../reference/github-repository-settings.md)、[Terraform state 與部署權責](../reference/terraform-state-and-deployment.md)
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+這個程式庫原本是私有的，但免費方案對私有程式庫有兩個限制：自動化測試每月的執行時間不夠用，而且分支保護規則實際上不會生效。稽核完整的歷史紀錄後確認沒有機密，只有維護者的姓名與電子郵件。因此決定把程式庫改為公開而不付費升級，歷史照原樣公開，程式碼採 MIT 授權，不接受外部的修改請求。代價是公開之後收不回來；自動化流程的紀錄人人可讀，所以之後不能使用自架的執行機器，雲端帳號編號也會出現在公開紀錄裡。
 
 ## 1. Context
 

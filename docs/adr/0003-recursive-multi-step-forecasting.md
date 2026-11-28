@@ -1,9 +1,15 @@
 # ADR 0003: 採用單一 LightGBM 遞迴自回歸多步預測以應對動態視界
 
 > - Created: 2026-08-23
-> - Last Updated: 2026-11-24
+> - Last Updated: 2026-11-27
 > - Status: Accepted
 > - Revisions: [Notes](#notes)
+
+---
+
+## Plain Language Summary
+
+系統要能依氣象預報的長度，產出未來 1 小時到數天不等的電力負載預報。如果為每一種長度各訓練一個模型，要維護的模型會多達數十個。因此決定只訓練一個「預測下一小時」的模型（LightGBM），把每一步的預測結果當成下一步的輸入，一路往後推算，並在每一步放入該時刻的天氣預報。代價是前面幾步的誤差會一路累積，預報超過三天時偏差可能放大。這個做法目前只用於動態長度的負載預報，其他預測工作可以採用別的做法（見 [ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)）。
 
 ---
 

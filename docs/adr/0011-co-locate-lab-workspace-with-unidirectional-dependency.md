@@ -1,7 +1,7 @@
 # ADR-0011：研究空間與正式程式同庫、單向相依
 
 > - Created: 2026-11-08
-> - Last Updated: 2026-11-25
+> - Last Updated: 2026-11-27
 > - Author: Bo-Xue Huang
 > - Status: Accepted
 > - Related: [ADR-0005](0005-dependency-management-with-uv.md)、[ADR-0008](0008-derive-hourly-actual-load-from-regional-snapshots.md)、[ADR-0009](0009-decouple-ml-tasks-via-task-config-and-task-types.md)、[GLOSSARY.md](../../GLOSSARY.md)
@@ -9,6 +9,10 @@
 > - Revisions: [Notes](#5-notes)
 
 ---
+
+## Plain Language Summary
+
+想嘗試新的模型參數或輸入資料時，如果直接在正式程式旁邊改，既沒有統一的評估方法，也沒有地方留下可重現的研究紀錄；研究用的工具又很笨重，不該裝進正式服務。因此決定在同一個程式庫裡開一個獨立的研究空間，它可以呼叫正式程式，但正式程式不能反過來依賴它，研究用的套件也分開安裝。另外，資料庫每小時都在增加，所以研究時先把訓練資料存成一份不可覆寫的檔案，讓不同時間做的實驗能在同一份資料上比較。代價是這些檔案體積大、不進版本控制，研究報告必須記下檔案的指紋才能核對。其中「把訓練資料存成不可覆寫的檔案」這部分，預計改由 [ADR-0018](0018-access-research-data-through-data-freezes-and-knowledge-time.md) 決定（尚未定稿）：研究改讀整個資料庫的凍結副本。
 
 ## 1. Context
 
